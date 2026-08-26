@@ -74,6 +74,14 @@ func main() {
 		logger.Warn("initial adoption failed (docker down?)", "error", err)
 	} else {
 		logger.Info("adopted state", "containers", len(adopted))
+		// Join running projects' networks now: does the containerized-server
+		// network attach (and the guest ARP refresh it triggers) at boot,
+		// not on the first port-preview click.
+		for p, st := range adopted {
+			if st.State == "running" {
+				orch.EnsureSelfAttached(ctx, p)
+			}
+		}
 	}
 
 	go orch.RunIdleReaper(ctx)
