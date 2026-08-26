@@ -64,9 +64,9 @@ func ParseLabels(labels map[string]string, containerName string, exposedPorts []
 	}
 
 	// Block reserved hostnames for non-infrastructure containers.
-	// Only devbox-* containers (infrastructure) may use "shell" or "auth".
-	if ReservedHostnames[app.Hostname] && !strings.HasPrefix(containerName, "devbox-") {
-		return nil, fmt.Errorf("hostname %q is reserved for devbox infrastructure", app.Hostname)
+	// Only styrman-* containers (infrastructure) may use reserved hostnames.
+	if ReservedHostnames[app.Hostname] && !strings.HasPrefix(containerName, "styrman-") {
+		return nil, fmt.Errorf("hostname %q is reserved for styrman infrastructure", app.Hostname)
 	}
 
 	// Port: label > EXPOSE > error

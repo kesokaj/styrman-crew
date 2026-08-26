@@ -91,7 +91,7 @@ var IPDetectionURLs = []string{
 	"https://icanhazip.com",
 }
 
-// Infrastructure hostnames — reserved for the devbox stack.
+// Infrastructure hostnames — reserved for the styrman stack.
 // The generator uses these for absolute FQDN routing.
 // User containers with these hostnames are rejected during label parsing.
 const (
@@ -100,7 +100,7 @@ const (
 )
 
 // ReservedHostnames are caddy_hostname values that cannot be used by
-// user containers. They are reserved for devbox infrastructure.
+// user containers. They are reserved for styrman infrastructure.
 var ReservedHostnames = map[string]bool{
 	ShellHostname: true,
 	AuthHostname:  true,

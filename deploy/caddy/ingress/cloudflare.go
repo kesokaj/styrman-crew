@@ -54,15 +54,15 @@ func (c *CloudflareClient) EnsureDNS(serverIP, authDomain, shellDomain, appsDoma
 	}{
 		{
 			name:    authDomain,
-			comment: "Devbox auth portal (auto-managed)",
+			comment: "styrman auth portal (auto-managed by styrman ingress)",
 		},
 		{
 			name:    shellDomain,
-			comment: "Devbox shell (auto-managed)",
+			comment: "styrman legacy shell record (auto-managed by styrman ingress)",
 		},
 		{
 			name:    fmt.Sprintf("*.%s", appsDomain),
-			comment: "Devbox apps wildcard (auto-managed)",
+			comment: "styrman apps wildcard (auto-managed by styrman ingress)",
 		},
 	}
 
