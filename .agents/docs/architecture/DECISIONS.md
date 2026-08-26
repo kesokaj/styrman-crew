@@ -264,3 +264,32 @@ re-enabling auto-launch/resume is a one-function change in the bridge
 **Consequences:** Simpler mental model and UI; "history per conversation"
 now means tmux scrollback + agent-native history (`claude --resume` by hand)
 until a future decision revives pinning.
+
+---
+
+## ADR-015: Project network isolation — per-project bridges, server cannot route
+
+**Date:** 2026-08-26 · **Status:** accepted (operator directive; R12)
+
+**Context:** Operator requirement: project microVMs must not access each
+other at all. Projects carry NET_ADMIN/NET_RAW (for their DinD), and the
+containerized server is attached to every project's bridge (for the
+port-preview proxy) — so "could a project route to another via the multi-homed
+server?" is a real question.
+
+**Decision:** 1 project = 1 bridge network (`sdb-<name>`), containing only
+that project's microVM and the styrman server. Docker's inter-bridge
+isolation blocks project↔project directly. Defense in depth: the server runs
+with `net.ipv4.ip_forward=0` (compose sysctl) — it originates connections to
+each project (all the proxy needs) but is structurally incapable of forwarding
+between the networks it bridges. Host networking is reserved for the Caddy
+ingress (which needs to see real client IPs and reach every bridge); projects
+never use it.
+
+**Consequences:** Verified empirically: two projects cannot ping/connect to
+each other even when one adds an explicit route through the server's IP. The
+cost is the server must `NetworkConnect` itself to each project network on
+start/attach and `NetworkDisconnect` before removal.
+
+**Verification:** `.agents/docs/testing/styrman/` — the isolation checks in
+integration.sh (added 2026-08-26).

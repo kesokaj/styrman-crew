@@ -42,6 +42,14 @@
 9. **R9 — Local-only deployment** on this machine. No cloud deploy of styrman itself.
 10. **R10 — Secrets**: single gitignored `.env`; per-user secrets in `~/.bash_secrets`
     (never overwritten by provisioning). No secrets in git, images, or labels.
+11. **R12 — Project network isolation** (operator directive 2026-08-26):
+    project microVMs MUST NOT be able to reach one another over the network.
+    Each project gets its own bridge (`sdb-<name>`) shared with nothing but
+    the styrman server; the server originates connections for the port-preview
+    proxy but has `ip_forward=0` so it can never route between projects. Host
+    networking is for the Caddy ingress ONLY, never for projects. Verified
+    adversarially (a project with NET_ADMIN adding a manual route through the
+    server stays blocked). See ADR-015.
 11. **R11 — Reproducible installation** (operator directive 2026-08-26): the whole
     system must install from this repo onto a fresh Debian 13 host — another baremetal
     machine first, or a GCP VM with nested virtualization — via `deploy/host-setup.sh`

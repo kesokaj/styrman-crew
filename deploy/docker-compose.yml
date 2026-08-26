@@ -36,6 +36,12 @@ services:
     user: '${STYRMAN_UID}:${STYRMAN_GID}'
     group_add:
       - '${DOCKER_GID}'
+    # The server originates connections to each project (port-preview proxy)
+    # but must NEVER route between the project networks it is attached to —
+    # that would defeat per-project isolation. ip_forward off makes it
+    # structurally incapable of being used as a cross-project router.
+    sysctls:
+      - net.ipv4.ip_forward=0
     environment:
       - STYRMAN_ADDR=0.0.0.0:8080
       - STYRMAN_AUTH=header
