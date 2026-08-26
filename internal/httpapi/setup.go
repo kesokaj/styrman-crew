@@ -67,7 +67,9 @@ func (s *Server) finishSetup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if err := s.orch.DestroySetup(r.Context()); err != nil {
+	dctx, dcancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer dcancel()
+	if err := s.orch.DestroySetup(dctx); err != nil {
 		s.logger.Warn("setup vm teardown failed", "error", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -75,7 +77,9 @@ func (s *Server) finishSetup(w http.ResponseWriter, r *http.Request) {
 
 // discardSetup tears the hidden VM down without marking setup done.
 func (s *Server) discardSetup(w http.ResponseWriter, r *http.Request) {
-	if err := s.orch.DestroySetup(r.Context()); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := s.orch.DestroySetup(ctx); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

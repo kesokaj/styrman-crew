@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useState } from 'react'
+import { StrictMode, useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   createRootRoute,
@@ -46,12 +46,16 @@ function ConversationPage() {
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState('')
 
+  const savingRef = useRef(false)
   const saveTitle = async () => {
+    if (savingRef.current) return // Enter triggers blur → avoid double PATCH
+    savingRef.current = true
     setEditing(false)
     if (title.trim() && title.trim() !== record?.title) {
-      await api.renameConversation(project, conv, title.trim())
+      await api.renameConversation(project, conv, title.trim()).catch(() => {})
       refresh()
     }
+    savingRef.current = false
   }
 
   return (

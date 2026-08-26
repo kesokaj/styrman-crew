@@ -9,6 +9,10 @@ Deferred work items. Not blocking current work, but should be addressed later.
 
 ## Medium Priority
 
+- [ ] UI: reduce poll amplification (Sidebar/ConversationList/ConversationPage each poll the same project; hoist to one shared source) (added 2026-08-26)
+- [ ] UI: replace two-stage delete confirm()s with a dialog + explicit wipe checkbox (added 2026-08-26)
+- [ ] Align REQUIREMENTS.md + AGENTS.md frontend-stack wording with ADR-012 once operator approves (added 2026-08-26)
+
 - [ ] Complete claude + agy first-run sign-in in the demo projects (operator's browser
       needed once; agy's remote-OAuth code flow works through the web terminal) (added 2026-08-26)
 - [ ] agy native resume: find its session/store mechanism and wire into paneCommand (ADR-011) (added 2026-08-26)

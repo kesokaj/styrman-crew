@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api } from '../lib/api'
+import { api, tryUI } from '../lib/api'
 import { usePolled } from '../lib/hooks'
 import { TerminalPane } from './TerminalPane'
 
@@ -14,18 +14,20 @@ export function RightRail({ project }: { project: string }) {
   const { data, refresh } = usePolled(() => api.listTerminals(project), 5000)
   const terminals = data?.terminals ?? []
 
-  const create = async () => {
-    const { id } = await api.createTerminal(project)
-    setActive(id)
-    setOpen(true)
-    refresh()
-  }
+  const create = () =>
+    tryUI(async () => {
+      const { id } = await api.createTerminal(project)
+      setActive(id)
+      setOpen(true)
+      refresh()
+    })
 
-  const kill = async (id: string) => {
-    await api.deleteTerminal(project, id)
-    if (active === id) setActive(null)
-    refresh()
-  }
+  const kill = (id: string) =>
+    tryUI(async () => {
+      await api.deleteTerminal(project, id)
+      if (active === id) setActive(null)
+      refresh()
+    })
 
   if (!open) {
     return (

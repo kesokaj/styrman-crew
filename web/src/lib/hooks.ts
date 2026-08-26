@@ -9,7 +9,9 @@ export function usePolled<T>(fetcher: () => Promise<T>, intervalMs: number): {
   const [data, setData] = useState<T>()
   const [error, setError] = useState<string>()
   const fetcherRef = useRef(fetcher)
-  fetcherRef.current = fetcher
+  useEffect(() => {
+    fetcherRef.current = fetcher
+  })
 
   const refresh = useCallback(() => {
     fetcherRef

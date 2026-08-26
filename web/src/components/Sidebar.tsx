@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from '@tanstack/react-router'
-import { api, type Project } from '../lib/api'
+import { api, tryUI, type Project } from '../lib/api'
 import { usePolled, useTheme } from '../lib/hooks'
 import { NewProjectDialog } from './NewProjectDialog'
 import { SetupBanner } from './SetupBanner'
@@ -16,13 +16,15 @@ export function Sidebar() {
 
   const projects = data?.projects ?? []
 
-  const openProject = async (p: Project) => {
-    const { conversations } = await api.listConversations(p.name)
-    const first = conversations[0] ?? (await api.createConversation(p.name))
-    navigate({ to: '/p/$project/$conv', params: { project: p.name, conv: first.id } })
-  }
+  const openProject = (p: Project) =>
+    tryUI(async () => {
+      const { conversations } = await api.listConversations(p.name)
+      const first = conversations[0] ?? (await api.createConversation(p.name))
+      navigate({ to: '/p/$project/$conv', params: { project: p.name, conv: first.id } })
+    })
 
-  const projectAction = async (p: Project, action: 'stop' | 'start' | 'delete') => {
+  const projectAction = (p: Project, action: 'stop' | 'start' | 'delete') =>
+    tryUI(async () => {
     setMenuFor(null)
     if (action === 'stop') await api.stopProject(p.name)
     if (action === 'start') await api.startProject(p.name)
@@ -35,7 +37,7 @@ export function Sidebar() {
       if (params.project === p.name) navigate({ to: '/' })
     }
     refresh()
-  }
+    })
 
   return (
     <aside className="flex h-full w-64 shrink-0 flex-col border-r border-border bg-bg-raised">

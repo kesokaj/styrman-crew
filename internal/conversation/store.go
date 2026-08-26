@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"sync"
@@ -49,16 +50,26 @@ func NewStore(path string) (*Store, error) {
 	for project, recs := range s.byProject {
 		kept := recs[:0]
 		for _, r := range recs {
-			if ValidateID(r.ID) == nil {
-				kept = append(kept, r)
-			} else {
+			// Validate on load: ids flow into tmux session names and the
+			// agentSession UUID into a shell string (bridge.paneCommand), so
+			// a hand-edited file must not break those invariants.
+			if ValidateID(r.ID) != nil {
 				slog.Warn("skipping invalid conversation record", "project", project, "id", r.ID)
+				continue
 			}
+			if r.AgentSession != "" && !sessionRe.MatchString(r.AgentSession) {
+				slog.Warn("skipping conversation with invalid agentSession", "project", project, "id", r.ID)
+				continue
+			}
+			kept = append(kept, r)
 		}
 		s.byProject[project] = kept
 	}
 	return s, nil
 }
+
+// sessionRe: lowercase UUIDv4 shape, as produced by newUUID.
+var sessionRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // Create allocates the next numeric id for the project and persists a record.
 func (s *Store) Create(project, title string) (Record, error) {
@@ -104,30 +115,6 @@ func (s *Store) Get(project, id string) (Record, bool) {
 	return Record{}, false
 }
 
-// EnsureRecord returns the record for id, creating one (with that id) if it
-// does not exist — keeps old clients and test probes working.
-func (s *Store) EnsureRecord(project, id string) (Record, error) {
-	if rec, ok := s.Get(project, id); ok {
-		return rec, nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, r := range s.byProject[project] { // re-check under lock
-		if r.ID == id {
-			return r, nil
-		}
-	}
-	rec := Record{
-		ID:           id,
-		Title:        "Conversation " + id,
-		AgentSession: newUUID(),
-		CreatedAt:    time.Now().UTC(),
-		LastOpened:   time.Now().UTC(),
-	}
-	s.byProject[project] = append(s.byProject[project], rec)
-	return rec, s.save()
-}
-
 // Touch updates LastOpened.
 func (s *Store) Touch(project, id string) {
 	s.mu.Lock()
@@ -135,7 +122,9 @@ func (s *Store) Touch(project, id string) {
 	for i, r := range s.byProject[project] {
 		if r.ID == id {
 			s.byProject[project][i].LastOpened = time.Now().UTC()
-			_ = s.save()
+			if err := s.save(); err != nil {
+				slog.Warn("conversation store save failed", "project", project, "id", id, "error", err)
+			}
 			return
 		}
 	}

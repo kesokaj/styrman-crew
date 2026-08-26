@@ -11,8 +11,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -92,13 +92,15 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "project has unknown agent "+proj.Agent, http.StatusInternalServerError)
 			return
 		}
-		rec, err := b.convs.EnsureRecord(projName, convID)
-		if err != nil {
-			http.Error(w, "conversation store: "+err.Error(), http.StatusInternalServerError)
+		// Strict: the record must exist (created via POST). Auto-creating
+		// here let stale reconnects resurrect deleted conversations.
+		rec, ok := b.convs.Get(projName, convID)
+		if !ok {
+			http.Error(w, "unknown conversation", http.StatusNotFound)
 			return
 		}
 		b.convs.Touch(projName, convID)
-		paneCmd = paneCommand(proj.Agent, agentCmd, rec.AgentSession, b.cfg.Username, projName)
+		paneCmd = paneCommand(proj.Agent, agentCmd, rec.AgentSession)
 		tmuxName = conversation.Prefix + convID
 	}
 
@@ -122,20 +124,24 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// uuidRe guards everything interpolated into the pane shell string — the
+// session UUID is server-generated, but the store file is hand-editable, so
+// enforce the shape at the point of use too (defense in depth).
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
 // paneCommand builds the tmux pane command for an agent conversation.
-// For claude, the conversation's UUID pins the Claude Code session: the
-// first run creates it (--session-id), later runs resume it (--resume), so
-// history survives container restarts and idle stops (ADR-011). Claude
-// stores sessions under ~/.claude/projects/<cwd with / and . mapped to ->/.
-// agy manages its own history; resume wiring is a TODO.
-func paneCommand(agent, agentCmd, sessionUUID, username, projName string) string {
-	if agent != "claude" || sessionUUID == "" {
+// For claude, the conversation's UUID pins the Claude Code session
+// (ADR-011): try native resume first; if that fails (no such session yet —
+// the first open), start a new session under the same UUID. Resume-first
+// avoids depending on claude's transcript-path encoding, whose breakage
+// would otherwise brick the conversation (review finding). agy manages its
+// own history; resume wiring is a TODO.
+func paneCommand(agent, agentCmd, sessionUUID string) string {
+	if agent != "claude" || !uuidRe.MatchString(sessionUUID) {
 		return "bash -lc 'exec " + agentCmd + "'"
 	}
-	dir := strings.NewReplacer("/", "-", ".", "-").Replace("/home/" + username + "/projects/" + projName)
-	file := "$HOME/.claude/projects/" + dir + "/" + sessionUUID + ".jsonl"
-	return "bash -lc 'if [ -s \"" + file + "\" ]; then exec claude --resume " + sessionUUID +
-		"; else exec claude --session-id " + sessionUUID + "; fi'"
+	return "bash -lc '" + agentCmd + " --resume " + sessionUUID +
+		" 2>/dev/null || exec " + agentCmd + " --session-id " + sessionUUID + "'"
 }
 
 // ServeSetup attaches the hidden onboarding microVM running styrman-setup
@@ -223,7 +229,7 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 	}
 	defer ex.Close()
 
-	b.logger.Info("terminal attached", "session", s.key, "cmd", s.paneCmd)
+	b.logger.Info("terminal attached", "session", s.key)
 
 	touch := func() {
 		if s.project != "" {

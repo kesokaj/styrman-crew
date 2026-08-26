@@ -40,16 +40,6 @@ func TestStoreLifecycle(t *testing.T) {
 		t.Errorf("agent session not stable across reload")
 	}
 
-	// EnsureRecord: existing id returns same record; new id creates.
-	same, _ := s2.EnsureRecord("alpha", "1")
-	if same.AgentSession != r1.AgentSession {
-		t.Error("EnsureRecord must not regenerate existing records")
-	}
-	created, _ := s2.EnsureRecord("alpha", "9")
-	if created.ID != "9" {
-		t.Errorf("EnsureRecord new id = %+v", created)
-	}
-
 	if err := s2.Rename("alpha", "2", "Renamed"); err != nil {
 		t.Fatal(err)
 	}

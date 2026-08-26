@@ -1,0 +1,88 @@
+package httpapi
+
+import (
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/kesokaj/styrman/internal/config"
+	"github.com/kesokaj/styrman/internal/conversation"
+	"github.com/kesokaj/styrman/internal/orchestrator"
+	"github.com/kesokaj/styrman/internal/project"
+)
+
+// testRoutes builds the handler with real stores in a temp dir; the docker
+// client is constructed but never dialed by the paths under test.
+func testRoutes(t *testing.T) http.Handler {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := &config.Config{StateDir: dir, HomeDir: filepath.Join(dir, "home")}
+	logger := slog.New(slog.DiscardHandler)
+	projects, err := project.NewStore(filepath.Join(dir, "projects.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	convs, err := conversation.NewStore(filepath.Join(dir, "conversations.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	orch, err := orchestrator.New(cfg, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return New(cfg, projects, convs, orch, logger).Routes()
+}
+
+func TestRouting(t *testing.T) {
+	h := testRoutes(t)
+	get := func(path string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		return w
+	}
+
+	// Unknown API/WS paths must be JSON 404s, never the SPA fallback.
+	for _, path := range []string{"/api/typo", "/ws/term/only-project", "/api/projects/x/nope"} {
+		w := get(path)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", path, w.Code)
+		}
+		if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "json") && w.Code == http.StatusNotFound {
+			// mux's own 404 is text; ours is JSON — both acceptable as long
+			// as it is NOT the SPA's HTML.
+			if strings.Contains(w.Body.String(), "<title>") {
+				t.Errorf("GET %s returned the SPA instead of an error", path)
+			}
+		}
+	}
+
+	// SPA: root and client-side routes serve index.html…
+	for _, path := range []string{"/", "/setup", "/p/foo/1"} {
+		w := get(path)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<title>styrman</title>") {
+			t.Errorf("GET %s: code=%d, SPA index expected", path, w.Code)
+		}
+	}
+
+	// …but embedded directories are not listable.
+	if w := get("/assets/"); strings.Contains(w.Body.String(), "<pre>") {
+		t.Error("GET /assets/ exposes a directory listing")
+	}
+
+	// Cross-origin mutation is rejected.
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader("{}"))
+	req.Header.Set("Origin", "https://evil.example")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("cross-origin POST = %d, want 403", w.Code)
+	}
+
+	// Unknown project 404s before any docker interaction.
+	if w := get("/api/projects/nope"); w.Code != http.StatusNotFound {
+		t.Errorf("GET unknown project = %d, want 404", w.Code)
+	}
+}

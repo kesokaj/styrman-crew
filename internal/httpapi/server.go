@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kesokaj/styrman/internal/config"
@@ -38,6 +39,13 @@ type Server struct {
 	convStore *conversation.Store
 	bridge    *terminal.Bridge
 	logger    *slog.Logger
+
+	// termMu/termReserved close the terminal-id TOCTOU: ids are derived from
+	// live tmux sessions, but the session only exists after the WS attaches,
+	// so rapid "+ New" clicks would get the same id (review finding).
+	// Reservations expire after a minute.
+	termMu       sync.Mutex
+	termReserved map[string]map[string]time.Time
 }
 
 // New creates the Server.
@@ -82,13 +90,22 @@ func (s *Server) Routes() http.Handler {
 
 	// The embedded SPA: real files served directly, everything else falls
 	// back to index.html so client-side routes (/p/..., /setup) deep-link.
-	dist, _ := fs.Sub(web.Dist, "dist")
+	// Unknown /api and /ws paths get a JSON 404 — the SPA fallback would
+	// otherwise hand 200 HTML to API clients (review finding); directories
+	// are excluded so the bundle can't be listing-browsed.
+	dist, err := fs.Sub(web.Dist, "dist")
+	if err != nil {
+		panic("embedded UI missing: " + err.Error()) // built into the binary; cannot fail at runtime
+	}
 	fileServer := http.FileServerFS(dist)
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/ws/") {
+			writeErr(w, http.StatusNotFound, fmt.Errorf("no such endpoint: %s", r.URL.Path))
+			return
+		}
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		if p != "" {
-			if f, err := dist.Open(p); err == nil {
-				f.Close()
+			if st, err := fs.Stat(dist, p); err == nil && !st.IsDir() {
 				fileServer.ServeHTTP(w, r)
 				return
 			}
@@ -221,7 +238,12 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	if err := s.orch.Destroy(r.Context(), name); err != nil {
+	// Detached context: a client that gives up (tab closed, timeout) must not
+	// cancel a half-done destroy and strand container-gone/record-present
+	// state (found by the e2e suite).
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := s.orch.Destroy(ctx, name); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -271,7 +293,10 @@ func (s *Server) stopProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	if err := s.orch.Stop(r.Context(), name); err != nil {
+	// Detached for the same reason as deleteProject.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := s.orch.Stop(ctx, name); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -396,9 +421,25 @@ func (s *Server) createTerminal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	s.termMu.Lock()
+	defer s.termMu.Unlock()
+	if s.termReserved == nil {
+		s.termReserved = map[string]map[string]time.Time{}
+	}
+	if s.termReserved[name] == nil {
+		s.termReserved[name] = map[string]time.Time{}
+	}
 	used := map[string]bool{}
 	for _, t := range terms {
 		used[t.ID] = true
+	}
+	now := time.Now()
+	for id, exp := range s.termReserved[name] {
+		if now.Before(exp) {
+			used[id] = true
+		} else {
+			delete(s.termReserved[name], id)
+		}
 	}
 	id := ""
 	for n := 1; ; n++ {
@@ -407,6 +448,7 @@ func (s *Server) createTerminal(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	s.termReserved[name][id] = now.Add(time.Minute)
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 }
 

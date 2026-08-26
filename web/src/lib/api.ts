@@ -36,7 +36,16 @@ export interface SetupStatus {
   vmRunning: boolean
 }
 
-class ApiError extends Error {
+/** Run a UI action; surface API failures instead of swallowing the rejection. */
+export async function tryUI(action: () => Promise<void>): Promise<void> {
+  try {
+    await action()
+  } catch (e) {
+    alert((e as Error).message || 'Request failed')
+  }
+}
+
+export class ApiError extends Error {
   readonly status: number
   constructor(message: string, status: number) {
     super(message)

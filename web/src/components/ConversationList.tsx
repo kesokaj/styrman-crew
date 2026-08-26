@@ -1,5 +1,5 @@
 import { useNavigate } from '@tanstack/react-router'
-import { api } from '../lib/api'
+import { api, tryUI } from '../lib/api'
 import { usePolled } from '../lib/hooks'
 
 export function ConversationList({ project, activeConv }: { project: string; activeConv?: string }) {
@@ -10,17 +10,20 @@ export function ConversationList({ project, activeConv }: { project: string; act
   const open = (id: string) =>
     navigate({ to: '/p/$project/$conv', params: { project, conv: id } })
 
-  const create = async () => {
-    const rec = await api.createConversation(project)
-    refresh()
-    open(rec.id)
-  }
+  const create = () =>
+    tryUI(async () => {
+      const rec = await api.createConversation(project)
+      refresh()
+      open(rec.id)
+    })
 
   const remove = async (id: string, title: string) => {
     if (!confirm(`Delete "${title}"? Its terminal session ends; the agent's transcript stays in the home.`)) return
-    await api.deleteConversation(project, id)
-    refresh()
-    if (activeConv === id) navigate({ to: '/' })
+    await tryUI(async () => {
+      await api.deleteConversation(project, id)
+      refresh()
+      if (activeConv === id) navigate({ to: '/' })
+    })
   }
 
   return (
