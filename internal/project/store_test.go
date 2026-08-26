@@ -29,17 +29,17 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := Project{Name: "alpha", Agent: "claude", CreatedAt: time.Now().UTC(), GitInit: true}
-	if err := s.Add(p); err != nil {
+	p, err := s.Add(Project{Name: "alpha", CreatedAt: time.Now().UTC(), GitInit: true})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Add(p); err == nil {
-		t.Error("duplicate Add should fail")
+	if p.ID == "" || p.Dir != "alpha" {
+		t.Errorf("Add did not assign id/dir: %+v", p)
 	}
-	if err := s.Add(Project{Name: "beta", Agent: "nope"}); err == nil {
-		t.Error("unknown agent should fail")
+	if _, err := s.Add(Project{Name: "alpha"}); err == nil {
+		t.Error("duplicate live name should fail")
 	}
-	if err := s.Add(Project{Name: "Bad Name", Agent: "agy"}); err == nil {
+	if _, err := s.Add(Project{Name: "Bad Name"}); err == nil {
 		t.Error("invalid name should fail")
 	}
 
@@ -48,25 +48,32 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := s2.Get("alpha")
+	got, err := s2.Get(p.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Agent != "claude" || !got.GitInit {
+	if got.Name != "alpha" || !got.GitInit {
 		t.Errorf("reloaded project = %+v", got)
 	}
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
 		t.Error("tmp file left behind")
 	}
 
-	if err := s2.Remove("alpha"); err != nil {
+	// Rename keeps the dir; name becomes reusable after removal.
+	if err := s2.Rename(p.ID, "omega"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s2.Get("alpha"); err != ErrNotFound {
+	if got, _ := s2.Get(p.ID); got.Name != "omega" || got.Dir != "alpha" {
+		t.Errorf("rename moved the dir: %+v", got)
+	}
+	if err := s2.Remove(p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.Get(p.ID); err != ErrNotFound {
 		t.Errorf("Get after Remove = %v, want ErrNotFound", err)
 	}
-	if err := s2.Remove("alpha"); err != ErrNotFound {
-		t.Errorf("double Remove = %v, want ErrNotFound", err)
+	if _, err := s2.Add(Project{Name: "omega"}); err != nil {
+		t.Errorf("name reuse after deletion should work: %v", err)
 	}
 }
 
@@ -74,7 +81,7 @@ func TestListNewestFirst(t *testing.T) {
 	s, _ := NewStore(filepath.Join(t.TempDir(), "p.json"))
 	base := time.Now()
 	for i, name := range []string{"old", "mid", "new"} {
-		if err := s.Add(Project{Name: name, Agent: "agy", CreatedAt: base.Add(time.Duration(i) * time.Hour)}); err != nil {
+		if _, err := s.Add(Project{Name: name, CreatedAt: base.Add(time.Duration(i) * time.Hour)}); err != nil {
 			t.Fatal(err)
 		}
 	}

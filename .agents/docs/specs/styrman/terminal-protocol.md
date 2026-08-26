@@ -6,17 +6,16 @@ verbatim from devbox so its hard-won semantics carry over.
 ## Endpoint
 
 ```
-GET /ws/term/{project}/{conv}?cols=<n>&rows=<n>[&kind=shell]
+GET /ws/term/{projectId}/{terminal}?cols=<n>&rows=<n>
 ```
 
-- `{project}`: an existing project slug (404 otherwise).
-- `{conv}`: conversation id, `[a-z0-9][a-z0-9-]{0,30}`. Maps to tmux session
-  `conv-<id>` inside the project's microVM.
+- `{projectId}`: the project's UUID (404 otherwise).
+- `{terminal}`: terminal id, `[a-z0-9][a-z0-9-]{0,30}`. Maps to tmux session
+  `conv-<id>` inside the project's microVM. The record must exist (created
+  via POST) — unknown terminals are refused, never auto-created.
 - `cols`/`rows`: the client's real terminal size at connect time. Passing them
   in the URL lets tmux create the session at the right size, avoiding the
   80x24-then-resize double-prompt redraw.
-- `kind=shell`: attach a plain `bash -l` instead of the project's agent CLI.
-  Used for auxiliary terminals (the right-rail "Terminals" in Phase 2).
 
 Connecting boots the project's microVM if it is stopped (this is the one slow
 path — up to a few seconds; the HTTP upgrade completes only after readiness).
@@ -43,9 +42,10 @@ There are no other text messages; unknown control types are ignored.
 
 - One live WebSocket per conversation, enforced server-side (`activeConns`).
 - The tmux session is created lazily by the first attach:
-  `tmux new-session -A -s conv-<id> -x <cols> -y <rows> -c ~/projects/<project> <cmd>`
-  where `<cmd>` is the project's agent CLI (or `bash -l` for kind=shell).
-  `-A` attaches when the session exists (the command is then ignored).
+  `tmux new-session -A -D -s conv-<id> -x <cols> -y <rows> -c ~/projects/<dir> bash -l`
+  — every terminal is a login shell (ADR-014/016); `-A` attaches when the
+  session exists, `-D` detaches stale clients. Panes are transcribed via
+  pipe-pane to `~/.styrman/logs/<projectId>/` (ADR-017).
 - The pane command exiting ends the session → close 4000.
 - A browser disconnect never signals the shell; the session stays alive until
   killed via the API, the pane command exits, or the container stops.

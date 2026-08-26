@@ -33,10 +33,13 @@
 5. **R5 — Agents**: `claude` (Claude Code) and `agy` (Antigravity CLI), selected per
    project at creation. Harness deployed from `devshell_prompt/harness` into the shared
    home for both vendors.
-6. **R6 — Conversations are tmux sessions**: survive browser disconnects; single active
-   WebSocket per conversation (close-code 4001 replaces).
-7. **R7 — No database**: state = Docker labels + filesystem + `projects.json`.
-   A server restart or host reboot recovers everything by adoption.
+6. **R6 — Terminals are durable records over tmux sessions** (ADR-016):
+   survive browser disconnects; single active WebSocket per terminal
+   (close-code 4001 replaces); pause keeps record + transcript.
+7. **R7 — No database**: state = Docker labels + filesystem + per-user JSON
+   stores (`users/<u>/{projects,conversations,profile}.json`). A server
+   restart or host reboot recovers everything by adoption. Project identity
+   is a UUID (ADR-020); friendly names are labels.
 8. **R8 — Auth via Google OAuth at the ingress** (reused devbox-caddy), application-level
    authorization re-checked against the userstore. No unauthenticated exposure.
 9. **R9 — Local-only deployment** on this machine. No cloud deploy of styrman itself.

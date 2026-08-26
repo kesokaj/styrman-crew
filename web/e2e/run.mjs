@@ -60,8 +60,16 @@ try {
   await shot('02-new-project-modal')
   await page.click('button:has-text("Create")')
   await check('navigates into a terminal after create', () =>
-    page.waitForURL(`**/p/${PROJECT}/1`, { timeout: 60000 }),
+    page.waitForURL(`**/p/*/1`, { timeout: 60000 }),
   )
+  // Resolve the project's UUID for URL-based assertions.
+  const PID = await (async () => {
+    const r = await (await fetch(`${BASE}/api/projects`)).json()
+    return r.projects.find((p) => p.name === PROJECT)?.id ?? 'missing'
+  })()
+  await check('URL uses the project UUID', async () => {
+    if (!page.url().includes(`/p/${PID}/`)) throw new Error(`url=${page.url()} pid=${PID}`)
+  })
   await check('terminal header shows title', () =>
     page.waitForSelector('header button:has-text("Terminal 1"), header button:has-text("Conversation 1")'),
   )
@@ -124,7 +132,7 @@ try {
     await page.waitForSelector('aside >> text=:4321', { timeout: 25000 })
   })
   await check('port link serves the app from inside the microVM', async () => {
-    const res = await page.request.get(`${BASE}/p/${PROJECT}/1/port/4321/index.html`)
+    const res = await page.request.get(`${BASE}/p/${PID}/1/port/4321/index.html`)
     const body = await res.text()
     if (!body.includes('e2e-app')) throw new Error('proxy did not serve the app')
   })
@@ -158,10 +166,10 @@ try {
   )
   await check('rename visible in sidebar', () => page.waitForSelector('aside >> text=Renamed by e2e'))
   await page.click('text=+ New terminal')
-  await check('second terminal opens', () => page.waitForURL(`**/p/${PROJECT}/2`))
+  await check('second terminal opens', () => page.waitForURL(`**/p/${PID}/2`))
 
   // ── Deep link ───────────────────────────────────────────────────────────
-  await page.goto(`${BASE}/p/${PROJECT}/1`)
+  await page.goto(`${BASE}/p/${PID}/1`)
   await check('deep link reattaches terminal 1', () =>
     page.waitForSelector('header button:has-text("Renamed by e2e")'),
   )
@@ -198,7 +206,7 @@ try {
   await page.click('text=☾ Dark')
 
   // ── Cleanup: delete terminal + project via UI ───────────────────────────
-  await page.goto(`${BASE}/p/${PROJECT}/2`)
+  await page.goto(`${BASE}/p/${PID}/2`)
   page.on('dialog', (d) => {
     console.log(`  [dialog:${d.type()}] ${d.message().slice(0, 80)}`)
     d.accept()

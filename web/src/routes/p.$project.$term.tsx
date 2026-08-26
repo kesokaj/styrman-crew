@@ -9,6 +9,7 @@ export const Route = createFileRoute('/p/$project/$term')({ component: TerminalP
 
 function TerminalPage() {
   const { project, term } = Route.useParams()
+  const { data: proj } = usePolled(() => api.getProject(project), 20000)
   const { data, refresh } = usePolled(() => api.listTerminals(project), 10000)
   const record = data?.terminals.find((t) => t.id === term)
   const [editing, setEditing] = useState(false)
@@ -30,7 +31,7 @@ function TerminalPage() {
     <>
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-bg-raised px-3 text-xs">
-          <span className="text-text-dim">{project}</span>
+          <span className="text-text-dim">{proj?.name ?? '…'}</span>
           <span className="text-text-dim">/</span>
           {editing ? (
             <input

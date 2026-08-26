@@ -13,14 +13,18 @@ import (
 	"sort"
 	"sync"
 	"time"
-
-	"github.com/kesokaj/styrman/internal/config"
 )
 
-// Project is one styrman project.
+// Project is one styrman project. Identity is the UUID (containers,
+// networks, docker disks, transcripts all key on it); Name is a friendly,
+// renamable label — the same name can be used again after deletion. Dir is
+// the workspace directory under ~/projects, frozen at creation so renames
+// never move files.
 type Project struct {
+	ID        string    `json:"id"`
 	Name      string    `json:"name"`
-	Agent     string    `json:"agent"` // "claude" or "agy"
+	Dir       string    `json:"dir"`
+	Agent     string    `json:"agent,omitempty"` // legacy field
 	CreatedAt time.Time `json:"createdAt"`
 	GitInit   bool      `json:"gitInit"`
 	Archived  bool      `json:"archived"`
@@ -49,7 +53,7 @@ type storeFile struct {
 type Store struct {
 	mu       sync.Mutex
 	path     string
-	projects map[string]Project
+	projects map[string]Project // keyed by ID
 }
 
 // NewStore loads (or initializes) the store at path.
@@ -66,6 +70,7 @@ func NewStore(path string) (*Store, error) {
 	if err := json.Unmarshal(data, &f); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	migrated := false
 	for _, p := range f.Projects {
 		// Validate on load, not just on Add: everything downstream (paths,
 		// container/network names, tmux -c, wipe's RemoveAll) trusts store
@@ -74,68 +79,100 @@ func NewStore(path string) (*Store, error) {
 			slog.Warn("skipping invalid project in store", "name", p.Name, "error", err)
 			continue
 		}
-		if p.Agent != "" {
-			if _, ok := config.Agents[p.Agent]; !ok {
-				slog.Warn("skipping project with unknown agent in store", "name", p.Name, "agent", p.Agent)
-				continue
-			}
+		// Migration from name-keyed records: assign a UUID, freeze the dir.
+		if p.ID == "" {
+			p.ID = NewUUID()
+			migrated = true
 		}
-		s.projects[p.Name] = p
+		if p.Dir == "" {
+			p.Dir = p.Name
+		}
+		if !uuidRe.MatchString(p.ID) || ValidateName(p.Dir) != nil {
+			slog.Warn("skipping project with invalid id/dir", "name", p.Name)
+			continue
+		}
+		s.projects[p.ID] = p
+	}
+	if migrated {
+		s.mu.Lock()
+		_ = s.save()
+		s.mu.Unlock()
 	}
 	return s, nil
 }
 
-// Add registers a new project. Fails if the name is taken or invalid.
-func (s *Store) Add(p Project) error {
+// uuidRe: lowercase UUIDv4 shape (NewUUID's output).
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+
+// Add registers a new project, assigning its UUID and freezing Dir = Name.
+// The name must not collide with another *current* project (the workspace
+// dir is name-based); reusing a name after deletion is fine — the UUID keeps
+// every runtime artifact distinct.
+func (s *Store) Add(p Project) (Project, error) {
 	if err := ValidateName(p.Name); err != nil {
-		return err
-	}
-	if p.Agent != "" {
-		if _, ok := config.Agents[p.Agent]; !ok {
-			return fmt.Errorf("unknown agent %q", p.Agent)
-		}
+		return Project{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.projects[p.Name]; exists {
-		return fmt.Errorf("project %q already exists", p.Name)
+	for _, other := range s.projects {
+		if other.Name == p.Name {
+			return Project{}, fmt.Errorf("a project named %q already exists", p.Name)
+		}
 	}
-	s.projects[p.Name] = p
+	p.ID = NewUUID()
+	p.Dir = p.Name
+	s.projects[p.ID] = p
+	return p, s.save()
+}
+
+// Rename changes the friendly name (the workspace dir stays put).
+func (s *Store) Rename(id, name string) error {
+	if err := ValidateName(name); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.projects[id]
+	if !ok {
+		return ErrNotFound
+	}
+	p.Name = name
+	s.projects[id] = p
 	return s.save()
 }
 
-// Get returns a project by name.
-func (s *Store) Get(name string) (Project, error) {
+// Get returns a project by ID.
+func (s *Store) Get(id string) (Project, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.projects[name]
+	p, ok := s.projects[id]
 	if !ok {
 		return Project{}, ErrNotFound
 	}
 	return p, nil
 }
 
-// Remove deletes a project's metadata.
-func (s *Store) Remove(name string) error {
+// Remove deletes a project's metadata by ID.
+func (s *Store) Remove(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.projects[name]; !ok {
+	if _, ok := s.projects[id]; !ok {
 		return ErrNotFound
 	}
-	delete(s.projects, name)
+	delete(s.projects, id)
 	return s.save()
 }
 
 // SetArchived flips the archived flag.
-func (s *Store) SetArchived(name string, archived bool) error {
+func (s *Store) SetArchived(id string, archived bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.projects[name]
+	p, ok := s.projects[id]
 	if !ok {
 		return ErrNotFound
 	}
 	p.Archived = archived
-	s.projects[name] = p
+	s.projects[id] = p
 	return s.save()
 }
 
@@ -157,7 +194,7 @@ func (s *Store) save() error {
 	for _, p := range s.projects {
 		f.Projects = append(f.Projects, p)
 	}
-	sort.Slice(f.Projects, func(i, j int) bool { return f.Projects[i].Name < f.Projects[j].Name })
+	sort.Slice(f.Projects, func(i, j int) bool { return f.Projects[i].ID < f.Projects[j].ID })
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return err

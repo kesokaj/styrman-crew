@@ -1,50 +1,57 @@
 # styrman
 
-Self-hosted web platform for running AI coding agents in isolated projects.
-
-Log in, hit **New Project**, pick an agent — [Claude Code](https://claude.ai/code)
-(`claude`) or [Antigravity CLI](https://antigravity.google/product/antigravity-cli)
-(`agy`) — and styrman gives you a browser terminal running that agent inside a dedicated
-**Kata Containers microVM**, in its own workspace, with its own Docker daemon. Jump
-between projects and conversations like a chat app; under the hood every conversation is
-a tmux session you can always reattach to.
+Self-hosted, multi-user platform for running AI coding agents in isolated
+projects. Sign in with Google, create a project, and get browser terminals
+inside a dedicated **Kata Containers microVM** — own kernel, own Docker
+daemon, own network, identified by a UUID with a friendly, renamable name.
+Both [Claude Code](https://claude.ai/code) (`claude`) and
+[Antigravity CLI](https://antigravity.google/product/antigravity-cli)
+(`agy`) are preinstalled — run either, in as many terminals as you like.
+Every user gets their own persistent home disk: credentials configured once,
+forever; containers disposable always.
 
 *Styrman* (Swedish): helmsman / first mate.
 
 ## Why
 
-- **The agent CLI is the chat window.** No custom chat UI to maintain — the terminal is
-  the interface, just organized like a conversation app (projects → conversations).
-- **Hard isolation.** 1 project = 1 microVM (own kernel, own dockerd). An agent running
-  wild in one project cannot touch another.
-- **Set up credentials once, ever.** A single persistent home directory is shared into
-  every microVM: `~/.ssh`, `~/.claude`, `~/.gemini`, gcloud, gh all survive container
-  rebuilds, project deletion, and host reboots.
+- **The agent CLI is the interface.** No custom chat UI to maintain — the
+  terminal is the surface, organized like a conversation app: projects →
+  terminals in the sidebar, project context (files, ports, history, diff)
+  in the side panel.
+- **Hard isolation.** 1 project = 1 microVM (own kernel, own dockerd, own
+  network — projects can never reach each other). 1 user = 1 home disk —
+  users never see each other's worlds.
+- **Credentials once, forever.** Each user's home (`~/.ssh`, `~/.claude`,
+  `~/.gemini`, gh) survives container rebuilds, project deletion, and host
+  reboots. Terminal transcripts are captured there too.
 
 ## Architecture
 
 ```
-Browser ──HTTPS──▶ Caddy (Google OAuth)          [Phase 3]
-                      │  X-Caddy-Email
+Browser ──HTTPS──► Caddy (Google OAuth, TLS, Cloudflare DNS — vendored ingress)
+                      │ identity header
                       ▼
-              styrman server (Go, one binary)
-                ├── embedded web UI (TanStack Start)
-                ├── REST /api/projects, /api/.../conversations
-                ├── WS   /ws/term/{project}/{conversation}
-                └── Docker SDK ──▶ per-project Kata microVM (runtime: mvm)
-                                     ├── tmux session per conversation → claude / agy
-                                     ├── own dockerd (data-root ~/.dockerd/<project>)
-                                     └── /home/<user> ← shared persistent (virtiofs)
+              styrman server (Go; embedded TanStack Start SPA)
+                ├── per-user spaces: homes/<user>, metadata JSON stores
+                ├── REST + WS /ws/term/{projectId}/{terminal}
+                ├── /p/{id}/{t}/port/{port}/ → apps inside the microVM
+                └── Docker SDK ──► per-project Kata microVM  styrman-<uuid>
+                                     ├── tmux session per terminal → transcripts
+                                     ├── own dockerd (overlay2 on a per-project disk)
+                                     └── virtiofs: the user's home
 ```
 
-No database: state lives in Docker labels, the filesystem, and one `projects.json`.
+No database: state lives in Docker labels, the filesystem, and per-user JSON
+stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-Alpha — Phase 1 complete: core backend, runtime image, terminal bridge, and
-reproducible host install are working end-to-end on localhost (18/18
-integration checks). Next: Phase 2 (the real UI), Phase 3 (Google OAuth
-ingress). Plan: `.agents/docs/plans/2026-08-26-super-devbox-implementation-plan.md`.
+Beta, deployed: https://app.styrman.xyz (Google sign-in, admin-managed
+access). All four build phases landed — microVM runtime, UI, OAuth ingress,
+multi-tenancy — verified by 3 suites (unit, 49 integration checks against
+real Kata, 29 Playwright browser checks). The living documentation is
+`.agents/docs/specs/styrman/guide.md`; the phase plans under
+`.agents/docs/plans/` are historical.
 
 ## Requirements
 
@@ -56,10 +63,13 @@ ingress). Plan: `.agents/docs/plans/2026-08-26-super-devbox-implementation-plan.
 
 ```bash
 sudo bash deploy/host-setup.sh --user $USER   # Docker + Kata "mvm" + dirs (idempotent)
-bash deploy/home-init.sh                      # shared home: dotfiles, SSH key, agent harness
 docker build -t styrman-runtime:dev image/    # runtime image (~10 min first build)
-STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/
-# → http://127.0.0.1:8080/dev/  — create a project, get an agent terminal in ~2 s
+
+# Dev (loopback, no auth):
+STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
+
+# Production (Google OAuth, HTTPS, reboot-safe):
+vi deploy/.env && docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 Full walkthrough, operations, and troubleshooting:

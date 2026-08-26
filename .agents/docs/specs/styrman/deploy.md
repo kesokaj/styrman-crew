@@ -9,8 +9,11 @@ STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/          # 127.0.0.1:808
 STYRMAN_ADDR=0.0.0.0:8080 ... go run ./cmd/styrman/              # LAN
 ```
 
-`STYRMAN_AUTH` defaults to `none`; anyone who can reach the port is the
-operator. Never expose this beyond a trusted network.
+`STYRMAN_AUTH` defaults to `none`; whoever reaches the port acts as the
+default user (first allowed email, else the OS user) with admin rights.
+Never expose this beyond loopback/trusted networks. In the compose deploy
+the same no-auth handler is published on host loopback only
+(`127.0.0.1:8080` → `STYRMAN_DEV_ADDR`) as the test/automation door.
 
 ## Production mode (Google OAuth, HTTPS, survives reboots)
 

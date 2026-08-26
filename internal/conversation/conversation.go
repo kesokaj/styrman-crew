@@ -49,7 +49,7 @@ func NewManager(orch *orchestrator.Orchestrator, cfg *config.Config) *Manager {
 
 // liveSessions lists tmux sessions with the given prefix. Empty (no error)
 // when the project is stopped or tmux has no server.
-func (m *Manager) liveSessions(ctx context.Context, user, project, prefix string) ([]Live, error) {
+func (m *Manager) liveSessions(ctx context.Context, user, project, guest, prefix string) ([]Live, error) {
 	st, err := m.orch.Status(ctx, user, project)
 	if err != nil {
 		return nil, err
@@ -58,9 +58,9 @@ func (m *Manager) liveSessions(ctx context.Context, user, project, prefix string
 		return []Live{}, nil
 	}
 	code, out, err := m.orch.Exec(ctx, st.ContainerID, orchestrator.ExecSpec{
-		User: user,
+		User: guest,
 		Cmd:  []string{"tmux", "list-sessions", "-F", "#{session_name}|#{session_attached}"},
-		Env:  []string{"HOME=/home/" + user, "USER=" + user},
+		Env:  []string{"HOME=/home/" + guest, "USER=" + guest},
 	})
 	if err != nil {
 		return nil, err
@@ -86,8 +86,8 @@ func (m *Manager) liveSessions(ctx context.Context, user, project, prefix string
 }
 
 // Live returns live tmux state keyed by terminal id.
-func (m *Manager) Live(ctx context.Context, user, project string) (map[string]Live, error) {
-	lives, err := m.liveSessions(ctx, user, project, Prefix)
+func (m *Manager) Live(ctx context.Context, user, project, guest string) (map[string]Live, error) {
+	lives, err := m.liveSessions(ctx, user, project, guest, Prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +99,7 @@ func (m *Manager) Live(ctx context.Context, user, project string) (map[string]Li
 }
 
 // KillSession ends a terminal's tmux session.
-func (m *Manager) KillSession(ctx context.Context, user, project, prefix, id string) error {
+func (m *Manager) KillSession(ctx context.Context, user, project, guest, prefix, id string) error {
 	if err := ValidateID(id); err != nil {
 		return err
 	}
@@ -111,9 +111,9 @@ func (m *Manager) KillSession(ctx context.Context, user, project, prefix, id str
 		return nil
 	}
 	code, out, err := m.orch.Exec(ctx, st.ContainerID, orchestrator.ExecSpec{
-		User: user,
+		User: guest,
 		Cmd:  []string{"tmux", "kill-session", "-t", prefix + id},
-		Env:  []string{"HOME=/home/" + user, "USER=" + user},
+		Env:  []string{"HOME=/home/" + guest, "USER=" + guest},
 	})
 	if err != nil {
 		return err

@@ -21,11 +21,12 @@ func (s *Server) rootFor(r *http.Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if name := r.PathValue("project"); name != "" {
-		if _, err := sp.projects.Get(name); err != nil {
+	if id := r.PathValue("project"); id != "" {
+		p, err := sp.projects.Get(id)
+		if err != nil {
 			return "", err
 		}
-		return filepath.Join(s.cfg.UserHome(u.Username), "projects", name), nil
+		return filepath.Join(s.cfg.UserHome(u.Username), "projects", p.Dir), nil
 	}
 	return s.cfg.UserHome(u.Username), nil
 }
@@ -151,7 +152,7 @@ func (s *Server) listHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	items, err := history.List(s.cfg.UserHome(u.Username), p.Name)
+	items, err := history.List(s.cfg.UserHome(u.Username), p.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -166,7 +167,7 @@ func (s *Server) readHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	max, _ := strconv.ParseInt(r.URL.Query().Get("bytes"), 10, 64)
-	text, err := history.Read(s.cfg.UserHome(u.Username), p.Name, r.PathValue("id"), max)
+	text, err := history.Read(s.cfg.UserHome(u.Username), p.ID, r.PathValue("id"), max)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
@@ -180,7 +181,7 @@ func (s *Server) projectDiff(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	d, err := history.GitDiff(filepath.Join(s.cfg.UserHome(u.Username), "projects", p.Name))
+	d, err := history.GitDiff(filepath.Join(s.cfg.UserHome(u.Username), "projects", p.Dir))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -212,6 +213,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		"runtime":       s.cfg.Runtime,
 		"dockerDiskGB":  s.cfg.DockerDisk,
 		"idleTimeout":   s.cfg.IdleTimeout.String(),
+		"terminalUsername": s.guestUserFor(u.Username),
 		"setupComplete": s.userSetupStatus(r.Context(), u.Username).Done,
 	})
 }

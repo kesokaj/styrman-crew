@@ -64,6 +64,55 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
   );
 }
 
+function TerminalUsername({ current, onSaved }: { current: string; onSaved: () => void }) {
+  const [value, setValue] = useState(current);
+  const [editing, setEditing] = useState(false);
+  if (!editing) {
+    return (
+      <span className="flex items-center gap-2">
+        <span className="font-mono">{current}</span>
+        <button
+          onClick={() => {
+            setValue(current);
+            setEditing(true);
+          }}
+          className="text-accent hover:underline"
+        >
+          change
+        </button>
+      </span>
+    );
+  }
+  return (
+    <span className="flex items-center gap-1">
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className="rounded border border-border bg-bg px-2 py-1 font-mono outline-none focus:border-accent"
+      />
+      <button
+        onClick={() =>
+          tryUI(async () => {
+            await api.setTerminalUsername(value.trim());
+            setEditing(false);
+            onSaved();
+          })
+        }
+        className="rounded bg-accent px-2 py-1 font-medium text-white"
+      >
+        Save
+      </button>
+      <button onClick={() => setEditing(false)} className="px-1 text-text-dim hover:text-text">
+        cancel
+      </button>
+      <span className="text-[10px] text-text-dim">
+        applies to project VMs started after the change (stop + start to apply)
+      </span>
+    </span>
+  );
+}
+
 function SettingsPage() {
   const navigate = useNavigate();
   const { data, refresh } = usePolled(() => api.settings(), 15000);
@@ -96,8 +145,8 @@ function SettingsPage() {
           <Row label="Signed in as">
             {data.user} {data.isAdmin && <span className="text-accent">(admin)</span>}
           </Row>
-          <Row label="Your username">
-            {data.username} — your terminals run as this user; your home is yours alone
+          <Row label="Terminal username">
+            <TerminalUsername current={data.terminalUsername} onSaved={refresh} />
           </Row>
           <Row label="Your home">{data.homeDir}</Row>
           <Row label="Auth mode">

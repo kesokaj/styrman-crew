@@ -35,10 +35,11 @@ import (
 // Version is stamped via -ldflags at build time.
 var Version = "dev"
 
-// userSpace holds one user's metadata stores.
+// userSpace holds one user's metadata stores and profile.
 type userSpace struct {
 	projects *project.Store
 	terms    *conversation.Store
+	profile  *profileStore
 }
 
 // Server wires the API handlers to their dependencies.
@@ -68,8 +69,32 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		logger: logger,
 		spaces: map[string]*userSpace{},
 	}
-	s.bridge = terminal.NewBridge(orch, cfg, logger, s.termStoreFor)
+	s.bridge = terminal.NewBridge(orch, cfg, logger, s.termStoreFor, s.ensureFor, s.guestUserFor)
 	return s
+}
+
+// ensureFor lets the WS bridge boot a project it only knows by user+UUID.
+func (s *Server) ensureFor(ctx context.Context, user, projectID string) (containerID, guestUser, dir string, err error) {
+	sp, err := s.space(user)
+	if err != nil {
+		return "", "", "", err
+	}
+	p, err := sp.projects.Get(projectID)
+	if err != nil {
+		return "", "", "", err
+	}
+	guest := sp.profile.GuestUser()
+	id, err := s.orch.EnsureRunning(ctx, user, p.ID, orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest})
+	return id, guest, p.Dir, err
+}
+
+// guestUserFor resolves the in-guest username for a user.
+func (s *Server) guestUserFor(user string) string {
+	sp, err := s.space(user)
+	if err != nil {
+		return user
+	}
+	return sp.profile.GuestUser()
 }
 
 // space returns (lazily creating) a user's stores and home skeleton.
@@ -94,7 +119,11 @@ func (s *Server) space(user string) (*userSpace, error) {
 	if err != nil {
 		return nil, err
 	}
-	sp := &userSpace{projects: projects, terms: terms}
+	prof, err := newProfileStore(filepath.Join(dir, "profile.json"), user)
+	if err != nil {
+		return nil, err
+	}
+	sp := &userSpace{projects: projects, terms: terms, profile: prof}
 	s.spaces[user] = sp
 	return sp, nil
 }
@@ -189,6 +218,8 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("GET /api/projects/{project}/diff", s.projectDiff)
 	// Settings + admin.
 	mux.HandleFunc("GET /api/settings", s.settings)
+	mux.HandleFunc("POST /api/settings/profile", s.updateProfile)
+	mux.HandleFunc("PATCH /api/projects/{project}", s.renameProject)
 	mux.HandleFunc("GET /api/settings/tools", s.toolDetails)
 	mux.HandleFunc("POST /api/settings/users", s.addUser)
 	mux.HandleFunc("DELETE /api/settings/users/{email}", s.removeUser)
@@ -294,7 +325,7 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	out := []projectView{}
 	for _, p := range sp.projects.List() {
 		state := "absent"
-		if st, ok := statuses[u.Username+"/"+p.Name]; ok {
+		if st, ok := statuses[u.Username+"/"+p.ID]; ok {
 			state = st.State
 		}
 		out = append(out, projectView{Project: p, State: state})
@@ -322,47 +353,50 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	p := project.Project{Name: req.Name, GitInit: req.GitInit, CreatedAt: time.Now().UTC()}
-
-	workdir := filepath.Join(s.cfg.UserHome(u.Username), "projects", req.Name)
-	if err := os.MkdirAll(workdir, 0o755); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	if err := sp.projects.Add(p); err != nil {
+	p, err := sp.projects.Add(project.Project{Name: req.Name, GitInit: req.GitInit, CreatedAt: time.Now().UTC()})
+	if err != nil {
 		writeErr(w, http.StatusConflict, err)
 		return
 	}
-
-	// Boot the microVM now so the first terminal attach is instant and
-	// creation errors surface here rather than mid-connect. On failure, roll
-	// the registration back so the name can be retried; the workspace dir is
-	// left in place — deleting user data on an error path is worse than a
-	// leftover empty dir.
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
-	defer cancel()
-	containerID, err := s.orch.EnsureRunning(ctx, u.Username, req.Name)
-	if err != nil {
-		_ = s.orch.Destroy(context.Background(), u.Username, req.Name)
-		_ = sp.projects.Remove(req.Name)
+	workdir := filepath.Join(s.cfg.UserHome(u.Username), "projects", p.Dir)
+	if err := os.MkdirAll(workdir, 0o755); err != nil {
+		_ = sp.projects.Remove(p.ID)
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	if req.GitInit {
-		// git init inside the guest as the user, so their gitconfig applies.
-		home := "/home/" + u.Username
-		code, out, err := s.orch.Exec(ctx, containerID, orchestrator.ExecSpec{
-			User:    u.Username,
-			WorkDir: home + "/projects/" + req.Name,
-			Env:     []string{"HOME=" + home, "USER=" + u.Username},
-			Cmd:     []string{"git", "init", "-b", "main"},
-		})
-		if err != nil || code != 0 {
-			s.logger.Warn("git init failed", "project", req.Name, "exit", code, "output", out, "error", err)
+	// Respond immediately and boot the microVM in the background: a
+	// seconds-long POST proved fragile in browsers (connection reuse during
+	// the docker network churn it causes), and the terminal attach waits for
+	// readiness anyway (per-project lock serializes with this boot).
+	guest := sp.profile.GuestUser()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		containerID, err := s.orch.EnsureRunning(ctx, u.Username, p.ID,
+			orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest})
+		if err != nil {
+			s.logger.Error("background project boot failed", "project", p.Name, "error", err)
+			return
 		}
-	}
-	writeJSON(w, http.StatusCreated, projectView{Project: p, State: "running"})
+		if req.GitInit {
+			// git init inside the guest as the user, so their gitconfig applies.
+			home := "/home/" + guest
+			code, out, err := s.orch.Exec(ctx, containerID, orchestrator.ExecSpec{
+				User:    guest,
+				WorkDir: home + "/projects/" + p.Dir,
+				Env:     []string{"HOME=" + home, "USER=" + guest},
+				Cmd:     []string{"git", "init", "-b", "main"},
+			})
+			if err != nil || code != 0 {
+				s.logger.Warn("git init failed", "project", p.Name, "exit", code, "output", out, "error", err)
+			}
+		}
+		// Pre-attach for port-preview while nothing depends on it (a fresh
+		// attach can kill in-flight connections through this container).
+		s.orch.EnsureSelfAttached(ctx, u.Username, p.ID)
+	}()
+	writeJSON(w, http.StatusCreated, projectView{Project: p, State: "creating"})
 }
 
 func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
@@ -385,12 +419,11 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	name := p.Name
 	// Detached context: a client that gives up must not cancel a half-done
 	// destroy and strand container-gone/record-present state.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := s.orch.Destroy(ctx, u.Username, name); err != nil {
+	if err := s.orch.Destroy(ctx, u.Username, p.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -399,22 +432,22 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("wipe") == "true" {
 		home := s.cfg.UserHome(u.Username)
 		for _, path := range []string{
-			filepath.Join(home, "projects", name),
-			filepath.Join(home, ".dockerd", name+".img"),
-			filepath.Join(home, ".dockerd", name),
-			filepath.Join(home, ".styrman", "logs", name),
+			filepath.Join(home, "projects", p.Dir),
+			filepath.Join(home, ".dockerd", p.ID+".img"),
+			filepath.Join(home, ".dockerd", p.ID),
+			filepath.Join(home, ".styrman", "logs", p.ID),
 		} {
 			if err := os.RemoveAll(path); err != nil {
-				s.logger.Warn("wipe failed", "project", name, "path", path, "error", err)
+				s.logger.Warn("wipe failed", "project", p.Name, "path", path, "error", err)
 			}
 		}
 	}
-	if err := sp.projects.Remove(name); err != nil {
+	if err := sp.projects.Remove(p.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if err := sp.terms.DeleteProject(name); err != nil {
-		s.logger.Warn("terminal records cleanup failed", "project", name, "error", err)
+	if err := sp.terms.DeleteProject(p.ID); err != nil {
+		s.logger.Warn("terminal records cleanup failed", "project", p.Name, "error", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -427,10 +460,18 @@ func (s *Server) startProject(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
-	if _, err := s.orch.EnsureRunning(ctx, u.Username, p.Name); err != nil {
+	sp2, _ := s.space(u.Username)
+	if _, err := s.orch.EnsureRunning(ctx, u.Username, p.ID,
+		orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: sp2.profile.GuestUser()}); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	go func() { // background pre-attach (see createProject)
+		actx, acancel := context.WithTimeout(context.Background(), time.Minute)
+		defer acancel()
+		time.Sleep(time.Second) // let this response flush first
+		s.orch.EnsureSelfAttached(actx, u.Username, p.ID)
+	}()
 	writeJSON(w, http.StatusOK, map[string]string{"state": "running"})
 }
 
@@ -442,7 +483,7 @@ func (s *Server) stopProject(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := s.orch.Stop(ctx, u.Username, p.Name); err != nil {
+	if err := s.orch.Stop(ctx, u.Username, p.ID); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -462,13 +503,13 @@ func (s *Server) listTerminals(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	live, err := s.tmux.Live(r.Context(), u.Username, p.Name)
+	live, err := s.tmux.Live(r.Context(), u.Username, p.ID, s.guestUserFor(u.Username))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	out := []terminalView{}
-	for _, rec := range sp.terms.List(p.Name) {
+	for _, rec := range sp.terms.List(p.ID) {
 		v := terminalView{Record: rec}
 		if l, ok := live[rec.ID]; ok {
 			v.Live = true
@@ -489,7 +530,7 @@ func (s *Server) createTerminal(w http.ResponseWriter, r *http.Request) {
 		Title string `json:"title"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body) // empty body = default title
-	rec, err := sp.terms.Create(p.Name, body.Title)
+	rec, err := sp.terms.Create(p.ID, body.Title)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -510,7 +551,7 @@ func (s *Server) renameTerminal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("title required"))
 		return
 	}
-	if err := sp.terms.Rename(p.Name, r.PathValue("term"), body.Title); err != nil {
+	if err := sp.terms.Rename(p.ID, r.PathValue("term"), body.Title); err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
@@ -528,11 +569,11 @@ func (s *Server) pauseTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("term")
-	if _, ok := sp.terms.Get(p.Name, id); !ok {
+	if _, ok := sp.terms.Get(p.ID, id); !ok {
 		writeErr(w, http.StatusNotFound, fmt.Errorf("terminal %s not found", id))
 		return
 	}
-	if err := s.tmux.KillSession(r.Context(), u.Username, p.Name, conversation.Prefix, id); err != nil {
+	if err := s.tmux.KillSession(r.Context(), u.Username, p.ID, s.guestUserFor(u.Username), conversation.Prefix, id); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -548,11 +589,11 @@ func (s *Server) deleteTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("term")
-	if err := s.tmux.KillSession(r.Context(), u.Username, p.Name, conversation.Prefix, id); err != nil {
+	if err := s.tmux.KillSession(r.Context(), u.Username, p.ID, s.guestUserFor(u.Username), conversation.Prefix, id); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if err := sp.terms.Delete(p.Name, id); err != nil {
+	if err := sp.terms.Delete(p.ID, id); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -566,11 +607,11 @@ func (s *Server) deleteAllTerminals(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	for _, rec := range sp.terms.List(p.Name) {
-		if err := s.tmux.KillSession(r.Context(), u.Username, p.Name, conversation.Prefix, rec.ID); err != nil {
+	for _, rec := range sp.terms.List(p.ID) {
+		if err := s.tmux.KillSession(r.Context(), u.Username, p.ID, s.guestUserFor(u.Username), conversation.Prefix, rec.ID); err != nil {
 			s.logger.Warn("kill session failed", "project", p.Name, "terminal", rec.ID, "error", err)
 		}
-		_ = sp.terms.Delete(p.Name, rec.ID)
+		_ = sp.terms.Delete(p.ID, rec.ID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

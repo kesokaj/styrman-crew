@@ -1,3 +1,7 @@
+> **HISTORICAL** — this plan predates several operator-directed redesigns
+> (terminals ADR-016, multi-tenancy ADR-019, UUID identity ADR-020). The
+> living documentation is `.agents/docs/specs/styrman/guide.md`.
+
 # styrman (né super-devbox) — Architecture Proposal
 
 Date: 2026-08-26 (rev 2 — user decisions incorporated)

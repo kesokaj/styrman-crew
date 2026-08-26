@@ -8,7 +8,8 @@ set -uo pipefail
 USERNAME="${STYRMAN_USER:?STYRMAN_USER not set}"
 UID_="${STYRMAN_UID:?STYRMAN_UID not set}"
 GID_="${STYRMAN_GID:?STYRMAN_GID not set}"
-PROJECT="${STYRMAN_PROJECT:?STYRMAN_PROJECT not set}"
+PROJECT="${STYRMAN_PROJECT:?STYRMAN_PROJECT not set}"           # project UUID
+PROJECT_DIR="${STYRMAN_PROJECT_DIR:-$PROJECT}"                  # workspace dir name
 DISK_GB="${STYRMAN_DOCKER_DISK_GB:-20}"
 HOME_DIR="/home/${USERNAME}"
 
@@ -54,7 +55,7 @@ MINIMAL="${STYRMAN_MINIMAL:-}"
 
 # Project-scoped dirs inside the shared home (write-discipline, ADR-003).
 if [ -z "${MINIMAL}" ]; then
-    runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/projects/${PROJECT}" "${HOME_DIR}/.dockerd" 2>/dev/null || true
+    runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/projects/${PROJECT_DIR}" "${HOME_DIR}/.dockerd" 2>/dev/null || true
 fi
 
 # ─── Keyring plumbing for agy (spike S4) ────────────────────────────────────

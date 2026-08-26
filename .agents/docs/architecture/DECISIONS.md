@@ -392,3 +392,49 @@ pre-multitenancy containers (data persists; containers are disposable).
 setup banner, their own projects — and no path to anyone else's. The state
 dir (all homes + metadata) is the single backup target. Legacy migration ran
 2026-08-26 (admin home → homes/ostling-simon).
+
+---
+
+## ADR-020: Project identity is a UUID; names are friendly labels
+
+**Date:** 2026-08-26 · **Status:** accepted (operator directive)
+
+**Context:** Operator: "we need to start using uuids, the same name can be
+used many times… all projects will get a uuid and a friendly name."
+
+**Decision:** `Project{ID(uuid), Name, Dir}`; everything runtime keys on the
+UUID: containers `styrman-<uuid>`, networks `sdb-<uuid>`, docker disks
+`~/.dockerd/<uuid>.img`, transcripts `~/.styrman/logs/<uuid>/`, API paths
+and UI routes. Names are renamable (`PATCH /api/projects/{id}`) and reusable
+after deletion; among *current* projects a name must be unique because the
+workspace dir (`Dir`, frozen at creation) is name-based. Stores migrate
+name-keyed records by assigning UUIDs on load; previous-scheme containers
+are swept via the Docker SDK at boot (CleanupLegacy — the containerized
+server has no docker CLI).
+
+**Consequences:** No naming collisions ever again across users or history;
+renames are free. URLs show UUIDs (stable, shareable) with names in the UI.
+
+---
+
+## ADR-021: Async project creation; the server never reconfigures its own
+network on a request path
+
+**Date:** 2026-08-26 · **Status:** accepted (bug-driven)
+
+**Context:** Browser POSTs to create projects failed intermittently with
+connection-refused while curl succeeded. Root cause: `EnsureSelfAttached`
+(joining the server's own container to the new project network for the
+port-preview proxy) reconfigures the server's network namespace, killing
+in-flight HTTP connections — including the very request that triggered it.
+
+**Decision:** (a) `POST /api/projects` returns 201 `state:"creating"`
+immediately and boots the microVM in a background goroutine (terminal
+attach waits on the per-project lock + readiness). (b) Self-attach happens
+only in the background (post-create, post-start, at boot for adopted
+projects); when the preview proxy must attach on demand it responds 307 to
+the same URL so the browser retries on a fresh connection instead of
+dialing through a doomed one.
+
+**Consequences:** Creation UX is instant; the flake class is gone (verified
+by repeated e2e runs). First-ever preview of a project may redirect once.

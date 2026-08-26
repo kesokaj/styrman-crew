@@ -74,7 +74,7 @@ func (o *Orchestrator) Touch(user, project string) { o.activity.Store(key(user, 
 
 // Status inspects the project's container.
 func (o *Orchestrator) Status(ctx context.Context, user, project string) (Status, error) {
-	insp, err := o.docker.ContainerInspect(ctx, config.ContainerName(user, project))
+	insp, err := o.docker.ContainerInspect(ctx, config.ContainerName(project))
 	if err != nil {
 		if errdefs.IsNotFound(err) {
 			return Status{User: user, Project: project, State: "absent"}, nil
@@ -88,14 +88,22 @@ func (o *Orchestrator) Status(ctx context.Context, user, project string) (Status
 	return Status{User: user, Project: project, ContainerID: insp.ID, State: st}, nil
 }
 
+// RunOpts carries the project facts the container needs beyond its UUID.
+type RunOpts struct {
+	Name      string // friendly name (label + hostname)
+	Dir       string // workspace dir under ~/projects
+	GuestUser string // in-guest username (per-user setting)
+}
+
 // EnsureRunning makes sure the project's microVM exists and is running, and
-// waits until the entrypoint reports ready. Returns the container ID.
-func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string) (string, error) {
+// waits until the entrypoint reports ready. project is the UUID. Returns the
+// container ID.
+func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, opts RunOpts) (string, error) {
 	l := o.lockProject(key(user, project))
 	l.Lock()
 	defer l.Unlock()
 
-	name := config.ContainerName(user, project)
+	name := config.ContainerName(project)
 	id := ""
 	insp, err := o.docker.ContainerInspect(ctx, name)
 	switch {
@@ -110,17 +118,19 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string) 
 	case errdefs.IsNotFound(err):
 		id, err = o.create(ctx, createSpec{
 			name:      name,
-			netName:   config.NetworkName(user, project),
-			hostname:  "styrman-" + project,
-			guestUser: user,
+			netName:   config.NetworkName(project),
+			hostname:  "styrman-" + opts.Name,
+			guestUser: opts.GuestUser,
 			homePath:  o.cfg.UserHome(user),
 			extraEnv: []string{
 				config.EnvProject + "=" + project,
+				config.EnvProjectDir + "=" + opts.Dir,
 				config.EnvDockerDisk + "=" + strconv.Itoa(o.cfg.DockerDisk),
 			},
 			labels: map[string]string{
 				config.LabelManaged: "true",
 				config.LabelProject: project,
+				config.LabelName:    opts.Name,
 				config.LabelUser:    user,
 			},
 		})
@@ -134,7 +144,10 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string) 
 	if err := o.waitReady(ctx, id, 90*time.Second); err != nil {
 		return "", fmt.Errorf("project %s did not become ready: %w", name, err)
 	}
-	o.EnsureSelfAttached(ctx, user, project)
+	// NOTE: no EnsureSelfAttached here — attaching the server's own
+	// container to a network reconfigures its netns and can kill in-flight
+	// HTTP responses (observed as browser ERR_CONNECTION_REFUSED on the
+	// published dev port). The port-preview proxy attaches lazily instead.
 	o.Touch(user, project)
 	return id, nil
 }
@@ -142,32 +155,35 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string) 
 // EnsureSelfAttached joins the server's own container to the project's
 // bridge network (no-op for a host-mode server). Docker isolates bridge
 // networks from each other, so without this a containerized server cannot
-// reach microVM IPs for the port-preview proxy.
-func (o *Orchestrator) EnsureSelfAttached(_ context.Context, user, project string) {
+// reach microVM IPs for the port-preview proxy. Returns true when a fresh
+// attach happened — which reconfigures this container's netns and may kill
+// in-flight connections, so callers on a request path should redirect the
+// client to retry rather than proceed.
+func (o *Orchestrator) EnsureSelfAttached(_ context.Context, user, project string) bool {
 	if o.cfg.SelfContainer == "" {
-		return
+		return false
 	}
 	// Detached context: this must complete even if the triggering client
 	// gives up (a canceled attach left the network unreachable for the
 	// next request too — same failure class as the delete-handler bug).
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	err := o.docker.NetworkConnect(ctx, config.NetworkName(user, project), o.cfg.SelfContainer, nil)
+	err := o.docker.NetworkConnect(ctx, config.NetworkName(project), o.cfg.SelfContainer, nil)
 	if err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			o.logger.Warn("self-attach to project network failed", "project", project, "error", err)
 		}
-		return
+		return false
 	}
-	// Fresh attachment: give the new interface/route a moment before the
-	// caller dials through it (the first proxy request otherwise races it).
+	// Fresh attachment: give the new interface/route a moment to settle.
 	time.Sleep(500 * time.Millisecond)
+	return true
 }
 
 // EnsureSetup boots the hidden system microVM used for first-time onboarding
 // (styrman-setup). It carries no project label, so it never appears in
 // project listings; minimal mode skips workspace + DinD for a fast boot.
-func (o *Orchestrator) EnsureSetup(ctx context.Context, user string) (string, error) {
+func (o *Orchestrator) EnsureSetup(ctx context.Context, user, guestUser string) (string, error) {
 	l := o.lockProject(config.SetupContainer(user))
 	l.Lock()
 	defer l.Unlock()
@@ -187,7 +203,7 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context, user string) (string, er
 			name:      config.SetupContainer(user),
 			netName:   config.SetupNetwork(user),
 			hostname:  "styrman-setup",
-			guestUser: user,
+			guestUser: guestUser,
 			homePath:  o.cfg.UserHome(user),
 			extraEnv: []string{
 				config.EnvProject + "=setup",
@@ -233,6 +249,40 @@ func (o *Orchestrator) DestroySetup(ctx context.Context, user string) error {
 		o.logger.Warn("setup network remove failed", "error", err)
 	}
 	return nil
+}
+
+// CleanupLegacy removes managed containers from previous naming schemes:
+// anything without a user label (pre-multitenancy) or, for project
+// containers, without a name label (pre-UUID). Their data lives in the
+// homes; containers are disposable and recreate on demand.
+func (o *Orchestrator) CleanupLegacy(ctx context.Context) {
+	list, err := o.docker.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("label", config.LabelManaged+"=true")),
+	})
+	if err != nil {
+		return
+	}
+	for _, c := range list {
+		hasUser := c.Labels[config.LabelUser] != ""
+		hasName := c.Labels[config.LabelName] != ""
+		isSystem := c.Labels[config.LabelSystem] != ""
+		if hasUser && (hasName || isSystem) {
+			continue
+		}
+		o.logger.Info("removing previous-layout container", "id", c.ID[:12], "names", c.Names)
+		_ = o.docker.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true})
+	}
+	// Orphaned previous-scheme networks (best effort).
+	nets, err := o.docker.NetworkList(ctx, network.ListOptions{})
+	if err != nil {
+		return
+	}
+	for _, n := range nets {
+		if strings.HasPrefix(n.Name, "sdb-") {
+			_ = o.docker.NetworkRemove(ctx, n.ID) // fails harmlessly if in use
+		}
+	}
 }
 
 // createSpec parameterizes container creation for project and system VMs.
@@ -328,7 +378,7 @@ func (o *Orchestrator) waitReady(ctx context.Context, containerID string, timeou
 // Stop stops a project's container (home and workspace persist).
 func (o *Orchestrator) Stop(ctx context.Context, user, project string) error {
 	timeout := 30
-	err := o.docker.ContainerStop(ctx, config.ContainerName(user, project), container.StopOptions{Timeout: &timeout})
+	err := o.docker.ContainerStop(ctx, config.ContainerName(project), container.StopOptions{Timeout: &timeout})
 	if errdefs.IsNotFound(err) {
 		return nil
 	}
@@ -338,16 +388,16 @@ func (o *Orchestrator) Stop(ctx context.Context, user, project string) error {
 // Destroy removes the project's container and network. The workspace and all
 // home-dir state persist; only runtime state is lost.
 func (o *Orchestrator) Destroy(ctx context.Context, user, project string) error {
-	err := o.docker.ContainerRemove(ctx, config.ContainerName(user, project), container.RemoveOptions{Force: true})
+	err := o.docker.ContainerRemove(ctx, config.ContainerName(project), container.RemoveOptions{Force: true})
 	if err != nil && !errdefs.IsNotFound(err) {
 		return err
 	}
 	// Detach ourselves first or the network removal fails on the active
 	// endpoint (containerized server only).
 	if o.cfg.SelfContainer != "" {
-		_ = o.docker.NetworkDisconnect(ctx, config.NetworkName(user, project), o.cfg.SelfContainer, true)
+		_ = o.docker.NetworkDisconnect(ctx, config.NetworkName(project), o.cfg.SelfContainer, true)
 	}
-	if err := o.docker.NetworkRemove(ctx, config.NetworkName(user, project)); err != nil && !errdefs.IsNotFound(err) {
+	if err := o.docker.NetworkRemove(ctx, config.NetworkName(project)); err != nil && !errdefs.IsNotFound(err) {
 		o.logger.Warn("network remove failed", "project", project, "error", err)
 	}
 	o.activity.Delete(key(user, project))

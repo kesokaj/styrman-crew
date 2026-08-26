@@ -14,7 +14,7 @@ import (
 // IPAddress returns the project container's IP on its bridge network, or ""
 // if not running.
 func (o *Orchestrator) IPAddress(ctx context.Context, user, project string) (string, error) {
-	insp, err := o.docker.ContainerInspect(ctx, config.ContainerName(user, project))
+	insp, err := o.docker.ContainerInspect(ctx, config.ContainerName(project))
 	if err != nil {
 		if errdefs.IsNotFound(err) {
 			return "", nil
@@ -24,7 +24,7 @@ func (o *Orchestrator) IPAddress(ctx context.Context, user, project string) (str
 	if insp.State == nil || !insp.State.Running || insp.NetworkSettings == nil {
 		return "", nil
 	}
-	if net, ok := insp.NetworkSettings.Networks[config.NetworkName(user, project)]; ok {
+	if net, ok := insp.NetworkSettings.Networks[config.NetworkName(project)]; ok {
 		return net.IPAddress, nil
 	}
 	for _, net := range insp.NetworkSettings.Networks {

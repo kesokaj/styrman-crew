@@ -20,8 +20,8 @@ export function NewProjectDialog({
     setError(undefined)
     try {
       const p = await api.createProject(name, gitInit)
-      const term = await api.createTerminal(p.name)
-      onCreated(p.name, term.id)
+      const term = await api.createTerminal(p.id)
+      onCreated(p.id, term.id)
     } catch (e) {
       setError((e as Error).message)
       setBusy(false)

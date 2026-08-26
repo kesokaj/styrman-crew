@@ -62,7 +62,7 @@ func (s *Server) startSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
-	if _, err := s.orch.EnsureSetup(ctx, u.Username); err != nil {
+	if _, err := s.orch.EnsureSetup(ctx, u.Username, s.guestUserFor(u.Username)); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

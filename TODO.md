@@ -18,8 +18,7 @@ Deferred work items. Not blocking current work, but should be addressed later.
 - [ ] Conversation auto-titles from claude transcript summaries (~/.claude/projects) (added 2026-08-26)
 - [ ] Integration check for agent-path keyring (DBUS in agent conversations, not just
       kind=shell) — the Phase 1 suite missed a real bug there (added 2026-08-26)
-- [ ] createProject boots the microVM synchronously; make async with progress events
-      for the Phase 2 UI (added 2026-08-26)
+- [x] ~~createProject synchronous~~ — async since ADR-021 (2026-08-26)
 - [ ] Migrate docker SDK from pinned docker/docker v28 to the renamed moby modules (added 2026-08-26)
 - [ ] Exercise the entrypoint's vfs fallback path (loop-mount failure) in a test (added 2026-08-26)
 
@@ -31,6 +30,10 @@ Deferred work items. Not blocking current work, but should be addressed later.
 - [ ] Decide backup story for `/var/lib/styrman/home` (restic/borg to GCS?) (added 2026-08-26)
 
 ## Low Priority
+
+- [ ] Transcript rotation for ~/.styrman/logs (unbounded today) (added 2026-08-26)
+- [ ] Ops panel: per-project disk/memory usage, container logs (added 2026-08-26)
+- [ ] Git status badges in the sidebar (added 2026-08-26)
 
 - [ ] Makefile target for Artifact Registry push if styrman ever leaves this host (added 2026-08-26)
 

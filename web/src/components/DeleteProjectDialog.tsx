@@ -7,11 +7,13 @@ import { api } from "../lib/api";
  * separate explicit choice.
  */
 export function DeleteProjectDialog({
-  project,
+  projectId,
+  projectName,
   onClose,
   onDeleted,
 }: {
-  project: string;
+  projectId: string;
+  projectName: string;
   onClose: () => void;
   onDeleted: () => void;
 }) {
@@ -25,7 +27,7 @@ export function DeleteProjectDialog({
     setBusy(true);
     setError(undefined);
     try {
-      await api.deleteProject(project, wipe);
+      await api.deleteProject(projectId, wipe);
       onDeleted();
     } catch (e) {
       setError((e as Error).message);
@@ -43,7 +45,7 @@ export function DeleteProjectDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="mb-1 text-sm font-semibold text-danger">
-          Delete project “{project}”
+          Delete project “{projectName}”
         </h2>
         <p className="mb-3 text-xs text-text-dim">
           This destroys the project's microVM and removes it from styrman.

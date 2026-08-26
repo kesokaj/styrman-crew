@@ -18,7 +18,7 @@ func (s *Server) listPorts(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	ports, err := s.orch.ListeningPorts(r.Context(), u.Username, p.Name)
+	ports, err := s.orch.ListeningPorts(r.Context(), u.Username, p.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -37,13 +37,19 @@ func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	name := p.Name
+	name := p.ID
 	port, err := strconv.Atoi(r.PathValue("port"))
 	if err != nil || port < 1024 || port > 65535 {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid port"))
 		return
 	}
-	s.orch.EnsureSelfAttached(r.Context(), u.Username, name)
+	if fresh := s.orch.EnsureSelfAttached(r.Context(), u.Username, name); fresh {
+		// The attach just reconfigured this container's network namespace —
+		// this request's own connection may be doomed. Send the browser
+		// around again on a fresh connection.
+		http.Redirect(w, r, r.URL.String(), http.StatusTemporaryRedirect)
+		return
+	}
 	ip, err := s.orch.IPAddress(r.Context(), u.Username, name)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)

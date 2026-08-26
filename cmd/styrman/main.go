@@ -7,10 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -61,6 +59,9 @@ func main() {
 	// Adopt pre-existing containers so restarts are seamless (ADR-007), and
 	// join running projects' networks now (containerized server: does the
 	// network attach + guest ARP refresh at boot, not on first click).
+	// Non-blocking: force-removing a running Kata VM can take seconds and
+	// must not delay the listener.
+	go orch.CleanupLegacy(ctx)
 	if adopted, err := orch.Adopt(ctx); err != nil {
 		logger.Warn("initial adoption failed (docker down?)", "error", err)
 	} else {
@@ -149,24 +150,7 @@ func migrateLegacy(cfg *config.Config, logger *slog.Logger) {
 		}
 	}
 
-	// 3. Legacy containers/networks (no styrman.user label): their names no
-	// longer match the new scheme; data lives in the migrated home, so drop
-	// them — they recreate on demand under the new naming.
-	out, err := exec.Command("docker", "ps", "-aq",
-		"--filter", "label="+config.LabelManaged+"=true").Output()
-	if err != nil {
-		return
-	}
-	for _, id := range strings.Fields(string(out)) {
-		lbl, _ := exec.Command("docker", "inspect", "--format",
-			"{{index .Config.Labels \""+config.LabelUser+"\"}}", id).Output()
-		if strings.TrimSpace(string(lbl)) != "" {
-			continue
-		}
-		logger.Info("removing pre-multitenancy container", "id", id)
-		_ = exec.Command("docker", "rm", "-f", id).Run()
-	}
-	for _, n := range []string{"sdb-demo", "sdb-demo-agy", "sdb-sys-setup"} {
-		_ = exec.Command("docker", "network", "rm", n).Run()
-	}
+	// 3. Previous-scheme containers are removed via the Docker SDK after the
+	// orchestrator is up (CleanupLegacy) — the containerized server has no
+	// docker CLI.
 }

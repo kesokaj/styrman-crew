@@ -19,6 +19,7 @@ const (
 	LabelManaged = "styrman.managed"
 	LabelProject = "styrman.project"
 	LabelUser    = "styrman.user"
+	LabelName    = "styrman.name" // friendly project name (informational)
 	LabelAgent   = "styrman.agent"
 	// LabelSystem marks hidden system containers (e.g. the onboarding VM);
 	// they carry no project label and never appear in project listings.
@@ -36,7 +37,8 @@ const (
 	EnvUser       = "STYRMAN_USER"
 	EnvUID        = "STYRMAN_UID"
 	EnvGID        = "STYRMAN_GID"
-	EnvProject    = "STYRMAN_PROJECT"
+	EnvProject    = "STYRMAN_PROJECT"     // the project UUID (disks, transcript paths)
+	EnvProjectDir = "STYRMAN_PROJECT_DIR" // workspace dir name under ~/projects
 	EnvDockerDisk = "STYRMAN_DOCKER_DISK_GB"
 	EnvKeyringPW  = "STYRMAN_KEYRING_PW"
 )
@@ -177,11 +179,13 @@ func usernameFromEmail(email string) string {
 	return name
 }
 
-// ContainerName returns the container name for a user's project.
-func ContainerName(user, project string) string { return "styrman-" + user + "-" + project }
+// ContainerName returns the container name for a project. Identity is the
+// project UUID — globally unique, so no user prefix is needed and friendly
+// names can repeat freely.
+func ContainerName(projectID string) string { return "styrman-" + projectID }
 
 // NetworkName returns its bridge network name.
-func NetworkName(user, project string) string { return "sdb-" + user + "-" + project }
+func NetworkName(projectID string) string { return "sdb-" + projectID }
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {

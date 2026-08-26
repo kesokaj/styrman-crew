@@ -24,8 +24,10 @@ Inputs (env, set by the orchestrator):
 
 | Env | Meaning |
 |---|---|
-| `STYRMAN_USER` / `STYRMAN_UID` / `STYRMAN_GID` | In-guest account; MUST match the host owner of the shared home (spike S2) |
-| `STYRMAN_PROJECT` | Project slug |
+| `STYRMAN_USER` / `STYRMAN_UID` / `STYRMAN_GID` | In-guest account (the user's configurable "terminal username"); uid/gid MUST match the host owner of the homes (spike S2) |
+| `STYRMAN_PROJECT` | Project UUID — keys the docker disk and transcript dir |
+| `STYRMAN_PROJECT_DIR` | Workspace dir name under ~/projects |
+| `STYRMAN_MINIMAL` | System VMs (onboarding): skip workspace + DinD |
 | `STYRMAN_DOCKER_DISK_GB` | Size for a newly created docker.img |
 | `STYRMAN_KEYRING_PW` | Written to `/run/styrman/keyring-pw` (0400, user-owned), then unset |
 
@@ -36,12 +38,13 @@ Steps, in order:
    subtree controllers (without this dockerd dies — spike S3).
 3. mknod loop devices 0–7.
 4. Create the user (matching uid/gid), passwordless sudo, docker group.
-5. `~/projects/<project>` and `~/.dockerd` (as the user).
+5. `~/projects/<dir>` and `~/.dockerd` (as the user; skipped in minimal mode).
 6. Keyring plumbing: password file + `/etc/profile.d/styrman-keyring.sh`
    (starts session dbus + unlocked gnome-keyring on first login shell; keyring
    files persist at `~/.local/share/keyrings` on the shared home).
 7. Default `~/.tmux.conf` if the user has none (status off, login shells).
-8. DinD (ADR-008): create sparse ext4 `~/.dockerd/<project>.img` if absent,
+7b. tmux transcript hook: pipe-pane every session to `~/.styrman/logs/<uuid>/` (ADR-017).
+8. DinD (ADR-008): create sparse ext4 `~/.dockerd/<uuid>.img` if absent,
    loop-mount at `/var/lib/docker-project`, start dockerd with **overlay2**;
    fall back to **vfs** directly on the home if the loop mount fails.
 9. `touch /run/styrman/ready` — the orchestrator's readiness probe target.

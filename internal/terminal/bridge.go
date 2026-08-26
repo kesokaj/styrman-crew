@@ -35,6 +35,8 @@ type Bridge struct {
 	cfg      *config.Config
 	logger   *slog.Logger
 	storeFor func(user string) (TermStore, error)
+	ensure   func(ctx context.Context, user, projectID string) (containerID, guestUser, dir string, err error)
+	guestFor func(user string) string
 
 	// activeConns maps a session key → the current *websocket.Conn. A new
 	// connection closes the previous one with CloseReplaced so only one client
@@ -43,8 +45,12 @@ type Bridge struct {
 }
 
 // NewBridge creates a Bridge. storeFor resolves a user's terminal store.
-func NewBridge(orch *orchestrator.Orchestrator, cfg *config.Config, logger *slog.Logger, storeFor func(user string) (TermStore, error)) *Bridge {
-	return &Bridge{orch: orch, cfg: cfg, logger: logger, storeFor: storeFor}
+func NewBridge(orch *orchestrator.Orchestrator, cfg *config.Config, logger *slog.Logger,
+	storeFor func(user string) (TermStore, error),
+	ensure func(ctx context.Context, user, projectID string) (string, string, string, error),
+	guestFor func(user string) string,
+) *Bridge {
+	return &Bridge{orch: orch, cfg: cfg, logger: logger, storeFor: storeFor, ensure: ensure, guestFor: guestFor}
 }
 
 type controlMessage struct {
@@ -95,18 +101,20 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	tmuxName := conversation.Prefix + convID
 
 	// Ensure the microVM is up before upgrading — first attach after idle-stop
-	// pays the (~seconds) start cost here.
-	containerID, err := b.orch.EnsureRunning(r.Context(), user, projName)
+	// pays the (~seconds) start cost here. The callback resolves the record
+	// (dir, guest username) the orchestrator needs.
+	containerID, guest, dir, err := b.ensure(r.Context(), user, projName)
 	if err != nil {
 		b.logger.Error("ensure running failed", "project", projName, "error", err)
 		http.Error(w, "failed to start project", http.StatusInternalServerError)
 		return
 	}
 
-	workdir := "/home/" + user + "/projects/" + projName
+	workdir := "/home/" + guest + "/projects/" + dir
 	b.serve(w, r, session{
 		containerID: containerID,
 		user:        user,
+		guest:       guest,
 		key:         user + "/" + projName + "/" + tmuxName,
 		tmuxName:    tmuxName,
 		workdir:     workdir,
@@ -120,7 +128,8 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // session; when the script's shell exits the client gets close 4000.
 func (b *Bridge) ServeSetup(w http.ResponseWriter, r *http.Request) {
 	user := identity.FromContext(r.Context()).Username
-	containerID, err := b.orch.EnsureSetup(r.Context(), user)
+	guest := b.guestFor(user)
+	containerID, err := b.orch.EnsureSetup(r.Context(), user, guest)
 	if err != nil {
 		b.logger.Error("ensure setup vm failed", "user", user, "error", err)
 		http.Error(w, "failed to start setup environment", http.StatusInternalServerError)
@@ -129,9 +138,10 @@ func (b *Bridge) ServeSetup(w http.ResponseWriter, r *http.Request) {
 	b.serve(w, r, session{
 		containerID: containerID,
 		user:        user,
+		guest:       guest,
 		key:         user + "/system/setup",
 		tmuxName:    "styrman-setup",
-		workdir:     "/home/" + user,
+		workdir:     "/home/" + guest,
 		paneCmd:     "bash -lc 'styrman-setup; exec bash -l'",
 		project:     "", // system VM: no idle tracking
 	})
@@ -140,7 +150,8 @@ func (b *Bridge) ServeSetup(w http.ResponseWriter, r *http.Request) {
 // session describes one terminal attachment target.
 type session struct {
 	containerID string
-	user        string
+	user        string // identity slug (activity keys)
+	guest       string // in-guest username (exec identity, paths)
 	key         string // activeConns key
 	tmuxName    string
 	workdir     string
@@ -173,9 +184,9 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 	b.activeConns.Store(s.key, conn)
 	defer b.activeConns.CompareAndDelete(s.key, conn)
 
-	home := "/home/" + s.user
+	home := "/home/" + s.guest
 	spec := orchestrator.ExecSpec{
-		User:    s.user,
+		User:    s.guest,
 		WorkDir: s.workdir,
 		// -x/-y seed the size for a newly created session (avoids the
 		// double-prompt redraw); -c sets the pane's start directory. -D
@@ -187,7 +198,7 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 			"-c", s.workdir, s.paneCmd},
 		Env: []string{
 			"HOME=" + home,
-			"USER=" + s.user,
+			"USER=" + s.guest,
 			"SHELL=/bin/bash",
 			"TERM=xterm-256color",
 			"LANG=en_US.UTF-8",

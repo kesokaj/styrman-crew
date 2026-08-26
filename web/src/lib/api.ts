@@ -1,8 +1,9 @@
 // Typed client for the styrman REST API (spec: .agents/docs/specs/styrman/api.md).
 
 export interface Project {
-  name: string;
-  agent?: string;
+  id: string; // UUID — the identity everything keys on
+  name: string; // friendly, renamable label
+  dir: string; // workspace dir under ~/projects (frozen at creation)
   createdAt: string;
   gitInit: boolean;
   archived: boolean;
@@ -78,6 +79,7 @@ export interface Settings {
   runtime: string;
   dockerDiskGB: number;
   idleTimeout: string;
+  terminalUsername: string;
   setupComplete: boolean;
 }
 
@@ -134,14 +136,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, gitInit }),
     }),
-  deleteProject: (name: string, wipe: boolean) =>
-    request<void>(`/api/projects/${name}${wipe ? "?wipe=true" : ""}`, {
+  getProject: (id: string) => request<Project>(`/api/projects/${id}`),
+  renameProject: (id: string, name: string) =>
+    request<void>(`/api/projects/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }),
+  deleteProject: (id: string, wipe: boolean) =>
+    request<void>(`/api/projects/${id}${wipe ? "?wipe=true" : ""}`, {
       method: "DELETE",
     }),
-  startProject: (name: string) =>
-    request<void>(`/api/projects/${name}/start`, { method: "POST" }),
-  stopProject: (name: string) =>
-    request<void>(`/api/projects/${name}/stop`, { method: "POST" }),
+  startProject: (id: string) =>
+    request<void>(`/api/projects/${id}/start`, { method: "POST" }),
+  stopProject: (id: string) =>
+    request<void>(`/api/projects/${id}/stop`, { method: "POST" }),
 
   listTerminals: (project: string) =>
     request<{ terminals: Terminal[] }>(`/api/projects/${project}/terminals`),
@@ -207,6 +215,11 @@ export const api = {
 
   settings: () => request<Settings>("/api/settings"),
   tools: () => request<{ tools: ToolInfo[] }>("/api/settings/tools"),
+  setTerminalUsername: (name: string) =>
+    request<{ terminalUsername: string }>("/api/settings/profile", {
+      method: "POST",
+      body: JSON.stringify({ terminalUsername: name }),
+    }),
   addUser: (email: string) =>
     request<{ allowedUsers: string[] }>("/api/settings/users", {
       method: "POST",

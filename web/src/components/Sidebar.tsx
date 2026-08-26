@@ -16,28 +16,35 @@ export function Sidebar() {
   const { data, refresh } = usePolled(() => api.listProjects(), 5000);
   const { theme, toggle } = useTheme();
   const [showNew, setShowNew] = useState(false);
-  const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<Project | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
 
   const projects = data?.projects ?? [];
 
   const openProject = (p: Project) =>
     tryUI(async () => {
-      const { terminals } = await api.listTerminals(p.name);
-      const first = terminals[0] ?? (await api.createTerminal(p.name));
+      const { terminals } = await api.listTerminals(p.id);
+      const first = terminals[0] ?? (await api.createTerminal(p.id));
       navigate({
         to: "/p/$project/$term",
-        params: { project: p.name, term: first.id },
+        params: { project: p.id, term: first.id },
       });
     });
 
-  const projectAction = (p: Project, action: "stop" | "start" | "delete") =>
+  const projectAction = (
+    p: Project,
+    action: "stop" | "start" | "delete" | "rename",
+  ) =>
     tryUI(async () => {
       setMenuFor(null);
-      if (action === "stop") await api.stopProject(p.name);
-      if (action === "start") await api.startProject(p.name);
+      if (action === "stop") await api.stopProject(p.id);
+      if (action === "start") await api.startProject(p.id);
+      if (action === "rename") {
+        const name = prompt("New project name:", p.name);
+        if (name && name !== p.name) await api.renameProject(p.id, name);
+      }
       if (action === "delete") {
-        setDeleting(p.name);
+        setDeleting(p);
         return;
       }
       refresh();
@@ -72,10 +79,10 @@ export function Sidebar() {
           </p>
         )}
         {projects.map((p) => (
-          <div key={p.name} className="mb-0.5">
+          <div key={p.id} className="mb-0.5">
             <div
               className={`group flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-bg-hover ${
-                params.project === p.name ? "bg-bg-hover" : ""
+                params.project === p.id ? "bg-bg-hover" : ""
               }`}
               onClick={() => openProject(p)}
             >
@@ -90,14 +97,14 @@ export function Sidebar() {
                 className="invisible rounded px-1 text-text-dim hover:text-text group-hover:visible"
                 onClick={(e) => {
                   e.stopPropagation();
-                  setMenuFor(menuFor === p.name ? null : p.name);
+                  setMenuFor(menuFor === p.id ? null : p.id);
                 }}
                 aria-label={`Project ${p.name} actions`}
               >
                 ⋯
               </button>
             </div>
-            {menuFor === p.name && (
+            {menuFor === p.id && (
               <div className="mx-2 mb-1 flex gap-1 rounded-md border border-border bg-bg p-1 text-xs">
                 {p.state === "running" ? (
                   <button
@@ -115,6 +122,12 @@ export function Sidebar() {
                   </button>
                 )}
                 <button
+                  className="flex-1 rounded px-2 py-1 hover:bg-bg-hover"
+                  onClick={() => projectAction(p, "rename")}
+                >
+                  Rename
+                </button>
+                <button
                   className="flex-1 rounded px-2 py-1 text-danger hover:bg-bg-hover"
                   onClick={() => projectAction(p, "delete")}
                 >
@@ -122,8 +135,8 @@ export function Sidebar() {
                 </button>
               </div>
             )}
-            {params.project === p.name && (
-              <TerminalList project={p.name} activeTerm={params.term} />
+            {params.project === p.id && (
+              <TerminalList project={p.id} activeTerm={params.term} />
             )}
           </div>
         ))}
@@ -140,10 +153,11 @@ export function Sidebar() {
 
       {deleting && (
         <DeleteProjectDialog
-          project={deleting}
+          projectId={deleting.id}
+          projectName={deleting.name}
           onClose={() => setDeleting(null)}
           onDeleted={() => {
-            const wasOpen = params.project === deleting;
+            const wasOpen = params.project === deleting.id;
             setDeleting(null);
             refresh();
             if (wasOpen) navigate({ to: "/" });
