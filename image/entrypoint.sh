@@ -14,6 +14,12 @@ HOME_DIR="/home/${USERNAME}"
 
 log() { echo "[styrman] $*"; }
 
+# /run is NOT a tmpfs in this container — a marker from the previous boot
+# survives docker stop/start and would let waitReady pass while dockerd and
+# the keyring are still coming up (review finding). Clear it first thing.
+mkdir -p /run/styrman
+rm -f /run/styrman/ready
+
 # ─── Guest tuning (Kata mounts /proc/sys and /sys/fs/cgroup read-only) ──────
 mount -o remount,rw /proc/sys 2>/dev/null || true
 cat /etc/resolv.conf.styrman > /etc/resolv.conf 2>/dev/null || true
@@ -54,6 +60,7 @@ chown "${UID_}:${GID_}" /run/styrman/keyring-pw
 chmod 400 /run/styrman/keyring-pw
 unset STYRMAN_KEYRING_PW
 cp /styrman/configs/profile-keyring.sh /etc/profile.d/styrman-keyring.sh
+cp /styrman/configs/profile-motd.sh /etc/profile.d/styrman-motd.sh
 
 # tmux defaults (hidden status bar, login shells) unless the user has their own.
 if [ ! -f "${HOME_DIR}/.tmux.conf" ]; then
@@ -63,9 +70,16 @@ fi
 # ─── Per-project Docker daemon (ADR-004 + ADR-008) ──────────────────────────
 IMG="${HOME_DIR}/.dockerd/${PROJECT}.img"
 if [ ! -f "${IMG}" ]; then
+    # Build at a temp path and mv into place only once mkfs succeeded, so an
+    # interrupted first boot can't leave a half-made image that silently
+    # diverts the next boot to the vfs fallback (review finding).
     log "creating ${DISK_GB}G sparse docker image ${IMG}"
-    runuser -u "${USERNAME}" -- truncate -s "${DISK_GB}G" "${IMG}"
-    mkfs.ext4 -q "${IMG}"
+    if runuser -u "${USERNAME}" -- truncate -s "${DISK_GB}G" "${IMG}.tmp" && mkfs.ext4 -q "${IMG}.tmp"; then
+        mv "${IMG}.tmp" "${IMG}"
+    else
+        log "WARN: docker image creation failed, removing partial file"
+        rm -f "${IMG}.tmp"
+    fi
 fi
 mkdir -p /var/lib/docker-project
 if mount -o loop "${IMG}" /var/lib/docker-project; then
@@ -95,16 +109,24 @@ cat > /etc/docker/daemon.json <<EOF
 EOF
 rm -f /var/run/docker.pid
 dockerd > /var/log/dockerd.log 2>&1 &
+DOCKER_UP=false
 for i in $(seq 1 30); do
     if docker info &>/dev/null; then
-        chmod 666 /var/run/docker.sock 2>/dev/null || true
+        DOCKER_UP=true
         log "dockerd ready (${STORAGE_DRIVER} on ${DATA_ROOT})"
         break
     fi
     sleep 1
 done
+if [ "${DOCKER_UP}" != "true" ]; then
+    # Exit non-zero so the orchestrator's waitReady fails with a real error
+    # instead of handing out a project whose docker is broken (R2).
+    log "FATAL: dockerd did not become ready; last log lines:"
+    tail -5 /var/log/dockerd.log || true
+    exit 1
+fi
 
-# ─── Ready ──────────────────────────────────────────────────────────────────
+# ─── Ready (only after everything above actually succeeded) ────────────────
 touch /run/styrman/ready
 log "project ${PROJECT} ready (user=${USERNAME} uid=${UID_})"
 

@@ -114,13 +114,25 @@ func (e *InteractiveExec) Resize(ctx context.Context, cols, rows uint) error {
 	return e.o.docker.ContainerExecResize(ctx, e.ID, container.ResizeOptions{Width: cols, Height: rows})
 }
 
-// ExitCode inspects the exec; returns (-1, false) while still running.
-func (e *InteractiveExec) ExitCode(ctx context.Context) (int, bool) {
-	insp, err := e.o.docker.ContainerExecInspect(ctx, e.ID)
-	if err != nil || insp.Running {
-		return -1, false
+// ExitCodeWait polls the exec for up to wait: dockerd's Running flag lags the
+// stream EOF by a few milliseconds, so a single inspect would misclassify a
+// genuine exit as a detach. Returns (-1, false) if still running after wait.
+func (e *InteractiveExec) ExitCodeWait(ctx context.Context, wait time.Duration) (int, bool) {
+	deadline := time.Now().Add(wait)
+	for {
+		insp, err := e.o.docker.ContainerExecInspect(ctx, e.ID)
+		if err == nil && !insp.Running {
+			return insp.ExitCode, true
+		}
+		if time.Now().After(deadline) {
+			return -1, false
+		}
+		select {
+		case <-ctx.Done():
+			return -1, false
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
-	return insp.ExitCode, true
 }
 
 // Close tears down the attached stream.

@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -28,8 +27,26 @@ type Orchestrator struct {
 	cfg    *config.Config
 	logger *slog.Logger
 
-	mu       sync.Mutex // serializes create/start per process
-	activity sync.Map   // project name → time.Time of last terminal activity
+	mu        sync.Mutex             // guards projLocks
+	projLocks map[string]*sync.Mutex // per-project create/start serialization
+	activity  sync.Map               // project name → time.Time of last terminal activity
+}
+
+// lockProject returns the mutex for one project, creating it on first use.
+// Locking per project keeps a slow cold start (up to 90 s waitReady) from
+// stalling attaches to every other project (review finding).
+func (o *Orchestrator) lockProject(project string) *sync.Mutex {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.projLocks == nil {
+		o.projLocks = map[string]*sync.Mutex{}
+	}
+	m, ok := o.projLocks[project]
+	if !ok {
+		m = &sync.Mutex{}
+		o.projLocks[project] = m
+	}
+	return m
 }
 
 // New creates an Orchestrator using the default Docker socket.
@@ -70,8 +87,9 @@ func (o *Orchestrator) Status(ctx context.Context, project string) (Status, erro
 // EnsureRunning makes sure the project's microVM exists and is running, and
 // waits until the entrypoint reports ready. Returns the container ID.
 func (o *Orchestrator) EnsureRunning(ctx context.Context, project string) (string, error) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
+	l := o.lockProject(project)
+	l.Lock()
+	defer l.Unlock()
 
 	name := config.ContainerName(project)
 	id := ""
@@ -101,7 +119,8 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, project string) (strin
 	return id, nil
 }
 
-// create builds the per-project network and container. Caller holds o.mu.
+// create builds the per-project network and container. Caller holds the
+// project lock.
 func (o *Orchestrator) create(ctx context.Context, project string) (string, error) {
 	netName := config.NetworkName(project)
 	if _, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{}); err != nil {
@@ -154,10 +173,12 @@ func (o *Orchestrator) create(ctx context.Context, project string) (string, erro
 		name,
 	)
 	if err != nil {
+		_ = o.docker.NetworkRemove(context.Background(), netName)
 		return "", fmt.Errorf("create container %s: %w", name, err)
 	}
 	if err := o.docker.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		_ = o.docker.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
+		_ = o.docker.NetworkRemove(context.Background(), netName)
 		return "", fmt.Errorf("start container %s: %w", name, err)
 	}
 	return resp.ID, nil
@@ -200,6 +221,7 @@ func (o *Orchestrator) Destroy(ctx context.Context, project string) error {
 	if err := o.docker.NetworkRemove(ctx, config.NetworkName(project)); err != nil && !errdefs.IsNotFound(err) {
 		o.logger.Warn("network remove failed", "project", project, "error", err)
 	}
+	o.activity.Delete(project)
 	return nil
 }
 
@@ -220,7 +242,7 @@ func (o *Orchestrator) Adopt(ctx context.Context) (map[string]Status, error) {
 			continue
 		}
 		st := "stopped"
-		if strings.HasPrefix(c.Status, "Up") {
+		if c.State == container.StateRunning {
 			st = "running"
 		}
 		out[p] = Status{Project: p, ContainerID: c.ID, State: st}
@@ -258,7 +280,14 @@ func (o *Orchestrator) RunIdleReaper(ctx context.Context) {
 				if v, ok := o.activity.Load(p); ok {
 					last = v.(time.Time)
 				}
-				if last.IsZero() || time.Since(last) > o.cfg.IdleTimeout {
+				// A running container with no recorded activity was adopted
+				// after a server restart — start its idle clock now instead
+				// of stopping it on the first tick (review finding).
+				if last.IsZero() {
+					o.Touch(p)
+					continue
+				}
+				if time.Since(last) > o.cfg.IdleTimeout {
 					o.logger.Info("stopping idle project", "project", p, "lastActivity", last)
 					if err := o.Stop(ctx, p); err != nil {
 						o.logger.Warn("idle stop failed", "project", p, "error", err)

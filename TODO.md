@@ -18,6 +18,9 @@ Deferred work items. Not blocking current work, but should be addressed later.
 - [ ] Migrate docker SDK from pinned docker/docker v28 to the renamed moby modules (added 2026-08-26)
 - [ ] Exercise the entrypoint's vfs fallback path (loop-mount failure) in a test (added 2026-08-26)
 
+- [ ] systemd unit for the styrman server (review finding; Phase 3 service-ification) (added 2026-08-26)
+- [ ] Pin + verify SHA-256 of the Kata release tarball in host-setup.sh (added 2026-08-26)
+- [ ] Keyring password visible via docker inspect (container env); move to one-shot exec injection (added 2026-08-26)
 - [ ] Phase 3 needs Google OAuth client ID/secret, Cloudflare API token, and BASE_DOMAIN
       from the operator — the old devbox `.env` is not on this machine (added 2026-08-26)
 - [ ] Decide backup story for `/var/lib/styrman/home` (restic/borg to GCS?) (added 2026-08-26)

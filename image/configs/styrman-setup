@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# styrman-setup — one-time-per-user onboarding, run inside any project
+# terminal. Walks through every credential styrman needs; each lands in the
+# shared home, so completing this once covers all projects forever (R3).
+# Idempotent: shows status and only prompts for what's missing.
+set -uo pipefail
+
+BOLD=$'\033[1m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RESET=$'\033[0m'
+ok()   { echo "  ${GREEN}✔${RESET} $*"; }
+todo() { echo "  ${YELLOW}➜${RESET} $*"; }
+step() { echo; echo "${BOLD}$*${RESET}"; }
+
+echo "${BOLD}styrman setup — sign in once, use everywhere${RESET}"
+
+step "1/5 Git identity"
+if git config --global user.email >/dev/null 2>&1; then
+    ok "git: $(git config --global user.name) <$(git config --global user.email)>"
+else
+    todo "no git identity yet"
+    read -rp "  your name: " GIT_NAME
+    read -rp "  your email: " GIT_EMAIL
+    git config --global user.name "${GIT_NAME}"
+    git config --global user.email "${GIT_EMAIL}"
+    git config --global init.defaultBranch main
+    ok "git identity saved to ~/.gitconfig"
+fi
+
+step "2/5 SSH key (for git over ssh)"
+if [ -f ~/.ssh/id_ed25519 ]; then
+    ok "key exists: ~/.ssh/id_ed25519"
+else
+    ssh-keygen -t ed25519 -N "" -C "styrman" -f ~/.ssh/id_ed25519 >/dev/null
+    ok "generated ~/.ssh/id_ed25519"
+fi
+echo "  public key (add to https://github.com/settings/keys if not done):"
+echo "    $(cat ~/.ssh/id_ed25519.pub)"
+
+step "3/5 GitHub CLI"
+if gh auth status >/dev/null 2>&1; then
+    ok "gh: logged in as $(gh api user --jq .login 2>/dev/null || echo '?')"
+else
+    todo "running: gh auth login (choose SSH; use the one-time code in your browser)"
+    gh auth login || todo "gh login skipped/failed — rerun styrman-setup anytime"
+fi
+
+step "4/5 Claude Code"
+if [ -f ~/.claude/.credentials.json ] || claude auth status 2>/dev/null | grep -qi 'logged in'; then
+    ok "claude: credentials present (~/.claude)"
+else
+    todo "launching claude for first-run sign-in — finish the wizard, then /exit"
+    claude || true
+fi
+
+step "5/5 Antigravity CLI (agy)"
+if secret-tool search --all service antigravity 2>/dev/null | grep -q .; then
+    ok "agy: keyring credentials present"
+else
+    todo "launching agy for Google sign-in (copy the URL to your browser, paste the code back), then quit agy"
+    agy || true
+fi
+
+step "Done"
+echo "Everything above lives in the shared home — every project, current and"
+echo "future, is now signed in. Rerun ${BOLD}styrman-setup${RESET} anytime to check status."

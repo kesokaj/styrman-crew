@@ -23,7 +23,12 @@ async function refresh() {
   for (const p of projects) {
     const div = document.createElement('div');
     div.className = 'proj' + (current?.project === p.name ? ' active' : '');
-    div.innerHTML = `<span>${p.name} <span style="color:#667">(${p.agent})</span></span><span class="state ${p.state}">${p.state}</span>`;
+    const label = document.createElement('span');
+    label.textContent = `${p.name} (${p.agent})`;
+    const state = document.createElement('span');
+    state.className = `state ${p.state}`;
+    state.textContent = p.state;
+    div.append(label, state);
     div.onclick = () => openProject(p.name);
     el.appendChild(div);
     if (current?.project === p.name) {
@@ -42,7 +47,21 @@ async function loadConvs(project, el) {
   for (const c of conversations) {
     const d = document.createElement('div');
     d.className = 'conv' + (current?.conv === c.id ? ' active' : '');
-    d.textContent = `conversation ${c.id}` + (c.attached ? ' •' : '');
+    d.style.display = 'flex';
+    d.style.justifyContent = 'space-between';
+    const label = document.createElement('span');
+    label.textContent = `conversation ${c.id}` + (c.attached ? ' •' : '');
+    const kill = document.createElement('span');
+    kill.textContent = '✕';
+    kill.title = 'kill this conversation (ends whatever runs in it)';
+    kill.style.color = '#c66';
+    kill.onclick = async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Kill conversation ${c.id}? This ends the session inside it.`)) return;
+      await api(`/api/projects/${project}/conversations/${c.id}`, { method: 'DELETE' });
+      refresh();
+    };
+    d.append(label, kill);
     d.onclick = (e) => { e.stopPropagation(); connect(project, c.id); };
     el.appendChild(d);
   }

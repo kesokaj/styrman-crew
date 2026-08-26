@@ -165,3 +165,34 @@ virtualization enabled.
 
 **Consequences:** REQUIREMENTS.md R11. The manual S0 fix becomes code. Disaster
 recovery = fresh install + restore `/var/lib/styrman`.
+
+---
+
+## ADR-011: Conversations are durable agent sessions; tmux is only the live view
+
+**Date:** 2026-08-26 · **Status:** accepted (design direction for Phase 2; operator feedback)
+
+**Context:** Phase 1 equated "conversation" with a tmux session. Operator
+feedback after first use: that model is wrong — you can quit claude/agy inside
+one and the "conversation" lives on as a shell; killing tmux loses nothing the
+user cares about; and the thing they actually want per conversation is its
+**history**, like Antigravity's conversation list.
+
+**Decision:** Redefine for Phase 2:
+- A **conversation** is a durable record bound to the agent's own session
+  (Claude Code session id under `~/.claude/projects/<dir>/`; agy's equivalent
+  under `~/.gemini`), with a title and timestamps, stored per project
+  (`conversations.json`, userstore pattern — the one addition to ADR-007).
+- Opening a conversation attaches (or recreates) its tmux session; if the
+  pane's agent exited or the container was restarted, styrman relaunches the
+  agent with its native resume (`claude --resume <id>`; agy equivalent) — so
+  history survives everything, which is the actual requirement.
+- Plain shells are **terminals**, not conversations (Antigravity's right
+  rail); they are ephemeral and unlisted in history.
+- Deleting a conversation removes the record + tmux session; the agent's
+  transcript files remain in the shared home unless the user purges them.
+
+**Consequences:** Phase 2 UI lists conversation history per project even for
+stopped projects. Requires per-agent session-id discovery (claude: parse
+`~/.claude/projects`; agy: investigate its session store). Phase 1's
+tmux-only conversations remain the transport layer underneath.

@@ -78,7 +78,12 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The agent runs under a login shell so /etc/profile.d applies — the
 	// keyring env (DBUS_SESSION_BUS_ADDRESS) in particular, which agy's
 	// Secret Service auth needs. tmux runs a single-string command via sh.
-	paneCmd := "bash -lc 'exec " + config.Agents[proj.Agent] + "'"
+	agentCmd, ok := config.Agents[proj.Agent]
+	if !ok {
+		http.Error(w, "project has unknown agent "+proj.Agent, http.StatusInternalServerError)
+		return
+	}
+	paneCmd := "bash -lc 'exec " + agentCmd + "'"
 	if r.URL.Query().Get("kind") == "shell" {
 		paneCmd = "bash -l"
 	}
@@ -92,9 +97,11 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true, // TLS terminates at the ingress (Phase 3)
-	})
+	// Default Origin verification (Origin host must match Host) stays ON:
+	// WebSockets bypass CORS, and without this any web page the operator
+	// visits could drive a terminal. The Phase 3 ingress preserves Host, so
+	// same-origin keeps working behind Caddy.
+	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
 	}
@@ -119,7 +126,10 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		WorkDir: workdir,
 		// -x/-y seed the size for a newly created session (avoids the
 		// double-prompt redraw); -c sets the pane's start directory.
-		Cmd: []string{"tmux", "new-session", "-A", "-s", sess,
+		// -D detaches stale clients (e.g. left by a crashed server). Safe with
+		// -A here because a replaced browser gets close 4001 and never
+		// reconnects, so there is no detach/reattach spiral.
+		Cmd: []string{"tmux", "new-session", "-A", "-D", "-s", sess,
 			"-x", strconv.Itoa(int(cols)), "-y", strconv.Itoa(int(rows)),
 			"-c", workdir, paneCmd},
 		Env: []string{
@@ -141,10 +151,24 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer ex.Close()
 
 	b.logger.Info("terminal attached", "project", projName, "conv", convID, "kind", paneCmd)
-	ctx := r.Context()
+
+	// hctx governs the whole session: cancelled by browser disconnect (WS
+	// reader), stream EOF, or handler exit. The watcher below turns that into
+	// ex.Close(), which unblocks the stream reader — without it, a closed
+	// browser tab would leave the exec, hijacked conn, and a ghost tmux
+	// client attached forever (review finding).
+	hctx, hcancel := context.WithCancel(r.Context())
+	defer hcancel()
+	go func() {
+		<-hctx.Done()
+		ex.Close()
+	}()
+
 	var wg sync.WaitGroup
 
 	// Heartbeat: detect dead connections faster than TCP keepalive would.
+	// Each ping gets its own deadline — Ping blocks until pong or ctx done,
+	// so an undeadlined ping on a half-open connection never returns.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -152,10 +176,14 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-hctx.Done():
 				return
 			case <-ticker.C:
-				if err := conn.Ping(ctx); err != nil {
+				pctx, pcancel := context.WithTimeout(hctx, 10*time.Second)
+				err := conn.Ping(pctx)
+				pcancel()
+				if err != nil {
+					hcancel()
 					return
 				}
 			}
@@ -167,12 +195,13 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	streamDone := make(chan struct{})
 	go func() {
 		defer close(streamDone)
+		defer hcancel()
 		buf := make([]byte, 32*1024)
 		for {
 			n, err := ex.Read(buf)
 			if n > 0 {
 				b.orch.Touch(projName)
-				if writeErr := conn.Write(ctx, websocket.MessageBinary, buf[:n]); writeErr != nil {
+				if writeErr := conn.Write(hctx, websocket.MessageBinary, buf[:n]); writeErr != nil {
 					return
 				}
 			}
@@ -184,11 +213,13 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// WebSocket → exec stream (stdin + resize). A read error here is a browser
 	// disconnect: do NOT signal the shell — the tmux session must survive it.
+	// hcancel tears down our attach; the tmux session lives on.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer hcancel()
 		for {
-			msgType, data, err := conn.Read(ctx)
+			msgType, data, err := conn.Read(hctx)
 			if err != nil {
 				return
 			}
@@ -196,7 +227,7 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if msgType == websocket.MessageText {
 				var msg controlMessage
 				if json.Unmarshal(data, &msg) == nil && msg.Type == "resize" && msg.Cols > 0 && msg.Rows > 0 {
-					_ = ex.Resize(ctx, uint(msg.Cols), uint(msg.Rows))
+					_ = ex.Resize(hctx, uint(msg.Cols), uint(msg.Rows))
 				}
 				continue
 			}
@@ -210,13 +241,16 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// The exec ends either because the session truly exited (user typed exit,
 	// agent quit) or because our attach was torn down. Only a finished exec
-	// gets the semantic close code; everything else closes normally and the
-	// client may silently reconnect.
-	if code, done := ex.ExitCode(context.Background()); done {
+	// gets the semantic close code (4000); everything else closes normally and
+	// the client may silently reconnect. ExitCode polls briefly: dockerd's
+	// exec bookkeeping lags stream EOF by a few ms, and misreading it would
+	// send a normal close where 4000 belongs (review finding).
+	if code, done := ex.ExitCodeWait(context.Background(), time.Second); done {
 		b.logger.Info("conversation exited", "project", projName, "conv", convID, "exitCode", code)
 		conn.Close(websocket.StatusCode(config.CloseShellExited), "shell exited")
 	} else {
 		conn.Close(websocket.StatusNormalClosure, "detached")
 	}
+	hcancel()
 	wg.Wait()
 }

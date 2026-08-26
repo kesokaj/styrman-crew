@@ -30,7 +30,7 @@ put_once() { # $1=dest $2=content — write only if absent
 }
 
 mkdir -p "${HOME_DIR}"/{projects,.ssh,.dockerd,.config,.cache,.local/bin,.local/share/keyrings}
-chmod 700 "${HOME_DIR}/.ssh"
+chmod 700 "${HOME_DIR}" "${HOME_DIR}/.ssh"   # the home holds credentials (R3/R10)
 
 put_once .bashrc '# styrman shared home
 case $- in *i*) ;; *) return ;; esac

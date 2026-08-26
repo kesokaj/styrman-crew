@@ -62,9 +62,11 @@ if [[ ! -x /usr/local/bin/containerd-shim-mvm-v2 ]]; then
 fi
 
 # ─── 3. daemon.json: mvm runtime + time-namespaces off (ADR-009) ────────────
+# Docker is only restarted when the config actually changed — a re-run on a
+# live host must not kill running project microVMs (idempotence).
 log "merging /etc/docker/daemon.json"
-python3 - <<'PYEOF'
-import json, os
+DAEMON_CHANGED=$(python3 - <<'PYEOF'
+import json, os, shutil, tempfile
 path = "/etc/docker/daemon.json"
 cfg = {}
 if os.path.exists(path):
@@ -82,15 +84,23 @@ if features.get("time-namespaces") is not False:
     features["time-namespaces"] = False
     changed = True
 if changed:
+    # Copy (not move) the backup, then write via temp + atomic rename so a
+    # failed write can never leave the host without a daemon.json.
     if os.path.exists(path):
-        os.replace(path, path + ".bak-styrman")
-    with open(path, "w") as f:
+        shutil.copy2(path, path + ".bak-styrman")
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w") as f:
         json.dump(cfg, f, indent=4, sort_keys=True)
-    print("daemon.json updated (backup: daemon.json.bak-styrman)")
-else:
-    print("daemon.json already correct")
+    os.replace(tmp, path)
+print("yes" if changed else "no")
 PYEOF
-systemctl restart docker
+)
+if [[ "${DAEMON_CHANGED}" == *yes* ]]; then
+    log "daemon.json updated (backup: daemon.json.bak-styrman) — restarting docker"
+    systemctl restart docker
+else
+    log "daemon.json already correct — not restarting docker"
+fi
 
 # ─── 4. Host tuning: KSM (merges identical microVM pages) ───────────────────
 if [[ -w /sys/kernel/mm/ksm/run ]]; then

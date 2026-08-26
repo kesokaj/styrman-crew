@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"sort"
@@ -66,6 +67,17 @@ func NewStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	for _, p := range f.Projects {
+		// Validate on load, not just on Add: everything downstream (paths,
+		// container/network names, tmux -c, wipe's RemoveAll) trusts store
+		// contents, so a hand-edited file must not break the invariant.
+		if err := ValidateName(p.Name); err != nil {
+			slog.Warn("skipping invalid project in store", "name", p.Name, "error", err)
+			continue
+		}
+		if _, ok := config.Agents[p.Agent]; !ok {
+			slog.Warn("skipping project with unknown agent in store", "name", p.Name, "agent", p.Agent)
+			continue
+		}
 		s.projects[p.Name] = p
 	}
 	return s, nil
@@ -146,8 +158,22 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
+	// Atomic + durable: fsync the temp file before rename so a power cut
+	// can't leave a truncated projects.json — the only durable metadata (R7).
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	f2, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f2.Write(data); err != nil {
+		f2.Close()
+		return err
+	}
+	if err := f2.Sync(); err != nil {
+		f2.Close()
+		return err
+	}
+	if err := f2.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.path)

@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -79,7 +80,26 @@ func (s *Server) Routes() http.Handler {
 		}
 		http.NotFound(w, r)
 	})
-	return mux
+	return csrfGuard(mux)
+}
+
+// csrfGuard rejects cross-origin mutating requests. Browsers always send
+// Origin on cross-origin POST/DELETE; same-origin requests either omit it or
+// match Host. curl and other non-browser clients send no Origin and pass.
+// (WebSocket origin checking is handled separately by websocket.Accept.)
+func csrfGuard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			if origin := r.Header.Get("Origin"); origin != "" {
+				if u, err := url.Parse(origin); err != nil || u.Host != r.Host {
+					writeErr(w, http.StatusForbidden, fmt.Errorf("cross-origin request rejected"))
+					return
+				}
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type projectView struct {
@@ -135,11 +155,16 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Boot the microVM now so the first terminal attach is instant and
-	// creation errors surface here rather than mid-connect.
+	// creation errors surface here rather than mid-connect. On failure, roll
+	// the registration back so the name can be retried (review finding); the
+	// workspace dir is left in place — it may hold nothing yet, and deleting
+	// user data on an error path is worse than a leftover empty dir.
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
 	containerID, err := s.orch.EnsureRunning(ctx, req.Name)
 	if err != nil {
+		_ = s.orch.Destroy(context.Background(), req.Name)
+		_ = s.projects.Remove(req.Name)
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -185,12 +210,19 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	// wipe=true also removes the workspace and the project's docker image
-	// file — irreversible, so it is opt-in per request.
+	// wipe=true also removes the workspace and the project's docker storage
+	// (both the ext4 image and the vfs-fallback dir) — irreversible, so it is
+	// opt-in per request. Store contents are validated on load, so name is a
+	// safe slug here; failures are logged, not swallowed.
 	if r.URL.Query().Get("wipe") == "true" {
-		if err := project.ValidateName(name); err == nil {
-			os.RemoveAll(filepath.Join(s.cfg.HomeDir, "projects", name))
-			os.Remove(filepath.Join(s.cfg.HomeDir, ".dockerd", name+".img"))
+		for _, path := range []string{
+			filepath.Join(s.cfg.HomeDir, "projects", name),
+			filepath.Join(s.cfg.HomeDir, ".dockerd", name+".img"),
+			filepath.Join(s.cfg.HomeDir, ".dockerd", name),
+		} {
+			if err := os.RemoveAll(path); err != nil {
+				s.logger.Warn("wipe failed", "project", name, "path", path, "error", err)
+			}
 		}
 	}
 	if err := s.projects.Remove(name); err != nil {

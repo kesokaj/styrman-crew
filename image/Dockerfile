@@ -60,6 +60,7 @@ RUN printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > /etc/resolv.conf.styrman
 COPY entrypoint.sh /styrman/entrypoint.sh
 COPY configs/ /styrman/configs/
 ARG STYRMAN_VERSION=0.0.0
-RUN echo "${STYRMAN_VERSION}" > /styrman/VERSION && chmod +x /styrman/entrypoint.sh
+RUN echo "${STYRMAN_VERSION}" > /styrman/VERSION && chmod +x /styrman/entrypoint.sh && \
+    install -m 755 /styrman/configs/styrman-setup /usr/local/bin/styrman-setup
 
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/styrman/entrypoint.sh"]
