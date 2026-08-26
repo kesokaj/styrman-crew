@@ -8,11 +8,12 @@ specs: `api.md`, `terminal-protocol.md`, `runtime-image.md`; decisions:
 ## 1. What styrman is
 
 A self-hosted web platform for running AI coding agents in isolated projects.
-You create a project, pick `claude` (Claude Code) or `agy` (Antigravity CLI),
-and get a browser terminal running that agent in a dedicated **Kata microVM**
-— its own kernel, its own Docker daemon, its own network. The agent CLI *is*
-the chat window; styrman just organizes it Antigravity-style: projects →
-conversations, jump anywhere, everything persistent.
+You create a project and get browser terminals inside a dedicated **Kata
+microVM** — its own kernel, its own Docker daemon, its own network. Both
+agents (`claude` and `agy`) are preinstalled; run whichever you want, in as
+many terminals as you want. styrman organizes it Antigravity-style: projects
+→ terminals in the sidebar, project context (files, ports, history, diff) in
+the side panel, everything persistent.
 
 Three load-bearing ideas:
 
@@ -35,23 +36,24 @@ Browser ──HTTPS──► Caddy + Google OAuth (Phase 3; Phase 1 is localhost
                       │
                       ▼
    styrman server (one Go binary, runs as the operator user)
-     ├── UI (embedded; /dev/ test console in Phase 1, TanStack SPA in Phase 2)
-     ├── REST /api/projects, /api/projects/{p}/conversations   (api.md)
-     ├── WS   /ws/term/{p}/{c}                    (terminal-protocol.md)
+     ├── UI (embedded TanStack Start SPA, ADR-013)
+     ├── REST /api/projects, .../terminals, .../files, .../history  (api.md)
+     ├── WS   /ws/term/{p}/{term}                 (terminal-protocol.md)
+     ├── proxy /p/{p}/{term}/port/{port}/ → the app inside the microVM
      └── Docker SDK ──► per-project container, runtime "mvm" (Kata)
                           ├── tini (PID 1) → entrypoint → sleep
                           ├── dockerd: overlay2 on loop-mounted ~/.dockerd/<p>.img
-                          ├── tmux: session conv-<id> per conversation
-                          │     └── bash -lc 'exec claude|agy'   (or bash -l)
+                          ├── tmux: session conv-<id> per terminal (bash -l),
+                          │     piped to ~/.styrman/logs/<p>/ (ADR-017)
                           └── virtiofs: /home/<user> = /var/lib/styrman/home
 ```
 
 - **State** (ADR-007): no database. Containers carry `styrman.*` labels and
-  are re-adopted on server start; conversations are discovered from tmux;
-  `projects.json` holds only what must outlive containers (agent choice,
-  created, archived).
+  are re-adopted on server start; live sessions are discovered from tmux;
+  `projects.json` + `conversations.json` hold only what must outlive
+  containers (project metadata, terminal titles).
 - **Terminal transport** (ADR-002): the server exec's
-  `tmux new-session -A -s conv-<id> -c ~/projects/<p> <cmd>` into the
+  `tmux new-session -A -D -s conv-<id> -c ~/projects/<p> bash -l` into the
   container (TTY exec, hijacked stream) and pumps bytes to the browser
   WebSocket. Project containers run no server, so orchestration logic updates
   without image rebuilds.
@@ -80,9 +82,12 @@ bash deploy/home-init.sh
 # 3. Runtime image (~10 min first time, 3.75 GB)
 docker build -t styrman-runtime:dev image/
 
-# 4. Run
+# 4. Run (dev: no auth, localhost)
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/
-# → http://127.0.0.1:8080/dev/
+# → http://127.0.0.1:8080
+
+# …or the production stack (Google OAuth + HTTPS): fill deploy/.env, then
+docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 First use: the UI shows a **First-time setup** banner (until marked done).
@@ -98,9 +103,9 @@ shells hint at it while credentials are missing. (agy fallback:
 
 ## 4. Operating it
 
-- **New project**: UI form (name, agent, git-init) or
-  `curl -X POST localhost:8080/api/projects -d '{"name":"x","agent":"claude","gitInit":true}'`.
-  ~2 s to a live agent.
+- **New project**: UI form (name, git-init) or
+  `curl -X POST localhost:8080/api/projects -d '{"name":"x","gitInit":true}'`.
+  ~2 s to a live terminal; type `claude` or `agy` in it.
 - **Jump projects/terminals**: click in the sidebar; each terminal is an
   independent tmux session.
 - **Side panel** (right): **Files** browses the project workspace and the
@@ -136,7 +141,8 @@ shells hint at it while credentials are missing. (agy fallback:
 | dockerd inside a project uses `vfs`, feels slow | The loop mount of `~/.dockerd/<p>.img` failed (see container logs); entrypoint fell back. Usually a loop-device or e2fsprogs issue. |
 | agy can't keep credentials / re-asks every time | Keyring didn't start: check `/etc/profile.d/styrman-keyring.sh` ran (login shell), `/run/styrman/keyring-pw` exists, and `~/.local/share/keyrings` is writable. Fallback: `GEMINI_API_KEY` in `~/.bash_secrets`. |
 | Files created by a project owned by root on the host | The in-guest user's UID must match the home's host owner. The server passes `STYRMAN_UID/GID` from the home dir's owner — check `ls -ld /var/lib/styrman/home`. |
-| Terminal shows "replaced" | That conversation was opened elsewhere (close code 4001). Only one attach per conversation, by design. |
+| Terminal shows "replaced" | That terminal was opened in another tab (close code 4001). One attach per terminal, by design. |
+| History tab is empty | Transcripts start when a tmux session is created; sessions predating ADR-017 have none. Check `~/.styrman/logs/<project>/` and that `/etc/styrman/tmux-project.conf` exists in the container. |
 | Project won't start, `waitReady` timeout | `docker logs styrman-<p>` — the entrypoint logs each step (`[styrman] ...`). |
 
 ## 6. Development
