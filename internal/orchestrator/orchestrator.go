@@ -137,10 +137,15 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, project string) (strin
 // bridge network (no-op for a host-mode server). Docker isolates bridge
 // networks from each other, so without this a containerized server cannot
 // reach microVM IPs for the port-preview proxy.
-func (o *Orchestrator) EnsureSelfAttached(ctx context.Context, project string) {
+func (o *Orchestrator) EnsureSelfAttached(_ context.Context, project string) {
 	if o.cfg.SelfContainer == "" {
 		return
 	}
+	// Detached context: this must complete even if the triggering client
+	// gives up (a canceled attach left the network unreachable for the
+	// next request too — same failure class as the delete-handler bug).
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	err := o.docker.NetworkConnect(ctx, config.NetworkName(project), o.cfg.SelfContainer, nil)
 	if err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
