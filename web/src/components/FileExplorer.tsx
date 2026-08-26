@@ -25,6 +25,7 @@ export function FileExplorer({ project }: { project: string }) {
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [error, setError] = useState<string>();
   const [open, setOpen] = useState<FileContent | null>(null);
+  const [dragging, setDragging] = useState(false);
 
   // Switching project resets the view to that project's root.
   useEffect(() => {
@@ -77,8 +78,41 @@ export function FileExplorer({ project }: { project: string }) {
           </button>
         ))}
         <button
+          onClick={() => {
+            const name = prompt("New file name (in the current directory):");
+            if (!name || name.includes("/")) return;
+            const newPath = path ? `${path}/${name}` : name;
+            tryUI(async () => {
+              await api.saveFile(scope, newPath, "");
+              load();
+              setOpen(await api.readFile(scope, newPath));
+            });
+          }}
+          className="ml-auto px-1 text-text-dim hover:text-accent"
+          title="New file"
+        >
+          ＋
+        </button>
+        <label className="cursor-pointer px-1 text-text-dim hover:text-accent" title="Upload files">
+          ↥
+          <input
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              const list = Array.from(e.target.files ?? []);
+              if (list.length)
+                tryUI(async () => {
+                  await api.uploadFiles(scope, path, list);
+                  load();
+                });
+              e.target.value = "";
+            }}
+          />
+        </label>
+        <button
           onClick={load}
-          className="ml-auto px-1 text-text-dim hover:text-text"
+          className="px-1 text-text-dim hover:text-text"
           title="Refresh"
         >
           ⟳
@@ -102,7 +136,24 @@ export function FileExplorer({ project }: { project: string }) {
         ))}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2">
+      <div
+        className={`min-h-0 flex-1 overflow-y-auto px-1 pb-2 ${dragging ? "bg-accent-soft/30 outline-dashed outline-1 outline-accent" : ""}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          const list = Array.from(e.dataTransfer.files ?? []);
+          if (list.length)
+            tryUI(async () => {
+              await api.uploadFiles(scope, path, list);
+              load();
+            });
+        }}
+      >
         {error && <p className="px-2 py-2 text-xs text-danger">{error}</p>}
         {!error && entries.length === 0 && (
           <p className="px-2 py-2 text-xs text-text-dim">Empty directory</p>

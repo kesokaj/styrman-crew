@@ -8,7 +8,7 @@
 | Metric | Target | Notes |
 |---|---|---|
 | Concurrent running projects (microVMs) | 10+ | On the NUC12 (16 threads / 62 GB); KSM enabled |
-| Users | 1 primary, ≤ 5 total | Single-operator system; userstore supports more |
+| Users | 1 admin, ≤ 5 total | Admin (env-provided) manages access; each user fully isolated |
 | Projects total (incl. stopped) | 100+ | Stopped projects cost only disk |
 
 ## Latency SLA

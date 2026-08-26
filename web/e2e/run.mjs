@@ -171,7 +171,7 @@ try {
   await check('settings page renders sections', async () => {
     await page.waitForURL('**/settings')
     await page.waitForSelector('text=Allowed accounts')
-    await page.waitForSelector('text=Shared home')
+    await page.waitForSelector('text=State dir')
   })
   await check('settings shows runtime info', () => page.waitForSelector('text=Kata microVM'))
   await shot('07-settings')
@@ -215,6 +215,14 @@ try {
   const menuDelete = page.locator('button.text-danger', { hasText: 'Delete' })
   await menuDelete.waitFor()
   await menuDelete.click()
+  // Typed-confirmation dialog (no browser popups): type "delete" to arm.
+  await check('delete dialog requires typing "delete"', async () => {
+    await page.waitForSelector('#del-confirm')
+    const armed = await page.locator('button:has-text("Delete project")').isEnabled()
+    if (armed) throw new Error('delete button armed before typing')
+  })
+  await page.fill('#del-confirm', 'delete')
+  await page.click('button:has-text("Delete project")')
   await check('project deleted from sidebar', () =>
     page.waitForFunction(
       (name) => !document.querySelector('nav')?.textContent?.includes(name),

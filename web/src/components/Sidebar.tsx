@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { api, tryUI, type Project } from "../lib/api";
 import { usePolled, useTheme } from "../lib/hooks";
+import { DeleteProjectDialog } from "./DeleteProjectDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { SetupBanner } from "./SetupBanner";
 import { TerminalList } from "./TerminalList";
@@ -15,6 +16,7 @@ export function Sidebar() {
   const { data, refresh } = usePolled(() => api.listProjects(), 5000);
   const { theme, toggle } = useTheme();
   const [showNew, setShowNew] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
 
   const projects = data?.projects ?? [];
@@ -35,17 +37,8 @@ export function Sidebar() {
       if (action === "stop") await api.stopProject(p.name);
       if (action === "start") await api.startProject(p.name);
       if (action === "delete") {
-        const wipe = confirm(
-          `Delete project "${p.name}"?\n\nOK = also wipe its workspace and docker disk (irreversible).\nCancel = keep the files, remove the project.`,
-        );
-        if (
-          !confirm(
-            `Really delete "${p.name}"${wipe ? " AND its files" : " (files kept)"}?`,
-          )
-        )
-          return;
-        await api.deleteProject(p.name, wipe);
-        if (params.project === p.name) navigate({ to: "/" });
+        setDeleting(p.name);
+        return;
       }
       refresh();
     });
@@ -145,6 +138,18 @@ export function Sidebar() {
         </button>
       </div>
 
+      {deleting && (
+        <DeleteProjectDialog
+          project={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={() => {
+            const wasOpen = params.project === deleting;
+            setDeleting(null);
+            refresh();
+            if (wasOpen) navigate({ to: "/" });
+          }}
+        />
+      )}
       {showNew && (
         <NewProjectDialog
           onClose={() => setShowNew(false)}

@@ -19,17 +19,22 @@ import (
 
 	"github.com/kesokaj/styrman/internal/config"
 	"github.com/kesokaj/styrman/internal/conversation"
+	"github.com/kesokaj/styrman/internal/identity"
 	"github.com/kesokaj/styrman/internal/orchestrator"
-	"github.com/kesokaj/styrman/internal/project"
 )
 
-// Bridge serves /ws/term/{project}/{conv} and /ws/setup.
+// TermStore is the slice of the per-user terminal store the bridge needs.
+type TermStore interface {
+	Get(project, id string) (conversation.Record, bool)
+	Touch(project, id string)
+}
+
+// Bridge serves /ws/term/{project}/{term} and /ws/setup.
 type Bridge struct {
 	orch     *orchestrator.Orchestrator
-	projects *project.Store
-	convs    *conversation.Store
 	cfg      *config.Config
 	logger   *slog.Logger
+	storeFor func(user string) (TermStore, error)
 
 	// activeConns maps a session key → the current *websocket.Conn. A new
 	// connection closes the previous one with CloseReplaced so only one client
@@ -37,9 +42,9 @@ type Bridge struct {
 	activeConns sync.Map
 }
 
-// NewBridge creates a Bridge.
-func NewBridge(orch *orchestrator.Orchestrator, projects *project.Store, convs *conversation.Store, cfg *config.Config, logger *slog.Logger) *Bridge {
-	return &Bridge{orch: orch, projects: projects, convs: convs, cfg: cfg, logger: logger}
+// NewBridge creates a Bridge. storeFor resolves a user's terminal store.
+func NewBridge(orch *orchestrator.Orchestrator, cfg *config.Config, logger *slog.Logger, storeFor func(user string) (TermStore, error)) *Bridge {
+	return &Bridge{orch: orch, cfg: cfg, logger: logger, storeFor: storeFor}
 }
 
 type controlMessage struct {
@@ -62,11 +67,12 @@ func clientSize(r *http.Request) (cols, rows uint16) {
 // ServeHTTP attaches a project terminal: {project} and {term} path values
 // plus optional cols/rows query params.
 func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	user := identity.FromContext(r.Context()).Username
 	projName := r.PathValue("project")
 	convID := r.PathValue("term")
-	proj, err := b.projects.Get(projName)
+	store, err := b.storeFor(user)
 	if err != nil {
-		http.Error(w, "unknown project", http.StatusNotFound)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if err := conversation.ValidateID(convID); err != nil {
@@ -78,30 +84,30 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// claude/agy themselves — both are in the image, and /etc/profile.d
 	// provides the keyring env agy needs. Run several terminals to work with
 	// several agents at once.
-	_ = proj
 	paneCmd := "bash -l"
 	// Strict: the record must exist (created via POST). Auto-creating here
 	// let stale reconnects resurrect deleted terminals.
-	if _, ok := b.convs.Get(projName, convID); !ok {
+	if _, ok := store.Get(projName, convID); !ok {
 		http.Error(w, "unknown terminal", http.StatusNotFound)
 		return
 	}
-	b.convs.Touch(projName, convID)
+	store.Touch(projName, convID)
 	tmuxName := conversation.Prefix + convID
 
 	// Ensure the microVM is up before upgrading — first attach after idle-stop
 	// pays the (~seconds) start cost here.
-	containerID, err := b.orch.EnsureRunning(r.Context(), projName)
+	containerID, err := b.orch.EnsureRunning(r.Context(), user, projName)
 	if err != nil {
 		b.logger.Error("ensure running failed", "project", projName, "error", err)
 		http.Error(w, "failed to start project", http.StatusInternalServerError)
 		return
 	}
 
-	workdir := "/home/" + b.cfg.Username + "/projects/" + projName
+	workdir := "/home/" + user + "/projects/" + projName
 	b.serve(w, r, session{
 		containerID: containerID,
-		key:         projName + "/" + tmuxName,
+		user:        user,
+		key:         user + "/" + projName + "/" + tmuxName,
 		tmuxName:    tmuxName,
 		workdir:     workdir,
 		paneCmd:     paneCmd,
@@ -113,17 +119,19 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // (no project, not listed anywhere). Reconnects re-enter the same tmux
 // session; when the script's shell exits the client gets close 4000.
 func (b *Bridge) ServeSetup(w http.ResponseWriter, r *http.Request) {
-	containerID, err := b.orch.EnsureSetup(r.Context())
+	user := identity.FromContext(r.Context()).Username
+	containerID, err := b.orch.EnsureSetup(r.Context(), user)
 	if err != nil {
-		b.logger.Error("ensure setup vm failed", "error", err)
+		b.logger.Error("ensure setup vm failed", "user", user, "error", err)
 		http.Error(w, "failed to start setup environment", http.StatusInternalServerError)
 		return
 	}
 	b.serve(w, r, session{
 		containerID: containerID,
-		key:         "system/setup",
+		user:        user,
+		key:         user + "/system/setup",
 		tmuxName:    "styrman-setup",
-		workdir:     "/home/" + b.cfg.Username,
+		workdir:     "/home/" + user,
 		paneCmd:     "bash -lc 'styrman-setup; exec bash -l'",
 		project:     "", // system VM: no idle tracking
 	})
@@ -132,6 +140,7 @@ func (b *Bridge) ServeSetup(w http.ResponseWriter, r *http.Request) {
 // session describes one terminal attachment target.
 type session struct {
 	containerID string
+	user        string
 	key         string // activeConns key
 	tmuxName    string
 	workdir     string
@@ -164,9 +173,9 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 	b.activeConns.Store(s.key, conn)
 	defer b.activeConns.CompareAndDelete(s.key, conn)
 
-	home := "/home/" + b.cfg.Username
+	home := "/home/" + s.user
 	spec := orchestrator.ExecSpec{
-		User:    b.cfg.Username,
+		User:    s.user,
 		WorkDir: s.workdir,
 		// -x/-y seed the size for a newly created session (avoids the
 		// double-prompt redraw); -c sets the pane's start directory. -D
@@ -178,7 +187,7 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 			"-c", s.workdir, s.paneCmd},
 		Env: []string{
 			"HOME=" + home,
-			"USER=" + b.cfg.Username,
+			"USER=" + s.user,
 			"SHELL=/bin/bash",
 			"TERM=xterm-256color",
 			"LANG=en_US.UTF-8",
@@ -198,7 +207,7 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 
 	touch := func() {
 		if s.project != "" {
-			b.orch.Touch(s.project)
+			b.orch.Touch(s.user, s.project)
 		}
 	}
 

@@ -9,9 +9,7 @@ import (
 	"testing"
 
 	"github.com/kesokaj/styrman/internal/config"
-	"github.com/kesokaj/styrman/internal/conversation"
 	"github.com/kesokaj/styrman/internal/orchestrator"
-	"github.com/kesokaj/styrman/internal/project"
 	"github.com/kesokaj/styrman/internal/userstore"
 )
 
@@ -20,16 +18,8 @@ import (
 func testRoutes(t *testing.T) http.Handler {
 	t.Helper()
 	dir := t.TempDir()
-	cfg := &config.Config{StateDir: dir, HomeDir: filepath.Join(dir, "home")}
+	cfg := &config.Config{StateDir: dir, HomesDir: filepath.Join(dir, "homes"), Username: "tester"}
 	logger := slog.New(slog.DiscardHandler)
-	projects, err := project.NewStore(filepath.Join(dir, "projects.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	convs, err := conversation.NewStore(filepath.Join(dir, "conversations.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	users, err := userstore.New(filepath.Join(dir, "users.json"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +28,7 @@ func testRoutes(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(cfg, projects, convs, users, orch, logger).Routes()
+	return New(cfg, users, orch, logger).Routes()
 }
 
 func TestRouting(t *testing.T) {
@@ -94,12 +84,18 @@ func TestRouting(t *testing.T) {
 
 func TestAuthGuard(t *testing.T) {
 	dir := t.TempDir()
+	cfg := &config.Config{StateDir: dir, HomesDir: filepath.Join(dir, "homes"), Username: "tester"}
 	users, err := userstore.New(filepath.Join(dir, "users.json"), []string{"me@example.com"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	orch, err := orchestrator.New(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(cfg, users, orch, nil)
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
-	h := authGuard("header", users, inner)
+	h := srv.authGuard("header", inner)
 
 	cases := []struct {
 		name, email, path string
@@ -123,8 +119,8 @@ func TestAuthGuard(t *testing.T) {
 		}
 	}
 
-	// Mode "none" bypasses entirely.
-	h = authGuard("none", users, inner)
+	// Mode "none" bypasses entirely (acts as the default user, admin).
+	h = srv.authGuard("none", inner)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
 	if w.Code != http.StatusOK {

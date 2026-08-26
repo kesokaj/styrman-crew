@@ -364,3 +364,31 @@ running container required.
 **Consequences:** Browsing and editing work while a project is stopped, and
 cost nothing per keystroke. The explorer's two scopes are the project
 workspace and the shared home (R3 — where every credential lives).
+
+---
+
+## ADR-019: Multi-tenancy — per-user homes, projects, and setup
+
+**Date:** 2026-08-26 · **Status:** accepted (operator directive; amends R3)
+
+**Context:** Operator: another account with access "should have its own
+disk", and "not my projects" — the admin adds users, each isolated.
+
+**Decision:** Identity flows from the ingress header (or the configured
+default on the loopback dev listener) through `internal/identity`
+(email → username slug, devbox's derivation). Everything is namespaced by
+user: home `/var/lib/styrman/homes/<user>` (created with a skeleton on first
+sight; credentials via that user's own styrman-setup), metadata stores
+`/var/lib/styrman/users/<user>/{projects,conversations}.json`, containers
+`styrman-<user>-<project>`, networks `sdb-<user>-<project>`, per-user hidden
+setup VMs, per-user transcripts. In-guest username = the slug; uid/gid stays
+the host operator's (isolation is at the mount + microVM level, not uid).
+Admins = env-provided emails (`STYRMAN_ALLOWED_EMAILS`); only they manage
+the user list (Settings → Admin). A startup migration moves the legacy
+single-home layout into the default user's namespace and removes
+pre-multitenancy containers (data persists; containers are disposable).
+
+**Consequences:** A second user signs in and finds an empty home, their own
+setup banner, their own projects — and no path to anyone else's. The state
+dir (all homes + metadata) is the single backup target. Legacy migration ran
+2026-08-26 (admin home → homes/ostling-simon).

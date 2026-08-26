@@ -61,20 +61,23 @@ func New(cfg *config.Config, logger *slog.Logger) (*Orchestrator, error) {
 
 // Status describes a project's container state.
 type Status struct {
+	User        string `json:"user"`
 	Project     string `json:"project"`
 	ContainerID string `json:"containerId,omitempty"`
 	State       string `json:"state"` // "running", "stopped", "absent"
 }
 
+func key(user, project string) string { return user + "/" + project }
+
 // Touch records terminal activity for the idle reaper.
-func (o *Orchestrator) Touch(project string) { o.activity.Store(project, time.Now()) }
+func (o *Orchestrator) Touch(user, project string) { o.activity.Store(key(user, project), time.Now()) }
 
 // Status inspects the project's container.
-func (o *Orchestrator) Status(ctx context.Context, project string) (Status, error) {
-	insp, err := o.docker.ContainerInspect(ctx, config.ContainerName(project))
+func (o *Orchestrator) Status(ctx context.Context, user, project string) (Status, error) {
+	insp, err := o.docker.ContainerInspect(ctx, config.ContainerName(user, project))
 	if err != nil {
 		if errdefs.IsNotFound(err) {
-			return Status{Project: project, State: "absent"}, nil
+			return Status{User: user, Project: project, State: "absent"}, nil
 		}
 		return Status{}, err
 	}
@@ -82,17 +85,17 @@ func (o *Orchestrator) Status(ctx context.Context, project string) (Status, erro
 	if insp.State != nil && insp.State.Running {
 		st = "running"
 	}
-	return Status{Project: project, ContainerID: insp.ID, State: st}, nil
+	return Status{User: user, Project: project, ContainerID: insp.ID, State: st}, nil
 }
 
 // EnsureRunning makes sure the project's microVM exists and is running, and
 // waits until the entrypoint reports ready. Returns the container ID.
-func (o *Orchestrator) EnsureRunning(ctx context.Context, project string) (string, error) {
-	l := o.lockProject(project)
+func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string) (string, error) {
+	l := o.lockProject(key(user, project))
 	l.Lock()
 	defer l.Unlock()
 
-	name := config.ContainerName(project)
+	name := config.ContainerName(user, project)
 	id := ""
 	insp, err := o.docker.ContainerInspect(ctx, name)
 	switch {
@@ -106,9 +109,11 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, project string) (strin
 		}
 	case errdefs.IsNotFound(err):
 		id, err = o.create(ctx, createSpec{
-			name:     name,
-			netName:  config.NetworkName(project),
-			hostname: name,
+			name:      name,
+			netName:   config.NetworkName(user, project),
+			hostname:  "styrman-" + project,
+			guestUser: user,
+			homePath:  o.cfg.UserHome(user),
 			extraEnv: []string{
 				config.EnvProject + "=" + project,
 				config.EnvDockerDisk + "=" + strconv.Itoa(o.cfg.DockerDisk),
@@ -116,6 +121,7 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, project string) (strin
 			labels: map[string]string{
 				config.LabelManaged: "true",
 				config.LabelProject: project,
+				config.LabelUser:    user,
 			},
 		})
 		if err != nil {
@@ -128,8 +134,8 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, project string) (strin
 	if err := o.waitReady(ctx, id, 90*time.Second); err != nil {
 		return "", fmt.Errorf("project %s did not become ready: %w", name, err)
 	}
-	o.EnsureSelfAttached(ctx, project)
-	o.Touch(project)
+	o.EnsureSelfAttached(ctx, user, project)
+	o.Touch(user, project)
 	return id, nil
 }
 
@@ -137,7 +143,7 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, project string) (strin
 // bridge network (no-op for a host-mode server). Docker isolates bridge
 // networks from each other, so without this a containerized server cannot
 // reach microVM IPs for the port-preview proxy.
-func (o *Orchestrator) EnsureSelfAttached(_ context.Context, project string) {
+func (o *Orchestrator) EnsureSelfAttached(_ context.Context, user, project string) {
 	if o.cfg.SelfContainer == "" {
 		return
 	}
@@ -146,7 +152,7 @@ func (o *Orchestrator) EnsureSelfAttached(_ context.Context, project string) {
 	// next request too — same failure class as the delete-handler bug).
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	err := o.docker.NetworkConnect(ctx, config.NetworkName(project), o.cfg.SelfContainer, nil)
+	err := o.docker.NetworkConnect(ctx, config.NetworkName(user, project), o.cfg.SelfContainer, nil)
 	if err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			o.logger.Warn("self-attach to project network failed", "project", project, "error", err)
@@ -161,12 +167,12 @@ func (o *Orchestrator) EnsureSelfAttached(_ context.Context, project string) {
 // EnsureSetup boots the hidden system microVM used for first-time onboarding
 // (styrman-setup). It carries no project label, so it never appears in
 // project listings; minimal mode skips workspace + DinD for a fast boot.
-func (o *Orchestrator) EnsureSetup(ctx context.Context) (string, error) {
-	l := o.lockProject(config.SetupContainer)
+func (o *Orchestrator) EnsureSetup(ctx context.Context, user string) (string, error) {
+	l := o.lockProject(config.SetupContainer(user))
 	l.Lock()
 	defer l.Unlock()
 
-	insp, err := o.docker.ContainerInspect(ctx, config.SetupContainer)
+	insp, err := o.docker.ContainerInspect(ctx, config.SetupContainer(user))
 	id := ""
 	switch {
 	case err == nil:
@@ -178,9 +184,11 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context) (string, error) {
 		}
 	case errdefs.IsNotFound(err):
 		id, err = o.create(ctx, createSpec{
-			name:     config.SetupContainer,
-			netName:  config.SetupNetwork,
-			hostname: "styrman-setup",
+			name:      config.SetupContainer(user),
+			netName:   config.SetupNetwork(user),
+			hostname:  "styrman-setup",
+			guestUser: user,
+			homePath:  o.cfg.UserHome(user),
 			extraEnv: []string{
 				config.EnvProject + "=setup",
 				"STYRMAN_MINIMAL=1",
@@ -188,6 +196,7 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context) (string, error) {
 			labels: map[string]string{
 				config.LabelManaged: "true",
 				config.LabelSystem:  "setup",
+				config.LabelUser:    user,
 			},
 		})
 		if err != nil {
@@ -203,8 +212,8 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context) (string, error) {
 }
 
 // SetupStatus reports whether the hidden onboarding microVM is running.
-func (o *Orchestrator) SetupStatus(ctx context.Context) (bool, error) {
-	insp, err := o.docker.ContainerInspect(ctx, config.SetupContainer)
+func (o *Orchestrator) SetupStatus(ctx context.Context, user string) (bool, error) {
+	insp, err := o.docker.ContainerInspect(ctx, config.SetupContainer(user))
 	if err != nil {
 		if errdefs.IsNotFound(err) {
 			return false, nil
@@ -215,12 +224,12 @@ func (o *Orchestrator) SetupStatus(ctx context.Context) (bool, error) {
 }
 
 // DestroySetup removes the hidden onboarding microVM and its network.
-func (o *Orchestrator) DestroySetup(ctx context.Context) error {
-	err := o.docker.ContainerRemove(ctx, config.SetupContainer, container.RemoveOptions{Force: true})
+func (o *Orchestrator) DestroySetup(ctx context.Context, user string) error {
+	err := o.docker.ContainerRemove(ctx, config.SetupContainer(user), container.RemoveOptions{Force: true})
 	if err != nil && !errdefs.IsNotFound(err) {
 		return err
 	}
-	if err := o.docker.NetworkRemove(ctx, config.SetupNetwork); err != nil && !errdefs.IsNotFound(err) {
+	if err := o.docker.NetworkRemove(ctx, config.SetupNetwork(user)); err != nil && !errdefs.IsNotFound(err) {
 		o.logger.Warn("setup network remove failed", "error", err)
 	}
 	return nil
@@ -228,11 +237,13 @@ func (o *Orchestrator) DestroySetup(ctx context.Context) error {
 
 // createSpec parameterizes container creation for project and system VMs.
 type createSpec struct {
-	name     string
-	netName  string
-	hostname string
-	extraEnv []string
-	labels   map[string]string
+	name      string
+	netName   string
+	hostname  string
+	guestUser string // in-guest username; its home is homePath
+	homePath  string // host path mounted as /home/<guestUser>
+	extraEnv  []string
+	labels    map[string]string
 }
 
 // create builds a network and container. Caller holds the relevant lock.
@@ -251,7 +262,7 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 	o.logger.Info("creating microVM", "container", name, "image", o.cfg.Image, "runtime", o.cfg.Runtime)
 
 	env := []string{
-		config.EnvUser + "=" + o.cfg.Username,
+		config.EnvUser + "=" + spec.guestUser,
 		config.EnvUID + "=" + strconv.Itoa(o.cfg.UID),
 		config.EnvGID + "=" + strconv.Itoa(o.cfg.GID),
 		config.EnvKeyringPW + "=" + o.cfg.KeyringPW,
@@ -275,7 +286,7 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 			Sysctls:     map[string]string{"net.ipv4.ip_forward": "1"},
 			SecurityOpt: []string{"apparmor=unconfined"},
 			Binds: []string{
-				o.cfg.HomeDir + ":/home/" + o.cfg.Username,
+				spec.homePath + ":/home/" + spec.guestUser,
 			},
 			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
 		},
@@ -315,9 +326,9 @@ func (o *Orchestrator) waitReady(ctx context.Context, containerID string, timeou
 }
 
 // Stop stops a project's container (home and workspace persist).
-func (o *Orchestrator) Stop(ctx context.Context, project string) error {
+func (o *Orchestrator) Stop(ctx context.Context, user, project string) error {
 	timeout := 30
-	err := o.docker.ContainerStop(ctx, config.ContainerName(project), container.StopOptions{Timeout: &timeout})
+	err := o.docker.ContainerStop(ctx, config.ContainerName(user, project), container.StopOptions{Timeout: &timeout})
 	if errdefs.IsNotFound(err) {
 		return nil
 	}
@@ -326,20 +337,20 @@ func (o *Orchestrator) Stop(ctx context.Context, project string) error {
 
 // Destroy removes the project's container and network. The workspace and all
 // home-dir state persist; only runtime state is lost.
-func (o *Orchestrator) Destroy(ctx context.Context, project string) error {
-	err := o.docker.ContainerRemove(ctx, config.ContainerName(project), container.RemoveOptions{Force: true})
+func (o *Orchestrator) Destroy(ctx context.Context, user, project string) error {
+	err := o.docker.ContainerRemove(ctx, config.ContainerName(user, project), container.RemoveOptions{Force: true})
 	if err != nil && !errdefs.IsNotFound(err) {
 		return err
 	}
 	// Detach ourselves first or the network removal fails on the active
 	// endpoint (containerized server only).
 	if o.cfg.SelfContainer != "" {
-		_ = o.docker.NetworkDisconnect(ctx, config.NetworkName(project), o.cfg.SelfContainer, true)
+		_ = o.docker.NetworkDisconnect(ctx, config.NetworkName(user, project), o.cfg.SelfContainer, true)
 	}
-	if err := o.docker.NetworkRemove(ctx, config.NetworkName(project)); err != nil && !errdefs.IsNotFound(err) {
+	if err := o.docker.NetworkRemove(ctx, config.NetworkName(user, project)); err != nil && !errdefs.IsNotFound(err) {
 		o.logger.Warn("network remove failed", "project", project, "error", err)
 	}
-	o.activity.Delete(project)
+	o.activity.Delete(key(user, project))
 	return nil
 }
 
@@ -356,14 +367,15 @@ func (o *Orchestrator) Adopt(ctx context.Context) (map[string]Status, error) {
 	out := map[string]Status{}
 	for _, c := range list {
 		p := c.Labels[config.LabelProject]
-		if p == "" {
-			continue
+		u := c.Labels[config.LabelUser]
+		if p == "" || u == "" {
+			continue // system VMs and pre-multitenancy legacy containers
 		}
 		st := "stopped"
 		if c.State == container.StateRunning {
 			st = "running"
 		}
-		out[p] = Status{Project: p, ContainerID: c.ID, State: st}
+		out[key(u, p)] = Status{User: u, Project: p, ContainerID: c.ID, State: st}
 	}
 	return out, nil
 }
@@ -390,25 +402,25 @@ func (o *Orchestrator) RunIdleReaper(ctx context.Context) {
 				o.logger.Warn("idle reaper list failed", "error", err)
 				continue
 			}
-			for p, st := range statuses {
+			for k, st := range statuses {
 				if st.State != "running" {
 					continue
 				}
 				last := time.Time{}
-				if v, ok := o.activity.Load(p); ok {
+				if v, ok := o.activity.Load(k); ok {
 					last = v.(time.Time)
 				}
 				// A running container with no recorded activity was adopted
 				// after a server restart — start its idle clock now instead
 				// of stopping it on the first tick (review finding).
 				if last.IsZero() {
-					o.Touch(p)
+					o.Touch(st.User, st.Project)
 					continue
 				}
 				if time.Since(last) > o.cfg.IdleTimeout {
-					o.logger.Info("stopping idle project", "project", p, "lastActivity", last)
-					if err := o.Stop(ctx, p); err != nil {
-						o.logger.Warn("idle stop failed", "project", p, "error", err)
+					o.logger.Info("stopping idle project", "user", st.User, "project", st.Project, "lastActivity", last)
+					if err := o.Stop(ctx, st.User, st.Project); err != nil {
+						o.logger.Warn("idle stop failed", "project", st.Project, "error", err)
 					}
 				}
 			}

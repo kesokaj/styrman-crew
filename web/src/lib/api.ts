@@ -49,12 +49,29 @@ export interface Diff {
   diff?: string;
 }
 
+export interface PortInfo {
+  port: number;
+  process?: string;
+  image?: string;
+}
+
+export interface ToolInfo {
+  name: string;
+  ready: boolean;
+  details?: string[];
+  skills?: string[];
+  agents?: string[];
+  commands?: string[];
+  configDir?: string;
+}
+
 export interface Settings {
   version: string;
   user: string;
+  username: string;
+  isAdmin: boolean;
   authMode: string;
   allowedUsers: string[];
-  guestUser: string;
   homeDir: string;
   stateDir: string;
   image: string;
@@ -142,9 +159,15 @@ export const api = {
     request<void>(`/api/projects/${project}/terminals/${id}`, {
       method: "DELETE",
     }),
+  deleteAllTerminals: (project: string) =>
+    request<void>(`/api/projects/${project}/terminals`, { method: "DELETE" }),
+  pauseTerminal: (project: string, id: string) =>
+    request<void>(`/api/projects/${project}/terminals/${id}/pause`, {
+      method: "POST",
+    }),
 
   listPorts: (project: string) =>
-    request<{ ports: number[] }>(`/api/projects/${project}/ports`),
+    request<{ ports: PortInfo[] }>(`/api/projects/${project}/ports`),
 
   listFiles: (scope: Scope, path: string) =>
     request<{ entries: FileEntry[] }>(
@@ -161,6 +184,18 @@ export const api = {
     }),
   downloadUrl: (scope: Scope, path: string) =>
     `${scopeBase(scope)}/download?path=${encodeURIComponent(path)}`,
+  uploadFiles: async (scope: Scope, dir: string, fileList: File[]) => {
+    const form = new FormData()
+    for (const f of fileList) form.append('files', f, f.name)
+    const res = await fetch(`${scopeBase(scope)}/upload?path=${encodeURIComponent(dir)}`, {
+      method: 'POST',
+      body: form,
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new ApiError(body?.error?.message ?? res.statusText, res.status)
+    }
+  },
 
   listHistory: (project: string) =>
     request<{ transcripts: Transcript[] }>(`/api/projects/${project}/history`),
@@ -171,6 +206,7 @@ export const api = {
   diff: (project: string) => request<Diff>(`/api/projects/${project}/diff`),
 
   settings: () => request<Settings>("/api/settings"),
+  tools: () => request<{ tools: ToolInfo[] }>("/api/settings/tools"),
   addUser: (email: string) =>
     request<{ allowedUsers: string[] }>("/api/settings/users", {
       method: "POST",

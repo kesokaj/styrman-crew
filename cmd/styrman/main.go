@@ -7,16 +7,16 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/kesokaj/styrman/internal/config"
-	"github.com/kesokaj/styrman/internal/conversation"
 	"github.com/kesokaj/styrman/internal/httpapi"
 	"github.com/kesokaj/styrman/internal/orchestrator"
-	"github.com/kesokaj/styrman/internal/project"
 	"github.com/kesokaj/styrman/internal/userstore"
 )
 
@@ -30,25 +30,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The state dir and shared home must exist and be writable by this
-	// process (deploy/host-setup.sh creates them). Fail loudly otherwise.
-	for _, dir := range []string{cfg.StateDir, cfg.HomeDir, filepath.Join(cfg.HomeDir, "projects")} {
+	for _, dir := range []string{cfg.StateDir, cfg.HomesDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			logger.Error("state dir unavailable — run deploy/host-setup.sh", "dir", dir, "error", err)
 			os.Exit(1)
 		}
 	}
 
-	projects, err := project.NewStore(cfg.ProjectsFile())
-	if err != nil {
-		logger.Error("project store load failed", "error", err)
-		os.Exit(1)
-	}
-	convs, err := conversation.NewStore(filepath.Join(cfg.StateDir, "conversations.json"))
-	if err != nil {
-		logger.Error("conversation store load failed", "error", err)
-		os.Exit(1)
-	}
+	migrateLegacy(cfg, logger)
 
 	users, err := userstore.New(filepath.Join(cfg.StateDir, "users.json"), cfg.AllowedEmails)
 	if err != nil {
@@ -69,24 +58,23 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Adopt pre-existing containers so restarts are seamless (ADR-007).
+	// Adopt pre-existing containers so restarts are seamless (ADR-007), and
+	// join running projects' networks now (containerized server: does the
+	// network attach + guest ARP refresh at boot, not on first click).
 	if adopted, err := orch.Adopt(ctx); err != nil {
 		logger.Warn("initial adoption failed (docker down?)", "error", err)
 	} else {
 		logger.Info("adopted state", "containers", len(adopted))
-		// Join running projects' networks now: does the containerized-server
-		// network attach (and the guest ARP refresh it triggers) at boot,
-		// not on the first port-preview click.
-		for p, st := range adopted {
+		for _, st := range adopted {
 			if st.State == "running" {
-				orch.EnsureSelfAttached(ctx, p)
+				orch.EnsureSelfAttached(ctx, st.User, st.Project)
 			}
 		}
 	}
 
 	go orch.RunIdleReaper(ctx)
 
-	api := httpapi.New(cfg, projects, convs, users, orch, logger)
+	api := httpapi.New(cfg, users, orch, logger)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           api.Routes(),
@@ -115,10 +103,70 @@ func main() {
 		_ = srv.Shutdown(shutCtx)
 	}()
 
-	logger.Info("styrman listening", "addr", cfg.Addr, "auth", cfg.AuthMode, "image", cfg.Image, "runtime", cfg.Runtime,
-		"home", cfg.HomeDir, "user", cfg.Username, "uid", cfg.UID, "version", httpapi.Version)
+	logger.Info("styrman listening", "addr", cfg.Addr, "auth", cfg.AuthMode, "image", cfg.Image,
+		"runtime", cfg.Runtime, "homes", cfg.HomesDir, "version", httpapi.Version)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Error("server failed", "error", err)
 		os.Exit(1)
+	}
+}
+
+// migrateLegacy moves the pre-multitenancy layout (one shared home at
+// StateDir/home, flat projects.json/conversations.json, containers named
+// styrman-<project>) into the default user's namespace. Idempotent: each
+// step only fires if the legacy artifact exists.
+func migrateLegacy(cfg *config.Config, logger *slog.Logger) {
+	_, user := cfg.DefaultUser()
+
+	// 1. Home dir.
+	if st, err := os.Stat(cfg.HomeDir); err == nil && st.IsDir() {
+		target := cfg.UserHome(user)
+		if _, err := os.Stat(target); os.IsNotExist(err) {
+			if err := os.Rename(cfg.HomeDir, target); err != nil {
+				logger.Error("legacy home migration failed", "from", cfg.HomeDir, "to", target, "error", err)
+			} else {
+				logger.Info("migrated legacy home", "to", target)
+			}
+		}
+	}
+
+	// 2. Metadata stores.
+	userDir := cfg.UserStateDir(user)
+	for _, f := range []string{"projects.json", "conversations.json"} {
+		legacy := filepath.Join(cfg.StateDir, f)
+		if _, err := os.Stat(legacy); err == nil {
+			_ = os.MkdirAll(userDir, 0o755)
+			target := filepath.Join(userDir, f)
+			if _, terr := os.Stat(target); os.IsNotExist(terr) {
+				if err := os.Rename(legacy, target); err != nil {
+					logger.Error("legacy store migration failed", "file", f, "error", err)
+					continue
+				}
+				logger.Info("migrated legacy store", "file", f, "user", user)
+			} else {
+				_ = os.Rename(legacy, legacy+".migrated")
+			}
+		}
+	}
+
+	// 3. Legacy containers/networks (no styrman.user label): their names no
+	// longer match the new scheme; data lives in the migrated home, so drop
+	// them — they recreate on demand under the new naming.
+	out, err := exec.Command("docker", "ps", "-aq",
+		"--filter", "label="+config.LabelManaged+"=true").Output()
+	if err != nil {
+		return
+	}
+	for _, id := range strings.Fields(string(out)) {
+		lbl, _ := exec.Command("docker", "inspect", "--format",
+			"{{index .Config.Labels \""+config.LabelUser+"\"}}", id).Output()
+		if strings.TrimSpace(string(lbl)) != "" {
+			continue
+		}
+		logger.Info("removing pre-multitenancy container", "id", id)
+		_ = exec.Command("docker", "rm", "-f", id).Run()
+	}
+	for _, n := range []string{"sdb-demo", "sdb-demo-agy", "sdb-sys-setup"} {
+		_ = exec.Command("docker", "network", "rm", n).Run()
 	}
 }

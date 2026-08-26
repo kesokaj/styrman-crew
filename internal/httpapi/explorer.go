@@ -3,25 +3,31 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 
 	"github.com/kesokaj/styrman/internal/files"
 	"github.com/kesokaj/styrman/internal/history"
+	"github.com/kesokaj/styrman/internal/identity"
 )
 
 // rootFor resolves the file-explorer root for a scope: a project's workspace
-// or the shared home (which is where all credentials and agent state live,
-// so it is browsable too — R3).
+// or the requesting user's home.
 func (s *Server) rootFor(r *http.Request) (string, error) {
+	u, sp, err := s.who(r)
+	if err != nil {
+		return "", err
+	}
 	if name := r.PathValue("project"); name != "" {
-		if _, err := s.projects.Get(name); err != nil {
+		if _, err := sp.projects.Get(name); err != nil {
 			return "", err
 		}
-		return filepath.Join(s.cfg.HomeDir, "projects", name), nil
+		return filepath.Join(s.cfg.UserHome(u.Username), "projects", name), nil
 	}
-	return s.cfg.HomeDir, nil
+	return s.cfg.UserHome(u.Username), nil
 }
 
 func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) {
@@ -72,6 +78,56 @@ func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// uploadFile accepts multipart form uploads (drag & drop) into ?path= (a
+// directory); each part keeps its filename. Binary-safe, 512 MB cap via the
+// csrf guard's MaxBytesReader.
+func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
+	root, err := s.rootFor(r)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	dir := r.URL.Query().Get("path")
+	mr, err := r.MultipartReader()
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	var saved []string
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+		name := filepath.Base(part.FileName())
+		if name == "" || name == "." || name == "/" {
+			continue
+		}
+		full, err := files.Resolve(root, filepath.Join(dir, name))
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return
+		}
+		f, err := os.Create(full)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		if _, err := io.Copy(f, part); err != nil {
+			f.Close()
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		f.Close()
+		saved = append(saved, name)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"saved": saved})
+}
+
 // downloadFile streams a raw file (any type) as an attachment.
 func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 	root, err := s.rootFor(r)
@@ -79,8 +135,7 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	rel := r.URL.Query().Get("path")
-	full, err := files.Resolve(root, rel)
+	full, err := files.Resolve(root, r.URL.Query().Get("path"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -91,12 +146,12 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 
 // listHistory returns the project's terminal transcripts.
 func (s *Server) listHistory(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("project")
-	if _, err := s.projects.Get(name); err != nil {
+	u, _, p, err := s.getProjectFor(r)
+	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	items, err := history.List(s.cfg.HomeDir, name)
+	items, err := history.List(s.cfg.UserHome(u.Username), p.Name)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -105,13 +160,13 @@ func (s *Server) listHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) readHistory(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("project")
-	if _, err := s.projects.Get(name); err != nil {
+	u, _, p, err := s.getProjectFor(r)
+	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
 	max, _ := strconv.ParseInt(r.URL.Query().Get("bytes"), 10, 64)
-	text, err := history.Read(s.cfg.HomeDir, name, r.PathValue("id"), max)
+	text, err := history.Read(s.cfg.UserHome(u.Username), p.Name, r.PathValue("id"), max)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
@@ -120,12 +175,12 @@ func (s *Server) readHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) projectDiff(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("project")
-	if _, err := s.projects.Get(name); err != nil {
+	u, _, p, err := s.getProjectFor(r)
+	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	d, err := history.GitDiff(filepath.Join(s.cfg.HomeDir, "projects", name))
+	d, err := history.GitDiff(filepath.Join(s.cfg.UserHome(u.Username), "projects", p.Name))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -133,32 +188,40 @@ func (s *Server) projectDiff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
-// settings reports everything the settings page shows: who you are, how the
-// server is configured, and where state lives.
+// settings reports everything the settings page shows.
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
-	email := r.Header.Get(HeaderEmail)
-	if email == "" {
-		email = "(no auth — local access)"
+	u, _, err := s.who(r)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
 	}
-	setupDone := fileExists(filepath.Join(s.cfg.HomeDir, setupDoneMarker))
+	email := u.Email
+	if email == "" {
+		email = "(local operator)"
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":       Version,
 		"user":          email,
+		"username":      u.Username,
+		"isAdmin":       u.Admin,
 		"authMode":      s.cfg.AuthMode,
 		"allowedUsers":  s.users.List(),
-		"guestUser":     s.cfg.Username,
-		"homeDir":       s.cfg.HomeDir,
+		"homeDir":       s.cfg.UserHome(u.Username),
 		"stateDir":      s.cfg.StateDir,
 		"image":         s.cfg.Image,
 		"runtime":       s.cfg.Runtime,
 		"dockerDiskGB":  s.cfg.DockerDisk,
 		"idleTimeout":   s.cfg.IdleTimeout.String(),
-		"setupComplete": setupDone,
+		"setupComplete": s.userSetupStatus(r.Context(), u.Username).Done,
 	})
 }
 
-// addUser authorizes another Google account (settings page).
+// addUser authorizes another Google account (admin only). The new user gets
+// their own home and projects on first sign-in.
 func (s *Server) addUser(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	var body struct {
 		Email string `json:"email"`
 	}
@@ -166,7 +229,7 @@ func (s *Server) addUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("email required"))
 		return
 	}
-	by := r.Header.Get(HeaderEmail)
+	by := identity.FromContext(r.Context()).Email
 	if by == "" {
 		by = "local"
 	}
@@ -178,6 +241,9 @@ func (s *Server) addUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) removeUser(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
 	if err := s.users.Remove(r.PathValue("email")); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return

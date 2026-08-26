@@ -92,22 +92,25 @@ function PortsTab({ project, term }: { project: string; term: string }) {
       )}
       {ports.map((p) => (
         <div
-          key={p}
+          key={p.port}
           className="flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-bg-hover"
         >
           <a
-            href={portUrl(project, term, p)}
+            href={portUrl(project, term, p.port)}
             target="_blank"
             rel="noreferrer"
             className="rounded bg-accent-soft px-2 py-0.5 text-accent hover:brightness-110"
           >
-            :{p}
+            :{p.port}
           </a>
+          <span className="min-w-0 flex-1 truncate text-[11px] text-text-dim">
+            {p.image ? `🐳 ${p.image}` : p.process || ""}
+          </span>
           <button
-            className="ml-auto text-[11px] text-text-dim hover:text-text"
+            className="shrink-0 text-[11px] text-text-dim hover:text-text"
             onClick={() =>
               navigator.clipboard?.writeText(
-                location.origin + portUrl(project, term, p),
+                location.origin + portUrl(project, term, p.port),
               )
             }
             title="Copy link"

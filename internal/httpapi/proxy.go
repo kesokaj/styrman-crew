@@ -13,17 +13,17 @@ import (
 
 // listPorts reports the project's in-guest listening ports (≥1024).
 func (s *Server) listPorts(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("project")
-	if _, err := s.projects.Get(name); err != nil {
+	u, _, p, err := s.getProjectFor(r)
+	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	ports, err := s.orch.ListeningPorts(r.Context(), name)
+	ports, err := s.orch.ListeningPorts(r.Context(), u.Username, p.Name)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	sort.Ints(ports)
+	sort.Slice(ports, func(i, j int) bool { return ports[i].Port < ports[j].Port })
 	writeJSON(w, http.StatusOK, map[string]any{"ports": ports})
 }
 
@@ -32,18 +32,19 @@ func (s *Server) listPorts(w http.ResponseWriter, r *http.Request) {
 // WebSocket upgrades through, so dev servers with HMR work too. The proxy
 // sits behind authGuard like every other route.
 func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("project")
-	if _, err := s.projects.Get(name); err != nil {
+	u, _, p, err := s.getProjectFor(r)
+	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
+	name := p.Name
 	port, err := strconv.Atoi(r.PathValue("port"))
 	if err != nil || port < 1024 || port > 65535 {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid port"))
 		return
 	}
-	s.orch.EnsureSelfAttached(r.Context(), name)
-	ip, err := s.orch.IPAddress(r.Context(), name)
+	s.orch.EnsureSelfAttached(r.Context(), u.Username, name)
+	ip, err := s.orch.IPAddress(r.Context(), u.Username, name)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

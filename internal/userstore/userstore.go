@@ -63,6 +63,15 @@ func New(path string, envEmails []string) (*Store, error) {
 	return s, nil
 }
 
+// IsAdmin reports whether email is an environment-provided administrator
+// (STYRMAN_ALLOWED_EMAILS). Admins manage the user list; users added at
+// runtime get their own workspace but no admin rights.
+func (s *Store) IsAdmin(email string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.envUsers[normalize(email)]
+}
+
 // IsAuthorized reports whether email may use styrman.
 func (s *Store) IsAuthorized(email string) bool {
 	e := normalize(email)

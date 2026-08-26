@@ -18,17 +18,18 @@ import (
 const (
 	LabelManaged = "styrman.managed"
 	LabelProject = "styrman.project"
+	LabelUser    = "styrman.user"
 	LabelAgent   = "styrman.agent"
 	// LabelSystem marks hidden system containers (e.g. the onboarding VM);
 	// they carry no project label and never appear in project listings.
 	LabelSystem = "styrman.system"
 )
 
-// Hidden onboarding microVM (runs styrman-setup; see /api/setup).
-const (
-	SetupContainer = "styrman-sys-setup"
-	SetupNetwork   = "sdb-sys-setup"
-)
+// SetupContainer names a user's hidden onboarding microVM (see /api/setup).
+func SetupContainer(user string) string { return "styrman-sys-setup-" + user }
+
+// SetupNetwork names its bridge network.
+func SetupNetwork(user string) string { return "sdb-sys-setup-" + user }
 
 // Env keys passed into project containers (read by image/entrypoint.sh).
 const (
@@ -62,7 +63,8 @@ var Agents = map[string]string{
 type Config struct {
 	Addr        string        // HTTP listen address
 	StateDir    string        // root state dir (default /var/lib/styrman)
-	HomeDir     string        // shared home mounted into every microVM
+	HomesDir    string        // per-user homes root (StateDir/homes)
+	HomeDir     string        // LEGACY single-user home; migrated to HomesDir on boot
 	Image       string        // runtime image for project containers
 	Runtime     string        // docker runtime (mvm = Kata)
 	Username    string        // in-guest username; owns the shared home
@@ -108,6 +110,7 @@ func Load() (*Config, error) {
 		}
 	}
 	c.HomeDir = envOr("STYRMAN_HOME_DIR", filepath.Join(c.StateDir, "home"))
+	c.HomesDir = envOr("STYRMAN_HOMES_DIR", filepath.Join(c.StateDir, "homes"))
 
 	// Username: env wins; user.Current() is best-effort — it fails in a
 	// static binary without $USER (the containerized server), where
@@ -133,11 +136,52 @@ func Load() (*Config, error) {
 // ProjectsFile is the metadata store path.
 func (c *Config) ProjectsFile() string { return filepath.Join(c.StateDir, "projects.json") }
 
-// ContainerName returns the container name for a project.
-func ContainerName(project string) string { return "styrman-" + project }
+// UserHome returns a user's home directory on the host.
+func (c *Config) UserHome(user string) string { return filepath.Join(c.HomesDir, user) }
 
-// NetworkName returns the per-project bridge network name.
-func NetworkName(project string) string { return "sdb-" + project }
+// UserStateDir returns where a user's metadata stores live.
+func (c *Config) UserStateDir(user string) string {
+	return filepath.Join(c.StateDir, "users", user)
+}
+
+// DefaultUser is the identity used when auth is off (dev door / local dev):
+// the first allowed email if configured (so the loopback door acts as the
+// admin), else the OS operator.
+func (c *Config) DefaultUser() (email, username string) {
+	if len(c.AllowedEmails) > 0 {
+		return c.AllowedEmails[0], usernameFromEmail(c.AllowedEmails[0])
+	}
+	return "", c.Username
+}
+
+// usernameFromEmail is identity.DeriveUsername without the import cycle.
+func usernameFromEmail(email string) string {
+	name, _, _ := strings.Cut(email, "@")
+	name = strings.ReplaceAll(name, ".", "-")
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r + 32
+		default:
+			return -1
+		}
+	}, name)
+	if name == "" || name[0] < 'a' || name[0] > 'z' {
+		name = "user-" + name
+	}
+	if len(name) > 32 {
+		name = name[:32]
+	}
+	return name
+}
+
+// ContainerName returns the container name for a user's project.
+func ContainerName(user, project string) string { return "styrman-" + user + "-" + project }
+
+// NetworkName returns its bridge network name.
+func NetworkName(user, project string) string { return "sdb-" + user + "-" + project }
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
