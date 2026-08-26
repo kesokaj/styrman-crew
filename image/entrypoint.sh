@@ -73,6 +73,23 @@ if [ ! -f "${HOME_DIR}/.tmux.conf" ]; then
     runuser -u "${USERNAME}" -- cp /styrman/configs/tmux.conf "${HOME_DIR}/.tmux.conf" 2>/dev/null || true
 fi
 
+# ─── Terminal transcripts (history) ─────────────────────────────────────────
+# Every tmux session pipes its output to a log in the shared home, so the
+# record of what the agents and the operator did outlives the container.
+# The path is project-specific, but ~/.tmux.conf is shared across projects —
+# hence a per-container include file that the shared config sources.
+LOG_DIR="${HOME_DIR}/.styrman/logs/${PROJECT}"
+runuser -u "${USERNAME}" -- mkdir -p "${LOG_DIR}"
+mkdir -p /etc/styrman
+cat > /etc/styrman/tmux-project.conf <<TEOF
+set-hook -g after-new-session 'pipe-pane -o "cat >> ${LOG_DIR}/#{session_name}.log"'
+set-hook -g after-new-window 'pipe-pane -o "cat >> ${LOG_DIR}/#{session_name}.log"'
+TEOF
+# Ensure the shared tmux.conf sources it (idempotent; survives user edits).
+if ! grep -q 'styrman/tmux-project.conf' "${HOME_DIR}/.tmux.conf" 2>/dev/null; then
+    echo 'source-file -q /etc/styrman/tmux-project.conf' >> "${HOME_DIR}/.tmux.conf"
+fi
+
 # ─── Per-project Docker daemon (ADR-004 + ADR-008) ──────────────────────────
 if [ -n "${MINIMAL}" ]; then
     touch /run/styrman/ready

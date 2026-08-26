@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { CLOSE_EXITED, CLOSE_REPLACED, termSocketUrl } from '../lib/api'
 
 export type TermTarget =
-  | { kind: 'conv' | 'shell'; project: string; id: string }
+  | { kind: 'term'; project: string; id: string }
   | { kind: 'setup' }
 
 type ConnState =
@@ -43,7 +43,7 @@ export function TerminalPane({ target, onExited }: { target: TermTarget; onExite
   // Key the whole effect on the logical target so switching conversations
   // tears down cleanly and reconnects fresh.
   const targetKey =
-    (target.kind === 'setup' ? 'setup' : `${target.kind}/${target.project}/${target.id}`) +
+    (target.kind === 'setup' ? 'setup' : `${target.project}/${target.id}`) +
     `#${epoch}`
 
   useEffect(() => {

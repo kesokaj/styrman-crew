@@ -22,9 +22,11 @@ Three load-bearing ideas:
 2. **One shared home** (ADR-003). `/var/lib/styrman/home` is mounted as
    `$HOME` in every microVM. Sign in to claude, agy, gh, gcloud, and generate
    your SSH key **once, ever**. Containers are disposable at all times.
-3. **Conversations are tmux sessions** (R6). Survive browser disconnects and
-   tab switches; agent-native resume (`claude --resume`) covers container
-   restarts because agent state lives in the shared home.
+3. **Terminals** (R6, ADR-016). A project has as many as you want — each a
+   durable record backed by a tmux session, surviving browser disconnects and
+   tab switches. Run `claude` in one and `agy` in another to work with several
+   agents at once. Everything printed in them is transcribed to the shared
+   home (ADR-017), so the record outlives the container.
 
 ## 2. Architecture
 
@@ -99,8 +101,15 @@ shells hint at it while credentials are missing. (agy fallback:
 - **New project**: UI form (name, agent, git-init) or
   `curl -X POST localhost:8080/api/projects -d '{"name":"x","agent":"claude","gitInit":true}'`.
   ~2 s to a live agent.
-- **Jump projects/conversations**: click in the sidebar; each conversation is
-  an independent tmux session. Extra plain terminals: `kind=shell`.
+- **Jump projects/terminals**: click in the sidebar; each terminal is an
+  independent tmux session.
+- **Side panel** (right): **Files** browses the project workspace and the
+  shared home (view, edit, download — works while the project is stopped);
+  **Ports** lists what is listening inside the microVM with shareable links
+  (`/p/<project>/<terminal>/port/<port>/`); **History** shows the terminal
+  transcripts; **Diff** shows the workspace's git status and diff.
+- **Settings** (sidebar footer): who is signed in, allowed accounts (add or
+  revoke), setup status, theme, runtime and storage facts.
 - **Stop / start / delete**: API or UI. Delete removes the container; the
   workspace stays unless you pass `wipe=true`.
 - **Where things live** on the host:
@@ -110,6 +119,7 @@ shells hint at it while credentials are missing. (agy fallback:
 | `/var/lib/styrman/home` | THE shared home — the only thing you must back up |
 | `/var/lib/styrman/home/projects/<p>` | Project workspaces (code, git) |
 | `/var/lib/styrman/home/.dockerd/<p>.img` | Per-project Docker disk (sparse; delete to reclaim) |
+| `/var/lib/styrman/home/.styrman/logs/<p>/` | Terminal transcripts (History tab) |
 | `/var/lib/styrman/projects.json` | Project metadata |
 | containers `styrman-<p>`, networks `sdb-<p>` | Disposable runtime state |
 

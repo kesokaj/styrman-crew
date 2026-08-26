@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -o /out/styrman ./cmd/styrman/
 
 FROM debian:trixie-slim
-RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates curl \
+RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /out/styrman /usr/local/bin/styrman
 # State dir and docker.sock are bind-mounted at the SAME paths as the host so

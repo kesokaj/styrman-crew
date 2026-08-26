@@ -14,11 +14,10 @@ import (
 	"github.com/kesokaj/styrman/internal/orchestrator"
 )
 
-// Session-name prefixes. Anything else in tmux belongs to the user.
-const (
-	Prefix     = "conv-"
-	TermPrefix = "term-"
-)
+// Prefix namespaces styrman's tmux sessions; anything else in tmux belongs
+// to the user. Kept as "conv-" so sessions created before the rename
+// (ADR-016) keep working.
+const Prefix = "conv-"
 
 var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}$`)
 
@@ -86,8 +85,8 @@ func (m *Manager) liveSessions(ctx context.Context, project, prefix string) ([]L
 	return lives, nil
 }
 
-// LiveConversations returns live tmux state keyed by conversation id.
-func (m *Manager) LiveConversations(ctx context.Context, project string) (map[string]Live, error) {
+// Live returns live tmux state keyed by terminal id.
+func (m *Manager) Live(ctx context.Context, project string) (map[string]Live, error) {
 	lives, err := m.liveSessions(ctx, project, Prefix)
 	if err != nil {
 		return nil, err
@@ -99,12 +98,7 @@ func (m *Manager) LiveConversations(ctx context.Context, project string) (map[st
 	return out, nil
 }
 
-// Terminals lists the project's live plain-shell terminals.
-func (m *Manager) Terminals(ctx context.Context, project string) ([]Live, error) {
-	return m.liveSessions(ctx, project, TermPrefix)
-}
-
-// KillSession ends a tmux session (conversation or terminal, by full prefix).
+// KillSession ends a terminal's tmux session.
 func (m *Manager) KillSession(ctx context.Context, project, prefix, id string) error {
 	if err := ValidateID(id); err != nil {
 		return err

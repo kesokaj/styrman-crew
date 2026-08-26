@@ -59,12 +59,11 @@ func clientSize(r *http.Request) (cols, rows uint16) {
 	return cols, rows
 }
 
-// ServeHTTP handles conversation terminals: {project} and {conv} path values
-// plus optional cols/rows/kind query params (kind=shell attaches a plain
-// login shell instead of the project's agent CLI).
+// ServeHTTP attaches a project terminal: {project} and {term} path values
+// plus optional cols/rows query params.
 func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	projName := r.PathValue("project")
-	convID := r.PathValue("conv")
+	convID := r.PathValue("term")
 	proj, err := b.projects.Get(projName)
 	if err != nil {
 		http.Error(w, "unknown project", http.StatusNotFound)
@@ -75,25 +74,20 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Both conversations and terminals are login shells (ADR-014): the user
-	// launches claude/agy themselves — both are in the image, /etc/profile.d
-	// provides the keyring env agy needs. The difference: conversations are
-	// durable records (sidebar, titles); terminals are ephemeral.
+	// Every terminal is a login shell (ADR-014/016): the user launches
+	// claude/agy themselves — both are in the image, and /etc/profile.d
+	// provides the keyring env agy needs. Run several terminals to work with
+	// several agents at once.
 	_ = proj
 	paneCmd := "bash -l"
-	var tmuxName string
-	if r.URL.Query().Get("kind") == "shell" {
-		tmuxName = conversation.TermPrefix + convID
-	} else {
-		// Strict: the record must exist (created via POST). Auto-creating
-		// here let stale reconnects resurrect deleted conversations.
-		if _, ok := b.convs.Get(projName, convID); !ok {
-			http.Error(w, "unknown conversation", http.StatusNotFound)
-			return
-		}
-		b.convs.Touch(projName, convID)
-		tmuxName = conversation.Prefix + convID
+	// Strict: the record must exist (created via POST). Auto-creating here
+	// let stale reconnects resurrect deleted terminals.
+	if _, ok := b.convs.Get(projName, convID); !ok {
+		http.Error(w, "unknown terminal", http.StatusNotFound)
+		return
 	}
+	b.convs.Touch(projName, convID)
+	tmuxName := conversation.Prefix + convID
 
 	// Ensure the microVM is up before upgrading — first attach after idle-stop
 	// pays the (~seconds) start cost here.

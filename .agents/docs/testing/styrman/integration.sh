@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# styrman Phase 1 integration test — exercises the full lifecycle against real
-# Docker + Kata: create project → terminal I/O over WebSocket → persistence
-# across container destruction → conversation management → cleanup.
+# styrman integration test — exercises the full lifecycle against real
+# Docker + Kata: create project → terminals → WebSocket I/O → transcripts →
+# file explorer → ports/preview → diff → persistence → cleanup.
 #
 # Prereqs: styrman-runtime image built (image/), Kata runtime 'mvm' working.
 # Uses an isolated state dir and port; safe to run alongside a real install.
@@ -13,6 +13,7 @@ IMAGE="${1:-styrman-runtime:dev}"
 PORT=18080
 STATE="$(mktemp -d /tmp/styrman-itest-XXXX)"
 REPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
+API="http://127.0.0.1:${PORT}"
 PASS=0; FAIL=0
 
 say()  { echo -e "\n\033[1;34m=== $* ===\033[0m"; }
@@ -42,17 +43,18 @@ STYRMAN_STATE_DIR="${STATE}" STYRMAN_IMAGE="${IMAGE}" STYRMAN_ADDR="127.0.0.1:${
     "${STATE}/styrman" > "${STATE}/server.log" 2>&1 &
 SERVER_PID=$!
 for i in $(seq 1 20); do
-    curl -fsS "http://127.0.0.1:${PORT}/api/health" >/dev/null 2>&1 && break
+    curl -fsS "${API}/api/health" >/dev/null 2>&1 && break
     sleep 0.5
 done
-check "health endpoint" "curl -fsS http://127.0.0.1:${PORT}/api/health | grep -q ok"
-check "embedded SPA served" "curl -fsS http://127.0.0.1:${PORT}/ | grep -q '<title>styrman</title>'"
-check "SPA deep-link fallback" "curl -fsS http://127.0.0.1:${PORT}/p/x/1 | grep -q '<title>styrman</title>'"
+check "health endpoint" "curl -fsS ${API}/api/health | grep -q ok"
+check "embedded SPA served" "curl -fsS ${API}/ | grep -q '<title>styrman</title>'"
+check "SPA deep-link fallback" "curl -fsS ${API}/p/x/1 | grep -q '<title>styrman</title>'"
+check "unknown API path is a JSON 404" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/api/nope) = 404 ]"
 
 say "create project (boots microVM, git init)"
 T0=$(date +%s)
-OUT=$(curl -fsS -X POST "http://127.0.0.1:${PORT}/api/projects" \
-    -d '{"name":"itest","agent":"claude","gitInit":true}')
+OUT=$(curl -fsS -X POST "${API}/api/projects" -d '{"name":"itest","gitInit":true}')
 T1=$(date +%s)
 echo "created in $((T1-T0))s: ${OUT}"
 check "project created running" "echo '${OUT}' | grep -q '\"state\":\"running\"'"
@@ -63,52 +65,89 @@ check "git repo initialized" "docker exec styrman-itest test -d /home/$(id -un)/
 check "in-guest dockerd runs overlay2" \
     "docker exec styrman-itest docker info --format '{{.Driver}}' | grep -q overlay2"
 
-say "terminal I/O over WebSocket (plain-shell terminal, tmux term-1)"
+say "terminals (durable records, ADR-016)"
+NEW=$(curl -fsS -X POST "${API}/api/projects/itest/terminals" -d '{"title":"First terminal"}')
+check "record created with title" "echo '${NEW}' | grep -q '\"title\":\"First terminal\"'"
+curl -fsS -X PATCH "${API}/api/projects/itest/terminals/1" -d '{"title":"Renamed"}' -o /dev/null
+check "rename persisted" \
+    "curl -fsS ${API}/api/projects/itest/terminals | grep -q '\"title\":\"Renamed\"'"
+check "attach to unknown terminal is refused" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/ws/term/itest/99) = 404 ]"
+
+say "terminal I/O over WebSocket"
 MARK="itest-$$-mark"
-OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/itest/1?kind=shell&cols=120&rows=30" \
+OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/itest/1?cols=120&rows=30" \
     -send "echo ${MARK}; pwd\r" -wait 5s || true)
 check "shell echoes marker" "echo '${OUT}' | grep -q '${MARK}'"
 check "cwd is the workspace" "echo '${OUT}' | grep -q 'projects/itest'"
-check "terminal listed via API" \
-    "curl -fsS http://127.0.0.1:${PORT}/api/projects/itest/terminals | grep -q '\"id\":\"1\"'"
+check "terminal reported live" \
+    "curl -fsS ${API}/api/projects/itest/terminals | grep -q '\"live\":true'"
 
 say "tmux session survives disconnect"
-"${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/itest/1?kind=shell" \
+"${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/itest/1" \
     -send "STYRMAN_TEST_VAR=${MARK}\r" -wait 2s >/dev/null || true
-OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/itest/1?kind=shell" \
+OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/itest/1" \
     -send "echo VAR=\$STYRMAN_TEST_VAR\r" -wait 4s || true)
 check "reattach sees same shell state" "echo '${OUT}' | grep -q 'VAR=${MARK}'"
 
-say "conversations API (durable records, ADR-011)"
-NEW=$(curl -fsS -X POST "http://127.0.0.1:${PORT}/api/projects/itest/conversations" -d '{"title":"First chat"}')
-check "record created with title" "echo '${NEW}' | grep -q '\"title\":\"First chat\"'"
-check "agent session UUID pinned" "echo '${NEW}' | grep -qE '\"agentSession\":\"[0-9a-f-]{36}\"'"
-curl -fsS -X PATCH "http://127.0.0.1:${PORT}/api/projects/itest/conversations/1" -d '{"title":"Renamed"}' -o /dev/null
-CONVS=$(curl -fsS "http://127.0.0.1:${PORT}/api/projects/itest/conversations")
-check "rename persisted" "echo '${CONVS}' | grep -q '\"title\":\"Renamed\"'"
-# Attach the agent conversation (claude launches; we just verify liveness).
-"${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/itest/1?cols=120&rows=30" -wait 4s >/dev/null || true
-CONVS=$(curl -fsS "http://127.0.0.1:${PORT}/api/projects/itest/conversations")
-check "conversation live after attach" "echo '${CONVS}' | grep -q '\"live\":true'"
-curl -fsS -X DELETE "http://127.0.0.1:${PORT}/api/projects/itest/conversations/1" -o /dev/null
-CONVS=$(curl -fsS "http://127.0.0.1:${PORT}/api/projects/itest/conversations")
-check "record deleted" "! echo '${CONVS}' | grep -q '\"id\":\"1\"'"
+say "transcripts (history)"
+sleep 1
+check "transcript listed" "curl -fsS ${API}/api/projects/itest/history | grep -q '\"id\":\"conv-1\"'"
+check "transcript captured the command" \
+    "curl -fsS ${API}/api/projects/itest/history/conv-1 | grep -q '${MARK}'"
+check "invalid transcript id refused" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' '${API}/api/projects/itest/history/..%2Fetc') != 200 ]"
+
+say "file explorer"
+check "project listing works" "curl -fsS '${API}/api/projects/itest/files' | grep -q entries"
+check "home listing works" "curl -fsS '${API}/api/home/files' | grep -q entries"
+check "path traversal refused" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' '${API}/api/projects/itest/files?path=../../etc') = 400 ]"
+curl -fsS -X PUT "${API}/api/projects/itest/file?path=note.txt" \
+    -d '{"content":"written by the explorer"}' -o /dev/null
+check "file written and read back" \
+    "curl -fsS '${API}/api/projects/itest/file?path=note.txt' | grep -q 'written by the explorer'"
+check "file visible on the host" "grep -q explorer '${STATE}/home/projects/itest/note.txt'"
+check "download serves the file" \
+    "curl -fsS '${API}/api/projects/itest/download?path=note.txt' | grep -q explorer"
+
+say "ports + preview proxy"
+docker exec -d -u "$(id -un)" styrman-itest sh -c 'cd /tmp && echo "<h1>preview</h1>" > i.html && python3 -m http.server 4100 >/dev/null 2>&1'
+sleep 2
+check "port detected" "curl -fsS ${API}/api/projects/itest/ports | grep -q 4100"
+check "pretty URL proxies to the app" \
+    "curl -fsS ${API}/p/itest/1/port/4100/i.html | grep -q preview"
+check "legacy proxy URL still works" \
+    "curl -fsS ${API}/proxy/itest/4100/i.html | grep -q preview"
+check "bare URL redirects to trailing slash" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/p/itest/1/port/4100) = 301 ]"
+
+say "git diff"
+check "diff reports the repo" "curl -fsS ${API}/api/projects/itest/diff | grep -q '\"repo\":true'"
+check "diff sees the new file" "curl -fsS ${API}/api/projects/itest/diff | grep -q 'note.txt'"
+
+say "settings"
+check "settings served" "curl -fsS ${API}/api/settings | grep -q '\"authMode\"'"
 
 say "persistence across container destruction (R3/R5)"
-"${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/itest/9?kind=shell" \
+"${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/itest/1" \
     -send "echo persisted > ~/projects/itest/proof.txt\r" -wait 2s >/dev/null || true
 sleep 1
 docker rm -f styrman-itest >/dev/null
-curl -fsS -X POST "http://127.0.0.1:${PORT}/api/projects/itest/start" >/dev/null
-OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/itest/9?kind=shell" \
+curl -fsS -X POST "${API}/api/projects/itest/start" >/dev/null
+OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/itest/1" \
     -send "cat ~/projects/itest/proof.txt\r" -wait 4s || true)
 check "file survives container recreate" "echo '${OUT}' | grep -q persisted"
 check "docker.img persisted" "[ -f '${STATE}/home/.dockerd/itest.img' ]"
+check "transcript survives recreate" \
+    "curl -fsS ${API}/api/projects/itest/history/conv-1 | grep -q '${MARK}'"
 
 say "stop + delete (wipe)"
-curl -fsS -X POST "http://127.0.0.1:${PORT}/api/projects/itest/stop" >/dev/null
+curl -fsS -X POST "${API}/api/projects/itest/stop" >/dev/null
 check "container stopped" "! docker ps --format '{{.Names}}' | grep -q styrman-itest"
-curl -fsS -X DELETE "http://127.0.0.1:${PORT}/api/projects/itest?wipe=true" -o /dev/null
+check "terminals still listed while stopped" \
+    "curl -fsS ${API}/api/projects/itest/terminals | grep -q Renamed"
+curl -fsS -X DELETE "${API}/api/projects/itest?wipe=true" -o /dev/null
 check "container gone" "! docker ps -a --format '{{.Names}}' | grep -q styrman-itest"
 check "workspace wiped" "[ ! -d '${STATE}/home/projects/itest' ]"
-check "project gone from API" "! curl -fsS http://127.0.0.1:${PORT}/api/projects | grep -q itest"
+check "project gone from API" "! curl -fsS ${API}/api/projects | grep -q itest"

@@ -293,3 +293,74 @@ start/attach and `NetworkDisconnect` before removal.
 
 **Verification:** `.agents/docs/testing/styrman/` — the isolation checks in
 integration.sh (added 2026-08-26).
+
+---
+
+## ADR-016: One concept — terminals. The side panel is context, not sessions
+
+**Date:** 2026-08-26 · **Status:** accepted (operator design review)
+
+**Context:** Operator: "a conversation is actually a terminal correct? Why do
+we have terminals on the side-panel?" Correct — since ADR-014 removed agent
+auto-launch, a "conversation" and a right-rail "terminal" were the same
+thing (a login shell in the project's microVM) presented in two places, with
+one durable and one ephemeral for no reason.
+
+**Decision:** A project has **terminals**: durable records (title, id,
+sidebar entry, listed even when the project is stopped), each backed by one
+tmux session. Run several to work with several agents at once — that is what
+the operator wanted the right-rail for. The ephemeral shell concept and its
+endpoints are removed; `/api/projects/{p}/conversations` becomes
+`/api/projects/{p}/terminals`; the WS path parameter is `{term}`.
+
+The **side panel** now holds project *context*, not sessions: Files (project
+workspace + shared home), Ports, History (transcripts), Diff.
+
+Internally the Go package stays `conversation` and the tmux prefix stays
+`conv-` so existing sessions and stored records keep working; the doc
+comments carry the terminal vocabulary.
+
+**Consequences:** One mental model, one place to look. Transcripts are per
+terminal (`conv-<id>.log`), so "history per terminal" is naturally scoped.
+
+---
+
+## ADR-017: Terminal transcripts via tmux pipe-pane into the shared home
+
+**Date:** 2026-08-26 · **Status:** accepted (operator request)
+
+**Context:** Operator wants "a file that logs everything claude or agy or my
+self is doing in the terminals" — a durable record of what happened in a
+project, independent of scrollback.
+
+**Decision:** The runtime image sets a tmux hook (`after-new-session` /
+`after-new-window`) that pipes every pane to
+`~/.styrman/logs/<project>/<session>.log`. The path is project-specific but
+`~/.tmux.conf` is shared across projects, so the entrypoint writes
+`/etc/styrman/tmux-project.conf` (per container) which the shared config
+sources. The server reads these host-side and strips ANSI escapes for the
+History tab; `GET /api/projects/{p}/history[/{id}]`.
+
+**Consequences:** Transcripts live in the shared home, so they survive
+container rebuilds, idle stops, and project deletion (deliberately — history
+outlives the terminal). They capture *everything*, including anything typed
+into a terminal: treat the home's `0700` permissions as the boundary and
+avoid pasting secrets you would not want recorded. No rotation yet
+(TODO).
+
+---
+
+## ADR-018: File explorer reads the host mount, not the guest
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+**Context:** The UI needs to browse project workspaces and the shared home.
+
+**Decision:** The server (which already mounts `/var/lib/styrman` at the
+host path) reads and writes these files directly via `internal/files`, with
+traversal and symlink-escape checks against a fixed root. No exec, no
+running container required.
+
+**Consequences:** Browsing and editing work while a project is stopped, and
+cost nothing per keystroke. The explorer's two scopes are the project
+workspace and the shared home (R3 — where every credential lives).

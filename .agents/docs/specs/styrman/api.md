@@ -16,32 +16,56 @@ re-checks `X-Caddy-Email` against the userstore.
 | `POST /api/projects/{p}/start` | Ensure the microVM is running (used after idle-stop). |
 | `POST /api/projects/{p}/stop` | Stop the container. Home/workspace persist; tmux sessions end. |
 
-## Conversations (durable, ADR-011)
+## Terminals (durable, ADR-016)
 
-A conversation is a persisted record (`conversations.json`) whose live view
-is a tmux session `conv-<id>` in the project microVM. For claude, the
-record's `agentSession` UUID pins the Claude Code session: the first attach
-runs `claude --session-id <uuid>`, later attaches (after container restarts,
-idle stops, reboots) run `claude --resume <uuid>` — history survives
-everything. agy conversations relaunch `agy` (native-resume wiring TODO).
+A terminal is a persisted record (`conversations.json`) whose live view is a
+tmux session `conv-<id>` in the project microVM. Every terminal is a login
+shell — run `claude`, `agy`, or anything else in it; run several terminals
+to work with several agents at once.
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/projects/{p}/conversations` | Durable records (present even for stopped projects), newest-opened first, merged with live tmux state: `{id, title, agentSession, createdAt, lastOpened, live, attached}`. |
-| `POST /api/projects/{p}/conversations` | Create a record: `{"title"}` (optional; defaults to "Conversation N"). tmux session created lazily on first WS attach. |
-| `PATCH /api/projects/{p}/conversations/{c}` | Rename: `{"title"}`. |
-| `DELETE /api/projects/{p}/conversations/{c}` | Kill the tmux session and remove the record. The agent's transcript files in the shared home are kept. |
+| `GET /api/projects/{p}/terminals` | Durable records (present even for stopped projects), newest-opened first, merged with live tmux state: `{id, title, createdAt, lastOpened, live, attached}`. |
+| `POST /api/projects/{p}/terminals` | Create: `{"title"}` optional (defaults to "Terminal N"). The tmux session is created lazily on first WS attach. |
+| `PATCH /api/projects/{p}/terminals/{t}` | Rename: `{"title"}`. |
+| `DELETE /api/projects/{p}/terminals/{t}` | Kill the session and remove the record. The transcript stays in History. |
 
-## Terminals (ephemeral)
-
-Plain shells (`term-<id>` tmux sessions) — the right rail in the UI. Listed
-straight from tmux, no records, gone when killed or the container stops.
+## Ports & preview
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/projects/{p}/terminals` | Live shells: `{"id","attached"}`. |
-| `POST /api/projects/{p}/terminals` | Next free numeric id (session created on WS attach with `kind=shell`). |
-| `DELETE /api/projects/{p}/terminals/{t}` | Kill the shell. |
+| `GET /api/projects/{p}/ports` | In-guest listening TCP ports ≥1024 (parsed from /proc/net/tcp{,6} via exec). |
+| `/p/{p}/{term}/port/{port}/...` | Shareable link that proxies to the app inside the microVM (WebSockets pass through). Bare form 301s to the trailing slash. |
+| `/proxy/{p}/{port}/...` | Same proxy, terminal-independent. |
+
+## Files (ADR-018)
+
+Two scopes: a project workspace, and the shared home. Served from the host
+mount, so they work while the project is stopped. `path` is root-relative;
+traversal and symlink escapes are refused.
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/projects/{p}/files?path=` · `GET /api/home/files?path=` | Directory listing (dirs first). |
+| `GET /api/projects/{p}/file?path=` · `GET /api/home/file?path=` | File contents (2 MiB cap, binary-flagged). |
+| `PUT /api/projects/{p}/file?path=` · `PUT /api/home/file?path=` | Save: `{"content"}`. |
+| `GET /api/projects/{p}/download?path=` · `GET /api/home/download?path=` | Raw download. |
+
+## History & diff (ADR-017)
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/projects/{p}/history` | Terminal transcripts: `{id, size, modified}`. |
+| `GET /api/projects/{p}/history/{id}` | Transcript text, ANSI-stripped, tail-capped (`?bytes=`). |
+| `GET /api/projects/{p}/diff` | `{repo, branch, status, diff}` from git in the workspace. |
+
+## Settings
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/settings` | Version, signed-in user, auth mode, allowed accounts, runtime and storage config. |
+| `POST /api/settings/users` | Authorize a Google account: `{"email"}`. |
+| `DELETE /api/settings/users/{email}` | Revoke (env-provided accounts cannot be revoked). |
 
 ## Terminal
 
@@ -74,7 +98,6 @@ credential it produces lands in the shared home, so onboarding happens once.
 |---|---|
 | `GET /api/health` | `{"status":"ok"}` iff Docker is reachable. |
 | `GET /api/version` | `{"version":"<ldflags-stamped>"}`. |
-| `GET /dev/` | Phase 1 test console (removed in Phase 2). |
 
 ## Environment variables (server)
 

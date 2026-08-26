@@ -13,11 +13,10 @@ import (
 	"time"
 )
 
-// Record is a durable conversation (ADR-011): it outlives tmux sessions,
-// containers, and reboots. For claude, AgentSession pins the Claude Code
-// session UUID so reopening resumes the same thread with full history; agy
-// keeps its own history and AgentSession stays empty until its resume
-// mechanism is wired up.
+// Record is a durable terminal (ADR-016): it outlives tmux sessions,
+// containers, and reboots, carrying the title shown in the sidebar.
+// AgentSession is a stable UUID reserved for agent-session pinning
+// (parked with ADR-014; see ADR-011 for what it was used for).
 type Record struct {
 	ID           string    `json:"id"`
 	Title        string    `json:"title"`
@@ -26,7 +25,7 @@ type Record struct {
 	LastOpened   time.Time `json:"lastOpened"`
 }
 
-// Store persists conversation records per project (single JSON file, atomic
+// Store persists terminal records per project (single JSON file, atomic
 // writes — the one addition to ADR-007's "no database" rule).
 type Store struct {
 	mu        sync.Mutex
@@ -54,11 +53,11 @@ func NewStore(path string) (*Store, error) {
 			// agentSession UUID into a shell string (bridge.paneCommand), so
 			// a hand-edited file must not break those invariants.
 			if ValidateID(r.ID) != nil {
-				slog.Warn("skipping invalid conversation record", "project", project, "id", r.ID)
+				slog.Warn("skipping invalid terminal record", "project", project, "id", r.ID)
 				continue
 			}
 			if r.AgentSession != "" && !sessionRe.MatchString(r.AgentSession) {
-				slog.Warn("skipping conversation with invalid agentSession", "project", project, "id", r.ID)
+				slog.Warn("skipping terminal with invalid agentSession", "project", project, "id", r.ID)
 				continue
 			}
 			kept = append(kept, r)
@@ -87,7 +86,7 @@ func (s *Store) Create(project, title string) (Record, error) {
 		}
 	}
 	if title == "" {
-		title = "Conversation " + id
+		title = "Terminal " + id
 	}
 	rec := Record{
 		ID:           id,
@@ -123,14 +122,14 @@ func (s *Store) Touch(project, id string) {
 		if r.ID == id {
 			s.byProject[project][i].LastOpened = time.Now().UTC()
 			if err := s.save(); err != nil {
-				slog.Warn("conversation store save failed", "project", project, "id", id, "error", err)
+				slog.Warn("terminal store save failed", "project", project, "id", id, "error", err)
 			}
 			return
 		}
 	}
 }
 
-// Rename sets a conversation's title.
+// Rename sets a terminal's title.
 func (s *Store) Rename(project, id, title string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -140,11 +139,11 @@ func (s *Store) Rename(project, id, title string) error {
 			return s.save()
 		}
 	}
-	return fmt.Errorf("conversation %s not found", id)
+	return fmt.Errorf("terminal %s not found", id)
 }
 
-// Delete removes a record. The agent's transcript files in the shared home
-// are deliberately left alone (ADR-011).
+// Delete removes a record. The transcript in the shared home is left alone
+// (ADR-016) — history outlives the terminal it came from.
 func (s *Store) Delete(project, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

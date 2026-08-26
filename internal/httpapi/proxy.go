@@ -53,8 +53,19 @@ func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prefix := "/proxy/" + name + "/" + strconv.Itoa(port)
-	s.proxyFor(ip, port, prefix).ServeHTTP(w, r)
+	s.proxyFor(ip, port, proxyPrefix(r, port)).ServeHTTP(w, r)
+}
+
+// proxyPrefix reconstructs the mount prefix from the request path so the
+// same handler serves every shape: /proxy/{p}/{port}/…,
+// /p/{p}/port/{port}/… and /p/{p}/{term}/port/{port}/…. The port segment is
+// always last, hence LastIndex (a terminal id could be numeric too).
+func proxyPrefix(r *http.Request, port int) string {
+	seg := "/" + strconv.Itoa(port) + "/"
+	if i := strings.LastIndex(r.URL.Path, seg); i >= 0 {
+		return r.URL.Path[:i+len(seg)-1]
+	}
+	return strings.TrimSuffix(r.URL.Path, "/")
 }
 
 // proxyFor caches one ReverseProxy per target (devbox pattern); entries are

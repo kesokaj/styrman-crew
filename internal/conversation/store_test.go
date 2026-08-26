@@ -16,7 +16,7 @@ func TestStoreLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r1.ID != "1" || r1.Title != "Conversation 1" {
+	if r1.ID != "1" || r1.Title != "Terminal 1" {
 		t.Errorf("first record = %+v", r1)
 	}
 	if r1.AgentSession == "" || len(strings.Split(r1.AgentSession, "-")) != 5 {

@@ -6,7 +6,7 @@ export function NewProjectDialog({
   onCreated,
 }: {
   onClose: () => void
-  onCreated: (project: string, convId: string) => void
+  onCreated: (project: string, termId: string) => void
 }) {
   const [name, setName] = useState('')
   const [gitInit, setGitInit] = useState(true)
@@ -20,8 +20,8 @@ export function NewProjectDialog({
     setError(undefined)
     try {
       const p = await api.createProject(name, gitInit)
-      const conv = await api.createConversation(p.name)
-      onCreated(p.name, conv.id)
+      const term = await api.createTerminal(p.name)
+      onCreated(p.name, term.id)
     } catch (e) {
       setError((e as Error).message)
       setBusy(false)

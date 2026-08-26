@@ -15,7 +15,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -43,12 +42,6 @@ type Server struct {
 	users     *userstore.Store
 	logger    *slog.Logger
 
-	// termMu/termReserved close the terminal-id TOCTOU: ids are derived from
-	// live tmux sessions, but the session only exists after the WS attaches,
-	// so rapid "+ New" clicks would get the same id (review finding).
-	// Reservations expire after a minute.
-	termMu       sync.Mutex
-	termReserved map[string]map[string]time.Time
 
 	// proxyMu/proxies cache port-preview reverse proxies (see proxy.go).
 	proxyMu sync.Mutex
@@ -82,21 +75,44 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("DELETE /api/projects/{project}", s.deleteProject)
 	mux.HandleFunc("POST /api/projects/{project}/start", s.startProject)
 	mux.HandleFunc("POST /api/projects/{project}/stop", s.stopProject)
-	mux.HandleFunc("GET /api/projects/{project}/conversations", s.listConversations)
-	mux.HandleFunc("POST /api/projects/{project}/conversations", s.createConversation)
-	mux.HandleFunc("PATCH /api/projects/{project}/conversations/{conv}", s.renameConversation)
-	mux.HandleFunc("DELETE /api/projects/{project}/conversations/{conv}", s.deleteConversation)
+	// Terminals: durable records, one tmux session each (ADR-016).
 	mux.HandleFunc("GET /api/projects/{project}/terminals", s.listTerminals)
 	mux.HandleFunc("POST /api/projects/{project}/terminals", s.createTerminal)
+	mux.HandleFunc("PATCH /api/projects/{project}/terminals/{term}", s.renameTerminal)
 	mux.HandleFunc("DELETE /api/projects/{project}/terminals/{term}", s.deleteTerminal)
-	mux.Handle("GET /ws/term/{project}/{conv}", s.bridge)
+	mux.Handle("GET /ws/term/{project}/{term}", s.bridge)
 	mux.HandleFunc("GET /ws/setup", s.bridge.ServeSetup)
+	// Ports + preview proxy. /p/... are the shareable links; /proxy/... is
+	// the original form, kept working. Per-method registration: a
+	// method-less pattern conflicts with the "GET /" SPA catch-all.
 	mux.HandleFunc("GET /api/projects/{project}/ports", s.listPorts)
-	// Per-method registration: a method-less pattern here conflicts with
-	// the "GET /" SPA catch-all under ServeMux precedence rules.
 	for _, m := range []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"} {
 		mux.HandleFunc(m+" /proxy/{project}/{port}/", s.proxyPort)
+		// Only the terminal-scoped shape: {term} could match the literal
+		// "port", so a 2-segment variant conflicts under ServeMux's overlap
+		// rules. /proxy/{project}/{port}/ covers terminal-less links.
+		mux.HandleFunc(m+" /p/{project}/{term}/port/{port}/", s.proxyPort)
 	}
+	// Bare (no trailing slash) forms redirect so relative asset paths work.
+	mux.HandleFunc("GET /p/{project}/{term}/port/{port}", redirectSlash)
+	mux.HandleFunc("GET /proxy/{project}/{port}", redirectSlash)
+	// File explorer: project workspace and the shared home.
+	mux.HandleFunc("GET /api/projects/{project}/files", s.listFiles)
+	mux.HandleFunc("GET /api/projects/{project}/file", s.readFile)
+	mux.HandleFunc("PUT /api/projects/{project}/file", s.writeFile)
+	mux.HandleFunc("GET /api/projects/{project}/download", s.downloadFile)
+	mux.HandleFunc("GET /api/home/files", s.listFiles)
+	mux.HandleFunc("GET /api/home/file", s.readFile)
+	mux.HandleFunc("PUT /api/home/file", s.writeFile)
+	mux.HandleFunc("GET /api/home/download", s.downloadFile)
+	// What happened: terminal transcripts + working-tree diff.
+	mux.HandleFunc("GET /api/projects/{project}/history", s.listHistory)
+	mux.HandleFunc("GET /api/projects/{project}/history/{id}", s.readHistory)
+	mux.HandleFunc("GET /api/projects/{project}/diff", s.projectDiff)
+	// Settings.
+	mux.HandleFunc("GET /api/settings", s.settings)
+	mux.HandleFunc("POST /api/settings/users", s.addUser)
+	mux.HandleFunc("DELETE /api/settings/users/{email}", s.removeUser)
 	mux.HandleFunc("GET /api/setup/status", s.getSetupStatus)
 	mux.HandleFunc("POST /api/setup/start", s.startSetup)
 	mux.HandleFunc("POST /api/setup/done", s.finishSetup)
@@ -132,6 +148,12 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	})
 	// Auth outermost: identity/permission first, then CSRF, then routing.
 	return authGuard(authMode, s.users, csrfGuard(mux))
+}
+
+// redirectSlash sends /p/x/port/3000 → /p/x/port/3000/ so the proxied app's
+// relative asset paths resolve under the prefix.
+func redirectSlash(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, r.URL.Path+"/", http.StatusMovedPermanently)
 }
 
 // csrfGuard rejects cross-origin mutating requests. Browsers always send
@@ -322,41 +344,41 @@ func (s *Server) stopProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"state": "stopped"})
 }
 
-// conversationView is a durable record merged with live tmux state.
-type conversationView struct {
+// terminalView is a durable terminal record merged with live tmux state.
+type terminalView struct {
 	conversation.Record
 	Live     bool `json:"live"`
 	Attached bool `json:"attached"`
 }
 
-// listConversations returns durable records (ADR-011) — present even for
-// stopped projects — merged with live tmux state when running.
-func (s *Server) listConversations(w http.ResponseWriter, r *http.Request) {
+// listTerminals returns durable terminal records (ADR-016) — present even
+// for stopped projects — merged with live tmux state when running.
+func (s *Server) listTerminals(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("project")
 	if _, err := s.projects.Get(name); err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	live, err := s.tmux.LiveConversations(r.Context(), name)
+	live, err := s.tmux.Live(r.Context(), name)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	out := []conversationView{}
+	out := []terminalView{}
 	for _, rec := range s.convStore.List(name) {
-		v := conversationView{Record: rec}
+		v := terminalView{Record: rec}
 		if l, ok := live[rec.ID]; ok {
 			v.Live = true
 			v.Attached = l.Attached
 		}
 		out = append(out, v)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"conversations": out})
+	writeJSON(w, http.StatusOK, map[string]any{"terminals": out})
 }
 
-// createConversation persists a durable record. The tmux session is created
+// createTerminal persists a durable record. The tmux session is created
 // lazily on the first WebSocket attach.
-func (s *Server) createConversation(w http.ResponseWriter, r *http.Request) {
+func (s *Server) createTerminal(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("project")
 	if _, err := s.projects.Get(name); err != nil {
 		writeErr(w, http.StatusNotFound, err)
@@ -371,10 +393,10 @@ func (s *Server) createConversation(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, conversationView{Record: rec})
+	writeJSON(w, http.StatusCreated, terminalView{Record: rec})
 }
 
-func (s *Server) renameConversation(w http.ResponseWriter, r *http.Request) {
+func (s *Server) renameTerminal(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("project")
 	if _, err := s.projects.Get(name); err != nil {
 		writeErr(w, http.StatusNotFound, err)
@@ -387,97 +409,27 @@ func (s *Server) renameConversation(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("title required"))
 		return
 	}
-	if err := s.convStore.Rename(name, r.PathValue("conv"), body.Title); err != nil {
+	if err := s.convStore.Rename(name, r.PathValue("term"), body.Title); err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// deleteConversation removes the record and kills its tmux session. The
-// agent's transcript in the shared home is left intact (ADR-011).
-func (s *Server) deleteConversation(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("project")
-	if _, err := s.projects.Get(name); err != nil {
-		writeErr(w, http.StatusNotFound, err)
-		return
-	}
-	convID := r.PathValue("conv")
-	if err := s.tmux.KillSession(r.Context(), name, conversation.Prefix, convID); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	if err := s.convStore.Delete(name, convID); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// Terminals: ephemeral plain shells, listed straight from tmux.
-func (s *Server) listTerminals(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("project")
-	if _, err := s.projects.Get(name); err != nil {
-		writeErr(w, http.StatusNotFound, err)
-		return
-	}
-	terms, err := s.tmux.Terminals(r.Context(), name)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"terminals": terms})
-}
-
-func (s *Server) createTerminal(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("project")
-	if _, err := s.projects.Get(name); err != nil {
-		writeErr(w, http.StatusNotFound, err)
-		return
-	}
-	terms, err := s.tmux.Terminals(r.Context(), name)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	s.termMu.Lock()
-	defer s.termMu.Unlock()
-	if s.termReserved == nil {
-		s.termReserved = map[string]map[string]time.Time{}
-	}
-	if s.termReserved[name] == nil {
-		s.termReserved[name] = map[string]time.Time{}
-	}
-	used := map[string]bool{}
-	for _, t := range terms {
-		used[t.ID] = true
-	}
-	now := time.Now()
-	for id, exp := range s.termReserved[name] {
-		if now.Before(exp) {
-			used[id] = true
-		} else {
-			delete(s.termReserved[name], id)
-		}
-	}
-	id := ""
-	for n := 1; ; n++ {
-		id = strconv.Itoa(n)
-		if !used[id] {
-			break
-		}
-	}
-	s.termReserved[name][id] = now.Add(time.Minute)
-	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
-}
-
+// deleteTerminal removes the record and kills its tmux session. The
+// transcript in the shared home is left intact (ADR-016).
 func (s *Server) deleteTerminal(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("project")
 	if _, err := s.projects.Get(name); err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	if err := s.tmux.KillSession(r.Context(), name, conversation.TermPrefix, r.PathValue("term")); err != nil {
+	convID := r.PathValue("term")
+	if err := s.tmux.KillSession(r.Context(), name, conversation.Prefix, convID); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := s.convStore.Delete(name, convID); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

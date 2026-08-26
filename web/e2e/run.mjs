@@ -1,10 +1,10 @@
 // styrman UI end-to-end test (Playwright, headless Chromium).
 // Drives the real UI against a running server: sidebar, setup banner,
-// project creation (boots a microVM), agent + shell terminals (xterm uses
-// the DOM renderer, so terminal text is assertable), rename/delete flows,
-// deep links, and cleanup. Screenshots land in the --shots dir.
+// project creation (boots a microVM), terminals (xterm uses the DOM
+// renderer, so terminal text is assertable), the side panel's Files / Ports
+// / History / Diff tabs, settings, deep links, and cleanup.
 //
-// Usage: node .agents/docs/testing/styrman/e2e.mjs [--base http://127.0.0.1:8080] [--shots /tmp/shots]
+// Usage: node web/e2e/run.mjs [--base http://127.0.0.1:8080] [--shots /tmp/shots]
 import { chromium } from 'playwright'
 
 const arg = (name, def) => {
@@ -41,9 +41,7 @@ const browser = await chromium.launch()
 const page = await browser.newPage({ viewport: { width: 1440, height: 860 } })
 page.setDefaultTimeout(15000)
 const shot = (name) => page.screenshot({ path: `${SHOTS}/${name}.png` })
-
-// Terminal text lives in the DOM (no canvas addon loaded).
-const termText = (scope) => scope.locator('.xterm-rows').innerText()
+const panel = () => page.locator('aside').last()
 
 try {
   // ── Home ────────────────────────────────────────────────────────────────
@@ -61,128 +59,170 @@ try {
   await page.fill('#np-name', PROJECT)
   await shot('02-new-project-modal')
   await page.click('button:has-text("Create")')
-  await check('navigates into conversation after create', () =>
+  await check('navigates into a terminal after create', () =>
     page.waitForURL(`**/p/${PROJECT}/1`, { timeout: 60000 }),
   )
-  await check('conversation header shows title', () =>
-    page.waitForSelector('header button:has-text("Conversation 1")'),
+  await check('terminal header shows title', () =>
+    page.waitForSelector('header button:has-text("Terminal 1"), header button:has-text("Conversation 1")'),
   )
   await check('project listed running (green dot)', () =>
     page.waitForSelector(`aside div:has-text("${PROJECT}") span[title="running"]`),
   )
 
-  // ── Conversation terminal: login shell with agent hint ─────────────────
-  await check('conversation shell prompt + agent hint appear', async () => {
-    await page.waitForFunction(
-      () => {
-        const rows = document.querySelector('.xterm-rows')
-        return rows && /styrman-setup|\$/.test(rows.textContent ?? '')
-      },
+  // ── The terminal is a shell; typing reaches the microVM ─────────────────
+  await check('shell prompt appears', () =>
+    page.waitForFunction(
+      () => /\$/.test(document.querySelector('.xterm-rows')?.textContent ?? ''),
       { timeout: 45000 },
-    )
-  })
-  await shot('03-conversation-shell')
-
-  // ── Right rail: plain shell terminal, typing works ──────────────────────
-  // NB: selectors must be exact + rail-scoped ('+ New' substring-matches the
-  // sidebar's '+ New Project' and opens the wrong dialog).
-  const railToggle = page.locator('button[title="Terminals"]')
-  if (await railToggle.count()) await railToggle.click()
-  const rail = page.locator('aside').filter({ hasText: 'Terminals' }).last()
-  await rail.getByText('+ New', { exact: true }).click()
-  await check('shell terminal opens in rail', () => rail.locator('.xterm').waitFor())
-  await check('shell prompt appears in rail', async () => {
-    // Scope to the LAST terminal (the rail's) — the center conversation is
-    // also a shell now and would satisfy an any-terminal check too early.
-    await page.waitForFunction(() => {
-      const rails = [...document.querySelectorAll('.xterm-rows')]
-      const last = rails[rails.length - 1]
-      return rails.length >= 2 && /\$/.test(last?.textContent ?? '')
-    })
-  })
-  await rail.locator('.xterm textarea').last().focus()
+    ),
+  )
+  await page.locator('.xterm textarea').first().focus()
   await page.keyboard.type('echo styrman-e2e-$((21*2))', { delay: 15 })
   await page.keyboard.press('Enter')
   await check('typed command executes in microVM', () =>
-    page.waitForFunction(() => {
-      const rails = [...document.querySelectorAll('.xterm-rows')]
-      return rails.some((r) => (r.textContent ?? '').includes('styrman-e2e-42'))
-    }),
+    page.waitForFunction(() =>
+      [...document.querySelectorAll('.xterm-rows')].some((r) =>
+        (r.textContent ?? '').includes('styrman-e2e-42'),
+      ),
+    ),
   )
-  await shot('04-right-rail-shell')
+  await check('both agents are installed', async () => {
+    await page.keyboard.type('command -v claude agy | wc -l', { delay: 10 })
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('.xterm-rows')].some((r) =>
+        (r.textContent ?? '').includes('command -v claude agy | wc -l'),
+      ),
+    )
+  })
+  await shot('03-terminal')
 
-  // ── Rename + second conversation ────────────────────────────────────────
-  await page.click('header button:has-text("Conversation 1")')
+  // ── Side panel: Files ───────────────────────────────────────────────────
+  await check('files tab lists the workspace', async () => {
+    await panel().getByText('Files', { exact: true }).click()
+    await page.waitForSelector('aside >> text=.git')
+  })
+  await check('home scope switches root', async () => {
+    await panel().getByText('Home', { exact: true }).click()
+    await page.waitForSelector('aside >> text=.claude')
+  })
+  await check('project scope returns', async () => {
+    await panel().getByText('Project', { exact: true }).click()
+    await page.waitForSelector('aside >> text=.git')
+  })
+  await shot('04-files')
+
+  // ── Side panel: Ports (start a server in the terminal first) ────────────
+  await page.locator('.xterm textarea').first().focus()
+  await page.keyboard.type(
+    'cd /tmp && echo "<h1>e2e-app</h1>" > index.html && python3 -m http.server 4321 >/dev/null 2>&1 &',
+    { delay: 5 },
+  )
+  await page.keyboard.press('Enter')
+  await check('port appears in the ports tab', async () => {
+    await panel().getByText('Ports', { exact: true }).click()
+    await page.waitForSelector('aside >> text=:4321', { timeout: 25000 })
+  })
+  await check('port link serves the app from inside the microVM', async () => {
+    const res = await page.request.get(`${BASE}/p/${PROJECT}/1/port/4321/index.html`)
+    const body = await res.text()
+    if (!body.includes('e2e-app')) throw new Error('proxy did not serve the app')
+  })
+  await shot('05-ports')
+
+  // ── Side panel: History (transcript of what we typed) ───────────────────
+  await check('history lists the transcript', async () => {
+    await panel().getByText('History', { exact: true }).click()
+    await page.waitForSelector('aside >> text=conv-1', { timeout: 25000 })
+  })
+  await check('transcript contains our command', async () => {
+    await panel().getByText('conv-1').click()
+    await page.waitForFunction(() =>
+      (document.querySelector('aside pre')?.textContent ?? '').includes('styrman-e2e-42'),
+    )
+  })
+  await shot('06-history')
+
+  // ── Side panel: Diff ────────────────────────────────────────────────────
+  await check('diff tab shows the repo', async () => {
+    await panel().getByText('Diff', { exact: true }).click()
+    await page.waitForSelector('aside >> text=branch')
+  })
+
+  // ── Terminals: rename + second terminal ─────────────────────────────────
+  await page.locator('header button').first().click()
   await page.fill('header input', 'Renamed by e2e')
   await page.keyboard.press('Enter')
   await check('rename sticks in header', () =>
     page.waitForSelector('header button:has-text("Renamed by e2e")'),
   )
-  await check('rename visible in sidebar', () =>
-    page.waitForSelector('aside >> text=Renamed by e2e'),
-  )
-  await page.click('text=+ New conversation')
-  await check('second conversation opens', () => page.waitForURL(`**/p/${PROJECT}/2`))
+  await check('rename visible in sidebar', () => page.waitForSelector('aside >> text=Renamed by e2e'))
+  await page.click('text=+ New terminal')
+  await check('second terminal opens', () => page.waitForURL(`**/p/${PROJECT}/2`))
 
   // ── Deep link ───────────────────────────────────────────────────────────
   await page.goto(`${BASE}/p/${PROJECT}/1`)
-  await check('deep link reattaches conversation 1', () =>
+  await check('deep link reattaches terminal 1', () =>
     page.waitForSelector('header button:has-text("Renamed by e2e")'),
   )
 
+  // ── Settings ────────────────────────────────────────────────────────────
+  await page.click('text=⚙ Settings')
+  await check('settings page renders sections', async () => {
+    await page.waitForURL('**/settings')
+    await page.waitForSelector('text=Allowed accounts')
+    await page.waitForSelector('text=Shared home')
+  })
+  await check('settings shows runtime info', () => page.waitForSelector('text=Kata microVM'))
+  await shot('07-settings')
+
   // ── Setup page ──────────────────────────────────────────────────────────
-  await page.click('text=Open setup')
+  await page.click('text=Open setup terminal')
   await check('setup page boots hidden VM and attaches', async () => {
     await page.waitForURL('**/setup')
     await page.waitForFunction(
-      () => {
-        const rows = document.querySelector('.xterm-rows')
-        return rows && /styrman setup|Git identity/i.test(rows.textContent ?? '')
-      },
+      () =>
+        /styrman setup|Git identity/i.test(document.querySelector('.xterm-rows')?.textContent ?? ''),
       { timeout: 60000 },
     )
   })
-  await shot('05-setup-page')
+  await shot('08-setup')
 
-  // ── Theme toggle ────────────────────────────────────────────────────────
+  // ── Theme ───────────────────────────────────────────────────────────────
   await page.click('text=☀ Light')
   await check('light theme applies', async () => {
     const theme = await page.evaluate(() => document.documentElement.dataset.theme)
     if (theme !== 'light') throw new Error(`theme=${theme}`)
   })
-  await shot('06-light-theme')
+  await shot('09-light-theme')
   await page.click('text=☾ Dark')
 
-  // ── Cleanup: delete conversation + project via UI ───────────────────────
+  // ── Cleanup: delete terminal + project via UI ───────────────────────────
   await page.goto(`${BASE}/p/${PROJECT}/2`)
   page.on('dialog', (d) => {
-    console.log(`  [dialog:${d.type()}] ${d.message().slice(0, 100)}`)
+    console.log(`  [dialog:${d.type()}] ${d.message().slice(0, 80)}`)
     d.accept()
   })
-  // Hover-revealed controls need force:true (visibility:hidden until hover).
-  const convRow = page.locator('aside .group', { hasText: 'Conversation 2' }).last()
-  await convRow.hover()
-  await convRow.locator('button[aria-label^="Delete"]').click({ force: true })
-  await check('conversation deleted from sidebar', async () => {
-    await page.waitForFunction(
-      () => !document.querySelector('aside')?.textContent?.includes('Conversation 2'),
-    )
-  })
+  const termRow = page.locator('aside .group', { hasText: 'Terminal 2' }).last()
+  await termRow.hover()
+  await termRow.locator('button[aria-label^="Delete"]').click({ force: true })
+  await check('terminal deleted from sidebar', () =>
+    page.waitForFunction(() => !document.querySelector('aside')?.textContent?.includes('Terminal 2')),
+  )
   const projRow = page.locator('aside .group', { hasText: PROJECT }).first()
   await projRow.hover()
   await projRow.locator('button[aria-label*="actions"]').click({ force: true })
-  // The inline action menu renders Stop/Start + a red Delete; wait for it.
   const menuDelete = page.locator('button.text-danger', { hasText: 'Delete' })
   await menuDelete.waitFor()
   await menuDelete.click()
-  await check('project deleted from sidebar', async () => {
-    await page.waitForFunction(
+  await check('project deleted from sidebar', () =>
+    page.waitForFunction(
       (name) => !document.querySelector('nav')?.textContent?.includes(name),
       PROJECT,
       { timeout: 90000 },
-    )
-  })
-  await shot('07-after-cleanup')
+    ),
+  )
+  await shot('10-after-cleanup')
 } catch (e) {
   bad('unexpected error', e.message.split('\n')[0])
   await shot('99-failure')

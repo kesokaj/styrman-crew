@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SetupRouteImport } from './routes/setup'
-import { Route as PProjectConvRouteImport } from './routes/p.$project.$conv'
+import { Route as PProjectTermRouteImport } from './routes/p.$project.$term'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SetupRoute = SetupRouteImport.update({
@@ -23,40 +29,44 @@ const SetupRoute = SetupRouteImport.update({
   path: '/setup',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PProjectConvRoute = PProjectConvRouteImport.update({
-  id: '/p/$project/$conv',
-  path: '/p/$project/$conv',
+const PProjectTermRoute = PProjectTermRouteImport.update({
+  id: '/p/$project/$term',
+  path: '/p/$project/$term',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
-  '/p/$project/$conv': typeof PProjectConvRoute
+  '/p/$project/$term': typeof PProjectTermRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
-  '/p/$project/$conv': typeof PProjectConvRoute
+  '/p/$project/$term': typeof PProjectTermRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/settings': typeof SettingsRoute
   '/setup': typeof SetupRoute
-  '/p/$project/$conv': typeof PProjectConvRoute
+  '/p/$project/$term': typeof PProjectTermRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/setup' | '/p/$project/$conv'
+  fullPaths: '/' | '/settings' | '/setup' | '/p/$project/$term'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/setup' | '/p/$project/$conv'
-  id: '__root__' | '/' | '/setup' | '/p/$project/$conv'
+  to: '/' | '/settings' | '/setup' | '/p/$project/$term'
+  id: '__root__' | '/' | '/settings' | '/setup' | '/p/$project/$term'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  SettingsRoute: typeof SettingsRoute
   SetupRoute: typeof SetupRoute
-  PProjectConvRoute: typeof PProjectConvRoute
+  PProjectTermRoute: typeof PProjectTermRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -68,6 +78,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/setup': {
       id: '/setup'
       path: '/setup'
@@ -75,11 +92,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SetupRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/p/$project/$conv': {
-      id: '/p/$project/$conv'
-      path: '/p/$project/$conv'
-      fullPath: '/p/$project/$conv'
-      preLoaderRoute: typeof PProjectConvRouteImport
+    '/p/$project/$term': {
+      id: '/p/$project/$term'
+      path: '/p/$project/$term'
+      fullPath: '/p/$project/$term'
+      preLoaderRoute: typeof PProjectTermRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -87,8 +104,9 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  SettingsRoute: SettingsRoute,
   SetupRoute: SetupRoute,
-  PProjectConvRoute: PProjectConvRoute,
+  PProjectTermRoute: PProjectTermRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
