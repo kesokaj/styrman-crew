@@ -59,7 +59,6 @@ try {
   // ── Create a project (boots a real microVM) ─────────────────────────────
   await page.click('text=+ New Project')
   await page.fill('#np-name', PROJECT)
-  await page.click('text=Claude Code')
   await shot('02-new-project-modal')
   await page.click('button:has-text("Create")')
   await check('navigates into conversation after create', () =>
@@ -72,17 +71,17 @@ try {
     page.waitForSelector(`aside div:has-text("${PROJECT}") span[title="running"]`),
   )
 
-  // ── Agent terminal: claude actually launches ────────────────────────────
-  await check('claude output reaches the terminal', async () => {
+  // ── Conversation terminal: login shell with agent hint ─────────────────
+  await check('conversation shell prompt + agent hint appear', async () => {
     await page.waitForFunction(
       () => {
         const rows = document.querySelector('.xterm-rows')
-        return rows && /claude|Claude|Welcome|theme|sign/i.test(rows.textContent ?? '')
+        return rows && /styrman-setup|\$/.test(rows.textContent ?? '')
       },
       { timeout: 45000 },
     )
   })
-  await shot('03-claude-conversation')
+  await shot('03-conversation-shell')
 
   // ── Right rail: plain shell terminal, typing works ──────────────────────
   // NB: selectors must be exact + rail-scoped ('+ New' substring-matches the
@@ -92,10 +91,13 @@ try {
   const rail = page.locator('aside').filter({ hasText: 'Terminals' }).last()
   await rail.getByText('+ New', { exact: true }).click()
   await check('shell terminal opens in rail', () => rail.locator('.xterm').waitFor())
-  await check('shell prompt appears', async () => {
+  await check('shell prompt appears in rail', async () => {
+    // Scope to the LAST terminal (the rail's) — the center conversation is
+    // also a shell now and would satisfy an any-terminal check too early.
     await page.waitForFunction(() => {
       const rails = [...document.querySelectorAll('.xterm-rows')]
-      return rails.some((r) => /\$/.test(r.textContent ?? ''))
+      const last = rails[rails.length - 1]
+      return rails.length >= 2 && /\$/.test(last?.textContent ?? '')
     })
   })
   await rail.locator('.xterm textarea').last().focus()

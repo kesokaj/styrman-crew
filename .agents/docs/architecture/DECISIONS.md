@@ -241,3 +241,26 @@ runtime; the single-binary deploy is unchanged.
 **Consequences:** REQUIREMENTS.md holds as written. SSR/server functions are
 now one config flip away if ever wanted. Build order matters: `vite build`
 generates `routeTree.gen.ts`, so typecheck runs after it.
+
+---
+
+## ADR-014: Conversations are login shells; agents launched manually
+
+**Date:** 2026-08-26 · **Status:** accepted (operator decision)
+
+**Context:** Operator simplification: both agents ship in the image, so
+choosing one per project at creation adds friction without value, and a
+conversation auto-running an agent surprises more than it helps.
+
+**Decision:** No agent picker; `Project.Agent` is optional/unused (kept for
+compat). Every conversation pane is `bash -l` — run `claude` or `agy` (or
+anything) inside it; the MOTD hints at styrman-setup until signed in.
+Conversations remain durable records (titles, sidebar, listed when stopped);
+terminals remain the ephemeral right rail. The claude session-pinning
+machinery (ADR-011 resume) is parked: records still carry a UUID, and
+re-enabling auto-launch/resume is a one-function change in the bridge
+(`git show 87541d8:internal/terminal/bridge.go` has the last version).
+
+**Consequences:** Simpler mental model and UI; "history per conversation"
+now means tmux scrollback + agent-native history (`claude --resume` by hand)
+until a future decision revives pinning.

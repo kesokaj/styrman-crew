@@ -74,9 +74,11 @@ func NewStore(path string) (*Store, error) {
 			slog.Warn("skipping invalid project in store", "name", p.Name, "error", err)
 			continue
 		}
-		if _, ok := config.Agents[p.Agent]; !ok {
-			slog.Warn("skipping project with unknown agent in store", "name", p.Name, "agent", p.Agent)
-			continue
+		if p.Agent != "" {
+			if _, ok := config.Agents[p.Agent]; !ok {
+				slog.Warn("skipping project with unknown agent in store", "name", p.Name, "agent", p.Agent)
+				continue
+			}
 		}
 		s.projects[p.Name] = p
 	}
@@ -88,8 +90,10 @@ func (s *Store) Add(p Project) error {
 	if err := ValidateName(p.Name); err != nil {
 		return err
 	}
-	if _, ok := config.Agents[p.Agent]; !ok {
-		return fmt.Errorf("unknown agent %q", p.Agent)
+	if p.Agent != "" {
+		if _, ok := config.Agents[p.Agent]; !ok {
+			return fmt.Errorf("unknown agent %q", p.Agent)
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

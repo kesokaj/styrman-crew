@@ -10,7 +10,7 @@ re-checks `X-Caddy-Email` against the userstore.
 | Method & path | Purpose |
 |---|---|
 | `GET /api/projects` | List projects, newest first, each with live `state` (`running` / `stopped` / `absent`). |
-| `POST /api/projects` | Create: `{"name","agent","gitInit"}`. Validates slug (`^[a-z][a-z0-9-]{0,30}$`) and agent (`claude`/`agy`), makes `~/projects/<name>`, records metadata, **boots the microVM synchronously** (~2 s; up to 2 min timeout), optionally `git init -b main` inside the guest as the user. Returns 201 + the project. 409 on duplicate. |
+| `POST /api/projects` | Create: `{"name","agent","gitInit"}`. Validates slug (`^[a-z][a-z0-9-]{0,30}$`); `agent` optional/deprecated (ADR-014), makes `~/projects/<name>`, records metadata, **boots the microVM synchronously** (~2 s; up to 2 min timeout), optionally `git init -b main` inside the guest as the user. Returns 201 + the project. 409 on duplicate. |
 | `GET /api/projects/{p}` | One project + state. |
 | `DELETE /api/projects/{p}[?wipe=true]` | Destroy container + network and remove metadata. `wipe=true` additionally deletes the workspace dir and the project's `~/.dockerd/<p>.img` — irreversible, so opt-in per request. |
 | `POST /api/projects/{p}/start` | Ensure the microVM is running (used after idle-stop). |

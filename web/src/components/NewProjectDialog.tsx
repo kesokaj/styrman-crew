@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { api, type Agent } from '../lib/api'
+import { api } from '../lib/api'
 
 export function NewProjectDialog({
   onClose,
@@ -9,7 +9,6 @@ export function NewProjectDialog({
   onCreated: (project: string, convId: string) => void
 }) {
   const [name, setName] = useState('')
-  const [agent, setAgent] = useState<Agent>('claude')
   const [gitInit, setGitInit] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
@@ -20,7 +19,7 @@ export function NewProjectDialog({
     setBusy(true)
     setError(undefined)
     try {
-      const p = await api.createProject(name, agent, gitInit)
+      const p = await api.createProject(name, gitInit)
       const conv = await api.createConversation(p.name)
       onCreated(p.name, conv.id)
     } catch (e) {
@@ -48,22 +47,10 @@ export function NewProjectDialog({
           placeholder="my-project"
           className="mb-3 w-full rounded-md border border-border bg-bg px-2 py-1.5 outline-none focus:border-accent"
         />
-        <div className="mb-1 block text-xs text-text-dim">Agent</div>
-        <div className="mb-3 flex gap-2">
-          {(['claude', 'agy'] as const).map((a) => (
-            <button
-              key={a}
-              onClick={() => setAgent(a)}
-              className={`flex-1 rounded-md border px-2 py-1.5 text-xs ${
-                agent === a
-                  ? 'border-accent bg-accent-soft text-accent'
-                  : 'border-border hover:bg-bg-hover'
-              }`}
-            >
-              {a === 'claude' ? 'Claude Code' : 'Antigravity (agy)'}
-            </button>
-          ))}
-        </div>
+        <p className="mb-3 text-xs text-text-dim">
+          Both agents are preinstalled — run <code>claude</code> or <code>agy</code> in any
+          conversation.
+        </p>
         <label className="mb-4 flex items-center gap-2 text-xs">
           <input type="checkbox" checked={gitInit} onChange={(e) => setGitInit(e.target.checked)} />
           Initialize a git repository

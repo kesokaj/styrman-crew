@@ -77,7 +77,6 @@ export function Sidebar() {
                 title={p.state}
               />
               <span className="min-w-0 flex-1 truncate">{p.name}</span>
-              <span className="text-[10px] text-text-dim">{p.agent}</span>
               <button
                 className="invisible rounded px-1 text-text-dim hover:text-text group-hover:visible"
                 onClick={(e) => {

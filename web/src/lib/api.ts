@@ -1,10 +1,8 @@
 // Typed client for the styrman REST API (spec: .agents/docs/specs/styrman/api.md).
 
-export type Agent = 'claude' | 'agy'
-
 export interface Project {
   name: string
-  agent: Agent
+  agent?: string
   createdAt: string
   gitInit: boolean
   archived: boolean
@@ -68,10 +66,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   listProjects: () => request<{ projects: Project[] }>('/api/projects'),
-  createProject: (name: string, agent: Agent, gitInit: boolean) =>
+  createProject: (name: string, gitInit: boolean) =>
     request<Project>('/api/projects', {
       method: 'POST',
-      body: JSON.stringify({ name, agent, gitInit }),
+      body: JSON.stringify({ name, gitInit }),
     }),
   deleteProject: (name: string, wipe: boolean) =>
     request<void>(`/api/projects/${name}${wipe ? '?wipe=true' : ''}`, { method: 'DELETE' }),

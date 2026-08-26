@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strconv"
 	"sync"
 	"time"
@@ -76,31 +75,23 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The pane command: the agent CLI is the conversation (R4/ADR-011);
-	// kind=shell gives an ephemeral "terminal" (tmux term-<id>, no record)
-	// into the same microVM. The agent runs under a login shell so
-	// /etc/profile.d applies — the keyring env (DBUS_SESSION_BUS_ADDRESS) in
-	// particular, which agy's Secret Service auth needs. tmux runs a
-	// single-string command via sh.
-	var paneCmd, tmuxName string
+	// Both conversations and terminals are login shells (ADR-014): the user
+	// launches claude/agy themselves — both are in the image, /etc/profile.d
+	// provides the keyring env agy needs. The difference: conversations are
+	// durable records (sidebar, titles); terminals are ephemeral.
+	_ = proj
+	paneCmd := "bash -l"
+	var tmuxName string
 	if r.URL.Query().Get("kind") == "shell" {
-		paneCmd = "bash -l"
 		tmuxName = conversation.TermPrefix + convID
 	} else {
-		agentCmd, ok := config.Agents[proj.Agent]
-		if !ok {
-			http.Error(w, "project has unknown agent "+proj.Agent, http.StatusInternalServerError)
-			return
-		}
 		// Strict: the record must exist (created via POST). Auto-creating
 		// here let stale reconnects resurrect deleted conversations.
-		rec, ok := b.convs.Get(projName, convID)
-		if !ok {
+		if _, ok := b.convs.Get(projName, convID); !ok {
 			http.Error(w, "unknown conversation", http.StatusNotFound)
 			return
 		}
 		b.convs.Touch(projName, convID)
-		paneCmd = paneCommand(proj.Agent, agentCmd, rec.AgentSession)
 		tmuxName = conversation.Prefix + convID
 	}
 
@@ -122,26 +113,6 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		paneCmd:     paneCmd,
 		project:     projName,
 	})
-}
-
-// uuidRe guards everything interpolated into the pane shell string — the
-// session UUID is server-generated, but the store file is hand-editable, so
-// enforce the shape at the point of use too (defense in depth).
-var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-
-// paneCommand builds the tmux pane command for an agent conversation.
-// For claude, the conversation's UUID pins the Claude Code session
-// (ADR-011): try native resume first; if that fails (no such session yet —
-// the first open), start a new session under the same UUID. Resume-first
-// avoids depending on claude's transcript-path encoding, whose breakage
-// would otherwise brick the conversation (review finding). agy manages its
-// own history; resume wiring is a TODO.
-func paneCommand(agent, agentCmd, sessionUUID string) string {
-	if agent != "claude" || !uuidRe.MatchString(sessionUUID) {
-		return "bash -lc 'exec " + agentCmd + "'"
-	}
-	return "bash -lc '" + agentCmd + " --resume " + sessionUUID +
-		" 2>/dev/null || exec " + agentCmd + " --session-id " + sessionUUID + "'"
 }
 
 // ServeSetup attaches the hidden onboarding microVM running styrman-setup
