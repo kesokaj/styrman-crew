@@ -1,43 +1,43 @@
-// Package conversation maps styrman conversations onto tmux sessions inside a
-// project's microVM (R6). A conversation exists iff its tmux session does; the
-// terminal bridge creates sessions lazily with `tmux new -A`.
+// Package conversation implements styrman's conversation model (ADR-011):
+// a conversation is a durable record (store.go) whose live view is a tmux
+// session (`conv-<id>`) inside the project's microVM. Plain shells are
+// "terminals" (`term-<id>`) — ephemeral, unrecorded, listed from tmux only.
 package conversation
 
 import (
 	"context"
 	"fmt"
 	"regexp"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/kesokaj/styrman/internal/config"
 	"github.com/kesokaj/styrman/internal/orchestrator"
 )
 
-// Prefix namespaces styrman's tmux sessions; other sessions the user starts
-// manually are left alone.
-const Prefix = "conv-"
+// Session-name prefixes. Anything else in tmux belongs to the user.
+const (
+	Prefix     = "conv-"
+	TermPrefix = "term-"
+)
 
 var idRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,30}$`)
 
-// ValidateID reports whether id is a safe conversation id (tmux session names
-// must avoid ':' and '.'; we keep it kebab-case like project names).
+// ValidateID reports whether id is a safe conversation/terminal id (tmux
+// session names must avoid ':' and '.'; we keep it kebab-case).
 func ValidateID(id string) error {
 	if !idRe.MatchString(id) {
-		return fmt.Errorf("invalid conversation id %q", id)
+		return fmt.Errorf("invalid session id %q", id)
 	}
 	return nil
 }
 
-// Conversation is one tmux session in a project.
-type Conversation struct {
-	ID        string    `json:"id"`
-	CreatedAt time.Time `json:"createdAt"`
-	Attached  bool      `json:"attached"`
+// Live describes one live tmux session.
+type Live struct {
+	ID       string `json:"id"`
+	Attached bool   `json:"attached"`
 }
 
-// Manager lists and kills conversations via exec.
+// Manager talks tmux inside project microVMs via exec.
 type Manager struct {
 	orch *orchestrator.Orchestrator
 	cfg  *config.Config
@@ -48,52 +48,64 @@ func NewManager(orch *orchestrator.Orchestrator, cfg *config.Config) *Manager {
 	return &Manager{orch: orch, cfg: cfg}
 }
 
-// List returns the project's conversations (empty if the container is not
-// running — stopped projects have no live tmux server).
-func (m *Manager) List(ctx context.Context, project string) ([]Conversation, error) {
+// liveSessions lists tmux sessions with the given prefix. Empty (no error)
+// when the project is stopped or tmux has no server.
+func (m *Manager) liveSessions(ctx context.Context, project, prefix string) ([]Live, error) {
 	st, err := m.orch.Status(ctx, project)
 	if err != nil {
 		return nil, err
 	}
 	if st.State != "running" {
-		return []Conversation{}, nil
+		return []Live{}, nil
 	}
 	code, out, err := m.orch.Exec(ctx, st.ContainerID, orchestrator.ExecSpec{
 		User: m.cfg.Username,
-		Cmd:  []string{"tmux", "list-sessions", "-F", "#{session_name}|#{session_created}|#{session_attached}"},
+		Cmd:  []string{"tmux", "list-sessions", "-F", "#{session_name}|#{session_attached}"},
 		Env:  []string{"HOME=/home/" + m.cfg.Username, "USER=" + m.cfg.Username},
 	})
 	if err != nil {
 		return nil, err
 	}
-	// tmux exits 1 with "no server running" when there are no sessions.
-	if code != 0 {
-		return []Conversation{}, nil
+	if code != 0 { // "no server running" — no sessions
+		return []Live{}, nil
 	}
-	var convs []Conversation
+	var lives []Live
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		parts := strings.Split(line, "|")
-		if len(parts) != 3 || !strings.HasPrefix(parts[0], Prefix) {
+		if len(parts) != 2 || !strings.HasPrefix(parts[0], prefix) {
 			continue
 		}
-		created := time.Time{}
-		if ts, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
-			created = time.Unix(ts, 0)
-		}
-		convs = append(convs, Conversation{
-			ID:        strings.TrimPrefix(parts[0], Prefix),
-			CreatedAt: created,
-			Attached:  parts[2] != "0",
+		lives = append(lives, Live{
+			ID:       strings.TrimPrefix(parts[0], prefix),
+			Attached: parts[1] != "0",
 		})
 	}
-	if convs == nil {
-		convs = []Conversation{}
+	if lives == nil {
+		lives = []Live{}
 	}
-	return convs, nil
+	return lives, nil
 }
 
-// Kill ends a conversation's tmux session (and whatever runs inside it).
-func (m *Manager) Kill(ctx context.Context, project, id string) error {
+// LiveConversations returns live tmux state keyed by conversation id.
+func (m *Manager) LiveConversations(ctx context.Context, project string) (map[string]Live, error) {
+	lives, err := m.liveSessions(ctx, project, Prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]Live{}
+	for _, l := range lives {
+		out[l.ID] = l
+	}
+	return out, nil
+}
+
+// Terminals lists the project's live plain-shell terminals.
+func (m *Manager) Terminals(ctx context.Context, project string) ([]Live, error) {
+	return m.liveSessions(ctx, project, TermPrefix)
+}
+
+// KillSession ends a tmux session (conversation or terminal, by full prefix).
+func (m *Manager) KillSession(ctx context.Context, project, prefix, id string) error {
 	if err := ValidateID(id); err != nil {
 		return err
 	}
@@ -106,13 +118,13 @@ func (m *Manager) Kill(ctx context.Context, project, id string) error {
 	}
 	code, out, err := m.orch.Exec(ctx, st.ContainerID, orchestrator.ExecSpec{
 		User: m.cfg.Username,
-		Cmd:  []string{"tmux", "kill-session", "-t", Prefix + id},
+		Cmd:  []string{"tmux", "kill-session", "-t", prefix + id},
 		Env:  []string{"HOME=/home/" + m.cfg.Username, "USER=" + m.cfg.Username},
 	})
 	if err != nil {
 		return err
 	}
-	if code != 0 && !strings.Contains(out, "can't find session") {
+	if code != 0 && !strings.Contains(out, "can't find session") && !strings.Contains(out, "no server running") {
 		return fmt.Errorf("tmux kill-session: %s", strings.TrimSpace(out))
 	}
 	return nil

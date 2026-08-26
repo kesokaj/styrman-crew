@@ -11,6 +11,8 @@ Deferred work items. Not blocking current work, but should be addressed later.
 
 - [ ] Complete claude + agy first-run sign-in in the demo projects (operator's browser
       needed once; agy's remote-OAuth code flow works through the web terminal) (added 2026-08-26)
+- [ ] agy native resume: find its session/store mechanism and wire into paneCommand (ADR-011) (added 2026-08-26)
+- [ ] Conversation auto-titles from claude transcript summaries (~/.claude/projects) (added 2026-08-26)
 - [ ] Integration check for agent-path keyring (DBUS in agent conversations, not just
       kind=shell) — the Phase 1 suite missed a real bug there (added 2026-08-26)
 - [ ] createProject boots the microVM synchronously; make async with progress events

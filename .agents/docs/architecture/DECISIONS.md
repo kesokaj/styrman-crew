@@ -196,3 +196,25 @@ user cares about; and the thing they actually want per conversation is its
 stopped projects. Requires per-agent session-id discovery (claude: parse
 `~/.claude/projects`; agy: investigate its session store). Phase 1's
 tmux-only conversations remain the transport layer underneath.
+
+---
+
+## ADR-012: UI built on TanStack Router + Vite (static SPA), not full TanStack Start
+
+**Date:** 2026-08-26 · **Status:** accepted
+
+**Context:** The global standard says TanStack Start for every frontend.
+styrman's UI is a static SPA embedded in the Go binary (ADR-006): the Go
+server is the only backend, there is no SSR, no server functions, no Node at
+runtime — Start's entire value-add is unusable here, while its Nitro/vinxi
+build machinery adds weight and a second server model.
+
+**Decision:** `web/` is Vite + React + TypeScript + Tailwind v4 +
+**@tanstack/react-router** (code-based routes: `/`, `/p/$project/$conv`,
+`/setup`), built to `dist/` and embedded via `go:embed` with an index.html
+fallback for deep links. `dist/` is committed so `go build` needs no Node.
+Documented deviation #2: dark theme is the default (terminal product),
+light supported via `data-theme`.
+
+**Consequences:** Single deployable binary stays true. If styrman ever needs
+SSR or server functions, migrating Router → Start is the designed path.

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 type Bridge struct {
 	orch     *orchestrator.Orchestrator
 	projects *project.Store
+	convs    *conversation.Store
 	cfg      *config.Config
 	logger   *slog.Logger
 
@@ -37,8 +39,8 @@ type Bridge struct {
 }
 
 // NewBridge creates a Bridge.
-func NewBridge(orch *orchestrator.Orchestrator, projects *project.Store, cfg *config.Config, logger *slog.Logger) *Bridge {
-	return &Bridge{orch: orch, projects: projects, cfg: cfg, logger: logger}
+func NewBridge(orch *orchestrator.Orchestrator, projects *project.Store, convs *conversation.Store, cfg *config.Config, logger *slog.Logger) *Bridge {
+	return &Bridge{orch: orch, projects: projects, convs: convs, cfg: cfg, logger: logger}
 }
 
 type controlMessage struct {
@@ -74,19 +76,30 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The pane command: the agent CLI is the conversation (R4); kind=shell
-	// gives a plain terminal into the same microVM. The agent runs under a
-	// login shell so /etc/profile.d applies — the keyring env
-	// (DBUS_SESSION_BUS_ADDRESS) in particular, which agy's Secret Service
-	// auth needs. tmux runs a single-string command via sh.
-	agentCmd, ok := config.Agents[proj.Agent]
-	if !ok {
-		http.Error(w, "project has unknown agent "+proj.Agent, http.StatusInternalServerError)
-		return
-	}
-	paneCmd := "bash -lc 'exec " + agentCmd + "'"
+	// The pane command: the agent CLI is the conversation (R4/ADR-011);
+	// kind=shell gives an ephemeral "terminal" (tmux term-<id>, no record)
+	// into the same microVM. The agent runs under a login shell so
+	// /etc/profile.d applies — the keyring env (DBUS_SESSION_BUS_ADDRESS) in
+	// particular, which agy's Secret Service auth needs. tmux runs a
+	// single-string command via sh.
+	var paneCmd, tmuxName string
 	if r.URL.Query().Get("kind") == "shell" {
 		paneCmd = "bash -l"
+		tmuxName = conversation.TermPrefix + convID
+	} else {
+		agentCmd, ok := config.Agents[proj.Agent]
+		if !ok {
+			http.Error(w, "project has unknown agent "+proj.Agent, http.StatusInternalServerError)
+			return
+		}
+		rec, err := b.convs.EnsureRecord(projName, convID)
+		if err != nil {
+			http.Error(w, "conversation store: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		b.convs.Touch(projName, convID)
+		paneCmd = paneCommand(proj.Agent, agentCmd, rec.AgentSession, b.cfg.Username, projName)
+		tmuxName = conversation.Prefix + convID
 	}
 
 	// Ensure the microVM is up before upgrading — first attach after idle-stop
@@ -101,12 +114,28 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	workdir := "/home/" + b.cfg.Username + "/projects/" + projName
 	b.serve(w, r, session{
 		containerID: containerID,
-		key:         projName + "/" + convID,
-		tmuxName:    conversation.Prefix + convID,
+		key:         projName + "/" + tmuxName,
+		tmuxName:    tmuxName,
 		workdir:     workdir,
 		paneCmd:     paneCmd,
 		project:     projName,
 	})
+}
+
+// paneCommand builds the tmux pane command for an agent conversation.
+// For claude, the conversation's UUID pins the Claude Code session: the
+// first run creates it (--session-id), later runs resume it (--resume), so
+// history survives container restarts and idle stops (ADR-011). Claude
+// stores sessions under ~/.claude/projects/<cwd with / and . mapped to ->/.
+// agy manages its own history; resume wiring is a TODO.
+func paneCommand(agent, agentCmd, sessionUUID, username, projName string) string {
+	if agent != "claude" || sessionUUID == "" {
+		return "bash -lc 'exec " + agentCmd + "'"
+	}
+	dir := strings.NewReplacer("/", "-", ".", "-").Replace("/home/" + username + "/projects/" + projName)
+	file := "$HOME/.claude/projects/" + dir + "/" + sessionUUID + ".jsonl"
+	return "bash -lc 'if [ -s \"" + file + "\" ]; then exec claude --resume " + sessionUUID +
+		"; else exec claude --session-id " + sessionUUID + "; fi'"
 }
 
 // ServeSetup attaches the hidden onboarding microVM running styrman-setup

@@ -5,7 +5,6 @@ package httpapi
 
 import (
 	"context"
-	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kesokaj/styrman/internal/config"
@@ -23,33 +23,33 @@ import (
 	"github.com/kesokaj/styrman/internal/orchestrator"
 	"github.com/kesokaj/styrman/internal/project"
 	"github.com/kesokaj/styrman/internal/terminal"
+	"github.com/kesokaj/styrman/web"
 )
-
-//go:embed devpage
-var devPage embed.FS
 
 // Version is stamped via -ldflags at build time.
 var Version = "dev"
 
 // Server wires the API handlers to their dependencies.
 type Server struct {
-	cfg      *config.Config
-	projects *project.Store
-	orch     *orchestrator.Orchestrator
-	convs    *conversation.Manager
-	bridge   *terminal.Bridge
-	logger   *slog.Logger
+	cfg       *config.Config
+	projects  *project.Store
+	orch      *orchestrator.Orchestrator
+	tmux      *conversation.Manager
+	convStore *conversation.Store
+	bridge    *terminal.Bridge
+	logger    *slog.Logger
 }
 
 // New creates the Server.
-func New(cfg *config.Config, projects *project.Store, orch *orchestrator.Orchestrator, logger *slog.Logger) *Server {
+func New(cfg *config.Config, projects *project.Store, convStore *conversation.Store, orch *orchestrator.Orchestrator, logger *slog.Logger) *Server {
 	return &Server{
-		cfg:      cfg,
-		projects: projects,
-		orch:     orch,
-		convs:    conversation.NewManager(orch, cfg),
-		bridge:   terminal.NewBridge(orch, projects, cfg, logger),
-		logger:   logger,
+		cfg:       cfg,
+		projects:  projects,
+		orch:      orch,
+		tmux:      conversation.NewManager(orch, cfg),
+		convStore: convStore,
+		bridge:    terminal.NewBridge(orch, projects, convStore, cfg, logger),
+		logger:    logger,
 	}
 }
 
@@ -64,7 +64,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/projects/{project}/stop", s.stopProject)
 	mux.HandleFunc("GET /api/projects/{project}/conversations", s.listConversations)
 	mux.HandleFunc("POST /api/projects/{project}/conversations", s.createConversation)
+	mux.HandleFunc("PATCH /api/projects/{project}/conversations/{conv}", s.renameConversation)
 	mux.HandleFunc("DELETE /api/projects/{project}/conversations/{conv}", s.deleteConversation)
+	mux.HandleFunc("GET /api/projects/{project}/terminals", s.listTerminals)
+	mux.HandleFunc("POST /api/projects/{project}/terminals", s.createTerminal)
+	mux.HandleFunc("DELETE /api/projects/{project}/terminals/{term}", s.deleteTerminal)
 	mux.Handle("GET /ws/term/{project}/{conv}", s.bridge)
 	mux.HandleFunc("GET /ws/setup", s.bridge.ServeSetup)
 	mux.HandleFunc("GET /api/setup/status", s.getSetupStatus)
@@ -76,14 +80,20 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"version": Version})
 	})
 
-	sub, _ := fs.Sub(devPage, "devpage")
-	mux.Handle("GET /dev/", http.StripPrefix("/dev/", http.FileServerFS(sub)))
+	// The embedded SPA: real files served directly, everything else falls
+	// back to index.html so client-side routes (/p/..., /setup) deep-link.
+	dist, _ := fs.Sub(web.Dist, "dist")
+	fileServer := http.FileServerFS(dist)
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			http.Redirect(w, r, "/dev/", http.StatusFound)
-			return
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		if p != "" {
+			if f, err := dist.Open(p); err == nil {
+				f.Close()
+				fileServer.ServeHTTP(w, r)
+				return
+			}
 		}
-		http.NotFound(w, r)
+		http.ServeFileFS(w, r, dist, "index.html")
 	})
 	return csrfGuard(mux)
 }
@@ -234,6 +244,9 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	if err := s.convStore.DeleteProject(name); err != nil {
+		s.logger.Warn("conversation records cleanup failed", "project", name, "error", err)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -265,36 +278,127 @@ func (s *Server) stopProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"state": "stopped"})
 }
 
+// conversationView is a durable record merged with live tmux state.
+type conversationView struct {
+	conversation.Record
+	Live     bool `json:"live"`
+	Attached bool `json:"attached"`
+}
+
+// listConversations returns durable records (ADR-011) — present even for
+// stopped projects — merged with live tmux state when running.
 func (s *Server) listConversations(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("project")
 	if _, err := s.projects.Get(name); err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	convs, err := s.convs.List(r.Context(), name)
+	live, err := s.tmux.LiveConversations(r.Context(), name)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"conversations": convs})
+	out := []conversationView{}
+	for _, rec := range s.convStore.List(name) {
+		v := conversationView{Record: rec}
+		if l, ok := live[rec.ID]; ok {
+			v.Live = true
+			v.Attached = l.Attached
+		}
+		out = append(out, v)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"conversations": out})
 }
 
-// createConversation allocates the next free numeric id. The tmux session
-// itself is created lazily on the first WebSocket attach.
+// createConversation persists a durable record. The tmux session is created
+// lazily on the first WebSocket attach.
 func (s *Server) createConversation(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("project")
 	if _, err := s.projects.Get(name); err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	convs, err := s.convs.List(r.Context(), name)
+	var body struct {
+		Title string `json:"title"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body) // empty body = default title
+	rec, err := s.convStore.Create(name, body.Title)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, conversationView{Record: rec})
+}
+
+func (s *Server) renameConversation(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("project")
+	if _, err := s.projects.Get(name); err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Title == "" {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("title required"))
+		return
+	}
+	if err := s.convStore.Rename(name, r.PathValue("conv"), body.Title); err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteConversation removes the record and kills its tmux session. The
+// agent's transcript in the shared home is left intact (ADR-011).
+func (s *Server) deleteConversation(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("project")
+	if _, err := s.projects.Get(name); err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	convID := r.PathValue("conv")
+	if err := s.tmux.KillSession(r.Context(), name, conversation.Prefix, convID); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := s.convStore.Delete(name, convID); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Terminals: ephemeral plain shells, listed straight from tmux.
+func (s *Server) listTerminals(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("project")
+	if _, err := s.projects.Get(name); err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	terms, err := s.tmux.Terminals(r.Context(), name)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"terminals": terms})
+}
+
+func (s *Server) createTerminal(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("project")
+	if _, err := s.projects.Get(name); err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	terms, err := s.tmux.Terminals(r.Context(), name)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	used := map[string]bool{}
-	for _, c := range convs {
-		used[c.ID] = true
+	for _, t := range terms {
+		used[t.ID] = true
 	}
 	id := ""
 	for n := 1; ; n++ {
@@ -306,13 +410,13 @@ func (s *Server) createConversation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id})
 }
 
-func (s *Server) deleteConversation(w http.ResponseWriter, r *http.Request) {
+func (s *Server) deleteTerminal(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("project")
 	if _, err := s.projects.Get(name); err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	if err := s.convs.Kill(r.Context(), name, r.PathValue("conv")); err != nil {
+	if err := s.tmux.KillSession(r.Context(), name, conversation.TermPrefix, r.PathValue("term")); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

@@ -2,6 +2,6 @@
 *.env
 !.env.example
 web/node_modules/
-web/dist/
+
 web/.output/
 styrman

@@ -1,0 +1,74 @@
+@import 'tailwindcss';
+@import '@xterm/xterm/css/xterm.css';
+
+/* Theme tokens. Dark is the default (terminal-first product surface,
+   documented project deviation from the light-first global standard);
+   data-theme="light" flips the palette. */
+:root {
+  --bg: #131417;
+  --bg-raised: #1b1d21;
+  --bg-hover: #24262b;
+  --bg-active: #2b3038;
+  --border: #2a2d33;
+  --text: #d6d8dd;
+  --text-dim: #8b8f98;
+  --accent: #5b9dd9;
+  --accent-soft: #23384d;
+  --ok: #5fb573;
+  --warn: #d9a75b;
+  --danger: #d97b6c;
+  --term-bg: #0d0e10;
+}
+
+[data-theme='light'] {
+  --bg: #f5f5f4;
+  --bg-raised: #ffffff;
+  --bg-hover: #ebebe9;
+  --bg-active: #dde5ee;
+  --border: #d8d8d5;
+  --text: #23252a;
+  --text-dim: #6d7178;
+  --accent: #2f6cab;
+  --accent-soft: #dbe7f3;
+  --ok: #2e7d43;
+  --warn: #a3742a;
+  --danger: #b5493a;
+  --term-bg: #16181c;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-raised: var(--bg-raised);
+  --color-bg-hover: var(--bg-hover);
+  --color-bg-active: var(--bg-active);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-text-dim: var(--text-dim);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-term-bg: var(--term-bg);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 13px;
+}
+
+/* xterm fills its pane */
+.term-host,
+.term-host .xterm,
+.term-host .xterm .xterm-viewport {
+  height: 100%;
+  width: 100%;
+}
