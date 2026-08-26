@@ -76,6 +76,10 @@ type Config struct {
 	// the userstore from the environment.
 	AuthMode      string
 	AllowedEmails []string
+	// DevAddr: optional second listener with auth bypassed, for testing
+	// without the OAuth ingress. Publish it on host loopback ONLY
+	// (compose: "127.0.0.1:8080:8081") — anyone who can reach it is operator.
+	DevAddr string
 }
 
 // Load resolves configuration from the environment with sensible defaults.
@@ -90,6 +94,7 @@ func Load() (*Config, error) {
 		DockerDisk:  envIntOr("STYRMAN_DOCKER_DISK_GB", 20),
 		IdleTimeout: envDurationOr("STYRMAN_IDLE_TIMEOUT", 24*time.Hour),
 		AuthMode:    envOr("STYRMAN_AUTH", "none"),
+		DevAddr:     os.Getenv("STYRMAN_DEV_ADDR"),
 	}
 	for _, e := range strings.Split(os.Getenv("STYRMAN_ALLOWED_EMAILS"), ",") {
 		if e = strings.TrimSpace(e); e != "" {

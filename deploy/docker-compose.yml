@@ -45,6 +45,11 @@ services:
       - STYRMAN_KEYRING_PW=${STYRMAN_KEYRING_PW:-styrman}
       - STYRMAN_IDLE_TIMEOUT=${STYRMAN_IDLE_TIMEOUT:-24h}
       - HOME=/var/lib/styrman # user.Current() needs a home for uid lookups
+      - STYRMAN_DEV_ADDR=0.0.0.0:8081
+    # Dev/test door: auth-bypassed listener published ONLY on the host's
+    # loopback — reachable from dave itself, never from the LAN/internet.
+    ports:
+      - '127.0.0.1:8080:8081'
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Same path inside as on the host: bind sources passed to project

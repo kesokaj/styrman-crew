@@ -78,10 +78,27 @@ func main() {
 
 	go orch.RunIdleReaper(ctx)
 
+	api := httpapi.New(cfg, projects, convs, users, orch, logger)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(cfg, projects, convs, users, orch, logger).Routes(),
+		Handler:           api.Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+	// Optional auth-bypassed dev listener; MUST only ever be published on
+	// host loopback (see config.DevAddr).
+	if cfg.DevAddr != "" {
+		devSrv := &http.Server{
+			Addr:              cfg.DevAddr,
+			Handler:           api.RoutesWithAuth("none"),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		go func() {
+			logger.Info("dev listener (NO AUTH) up", "addr", cfg.DevAddr)
+			if err := devSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("dev listener failed", "error", err)
+			}
+		}()
+		go func() { <-ctx.Done(); _ = devSrv.Close() }()
 	}
 	go func() {
 		<-ctx.Done()

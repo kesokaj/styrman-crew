@@ -69,8 +69,12 @@ func New(cfg *config.Config, projects *project.Store, convStore *conversation.St
 	}
 }
 
-// Routes returns the root handler.
-func (s *Server) Routes() http.Handler {
+// Routes returns the root handler with the configured auth mode.
+func (s *Server) Routes() http.Handler { return s.RoutesWithAuth(s.cfg.AuthMode) }
+
+// RoutesWithAuth builds the handler with an explicit auth mode — the dev
+// listener (loopback-published, see config.DevAddr) uses "none".
+func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/projects", s.listProjects)
 	mux.HandleFunc("POST /api/projects", s.createProject)
@@ -127,7 +131,7 @@ func (s *Server) Routes() http.Handler {
 		http.ServeFileFS(w, r, dist, "_shell.html")
 	})
 	// Auth outermost: identity/permission first, then CSRF, then routing.
-	return authGuard(s.cfg.AuthMode, s.users, csrfGuard(mux))
+	return authGuard(authMode, s.users, csrfGuard(mux))
 }
 
 // csrfGuard rejects cross-origin mutating requests. Browsers always send
