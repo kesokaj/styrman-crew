@@ -41,19 +41,29 @@ No database: state lives in Docker labels, the filesystem, and one `projects.jso
 
 ## Status
 
-Pre-alpha — Phase 0 (scaffold + de-risking spikes). See
-`.agents/docs/plans/2026-08-26-super-devbox-implementation-plan.md`.
+Alpha — Phase 1 complete: core backend, runtime image, terminal bridge, and
+reproducible host install are working end-to-end on localhost (18/18
+integration checks). Next: Phase 2 (the real UI), Phase 3 (Google OAuth
+ingress). Plan: `.agents/docs/plans/2026-08-26-super-devbox-implementation-plan.md`.
 
 ## Requirements
 
-- Linux host with Docker and Kata Containers registered as runtime `mvm`, `/dev/kvm`
-- Go 1.24+, Node 22+ (UI build)
+- Debian 13 host (baremetal, or a GCP VM with nested virtualization) — Docker,
+  Kata, and everything else is installed by `deploy/host-setup.sh`
+- Go 1.24+ to build/run the server
 
-## Quick start (Phase 1, localhost)
+## Quick start
 
 ```bash
-go run ./cmd/styrman/        # then open http://localhost:8080
+sudo bash deploy/host-setup.sh --user $USER   # Docker + Kata "mvm" + dirs (idempotent)
+bash deploy/home-init.sh                      # shared home: dotfiles, SSH key, agent harness
+docker build -t styrman-runtime:dev image/    # runtime image (~10 min first build)
+STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/
+# → http://127.0.0.1:8080/dev/  — create a project, get an agent terminal in ~2 s
 ```
+
+Full walkthrough, operations, and troubleshooting:
+`.agents/docs/specs/styrman/guide.md`.
 
 ## Lineage
 
