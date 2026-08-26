@@ -44,7 +44,7 @@ func NewCloudflareClient(token, baseDomain string, logger *slog.Logger) (*Cloudf
 // EnsureDNS ensures the infrastructure A records and the apps wildcard A record
 // exist, pointing to the given server IP. Records are created if missing, updated
 // if the IP has changed, and left alone if already correct.
-func (c *CloudflareClient) EnsureDNS(serverIP, authDomain, shellDomain, appsDomain string) error {
+func (c *CloudflareClient) EnsureDNS(serverIP, authDomain, _, appsDomain string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -56,10 +56,10 @@ func (c *CloudflareClient) EnsureDNS(serverIP, authDomain, shellDomain, appsDoma
 			name:    authDomain,
 			comment: "styrman auth portal (auto-managed by styrman ingress)",
 		},
-		{
-			name:    shellDomain,
-			comment: "styrman legacy shell record (auto-managed by styrman ingress)",
-		},
+		// NOTE: devbox also created a "shell" record here; styrman has no
+		// shell app, so no record. shellDomain stays in the signature only
+		// for the generator's hostname override (unused unless a container
+		// is labeled hostname=shell).
 		{
 			name:    fmt.Sprintf("*.%s", appsDomain),
 			comment: "styrman apps wildcard (auto-managed by styrman ingress)",
