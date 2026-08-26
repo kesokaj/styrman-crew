@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -48,6 +49,10 @@ type Server struct {
 	// Reservations expire after a minute.
 	termMu       sync.Mutex
 	termReserved map[string]map[string]time.Time
+
+	// proxyMu/proxies cache port-preview reverse proxies (see proxy.go).
+	proxyMu sync.Mutex
+	proxies map[string]*httputil.ReverseProxy
 }
 
 // New creates the Server.
@@ -82,6 +87,12 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/projects/{project}/terminals/{term}", s.deleteTerminal)
 	mux.Handle("GET /ws/term/{project}/{conv}", s.bridge)
 	mux.HandleFunc("GET /ws/setup", s.bridge.ServeSetup)
+	mux.HandleFunc("GET /api/projects/{project}/ports", s.listPorts)
+	// Per-method registration: a method-less pattern here conflicts with
+	// the "GET /" SPA catch-all under ServeMux precedence rules.
+	for _, m := range []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"} {
+		mux.HandleFunc(m+" /proxy/{project}/{port}/", s.proxyPort)
+	}
 	mux.HandleFunc("GET /api/setup/status", s.getSetupStatus)
 	mux.HandleFunc("POST /api/setup/start", s.startSetup)
 	mux.HandleFunc("POST /api/setup/done", s.finishSetup)

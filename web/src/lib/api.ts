@@ -98,6 +98,8 @@ export const api = {
   deleteTerminal: (project: string, id: string) =>
     request<void>(`/api/projects/${project}/terminals/${id}`, { method: 'DELETE' }),
 
+  listPorts: (project: string) => request<{ ports: number[] }>(`/api/projects/${project}/ports`),
+
   setupStatus: () => request<SetupStatus>('/api/setup/status'),
   setupStart: () => request<void>('/api/setup/start', { method: 'POST' }),
   setupDone: () => request<void>('/api/setup/done', { method: 'POST' }),

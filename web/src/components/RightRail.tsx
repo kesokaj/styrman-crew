@@ -13,6 +13,8 @@ export function RightRail({ project }: { project: string }) {
   const [active, setActive] = useState<string | null>(null)
   const { data, refresh } = usePolled(() => api.listTerminals(project), 5000)
   const terminals = data?.terminals ?? []
+  const { data: portData } = usePolled(() => api.listPorts(project), 7000)
+  const ports = portData?.ports ?? []
 
   const create = () =>
     tryUI(async () => {
@@ -80,6 +82,27 @@ export function RightRail({ project }: { project: string }) {
           </div>
         ))}
       </div>
+      {ports.length > 0 && (
+        <div className="border-t border-border p-1.5">
+          <div className="px-1.5 pb-1 text-[11px] font-medium uppercase tracking-wider text-text-dim">
+            Ports
+          </div>
+          <div className="flex flex-wrap gap-1 px-1.5">
+            {ports.map((p) => (
+              <a
+                key={p}
+                href={`/proxy/${project}/${p}/`}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded bg-accent-soft px-2 py-0.5 text-xs text-accent hover:brightness-110"
+                title={`Open port ${p} from inside the microVM`}
+              >
+                :{p}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="min-h-0 flex-1 border-t border-border">
         {active ? (
           <TerminalPane

@@ -47,6 +47,13 @@ straight from tmux, no records, gone when killed or the container stops.
 
 `GET /ws/term/{p}/{c}` — WebSocket; see `terminal-protocol.md`.
 
+## Ports & preview (Phase 4)
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/projects/{p}/ports` | In-guest listening TCP ports ≥1024 (parsed from /proc/net/tcp{,6} via exec). |
+| `/proxy/{p}/{port}/...` | Reverse proxy to the microVM's IP — open web apps running inside a project (WebSocket upgrades pass through). Behind authGuard like everything else. |
+
 ## Setup (first-time onboarding)
 
 A hidden system microVM (`styrman-sys-setup`, label `styrman.system=setup`,
