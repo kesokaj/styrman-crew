@@ -57,6 +57,15 @@ Spikes — each a throwaway script/program under `.agents/docs/testing/spikes/`,
 
 Exit: all five spikes answered, decisions recorded as ADR amendments.
 
+> **Phase 0 completed 2026-08-26.** All spikes passed — results in
+> `.agents/docs/testing/spikes/2026-08-26-phase0-results.md`. Highlights: an unplanned
+> S0 (Docker 29 broke Kata; fixed via `"features": {"time-namespaces": false}`, ADR-009);
+> S3 upgraded the DinD design to overlay2 on a loop-mounted sparse ext4 image (ADR-008);
+> S5 measured ~1 s microVM cold start. New operator requirement R11 (ADR-010):
+> reproducible install on fresh baremetal/GCP VM — `deploy/host-setup.sh` is promoted
+> from a Phase 3 afterthought to a Phase 1 deliverable, developed alongside the runtime
+> image and validated by re-running it on this host.
+
 ### Phase 1 — Runtime image + core backend (no UI, no auth)
 
 1. **Runtime image** (`image/`): Debian trixie, tool set per architecture doc §5, `claude` + `agy` baked in, entrypoint adapted from devbox (user creation, cgroup nesting, per-project dockerd, keyring per S4, version-aware home-config deploy preserving `~/.bash_secrets`, tmux, PID-1 reaper). AMD64 only.

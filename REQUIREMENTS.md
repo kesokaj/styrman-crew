@@ -42,6 +42,11 @@
 9. **R9 — Local-only deployment** on this machine. No cloud deploy of styrman itself.
 10. **R10 — Secrets**: single gitignored `.env`; per-user secrets in `~/.bash_secrets`
     (never overwritten by provisioning). No secrets in git, images, or labels.
+11. **R11 — Reproducible installation** (operator directive 2026-08-26): the whole
+    system must install from this repo onto a fresh Debian 13 host — another baremetal
+    machine first, or a GCP VM with nested virtualization — via `deploy/host-setup.sh`
+    (Docker, Kata `mvm`, daemon config incl. the time-namespaces fix, tuning, systemd).
+    No dependence on leftover devbox host state. See ADR-010.
 
 ## Constraints
 

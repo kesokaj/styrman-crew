@@ -24,7 +24,7 @@ Costs: microVM cold-start latency (spike S5), virtiofs for the shared home (S2/S
 
 ## ADR-002: Terminal transport via Docker exec, no in-container server
 
-**Date:** 2026-08-26 · **Status:** accepted (pending spike S1)
+**Date:** 2026-08-26 · **Status:** accepted (spike S1 passed 2026-08-26)
 
 **Context:** devbox ran a shell-server binary inside each container (HTTP+WS on :38917),
 which couples server updates to image rebuilds.
@@ -41,7 +41,7 @@ Fallback if exec streaming under Kata disappoints (S1): port devbox's shell-serv
 
 ## ADR-003: Single shared persistent home across all microVMs
 
-**Date:** 2026-08-26 · **Status:** accepted (pending spikes S2/S3)
+**Date:** 2026-08-26 · **Status:** accepted (spikes S2/S3 passed 2026-08-26; see ADR-008 for the S3 storage design)
 
 **Context:** Core operator requirement: configure ssh/agent/cloud credentials once, ever.
 devbox proved host-bind-mounted homes (its ADR-012), but 1:1 home:container.
@@ -110,3 +110,58 @@ for metadata that must outlive containers (agent choice, created, archived).
 
 **Consequences:** Restart/reboot recovery is adoption, not replay. No migrations. If
 requirements ever exceed this (search, history), revisit with SQLite.
+
+---
+
+## ADR-008: Per-project dockerd uses overlay2 on a loop-mounted ext4 image
+
+**Date:** 2026-08-26 · **Status:** accepted (spike S3)
+
+**Context:** overlay2 cannot mount on virtiofs (`invalid argument`); devbox worked
+around this with `storage-driver: vfs`, which copies every layer fully (slow, bloated).
+
+**Decision:** Each project's dockerd data-root is a sparse ext4 image at
+`~/.dockerd/<project>.img` (default 20 G, configurable), loop-mounted inside the guest
+by the entrypoint, with overlay2 on top. Prereqs (verified): remount `/sys/fs/cgroup`
+rw + cgroup-v2 nesting, loop-device mknod. `vfs` stays available as a config fallback.
+
+**Consequences:** Real overlay2 performance and bounded per-project Docker disk; the
+image file persists on the shared home and travels with backups. Growing an image later
+= `truncate` + `resize2fs`.
+
+---
+
+## ADR-009: Host prerequisite — Docker time-namespaces disabled
+
+**Date:** 2026-08-26 · **Status:** accepted (spike S0)
+
+**Context:** Docker ≥ 29.5.0 enables private time namespaces by default
+(moby/moby#52326); the Kata ≤ 3.31 guest agent rejects the `time` namespace type →
+every `--runtime mvm` container fails with `invalid namespace type`
+(kata-containers#13080).
+
+**Decision:** `/etc/docker/daemon.json` MUST carry
+`"features": {"time-namespaces": false}` on styrman hosts. Owned by
+`deploy/host-setup.sh`; applied manually on this host 2026-08-26 (backup:
+`daemon.json.bak-20260826`). Revisit when Kata supports time namespaces.
+
+---
+
+## ADR-010: Reproducible host installation is a first-class deliverable
+
+**Date:** 2026-08-26 · **Status:** accepted (operator requirement)
+
+**Context:** Operator directive: the entire project must be easy to reproduce on
+another baremetal machine first, or on a GCP VM. The current host accumulated its
+Docker/Kata/gVisor setup from devbox scripts plus manual fixes — that history must not
+be load-bearing.
+
+**Decision:** `deploy/host-setup.sh` provisions a styrman host from a fresh Debian 13
+(baremetal or GCP VM with nested virt): Docker CE, Kata (runtime `mvm`), daemon.json
+(incl. ADR-009 flag), host tuning (KSM/THP, sysctls, nested-KVM modprobe), state dirs,
+compose + systemd unit. Idempotent, no reliance on devbox leftovers. This machine gets
+re-run through it as validation. GCP VM path requires a machine type with nested
+virtualization enabled.
+
+**Consequences:** REQUIREMENTS.md R11. The manual S0 fix becomes code. Disaster
+recovery = fresh install + restore `/var/lib/styrman`.
