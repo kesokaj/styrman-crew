@@ -66,6 +66,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/projects/{project}/conversations", s.createConversation)
 	mux.HandleFunc("DELETE /api/projects/{project}/conversations/{conv}", s.deleteConversation)
 	mux.Handle("GET /ws/term/{project}/{conv}", s.bridge)
+	mux.HandleFunc("GET /ws/setup", s.bridge.ServeSetup)
+	mux.HandleFunc("GET /api/setup/status", s.getSetupStatus)
+	mux.HandleFunc("POST /api/setup/start", s.startSetup)
+	mux.HandleFunc("POST /api/setup/done", s.finishSetup)
+	mux.HandleFunc("DELETE /api/setup", s.discardSetup)
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"version": Version})

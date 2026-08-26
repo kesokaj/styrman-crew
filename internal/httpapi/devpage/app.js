@@ -136,5 +136,55 @@ $('#newProject').onsubmit = async (e) => {
   }
 };
 
+// ── First-time setup: hidden system microVM running styrman-setup ──────────
+async function refreshSetup() {
+  try {
+    const st = await api('/api/setup/status');
+    const banner = $('#setupBanner');
+    if (st.done) { banner.style.display = 'none'; return; }
+    banner.style.display = 'block';
+    const mark = (ok, label) => `${ok ? '✔' : '✗'} ${label}`;
+    $('#setupItems').textContent = [
+      mark(st.gitIdentity, 'git'), mark(st.sshKey, 'ssh'), mark(st.github, 'gh'),
+      mark(st.claude, 'claude'), mark(st.keyring, 'keyring'),
+    ].join('  ');
+  } catch { /* server restarting; retry on next tick */ }
+}
+
+function connectSetup() {
+  ensureTerm();
+  if (ws) { ws.onclose = null; ws.close(); }
+  current = { setup: true };
+  fit.fit();
+  $('#status').textContent = 'setup — booting hidden VM…';
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/setup?cols=${term.cols}&rows=${term.rows}`);
+  ws.binaryType = 'arraybuffer';
+  ws.onopen = () => { $('#status').textContent = 'setup — follow the steps in the terminal'; term.focus(); };
+  ws.onmessage = (ev) => term.write(new Uint8Array(ev.data));
+  ws.onclose = (ev) => {
+    if (ev.code === 4001) { $('#status').textContent = 'setup — opened in another tab'; return; }
+    $('#status').textContent = 'setup — session ended';
+    refreshSetup();
+  };
+}
+
+$('#setupOpen').onclick = async () => {
+  $('#setupOpen').disabled = true;
+  $('#setupOpen').textContent = 'booting setup VM…';
+  try { await api('/api/setup/start', { method: 'POST' }); connectSetup(); }
+  catch (e) { alert(e.message); }
+  finally { $('#setupOpen').disabled = false; $('#setupOpen').textContent = 'Open setup'; }
+};
+
+$('#setupDone').onclick = async () => {
+  if (!confirm('Mark setup as done? The hidden setup VM is removed; your sign-ins stay in the shared home.')) return;
+  await api('/api/setup/done', { method: 'POST' });
+  if (current?.setup && ws) { ws.onclose = null; ws.close(); $('#status').textContent = 'setup complete'; }
+  refreshSetup();
+};
+
 refresh();
+refreshSetup();
 setInterval(refresh, 5000);
+setInterval(refreshSetup, 10000);

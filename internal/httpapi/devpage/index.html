@@ -30,6 +30,12 @@
 <body>
 <div id="sidebar">
   <h1>styrman <span style="color:#666">dev console</span></h1>
+  <div id="setupBanner" style="display:none; background:#332b16; border:1px solid #665522; border-radius:6px; padding:8px; margin-bottom:10px; font-size:12px;">
+    <div style="margin-bottom:6px">⚙ <b>First-time setup</b> — sign in to git, GitHub, claude and agy once, for every project.</div>
+    <div id="setupItems" style="color:#aa9; margin-bottom:6px"></div>
+    <button id="setupOpen" style="width:100%">Open setup</button>
+    <button id="setupDone" style="width:100%; margin-top:4px; background:#253">Mark setup done</button>
+  </div>
   <form id="newProject">
     <input name="name" placeholder="project-name" pattern="[a-z][a-z0-9-]{0,30}" required>
     <select name="agent"><option value="claude">claude</option><option value="agy">agy</option></select>

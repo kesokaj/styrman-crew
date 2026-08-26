@@ -1,4 +1,4 @@
-// Package terminal bridges browser WebSockets to tmux sessions inside project
+// Package terminal bridges browser WebSockets to tmux sessions inside styrman
 // microVMs over Docker's exec API (ADR-002). The wire protocol is ported
 // verbatim from devbox: binary frames carry raw PTY bytes, JSON text frames
 // carry control messages ({"type":"resize","cols":N,"rows":N}), close code
@@ -23,14 +23,14 @@ import (
 	"github.com/kesokaj/styrman/internal/project"
 )
 
-// Bridge is the /ws/term/{project}/{conv} handler.
+// Bridge serves /ws/term/{project}/{conv} and /ws/setup.
 type Bridge struct {
 	orch     *orchestrator.Orchestrator
 	projects *project.Store
 	cfg      *config.Config
 	logger   *slog.Logger
 
-	// activeConns maps project/conv → the current *websocket.Conn. A new
+	// activeConns maps a session key → the current *websocket.Conn. A new
 	// connection closes the previous one with CloseReplaced so only one client
 	// attaches to a tmux session at a time (duplicate attaches garble output).
 	activeConns sync.Map
@@ -47,9 +47,20 @@ type controlMessage struct {
 	Rows uint16 `json:"rows,omitempty"`
 }
 
-// ServeHTTP expects {project} and {conv} path values plus optional
-// cols/rows/kind query params (kind=shell attaches a plain login shell
-// instead of the project's agent CLI).
+func clientSize(r *http.Request) (cols, rows uint16) {
+	cols, rows = 80, 24
+	if v, err := strconv.ParseUint(r.URL.Query().Get("cols"), 10, 16); err == nil && v > 0 {
+		cols = uint16(v)
+	}
+	if v, err := strconv.ParseUint(r.URL.Query().Get("rows"), 10, 16); err == nil && v > 0 {
+		rows = uint16(v)
+	}
+	return cols, rows
+}
+
+// ServeHTTP handles conversation terminals: {project} and {conv} path values
+// plus optional cols/rows/kind query params (kind=shell attaches a plain
+// login shell instead of the project's agent CLI).
 func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	projName := r.PathValue("project")
 	convID := r.PathValue("conv")
@@ -63,21 +74,11 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cols, rows := uint16(80), uint16(24)
-	if v, err := strconv.ParseUint(r.URL.Query().Get("cols"), 10, 16); err == nil && v > 0 {
-		cols = uint16(v)
-	}
-	if v, err := strconv.ParseUint(r.URL.Query().Get("rows"), 10, 16); err == nil && v > 0 {
-		rows = uint16(v)
-	}
-
 	// The pane command: the agent CLI is the conversation (R4); kind=shell
-	// gives a plain terminal into the same microVM. `tmux new -A` attaches if
-	// the session already exists (the command is then ignored), so reconnects
-	// land in the same session with scrollback and running processes intact.
-	// The agent runs under a login shell so /etc/profile.d applies — the
-	// keyring env (DBUS_SESSION_BUS_ADDRESS) in particular, which agy's
-	// Secret Service auth needs. tmux runs a single-string command via sh.
+	// gives a plain terminal into the same microVM. The agent runs under a
+	// login shell so /etc/profile.d applies — the keyring env
+	// (DBUS_SESSION_BUS_ADDRESS) in particular, which agy's Secret Service
+	// auth needs. tmux runs a single-string command via sh.
 	agentCmd, ok := config.Agents[proj.Agent]
 	if !ok {
 		http.Error(w, "project has unknown agent "+proj.Agent, http.StatusInternalServerError)
@@ -97,6 +98,52 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	workdir := "/home/" + b.cfg.Username + "/projects/" + projName
+	b.serve(w, r, session{
+		containerID: containerID,
+		key:         projName + "/" + convID,
+		tmuxName:    conversation.Prefix + convID,
+		workdir:     workdir,
+		paneCmd:     paneCmd,
+		project:     projName,
+	})
+}
+
+// ServeSetup attaches the hidden onboarding microVM running styrman-setup
+// (no project, not listed anywhere). Reconnects re-enter the same tmux
+// session; when the script's shell exits the client gets close 4000.
+func (b *Bridge) ServeSetup(w http.ResponseWriter, r *http.Request) {
+	containerID, err := b.orch.EnsureSetup(r.Context())
+	if err != nil {
+		b.logger.Error("ensure setup vm failed", "error", err)
+		http.Error(w, "failed to start setup environment", http.StatusInternalServerError)
+		return
+	}
+	b.serve(w, r, session{
+		containerID: containerID,
+		key:         "system/setup",
+		tmuxName:    "styrman-setup",
+		workdir:     "/home/" + b.cfg.Username,
+		paneCmd:     "bash -lc 'styrman-setup; exec bash -l'",
+		project:     "", // system VM: no idle tracking
+	})
+}
+
+// session describes one terminal attachment target.
+type session struct {
+	containerID string
+	key         string // activeConns key
+	tmuxName    string
+	workdir     string
+	paneCmd     string
+	project     string // "" for system VMs
+}
+
+// serve upgrades the WebSocket and pumps it against a tmux session in the
+// target container. Shared by conversation and setup terminals.
+func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
+	cols, rows := clientSize(r)
+
 	// Default Origin verification (Origin host must match Host) stays ON:
 	// WebSockets bypass CORS, and without this any web page the operator
 	// visits could drive a terminal. The Phase 3 ingress preserves Host, so
@@ -108,30 +155,27 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer conn.CloseNow()
 	conn.SetReadLimit(-1)
 
-	// Replace any previous connection for this conversation (close 4001;
-	// the frontend must not auto-reconnect on it, or two clients would fight
-	// over the tmux session in a reconnect death-spiral).
-	key := projName + "/" + convID
-	if old, loaded := b.activeConns.LoadAndDelete(key); loaded {
+	// Replace any previous connection for this session (close 4001; the
+	// frontend must not auto-reconnect on it, or two clients would fight over
+	// the tmux session in a reconnect death-spiral).
+	if old, loaded := b.activeConns.LoadAndDelete(s.key); loaded {
 		old.(*websocket.Conn).Close(websocket.StatusCode(config.CloseReplaced), "replaced by new connection")
 	}
-	b.activeConns.Store(key, conn)
-	defer b.activeConns.CompareAndDelete(key, conn)
+	b.activeConns.Store(s.key, conn)
+	defer b.activeConns.CompareAndDelete(s.key, conn)
 
 	home := "/home/" + b.cfg.Username
-	workdir := home + "/projects/" + projName
-	sess := conversation.Prefix + convID
 	spec := orchestrator.ExecSpec{
 		User:    b.cfg.Username,
-		WorkDir: workdir,
+		WorkDir: s.workdir,
 		// -x/-y seed the size for a newly created session (avoids the
-		// double-prompt redraw); -c sets the pane's start directory.
-		// -D detaches stale clients (e.g. left by a crashed server). Safe with
-		// -A here because a replaced browser gets close 4001 and never
-		// reconnects, so there is no detach/reattach spiral.
-		Cmd: []string{"tmux", "new-session", "-A", "-D", "-s", sess,
+		// double-prompt redraw); -c sets the pane's start directory. -D
+		// detaches stale clients (e.g. left by a crashed server). Safe with
+		// -A because a replaced browser gets close 4001 and never reconnects,
+		// so there is no detach/reattach spiral.
+		Cmd: []string{"tmux", "new-session", "-A", "-D", "-s", s.tmuxName,
 			"-x", strconv.Itoa(int(cols)), "-y", strconv.Itoa(int(rows)),
-			"-c", workdir, paneCmd},
+			"-c", s.workdir, s.paneCmd},
 		Env: []string{
 			"HOME=" + home,
 			"USER=" + b.cfg.Username,
@@ -142,17 +186,23 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	ex, err := b.orch.StartInteractive(r.Context(), containerID, spec, uint(cols), uint(rows))
+	ex, err := b.orch.StartInteractive(r.Context(), s.containerID, spec, uint(cols), uint(rows))
 	if err != nil {
-		b.logger.Error("exec start failed", "project", projName, "conv", convID, "error", err)
+		b.logger.Error("exec start failed", "session", s.key, "error", err)
 		conn.Close(websocket.StatusInternalError, "failed to attach")
 		return
 	}
 	defer ex.Close()
 
-	b.logger.Info("terminal attached", "project", projName, "conv", convID, "kind", paneCmd)
+	b.logger.Info("terminal attached", "session", s.key, "cmd", s.paneCmd)
 
-	// hctx governs the whole session: cancelled by browser disconnect (WS
+	touch := func() {
+		if s.project != "" {
+			b.orch.Touch(s.project)
+		}
+	}
+
+	// hctx governs the whole attachment: cancelled by browser disconnect (WS
 	// reader), stream EOF, or handler exit. The watcher below turns that into
 	// ex.Close(), which unblocks the stream reader — without it, a closed
 	// browser tab would leave the exec, hijacked conn, and a ghost tmux
@@ -200,7 +250,7 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for {
 			n, err := ex.Read(buf)
 			if n > 0 {
-				b.orch.Touch(projName)
+				touch()
 				if writeErr := conn.Write(hctx, websocket.MessageBinary, buf[:n]); writeErr != nil {
 					return
 				}
@@ -223,7 +273,7 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
-			b.orch.Touch(projName)
+			touch()
 			if msgType == websocket.MessageText {
 				var msg controlMessage
 				if json.Unmarshal(data, &msg) == nil && msg.Type == "resize" && msg.Cols > 0 && msg.Rows > 0 {
@@ -242,11 +292,11 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// The exec ends either because the session truly exited (user typed exit,
 	// agent quit) or because our attach was torn down. Only a finished exec
 	// gets the semantic close code (4000); everything else closes normally and
-	// the client may silently reconnect. ExitCode polls briefly: dockerd's
+	// the client may silently reconnect. ExitCodeWait polls briefly: dockerd's
 	// exec bookkeeping lags stream EOF by a few ms, and misreading it would
 	// send a normal close where 4000 belongs (review finding).
 	if code, done := ex.ExitCodeWait(context.Background(), time.Second); done {
-		b.logger.Info("conversation exited", "project", projName, "conv", convID, "exitCode", code)
+		b.logger.Info("session exited", "session", s.key, "exitCode", code)
 		conn.Close(websocket.StatusCode(config.CloseShellExited), "shell exited")
 	} else {
 		conn.Close(websocket.StatusNormalClosure, "detached")

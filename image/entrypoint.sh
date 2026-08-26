@@ -48,8 +48,14 @@ echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/${USERNAME}"
 chmod 440 "/etc/sudoers.d/${USERNAME}"
 usermod -aG docker "${USERNAME}" 2>/dev/null || true
 
+# Minimal mode (system VMs, e.g. the hidden onboarding container): no
+# workspace, no DinD — just the user, keyring, and a shell.
+MINIMAL="${STYRMAN_MINIMAL:-}"
+
 # Project-scoped dirs inside the shared home (write-discipline, ADR-003).
-runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/projects/${PROJECT}" "${HOME_DIR}/.dockerd" 2>/dev/null || true
+if [ -z "${MINIMAL}" ]; then
+    runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/projects/${PROJECT}" "${HOME_DIR}/.dockerd" 2>/dev/null || true
+fi
 
 # ─── Keyring plumbing for agy (spike S4) ────────────────────────────────────
 # The password lands in a root-then-user file; a profile.d snippet starts a
@@ -68,6 +74,12 @@ if [ ! -f "${HOME_DIR}/.tmux.conf" ]; then
 fi
 
 # ─── Per-project Docker daemon (ADR-004 + ADR-008) ──────────────────────────
+if [ -n "${MINIMAL}" ]; then
+    touch /run/styrman/ready
+    log "system container ${PROJECT} ready (minimal mode, user=${USERNAME})"
+    exec sleep infinity
+fi
+
 IMG="${HOME_DIR}/.dockerd/${PROJECT}.img"
 if [ ! -f "${IMG}" ]; then
     # Build at a temp path and mv into place only once mkfs succeeded, so an

@@ -104,7 +104,19 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, project string) (strin
 			}
 		}
 	case errdefs.IsNotFound(err):
-		id, err = o.create(ctx, project)
+		id, err = o.create(ctx, createSpec{
+			name:     name,
+			netName:  config.NetworkName(project),
+			hostname: name,
+			extraEnv: []string{
+				config.EnvProject + "=" + project,
+				config.EnvDockerDisk + "=" + strconv.Itoa(o.cfg.DockerDisk),
+			},
+			labels: map[string]string{
+				config.LabelManaged: "true",
+				config.LabelProject: project,
+			},
+		})
 		if err != nil {
 			return "", err
 		}
@@ -113,16 +125,92 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, project string) (strin
 	}
 
 	if err := o.waitReady(ctx, id, 90*time.Second); err != nil {
-		return "", fmt.Errorf("project %s did not become ready: %w", project, err)
+		return "", fmt.Errorf("project %s did not become ready: %w", name, err)
 	}
 	o.Touch(project)
 	return id, nil
 }
 
-// create builds the per-project network and container. Caller holds the
-// project lock.
-func (o *Orchestrator) create(ctx context.Context, project string) (string, error) {
-	netName := config.NetworkName(project)
+// EnsureSetup boots the hidden system microVM used for first-time onboarding
+// (styrman-setup). It carries no project label, so it never appears in
+// project listings; minimal mode skips workspace + DinD for a fast boot.
+func (o *Orchestrator) EnsureSetup(ctx context.Context) (string, error) {
+	l := o.lockProject(config.SetupContainer)
+	l.Lock()
+	defer l.Unlock()
+
+	insp, err := o.docker.ContainerInspect(ctx, config.SetupContainer)
+	id := ""
+	switch {
+	case err == nil:
+		id = insp.ID
+		if insp.State == nil || !insp.State.Running {
+			if err := o.docker.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
+				return "", fmt.Errorf("start setup container: %w", err)
+			}
+		}
+	case errdefs.IsNotFound(err):
+		id, err = o.create(ctx, createSpec{
+			name:     config.SetupContainer,
+			netName:  config.SetupNetwork,
+			hostname: "styrman-setup",
+			extraEnv: []string{
+				config.EnvProject + "=setup",
+				"STYRMAN_MINIMAL=1",
+			},
+			labels: map[string]string{
+				config.LabelManaged: "true",
+				config.LabelSystem:  "setup",
+			},
+		})
+		if err != nil {
+			return "", err
+		}
+	default:
+		return "", fmt.Errorf("inspect setup container: %w", err)
+	}
+	if err := o.waitReady(ctx, id, 90*time.Second); err != nil {
+		return "", fmt.Errorf("setup container did not become ready: %w", err)
+	}
+	return id, nil
+}
+
+// SetupStatus reports whether the hidden onboarding microVM is running.
+func (o *Orchestrator) SetupStatus(ctx context.Context) (bool, error) {
+	insp, err := o.docker.ContainerInspect(ctx, config.SetupContainer)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return insp.State != nil && insp.State.Running, nil
+}
+
+// DestroySetup removes the hidden onboarding microVM and its network.
+func (o *Orchestrator) DestroySetup(ctx context.Context) error {
+	err := o.docker.ContainerRemove(ctx, config.SetupContainer, container.RemoveOptions{Force: true})
+	if err != nil && !errdefs.IsNotFound(err) {
+		return err
+	}
+	if err := o.docker.NetworkRemove(ctx, config.SetupNetwork); err != nil && !errdefs.IsNotFound(err) {
+		o.logger.Warn("setup network remove failed", "error", err)
+	}
+	return nil
+}
+
+// createSpec parameterizes container creation for project and system VMs.
+type createSpec struct {
+	name     string
+	netName  string
+	hostname string
+	extraEnv []string
+	labels   map[string]string
+}
+
+// create builds a network and container. Caller holds the relevant lock.
+func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, error) {
+	netName := spec.netName
 	if _, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{}); err != nil {
 		if !errdefs.IsNotFound(err) {
 			return "", fmt.Errorf("inspect network %s: %w", netName, err)
@@ -132,25 +220,23 @@ func (o *Orchestrator) create(ctx context.Context, project string) (string, erro
 		}
 	}
 
-	name := config.ContainerName(project)
-	o.logger.Info("creating project microVM", "project", project, "image", o.cfg.Image, "runtime", o.cfg.Runtime)
+	name := spec.name
+	o.logger.Info("creating microVM", "container", name, "image", o.cfg.Image, "runtime", o.cfg.Runtime)
+
+	env := []string{
+		config.EnvUser + "=" + o.cfg.Username,
+		config.EnvUID + "=" + strconv.Itoa(o.cfg.UID),
+		config.EnvGID + "=" + strconv.Itoa(o.cfg.GID),
+		config.EnvKeyringPW + "=" + o.cfg.KeyringPW,
+	}
+	env = append(env, spec.extraEnv...)
 
 	resp, err := o.docker.ContainerCreate(ctx,
 		&container.Config{
 			Image:    o.cfg.Image,
-			Hostname: name,
-			Env: []string{
-				config.EnvUser + "=" + o.cfg.Username,
-				config.EnvUID + "=" + strconv.Itoa(o.cfg.UID),
-				config.EnvGID + "=" + strconv.Itoa(o.cfg.GID),
-				config.EnvProject + "=" + project,
-				config.EnvDockerDisk + "=" + strconv.Itoa(o.cfg.DockerDisk),
-				config.EnvKeyringPW + "=" + o.cfg.KeyringPW,
-			},
-			Labels: map[string]string{
-				config.LabelManaged: "true",
-				config.LabelProject: project,
-			},
+			Hostname: spec.hostname,
+			Env:      env,
+			Labels:   spec.labels,
 		},
 		&container.HostConfig{
 			Runtime: o.cfg.Runtime,

@@ -17,6 +17,15 @@ const (
 	LabelManaged = "styrman.managed"
 	LabelProject = "styrman.project"
 	LabelAgent   = "styrman.agent"
+	// LabelSystem marks hidden system containers (e.g. the onboarding VM);
+	// they carry no project label and never appear in project listings.
+	LabelSystem = "styrman.system"
+)
+
+// Hidden onboarding microVM (runs styrman-setup; see /api/setup).
+const (
+	SetupContainer = "styrman-sys-setup"
+	SetupNetwork   = "sdb-sys-setup"
 )
 
 // Env keys passed into project containers (read by image/entrypoint.sh).
