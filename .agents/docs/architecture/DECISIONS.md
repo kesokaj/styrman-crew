@@ -218,3 +218,26 @@ light supported via `data-theme`.
 
 **Consequences:** Single deployable binary stays true. If styrman ever needs
 SSR or server functions, migrating Router → Start is the designed path.
+
+---
+
+## ADR-013: UI migrated to full TanStack Start (SPA mode) — supersedes ADR-012
+
+**Date:** 2026-08-26 · **Status:** accepted (operator decision)
+
+**Context:** ADR-012 deviated from the REQUIREMENTS.md "TanStack Start"
+constraint with Router + Vite. The reviewer flagged that REQUIREMENTS.md
+changes need explicit operator approval; offered the choice, the operator
+chose migration over amendment.
+
+**Decision:** `web/` is TanStack Start (v1.168+, Vite plugin) in **SPA mode**
+(`spa.enabled`): file-based routes under `src/routes/` (`__root.tsx` renders
+the document, index / `p.$project.$conv` / `setup`), generated route tree,
+prerendered static shell. The build emits `dist/client/` (committed, embedded
+via go:embed; the Go server falls back to `_shell.html` for deep links) and
+`dist/server/` (Start's Node handler — unused, gitignored). Still no Node at
+runtime; the single-binary deploy is unchanged.
+
+**Consequences:** REQUIREMENTS.md holds as written. SSR/server functions are
+now one config flip away if ever wanted. Build order matters: `vite build`
+generates `routeTree.gen.ts`, so typecheck runs after it.

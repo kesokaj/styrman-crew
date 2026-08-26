@@ -89,11 +89,11 @@ func (s *Server) Routes() http.Handler {
 	})
 
 	// The embedded SPA: real files served directly, everything else falls
-	// back to index.html so client-side routes (/p/..., /setup) deep-link.
+	// back to the prerendered SPA shell so client-side routes deep-link.
 	// Unknown /api and /ws paths get a JSON 404 — the SPA fallback would
 	// otherwise hand 200 HTML to API clients (review finding); directories
 	// are excluded so the bundle can't be listing-browsed.
-	dist, err := fs.Sub(web.Dist, "dist")
+	dist, err := fs.Sub(web.Dist, "dist/client")
 	if err != nil {
 		panic("embedded UI missing: " + err.Error()) // built into the binary; cannot fail at runtime
 	}
@@ -110,7 +110,7 @@ func (s *Server) Routes() http.Handler {
 				return
 			}
 		}
-		http.ServeFileFS(w, r, dist, "index.html")
+		http.ServeFileFS(w, r, dist, "_shell.html")
 	})
 	return csrfGuard(mux)
 }
