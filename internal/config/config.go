@@ -3,10 +3,12 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -68,6 +70,12 @@ type Config struct {
 	DockerDisk  int           // per-project docker.img size in GB
 	KeyringPW   string        // password for the in-guest gnome-keyring
 	IdleTimeout time.Duration // stop project containers idle this long (0 = never)
+
+	// AuthMode "none" (localhost dev) or "header" (behind the Caddy ingress,
+	// which injects X-Caddy-Email after Google OAuth). AllowedEmails seeds
+	// the userstore from the environment.
+	AuthMode      string
+	AllowedEmails []string
 }
 
 // Load resolves configuration from the environment with sensible defaults.
@@ -81,16 +89,27 @@ func Load() (*Config, error) {
 		KeyringPW:   envOr("STYRMAN_KEYRING_PW", "styrman"),
 		DockerDisk:  envIntOr("STYRMAN_DOCKER_DISK_GB", 20),
 		IdleTimeout: envDurationOr("STYRMAN_IDLE_TIMEOUT", 24*time.Hour),
+		AuthMode:    envOr("STYRMAN_AUTH", "none"),
+	}
+	for _, e := range strings.Split(os.Getenv("STYRMAN_ALLOWED_EMAILS"), ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			c.AllowedEmails = append(c.AllowedEmails, e)
+		}
 	}
 	c.HomeDir = envOr("STYRMAN_HOME_DIR", filepath.Join(c.StateDir, "home"))
 
-	cur, err := user.Current()
-	if err != nil {
-		return nil, err
+	// Username: env wins; user.Current() is best-effort — it fails in a
+	// static binary without $USER (the containerized server), where
+	// STYRMAN_USER is required instead.
+	c.Username = os.Getenv("STYRMAN_USER")
+	c.UID, c.GID = os.Getuid(), os.Getgid()
+	if cur, err := user.Current(); err == nil && c.Username == "" {
+		c.Username = cur.Username
 	}
-	c.Username = envOr("STYRMAN_USER", cur.Username)
-	c.UID, _ = strconv.Atoi(cur.Uid)
-	c.GID, _ = strconv.Atoi(cur.Gid)
+	if c.Username == "" {
+		return nil, fmt.Errorf("cannot determine username — set STYRMAN_USER")
+	}
+	// The shared home's owner is authoritative for the in-guest uid/gid.
 	if st, err := os.Stat(c.HomeDir); err == nil {
 		if sys, ok := st.Sys().(*syscall.Stat_t); ok {
 			c.UID = int(sys.Uid)

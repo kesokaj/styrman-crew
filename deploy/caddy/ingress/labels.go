@@ -1,0 +1,153 @@
+package ingress
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+// AccessMode determines how authentication is handled for an app.
+type AccessMode int
+
+const (
+	// ModePublic means no authentication required.
+	ModePublic AccessMode = iota
+	// ModeAuthenticated means any Google user can access.
+	ModeAuthenticated
+	// ModeRoleGated means only listed emails can access with assigned roles.
+	ModeRoleGated
+)
+
+// App represents a discovered Docker container that should be proxied.
+type App struct {
+	// Name is the container name or service name (used for logging/zone names).
+	Name string
+	// Hostname is the subdomain (e.g., "grafana" → grafana.{BASE_DOMAIN}).
+	Hostname string
+	// ContainerIP is the bridge IP of the container (e.g., "172.18.0.2").
+	ContainerIP string
+	// Port is the container port to proxy to.
+	Port int
+	// Mode is the access mode for this app.
+	Mode AccessMode
+	// Admins is the list of admin email addresses (ModeRoleGated only).
+	Admins []string
+	// Viewers is the list of viewer email addresses (ModeRoleGated only).
+	Viewers []string
+	// SuperAdmins is the list of superadmin email addresses (ModeRoleGated only).
+	SuperAdmins []string
+	// RPS is the rate limit in requests per second per client IP.
+	RPS int
+}
+
+
+// ParseLabels extracts an App from a Docker container's labels.
+// containerName is the container name (without leading slash).
+// exposedPorts is the list of EXPOSE ports from the image (used as fallback).
+// defaultRPS is the default rate limit if caddy_rps is not set.
+// Returns nil if the container should not be proxied (caddy != "true").
+func ParseLabels(labels map[string]string, containerName string, exposedPorts []int, defaultRPS int) (*App, error) {
+	if !isTrue(labels[LabelCaddy]) {
+		return nil, nil
+	}
+
+	app := &App{
+		Name: containerName,
+		RPS:  defaultRPS,
+	}
+
+	// Hostname: label override or container name
+	if h := strings.TrimSpace(labels[LabelHostname]); h != "" {
+		app.Hostname = h
+	} else {
+		app.Hostname = sanitizeHostname(containerName)
+	}
+
+	// Block reserved hostnames for non-infrastructure containers.
+	// Only devbox-* containers (infrastructure) may use "shell" or "auth".
+	if ReservedHostnames[app.Hostname] && !strings.HasPrefix(containerName, "devbox-") {
+		return nil, fmt.Errorf("hostname %q is reserved for devbox infrastructure", app.Hostname)
+	}
+
+	// Port: label > EXPOSE > error
+	if p := strings.TrimSpace(labels[LabelPort]); p != "" {
+		port, err := strconv.Atoi(p)
+		if err != nil {
+			return nil, fmt.Errorf("parsing caddy_port %q: %w", p, err)
+		}
+		if port < 1 || port > 65535 {
+			return nil, fmt.Errorf("caddy_port %d out of range (1-65535)", port)
+		}
+		app.Port = port
+	} else if len(exposedPorts) == 1 {
+		app.Port = exposedPorts[0]
+	} else if len(exposedPorts) > 1 {
+		return nil, fmt.Errorf("container %q has multiple EXPOSE ports %v, set caddy_port label", containerName, exposedPorts)
+	} else {
+		return nil, fmt.Errorf("container %q has no EXPOSE ports and no caddy_port label", containerName)
+	}
+
+	// Access mode
+	if isTrue(labels[LabelPublic]) {
+		app.Mode = ModePublic
+	} else {
+		admins := parseEmailList(labels[LabelAdmins])
+		viewers := parseEmailList(labels[LabelViewers])
+		superAdmins := parseEmailList(labels[LabelSuperAdmins])
+		if len(admins) > 0 || len(viewers) > 0 || len(superAdmins) > 0 {
+			app.Mode = ModeRoleGated
+			app.Admins = admins
+			app.Viewers = viewers
+			app.SuperAdmins = superAdmins
+		} else {
+			app.Mode = ModeAuthenticated
+		}
+	}
+
+	// Rate limit
+	if r := strings.TrimSpace(labels[LabelRPS]); r != "" {
+		rps, err := strconv.Atoi(r)
+		if err != nil {
+			return nil, fmt.Errorf("parsing caddy_rps %q: %w", r, err)
+		}
+		if rps < 1 {
+			return nil, fmt.Errorf("caddy_rps must be >= 1, got %d", rps)
+		}
+		app.RPS = rps
+	}
+
+	return app, nil
+}
+
+// parseEmailList splits a comma-separated email string into a deduplicated,
+// trimmed slice. Empty strings are filtered out.
+func parseEmailList(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	seen := make(map[string]bool, len(parts))
+	var result []string
+	for _, p := range parts {
+		email := strings.TrimSpace(p)
+		if email != "" && !seen[email] {
+			seen[email] = true
+			result = append(result, email)
+		}
+	}
+	return result
+}
+
+// isTrue checks if a string value represents true.
+func isTrue(s string) bool {
+	s = strings.TrimSpace(strings.ToLower(s))
+	return s == "true" || s == "yes" || s == "1"
+}
+
+// sanitizeHostname converts a container name into a valid subdomain.
+// Strips leading slashes (Docker adds them) and replaces underscores with hyphens.
+func sanitizeHostname(name string) string {
+	name = strings.TrimLeft(name, "/")
+	name = strings.ReplaceAll(name, "_", "-")
+	return strings.ToLower(name)
+}

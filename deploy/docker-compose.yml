@@ -1,0 +1,71 @@
+# styrman Phase 3 deployment: the vendored Caddy ingress (Google OAuth, TLS,
+# Cloudflare DNS, label-based discovery) in front of the containerized
+# styrman server. Copy .env.example → .env in this directory first.
+#
+# Boot survival: both services are restart: unless-stopped — a host reboot
+# brings everything back via docker.service; no extra systemd unit needed.
+services:
+  caddy:
+    container_name: styrman-caddy
+    image: styrman-caddy:latest
+    build:
+      context: ./caddy
+      network: host
+    command: caddy ingress
+    network_mode: host # direct access to container IPs on the bridge networks
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - ./caddy/Caddyfile.base:/etc/caddy/Caddyfile.base:ro
+    env_file: .env
+    environment:
+      - CADDYFILE_BASE_PATH=/etc/caddy/Caddyfile.base
+    dns: [8.8.8.8, 1.1.1.1]
+    restart: unless-stopped
+
+  styrman:
+    container_name: styrman-server
+    image: styrman-server:latest
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.server
+      network: host
+    # The operator's uid:gid (files created in the shared home must match the
+    # in-guest user) + the host's docker group for the socket.
+    user: '${STYRMAN_UID}:${STYRMAN_GID}'
+    group_add:
+      - '${DOCKER_GID}'
+    environment:
+      - STYRMAN_ADDR=0.0.0.0:8080
+      - STYRMAN_AUTH=header
+      - STYRMAN_ALLOWED_EMAILS=${STYRMAN_ALLOWED_EMAILS}
+      - STYRMAN_USER=${STYRMAN_USER}
+      - STYRMAN_IMAGE=${STYRMAN_IMAGE:-styrman-runtime:latest}
+      - STYRMAN_KEYRING_PW=${STYRMAN_KEYRING_PW:-styrman}
+      - STYRMAN_IDLE_TIMEOUT=${STYRMAN_IDLE_TIMEOUT:-24h}
+      - HOME=/var/lib/styrman # user.Current() needs a home for uid lookups
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Same path inside as on the host: bind sources passed to project
+      # containers must be valid host paths.
+      - /var/lib/styrman:/var/lib/styrman
+    networks: [styrman-ingress]
+    labels:
+      # Discovered by the vendored ingress: https://${STYRMAN_HOSTNAME}.${BASE_DOMAIN}
+      caddy: 'true'
+      caddy_hostname: '${STYRMAN_HOSTNAME:-styrman}'
+      caddy_port: '8080'
+      # Google OAuth required; only these accounts pass (the server re-checks
+      # X-Caddy-Email against its userstore as the second layer, R8).
+      caddy_admins: '${STYRMAN_ALLOWED_EMAILS}'
+    restart: unless-stopped
+
+networks:
+  styrman-ingress:
+    name: styrman-ingress
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

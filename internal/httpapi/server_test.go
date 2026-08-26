@@ -12,6 +12,7 @@ import (
 	"github.com/kesokaj/styrman/internal/conversation"
 	"github.com/kesokaj/styrman/internal/orchestrator"
 	"github.com/kesokaj/styrman/internal/project"
+	"github.com/kesokaj/styrman/internal/userstore"
 )
 
 // testRoutes builds the handler with real stores in a temp dir; the docker
@@ -29,11 +30,15 @@ func testRoutes(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
+	users, err := userstore.New(filepath.Join(dir, "users.json"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	orch, err := orchestrator.New(cfg, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(cfg, projects, convs, orch, logger).Routes()
+	return New(cfg, projects, convs, users, orch, logger).Routes()
 }
 
 func TestRouting(t *testing.T) {
@@ -84,5 +89,45 @@ func TestRouting(t *testing.T) {
 	// Unknown project 404s before any docker interaction.
 	if w := get("/api/projects/nope"); w.Code != http.StatusNotFound {
 		t.Errorf("GET unknown project = %d, want 404", w.Code)
+	}
+}
+
+func TestAuthGuard(t *testing.T) {
+	dir := t.TempDir()
+	users, err := userstore.New(filepath.Join(dir, "users.json"), []string{"me@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
+	h := authGuard("header", users, inner)
+
+	cases := []struct {
+		name, email, path string
+		want              int
+	}{
+		{"no header", "", "/api/projects", http.StatusUnauthorized},
+		{"unauthorized email", "evil@example.com", "/api/projects", http.StatusForbidden},
+		{"authorized email", "me@example.com", "/api/projects", http.StatusOK},
+		{"case-insensitive", "ME@Example.COM", "/api/projects", http.StatusOK},
+		{"health always open", "", "/api/health", http.StatusOK},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(http.MethodGet, c.path, nil)
+		if c.email != "" {
+			req.Header.Set(HeaderEmail, c.email)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != c.want {
+			t.Errorf("%s: got %d, want %d", c.name, w.Code, c.want)
+		}
+	}
+
+	// Mode "none" bypasses entirely.
+	h = authGuard("none", users, inner)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
+	if w.Code != http.StatusOK {
+		t.Errorf("mode none: got %d, want 200", w.Code)
 	}
 }

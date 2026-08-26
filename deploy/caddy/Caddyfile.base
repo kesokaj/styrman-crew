@@ -1,0 +1,3 @@
+# Static Caddyfile entries (merged with auto-generated config)
+# Add any manual route blocks, redirects, or overrides below.
+# These are prepended to the auto-generated config from Docker labels.

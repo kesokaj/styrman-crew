@@ -17,6 +17,7 @@ import (
 	"github.com/kesokaj/styrman/internal/httpapi"
 	"github.com/kesokaj/styrman/internal/orchestrator"
 	"github.com/kesokaj/styrman/internal/project"
+	"github.com/kesokaj/styrman/internal/userstore"
 )
 
 func main() {
@@ -49,6 +50,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	users, err := userstore.New(filepath.Join(cfg.StateDir, "users.json"), cfg.AllowedEmails)
+	if err != nil {
+		logger.Error("userstore load failed", "error", err)
+		os.Exit(1)
+	}
+	if cfg.AuthMode == "header" && len(users.List()) == 0 {
+		logger.Error("STYRMAN_AUTH=header but no authorized users — set STYRMAN_ALLOWED_EMAILS")
+		os.Exit(1)
+	}
+
 	orch, err := orchestrator.New(cfg, logger)
 	if err != nil {
 		logger.Error("orchestrator init failed", "error", err)
@@ -69,7 +80,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           httpapi.New(cfg, projects, convs, orch, logger).Routes(),
+		Handler:           httpapi.New(cfg, projects, convs, users, orch, logger).Routes(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {
@@ -79,7 +90,7 @@ func main() {
 		_ = srv.Shutdown(shutCtx)
 	}()
 
-	logger.Info("styrman listening", "addr", cfg.Addr, "image", cfg.Image, "runtime", cfg.Runtime,
+	logger.Info("styrman listening", "addr", cfg.Addr, "auth", cfg.AuthMode, "image", cfg.Image, "runtime", cfg.Runtime,
 		"home", cfg.HomeDir, "user", cfg.Username, "uid", cfg.UID, "version", httpapi.Version)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Error("server failed", "error", err)

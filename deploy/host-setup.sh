@@ -117,6 +117,22 @@ mkdir -p "${STATE_DIR}/home/projects"
 chown -R "${OPERATOR}:${OPERATOR}" "${STATE_DIR}"
 log "state dir ready: ${STATE_DIR} (owner ${OPERATOR})"
 
+# ─── 5b. Deployment .env: computed identity values ──────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -f "${SCRIPT_DIR}/.env" && -f "${SCRIPT_DIR}/.env.example" ]]; then
+    OP_UID=$(id -u "${OPERATOR}")
+    OP_GID=$(id -g "${OPERATOR}")
+    DOCKER_GID=$(getent group docker | cut -d: -f3)
+    sed -e "s/^STYRMAN_UID=.*/STYRMAN_UID=${OP_UID}/" \
+        -e "s/^STYRMAN_GID=.*/STYRMAN_GID=${OP_GID}/" \
+        -e "s/^DOCKER_GID=.*/DOCKER_GID=${DOCKER_GID}/" \
+        -e "s/^STYRMAN_USER=.*/STYRMAN_USER=${OPERATOR}/" \
+        "${SCRIPT_DIR}/.env.example" > "${SCRIPT_DIR}/.env"
+    chown "${OPERATOR}:${OPERATOR}" "${SCRIPT_DIR}/.env"
+    chmod 600 "${SCRIPT_DIR}/.env"
+    log "created deploy/.env with computed identity — fill in the secrets section"
+fi
+
 # ─── 6. Verify ──────────────────────────────────────────────────────────────
 log "verifying Kata microVM boots..."
 docker pull -q debian:trixie >/dev/null

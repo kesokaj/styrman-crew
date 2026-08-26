@@ -24,6 +24,7 @@ import (
 	"github.com/kesokaj/styrman/internal/orchestrator"
 	"github.com/kesokaj/styrman/internal/project"
 	"github.com/kesokaj/styrman/internal/terminal"
+	"github.com/kesokaj/styrman/internal/userstore"
 	"github.com/kesokaj/styrman/web"
 )
 
@@ -38,6 +39,7 @@ type Server struct {
 	tmux      *conversation.Manager
 	convStore *conversation.Store
 	bridge    *terminal.Bridge
+	users     *userstore.Store
 	logger    *slog.Logger
 
 	// termMu/termReserved close the terminal-id TOCTOU: ids are derived from
@@ -49,7 +51,7 @@ type Server struct {
 }
 
 // New creates the Server.
-func New(cfg *config.Config, projects *project.Store, convStore *conversation.Store, orch *orchestrator.Orchestrator, logger *slog.Logger) *Server {
+func New(cfg *config.Config, projects *project.Store, convStore *conversation.Store, users *userstore.Store, orch *orchestrator.Orchestrator, logger *slog.Logger) *Server {
 	return &Server{
 		cfg:       cfg,
 		projects:  projects,
@@ -57,6 +59,7 @@ func New(cfg *config.Config, projects *project.Store, convStore *conversation.St
 		tmux:      conversation.NewManager(orch, cfg),
 		convStore: convStore,
 		bridge:    terminal.NewBridge(orch, projects, convStore, cfg, logger),
+		users:     users,
 		logger:    logger,
 	}
 }
@@ -112,7 +115,8 @@ func (s *Server) Routes() http.Handler {
 		}
 		http.ServeFileFS(w, r, dist, "_shell.html")
 	})
-	return csrfGuard(mux)
+	// Auth outermost: identity/permission first, then CSRF, then routing.
+	return authGuard(s.cfg.AuthMode, s.users, csrfGuard(mux))
 }
 
 // csrfGuard rejects cross-origin mutating requests. Browsers always send

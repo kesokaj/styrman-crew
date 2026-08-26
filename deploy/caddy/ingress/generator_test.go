@@ -1,0 +1,287 @@
+package ingress
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// testConfig returns a GeneratorConfig with all domain fields populated
+// for consistent testing. Apps go to <hostname>.apps.example.com.
+func testConfig() GeneratorConfig {
+	return GeneratorConfig{
+		BaseDomain:  "example.com",
+		AdminEmail:  "admin@example.com",
+		DefaultRPS:  100,
+		AuthDomain:  "auth.example.com",
+		ShellDomain: "shell.example.com",
+		AppsDomain:  "apps.example.com",
+	}
+}
+
+func TestGenerateCaddyfile_NoApps(t *testing.T) {
+	cfg := testConfig()
+	result := GenerateCaddyfile(nil, cfg)
+
+	// Should still have global options and HTTP redirect
+	assertContains(t, result, "email admin@example.com")
+	assertContains(t, result, "acme_dns cloudflare")
+	assertContains(t, result, "http:// {")
+	assertContains(t, result, "redir https://{host}{uri} permanent")
+
+	// Prometheus metrics always enabled
+	assertContains(t, result, "metrics {")
+	assertContains(t, result, "per_host")
+
+	// Should NOT have security block or auth portal (no apps need OAuth)
+	assertNotContains(t, result, "security {")
+	assertNotContains(t, result, "authenticate with myportal")
+}
+
+func TestGenerateCaddyfile_PublicApp(t *testing.T) {
+	apps := []App{
+		{
+			Name:        "landing",
+			Hostname:    "landing",
+			ContainerIP: "172.18.0.2",
+			Port:        80,
+			Mode:        ModePublic,
+			RPS:         100,
+		},
+	}
+	cfg := testConfig()
+	result := GenerateCaddyfile(apps, cfg)
+
+	// Public app should have reverse_proxy and rate_limit, but NO authorize
+	assertContains(t, result, "landing.apps.example.com {")
+	assertContains(t, result, "reverse_proxy 172.18.0.2:80")
+	assertContains(t, result, "zone landing_rl")
+	assertContains(t, result, "events 100")
+	assertNotContains(t, result, "authorize with")
+	assertContains(t, result, `X-Caddy-Role "public"`)
+	assertNotContains(t, result, "X-Caddy-Email")
+
+	// No auth portal needed (all apps are public)
+	assertNotContains(t, result, "security {")
+}
+
+func TestGenerateCaddyfile_AuthenticatedApp(t *testing.T) {
+	apps := []App{
+		{
+			Name:        "wiki",
+			Hostname:    "wiki",
+			ContainerIP: "172.18.0.3",
+			Port:        3000,
+			Mode:        ModeAuthenticated,
+			RPS:         100,
+		},
+	}
+	cfg := testConfig()
+	result := GenerateCaddyfile(apps, cfg)
+
+	// Authenticated app should have OAuth + authorize, but NO X-Caddy-Role
+	assertContains(t, result, "security {")
+	assertContains(t, result, "authentication portal myportal")
+	assertContains(t, result, "auth.example.com {")
+	assertContains(t, result, "wiki.apps.example.com {")
+	assertContains(t, result, "authorize with wiki_policy")
+	assertContains(t, result, "allow roles authp/user authp/guest")
+	assertContains(t, result, "X-Caddy-Email")
+	assertContains(t, result, `X-Caddy-Role "user"`)
+}
+
+func TestGenerateCaddyfile_RoleGatedApp(t *testing.T) {
+	apps := []App{
+		{
+			Name:        "dashboard",
+			Hostname:    "dashboard",
+			ContainerIP: "172.18.0.4",
+			Port:        8080,
+			Mode:        ModeRoleGated,
+			Admins:      []string{"alice@gmail.com"},
+			Viewers:     []string{"bob@gmail.com"},
+			RPS:         50,
+		},
+	}
+	cfg := testConfig()
+	cfg.SuperAdmins = []string{"boss@gmail.com"}
+	result := GenerateCaddyfile(apps, cfg)
+
+	// Should have transforms for superadmin + app admins + app viewers
+	assertContains(t, result, "match email boss@gmail.com")
+	assertContains(t, result, "action add role app/dashboard/superadmin")
+	assertContains(t, result, "match email alice@gmail.com")
+	assertContains(t, result, "action add role app/dashboard/admin")
+	assertContains(t, result, "match email bob@gmail.com")
+	assertContains(t, result, "action add role app/dashboard/viewer")
+
+	// Authorization policy
+	assertContains(t, result, "authorization policy dashboard_policy")
+	assertContains(t, result, "allow roles app/dashboard/superadmin app/dashboard/admin app/dashboard/viewer")
+
+	// Site block
+	assertContains(t, result, "dashboard.apps.example.com {")
+	assertContains(t, result, "authorize with dashboard_policy")
+	assertContains(t, result, "events 50")
+	assertContains(t, result, "X-Caddy-Role")
+	assertContains(t, result, "X-Caddy-Email")
+	assertContains(t, result, "reverse_proxy 172.18.0.4:8080")
+}
+
+func TestGenerateCaddyfile_AllThreeModes(t *testing.T) {
+	apps := []App{
+		{
+			Name: "public-app", Hostname: "public-app",
+			ContainerIP: "172.18.0.2", Port: 80,
+			Mode: ModePublic, RPS: 100,
+		},
+		{
+			Name: "wiki", Hostname: "wiki",
+			ContainerIP: "172.18.0.3", Port: 3000,
+			Mode: ModeAuthenticated, RPS: 100,
+		},
+		{
+			Name: "dashboard", Hostname: "dashboard",
+			ContainerIP: "172.18.0.4", Port: 8080,
+			Mode: ModeRoleGated,
+			Admins: []string{"alice@gmail.com"}, Viewers: []string{"bob@gmail.com"},
+			RPS: 50,
+		},
+	}
+	cfg := testConfig()
+	cfg.SuperAdmins = []string{"boss@gmail.com"}
+	result := GenerateCaddyfile(apps, cfg)
+
+	// All three site blocks present
+	assertContains(t, result, "public-app.apps.example.com {")
+	assertContains(t, result, "wiki.apps.example.com {")
+	assertContains(t, result, "dashboard.apps.example.com {")
+
+	// Auth portal present (non-public apps exist)
+	assertContains(t, result, "auth.example.com {")
+
+	// HTTP redirect always present
+	assertContains(t, result, "http:// {")
+}
+
+func TestGenerateCaddyfile_SuperAdminDedup(t *testing.T) {
+	apps := []App{
+		{
+			Name: "myapp", Hostname: "myapp",
+			ContainerIP: "172.18.0.2", Port: 80,
+			Mode:        ModeRoleGated,
+			SuperAdmins: []string{"boss@gmail.com"}, // Same as SUPERADMINS
+			RPS:         100,
+		},
+	}
+	cfg := testConfig()
+	cfg.SuperAdmins = []string{"boss@gmail.com"}
+	result := GenerateCaddyfile(apps, cfg)
+
+	// boss@gmail.com should appear only once (not duplicated by env + label)
+	count := strings.Count(result, "match email boss@gmail.com")
+	if count != 1 {
+		t.Errorf("expected 1 transform for boss@gmail.com, got %d", count)
+	}
+}
+
+func TestGenerateCaddyfile_WithBaseFile(t *testing.T) {
+	// Create a temp Caddyfile.base
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "Caddyfile.base")
+	baseContent := "example.com {\n    redir https://www.example.com{uri} permanent\n}\n"
+	if err := os.WriteFile(basePath, []byte(baseContent), 0644); err != nil {
+		t.Fatalf("writing temp base file: %v", err)
+	}
+
+	cfg := testConfig()
+	cfg.CaddyfileBasePath = basePath
+	result := GenerateCaddyfile(nil, cfg)
+
+	// Base content should be prepended
+	assertContains(t, result, "FROM Caddyfile.base")
+	assertContains(t, result, "example.com {")
+	assertContains(t, result, "redir https://www.example.com{uri} permanent")
+
+	// Generated marker should follow
+	assertContains(t, result, "GENERATED by caddy-ingress")
+}
+
+func TestGenerateCaddyfile_NoBaseFile(t *testing.T) {
+	cfg := testConfig()
+	cfg.CaddyfileBasePath = "/nonexistent/path"
+	result := GenerateCaddyfile(nil, cfg)
+
+	// Should NOT have the base file marker
+	assertNotContains(t, result, "FROM Caddyfile.base")
+	// Should still have generated marker
+	assertContains(t, result, "GENERATED by caddy-ingress")
+}
+
+func TestGenerateCaddyfile_DeterministicOrder(t *testing.T) {
+	apps := []App{
+		{Name: "zzz", Hostname: "zzz", ContainerIP: "172.18.0.2", Port: 80, Mode: ModePublic, RPS: 100},
+		{Name: "aaa", Hostname: "aaa", ContainerIP: "172.18.0.3", Port: 80, Mode: ModePublic, RPS: 100},
+		{Name: "mmm", Hostname: "mmm", ContainerIP: "172.18.0.4", Port: 80, Mode: ModePublic, RPS: 100},
+	}
+	cfg := testConfig()
+
+	result1 := GenerateCaddyfile(apps, cfg)
+	result2 := GenerateCaddyfile(apps, cfg)
+
+	if result1 != result2 {
+		t.Error("expected deterministic output, but got different results")
+	}
+
+	// Should be sorted: aaa, mmm, zzz
+	aaaIdx := strings.Index(result1, "aaa.apps.example.com")
+	mmmIdx := strings.Index(result1, "mmm.apps.example.com")
+	zzzIdx := strings.Index(result1, "zzz.apps.example.com")
+	if aaaIdx > mmmIdx || mmmIdx > zzzIdx {
+		t.Error("expected alphabetical order: aaa, mmm, zzz")
+	}
+}
+
+func TestGenerateCaddyfile_HTTPSRedirectAlwaysPresent(t *testing.T) {
+	cfg := testConfig()
+
+	// Even with no apps, HTTP redirect should be present
+	result := GenerateCaddyfile(nil, cfg)
+	assertContains(t, result, "http:// {\n    redir https://{host}{uri} permanent\n}")
+}
+
+func TestGenerateCaddyfile_SuperAdminsOnAuthenticatedApps(t *testing.T) {
+	apps := []App{
+		{
+			Name: "wiki", Hostname: "wiki",
+			ContainerIP: "172.18.0.2", Port: 80,
+			Mode: ModeAuthenticated, RPS: 100,
+		},
+	}
+	cfg := testConfig()
+	cfg.SuperAdmins = []string{"boss@gmail.com"}
+	result := GenerateCaddyfile(apps, cfg)
+
+	// Superadmin should get a role transform even on authenticated apps
+	assertContains(t, result, "match email boss@gmail.com")
+	assertContains(t, result, "action add role app/wiki/superadmin")
+	// Policy should allow both superadmin role and authp/user
+	assertContains(t, result, "allow roles app/wiki/superadmin authp/user authp/guest")
+}
+
+// --- helpers ---
+
+func assertContains(t *testing.T, haystack, needle string) {
+	t.Helper()
+	if !strings.Contains(haystack, needle) {
+		t.Errorf("expected output to contain %q, but it didn't.\nFull output:\n%s", needle, haystack)
+	}
+}
+
+func assertNotContains(t *testing.T, haystack, needle string) {
+	t.Helper()
+	if strings.Contains(haystack, needle) {
+		t.Errorf("expected output NOT to contain %q, but it did.\nFull output:\n%s", needle, haystack)
+	}
+}

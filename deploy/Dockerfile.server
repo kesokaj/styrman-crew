@@ -1,0 +1,23 @@
+# styrman server image (Phase 3): the single Go binary + embedded UI,
+# containerized so the vendored Caddy ingress can discover it by labels.
+# Runs as the operator's UID (compose: user + group_add docker) so files it
+# creates in the shared home keep the right ownership.
+FROM golang:1.25-trixie AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+ARG STYRMAN_VERSION=0.0.0
+RUN CGO_ENABLED=0 go build -trimpath \
+    -ldflags "-s -w -X github.com/kesokaj/styrman/internal/httpapi.Version=${STYRMAN_VERSION}" \
+    -o /out/styrman ./cmd/styrman/
+
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /out/styrman /usr/local/bin/styrman
+# State dir and docker.sock are bind-mounted at the SAME paths as the host so
+# the bind sources the server passes to project containers stay valid.
+HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
+    CMD curl -fsS http://localhost:8080/api/health || exit 1
+ENTRYPOINT ["/usr/local/bin/styrman"]
