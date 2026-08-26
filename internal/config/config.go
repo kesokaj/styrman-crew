@@ -76,6 +76,11 @@ type Config struct {
 	// the userstore from the environment.
 	AuthMode      string
 	AllowedEmails []string
+	// SelfContainer: when the server itself runs in a container, its name —
+	// the orchestrator attaches it to each project network so the port-preview
+	// proxy can reach microVM IPs across docker's bridge isolation. Empty =
+	// host process (reaches all bridges natively).
+	SelfContainer string
 	// DevAddr: optional second listener with auth bypassed, for testing
 	// without the OAuth ingress. Publish it on host loopback ONLY
 	// (compose: "127.0.0.1:8080:8081") — anyone who can reach it is operator.
@@ -86,15 +91,16 @@ type Config struct {
 // UID/GID default to the owner of HomeDir if it exists, else the current user.
 func Load() (*Config, error) {
 	c := &Config{
-		Addr:        envOr("STYRMAN_ADDR", "127.0.0.1:8080"),
-		StateDir:    envOr("STYRMAN_STATE_DIR", "/var/lib/styrman"),
-		Image:       envOr("STYRMAN_IMAGE", "styrman-runtime:latest"),
-		Runtime:     envOr("STYRMAN_RUNTIME", "mvm"),
-		KeyringPW:   envOr("STYRMAN_KEYRING_PW", "styrman"),
-		DockerDisk:  envIntOr("STYRMAN_DOCKER_DISK_GB", 20),
-		IdleTimeout: envDurationOr("STYRMAN_IDLE_TIMEOUT", 24*time.Hour),
-		AuthMode:    envOr("STYRMAN_AUTH", "none"),
-		DevAddr:     os.Getenv("STYRMAN_DEV_ADDR"),
+		Addr:          envOr("STYRMAN_ADDR", "127.0.0.1:8080"),
+		StateDir:      envOr("STYRMAN_STATE_DIR", "/var/lib/styrman"),
+		Image:         envOr("STYRMAN_IMAGE", "styrman-runtime:latest"),
+		Runtime:       envOr("STYRMAN_RUNTIME", "mvm"),
+		KeyringPW:     envOr("STYRMAN_KEYRING_PW", "styrman"),
+		DockerDisk:    envIntOr("STYRMAN_DOCKER_DISK_GB", 20),
+		IdleTimeout:   envDurationOr("STYRMAN_IDLE_TIMEOUT", 24*time.Hour),
+		AuthMode:      envOr("STYRMAN_AUTH", "none"),
+		DevAddr:       os.Getenv("STYRMAN_DEV_ADDR"),
+		SelfContainer: os.Getenv("STYRMAN_SELF_CONTAINER"),
 	}
 	for _, e := range strings.Split(os.Getenv("STYRMAN_ALLOWED_EMAILS"), ",") {
 		if e = strings.TrimSpace(e); e != "" {

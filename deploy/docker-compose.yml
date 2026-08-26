@@ -46,6 +46,7 @@ services:
       - STYRMAN_IDLE_TIMEOUT=${STYRMAN_IDLE_TIMEOUT:-24h}
       - HOME=/var/lib/styrman # user.Current() needs a home for uid lookups
       - STYRMAN_DEV_ADDR=0.0.0.0:8081
+      - STYRMAN_SELF_CONTAINER=styrman-server
     # Dev/test door: auth-bypassed listener published ONLY on the host's
     # loopback — reachable from dave itself, never from the LAN/internet.
     ports:

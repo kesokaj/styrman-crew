@@ -42,6 +42,7 @@ func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid port"))
 		return
 	}
+	s.orch.EnsureSelfAttached(r.Context(), name)
 	ip, err := s.orch.IPAddress(r.Context(), name)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)

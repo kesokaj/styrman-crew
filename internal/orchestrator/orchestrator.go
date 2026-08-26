@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -127,8 +128,29 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, project string) (strin
 	if err := o.waitReady(ctx, id, 90*time.Second); err != nil {
 		return "", fmt.Errorf("project %s did not become ready: %w", name, err)
 	}
+	o.EnsureSelfAttached(ctx, project)
 	o.Touch(project)
 	return id, nil
+}
+
+// EnsureSelfAttached joins the server's own container to the project's
+// bridge network (no-op for a host-mode server). Docker isolates bridge
+// networks from each other, so without this a containerized server cannot
+// reach microVM IPs for the port-preview proxy.
+func (o *Orchestrator) EnsureSelfAttached(ctx context.Context, project string) {
+	if o.cfg.SelfContainer == "" {
+		return
+	}
+	err := o.docker.NetworkConnect(ctx, config.NetworkName(project), o.cfg.SelfContainer, nil)
+	if err != nil {
+		if !strings.Contains(err.Error(), "already exists") {
+			o.logger.Warn("self-attach to project network failed", "project", project, "error", err)
+		}
+		return
+	}
+	// Fresh attachment: give the new interface/route a moment before the
+	// caller dials through it (the first proxy request otherwise races it).
+	time.Sleep(500 * time.Millisecond)
 }
 
 // EnsureSetup boots the hidden system microVM used for first-time onboarding
@@ -303,6 +325,11 @@ func (o *Orchestrator) Destroy(ctx context.Context, project string) error {
 	err := o.docker.ContainerRemove(ctx, config.ContainerName(project), container.RemoveOptions{Force: true})
 	if err != nil && !errdefs.IsNotFound(err) {
 		return err
+	}
+	// Detach ourselves first or the network removal fails on the active
+	// endpoint (containerized server only).
+	if o.cfg.SelfContainer != "" {
+		_ = o.docker.NetworkDisconnect(ctx, config.NetworkName(project), o.cfg.SelfContainer, true)
 	}
 	if err := o.docker.NetworkRemove(ctx, config.NetworkName(project)); err != nil && !errdefs.IsNotFound(err) {
 		o.logger.Warn("network remove failed", "project", project, "error", err)
