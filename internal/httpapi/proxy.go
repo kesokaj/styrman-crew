@@ -71,19 +71,21 @@ func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.proxyFor(ip, port, proxyPrefix(r, port)).ServeHTTP(w, r)
+	s.proxyFor(ip, port, proxyPrefix(r)).ServeHTTP(w, r)
 }
 
-// proxyPrefix reconstructs the mount prefix from the request path so the
-// same handler serves every shape: /proxy/{p}/{port}/…,
-// /p/{p}/port/{port}/… and /p/{p}/{term}/port/{port}/…. The port segment is
-// always last, hence LastIndex (a terminal id could be numeric too).
-func proxyPrefix(r *http.Request, port int) string {
-	seg := "/" + strconv.Itoa(port) + "/"
-	if i := strings.LastIndex(r.URL.Path, seg); i >= 0 {
-		return r.URL.Path[:i+len(seg)-1]
+// proxyPrefix reconstructs the mount prefix from the matched route values
+// (N21) — deterministic regardless of the app's own path, which the old
+// LastIndex("/<port>/") mis-trimmed when it repeated the port segment
+// (e.g. /3000/x/3000/y). Shapes: /proxy/{project}/{port}/… and
+// /p/{project}/{term}/port/{port}/….
+func proxyPrefix(r *http.Request) string {
+	project := r.PathValue("project")
+	port := r.PathValue("port")
+	if strings.HasPrefix(r.URL.Path, "/proxy/") {
+		return "/proxy/" + project + "/" + port
 	}
-	return strings.TrimSuffix(r.URL.Path, "/")
+	return "/p/" + project + "/" + r.PathValue("term") + "/port/" + port
 }
 
 // proxyFor caches one ReverseProxy per target (devbox pattern); entries are

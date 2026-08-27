@@ -131,6 +131,7 @@ export function TerminalPane({
         ws?.send(
           JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
         );
+        flushOutbox(); // send anything typed while reconnecting
         term.focus();
       };
       ws.onmessage = (ev) => {
@@ -166,10 +167,22 @@ export function TerminalPane({
     };
     connect();
 
+    // N6: keystrokes typed during a brief reconnect window used to vanish
+    // silently ("I typed and nothing happened"). Queue them (bounded) and
+    // flush on reconnect.
+    const outbox: string[] = [];
+    const flushOutbox = () => {
+      if (ws?.readyState !== WebSocket.OPEN) return;
+      for (const d of outbox.splice(0)) {
+        ws.send(new TextEncoder().encode(d).buffer as ArrayBuffer);
+      }
+    };
     const dataSub = term.onData((d) => {
       if (ws?.readyState === WebSocket.OPEN) {
         // Binary frame = raw input bytes (text frames are control messages).
         ws.send(new TextEncoder().encode(d).buffer as ArrayBuffer);
+      } else if (outbox.length < 256) {
+        outbox.push(d); // dropped only under a very long outage
       }
     });
 
