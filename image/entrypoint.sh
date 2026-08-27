@@ -45,6 +45,13 @@ if ! id "${USERNAME}" &>/dev/null; then
     groupadd -g "${GID_}" "${USERNAME}" 2>/dev/null || true
     useradd -u "${UID_}" -g "${GID_}" -M -d "${HOME_DIR}" -s /bin/bash "${USERNAME}"
 fi
+# A reserved name (root, daemon, …) already exists at a different uid, so
+# useradd was skipped and every docker exec would run as the WRONG uid on a
+# home owned by ${UID_} — silent, total breakage. Fail loudly instead (I11).
+if [ "$(id -u "${USERNAME}")" != "${UID_}" ]; then
+    log "FATAL: terminal username '${USERNAME}' maps to uid $(id -u "${USERNAME}"), not ${UID_} — pick a non-reserved name"
+    exit 1
+fi
 echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/${USERNAME}"
 chmod 440 "/etc/sudoers.d/${USERNAME}"
 usermod -aG docker "${USERNAME}" 2>/dev/null || true
@@ -77,7 +84,8 @@ cp /styrman/configs/profile-motd.sh /etc/profile.d/styrman-motd.sh
 
 # tmux defaults (hidden status bar, login shells) unless the user has their own.
 if [ ! -f "${HOME_DIR}/.tmux.conf" ]; then
-    runuser -u "${USERNAME}" -- cp /styrman/configs/tmux.conf "${HOME_DIR}/.tmux.conf" 2>/dev/null || true
+    runuser -u "${USERNAME}" -- cp /styrman/configs/tmux.conf "${HOME_DIR}/.tmux.conf" 2>/dev/null \
+        || log "WARN: could not seed ~/.tmux.conf (home not writable?)"
 fi
 
 # ─── Terminal transcripts (history) ─────────────────────────────────────────
@@ -86,7 +94,9 @@ fi
 # The path is project-specific, but ~/.tmux.conf is shared across projects —
 # hence a per-container include file that the shared config sources.
 LOG_DIR="${HOME_DIR}/.styrman/logs/${PROJECT}"
-runuser -u "${USERNAME}" -- mkdir -p "${LOG_DIR}"
+# If the log dir can't be made, the pipe-pane hooks below would fail per-pane
+# and transcripts (R6) would silently stop — warn loudly instead.
+runuser -u "${USERNAME}" -- mkdir -p "${LOG_DIR}" || log "WARN: could not create transcript dir ${LOG_DIR} — history will be incomplete"
 mkdir -p /etc/styrman
 cat > /etc/styrman/tmux-project.conf <<TEOF
 set-hook -g after-new-session 'pipe-pane -o "cat >> ${LOG_DIR}/#{session_name}.log"'
@@ -101,27 +111,43 @@ set -g visual-bell off
 set -g set-clipboard on
 set -as terminal-features ',xterm-256color:clipboard'
 TEOF
-# Ensure the shared tmux.conf sources it (idempotent; survives user edits).
-if ! grep -q 'styrman/tmux-project.conf' "${HOME_DIR}/.tmux.conf" 2>/dev/null; then
-    echo 'source-file -q /etc/styrman/tmux-project.conf' >> "${HOME_DIR}/.tmux.conf"
-fi
-# Migration: earlier styrman defaults shipped 'mouse on', which steals mouse
-# selection from the browser terminal (see configs/tmux.conf). Only touch
-# files that are still ours (styrman marker in the header) — user-authored
-# configs win.
-if head -1 "${HOME_DIR}/.tmux.conf" 2>/dev/null | grep -q '^# styrman default tmux config'; then
-    sed -i 's/^set -g mouse on$/set -g mouse off/' "${HOME_DIR}/.tmux.conf" 2>/dev/null || true
+# Ensure the shared tmux.conf sources it — only if the file exists (a failed
+# cp above must NOT lead to `echo >>` creating a root-owned stub the guest
+# can't edit, I10). Append AS THE USER so ownership never flips to root.
+if [ -f "${HOME_DIR}/.tmux.conf" ]; then
+    if ! grep -q 'styrman/tmux-project.conf' "${HOME_DIR}/.tmux.conf" 2>/dev/null; then
+        runuser -u "${USERNAME}" -- sh -c \
+            "printf '%s\n' 'source-file -q /etc/styrman/tmux-project.conf' >> '${HOME_DIR}/.tmux.conf'" 2>/dev/null || true
+    fi
+    # Migration: earlier defaults shipped 'mouse on', which steals mouse
+    # selection from the browser terminal — only touch files still ours.
+    if head -1 "${HOME_DIR}/.tmux.conf" 2>/dev/null | grep -q '^# styrman default tmux config'; then
+        runuser -u "${USERNAME}" -- sed -i 's/^set -g mouse on$/set -g mouse off/' "${HOME_DIR}/.tmux.conf" 2>/dev/null || true
+    fi
+    # Self-heal: reclaim a ~/.tmux.conf that a previous (buggy) boot created
+    # root-owned, so the guest can always read/edit its own config.
+    chown "${UID_}:${GID_}" "${HOME_DIR}/.tmux.conf" 2>/dev/null || true
 fi
 
 # ─── Per-project Docker daemon (ADR-004 + ADR-008) ──────────────────────────
 if [ -n "${MINIMAL}" ]; then
     touch /run/styrman/ready
     log "system container ${PROJECT} ready (minimal mode, user=${USERNAME})"
-    exec sleep infinity
+    trap 'exit 0' TERM INT
+    sleep infinity &
+    wait $!
+    exit 0
 fi
 
 IMG="${HOME_DIR}/.dockerd/${PROJECT}.img"
 if [ ! -f "${IMG}" ]; then
+    # N30: fail fast if the home disk can't hold the image, instead of letting
+    # dockerd hit ENOSPC mid-write inside a filesystem that thinks it has room.
+    AVAIL_KB=$(df -Pk "${HOME_DIR}/.dockerd" 2>/dev/null | awk 'NR==2{print $4}')
+    NEED_KB=$((DISK_GB * 1024 * 1024))
+    if [ -n "${AVAIL_KB}" ] && [ "${AVAIL_KB}" -lt "${NEED_KB}" ]; then
+        log "WARN: only ${AVAIL_KB}KiB free for a ${DISK_GB}G docker image — DinD may fail on ENOSPC"
+    fi
     # Build at a temp path and mv into place only once mkfs succeeded, so an
     # interrupted first boot can't leave a half-made image that silently
     # diverts the next boot to the vfs fallback (review finding).
@@ -134,15 +160,24 @@ if [ ! -f "${IMG}" ]; then
     fi
 fi
 mkdir -p /var/lib/docker-project
-if mount -o loop "${IMG}" /var/lib/docker-project; then
+# Check the ext4 image before mounting — a dirty journal from an ungraceful
+# shutdown (now less likely with the SIGTERM trap) is repaired, not tolerated.
+[ -f "${IMG}" ] && fsck.ext4 -p "${IMG}" >/dev/null 2>&1 || true
+STORAGE_NOTE=""
+if [ -f "${IMG}" ] && mount -o loop "${IMG}" /var/lib/docker-project; then
     STORAGE_DRIVER="overlay2"
     DATA_ROOT="/var/lib/docker-project"
 else
-    # Fallback (ADR-008): vfs directly on the virtiofs home. Slow but works.
-    log "WARN: loop mount failed, falling back to vfs storage driver"
+    # Fallback (ADR-008): vfs directly on the virtiofs home. Slow, and it uses
+    # a DIFFERENT data-root — prior overlay2 images/containers won't be visible
+    # (looks like data loss). Surface it loudly + via a marker the UI can read.
+    log "WARN: loop mount of ${IMG} FAILED — falling back to slow 'vfs' storage."
+    log "WARN: containers/images from the overlay2 image are not visible under vfs."
     STORAGE_DRIVER="vfs"
     DATA_ROOT="${HOME_DIR}/.dockerd/${PROJECT}"
     mkdir -p "${DATA_ROOT}"
+    STORAGE_NOTE="vfs-fallback"
+    runuser -u "${USERNAME}" -- sh -c "printf 'vfs (loop mount failed)\n' > '${HOME_DIR}/.styrman/logs/${PROJECT}/storage-warning.txt'" 2>/dev/null || true
 fi
 
 mkdir -p /etc/docker
@@ -161,6 +196,7 @@ cat > /etc/docker/daemon.json <<EOF
 EOF
 rm -f /var/run/docker.pid
 dockerd > /var/log/dockerd.log 2>&1 &
+DOCKERD_PID=$!
 DOCKER_UP=false
 for i in $(seq 1 30); do
     if docker info &>/dev/null; then
@@ -182,6 +218,20 @@ fi
 touch /run/styrman/ready
 log "project ${PROJECT} ready (user=${USERNAME} uid=${UID_})"
 
-# tini (PID 1) reaps; this process just parks. Terminal sessions arrive via
-# docker exec (ADR-002) and never depend on this shell.
-exec sleep infinity
+# Graceful shutdown (I9): on `docker stop`, tini forwards SIGTERM here. Stop
+# dockerd cleanly (so nested containers get their grace period and overlay2
+# isn't torn down mid-write) and unmount the loop-mounted ext4 so its journal
+# is clean on the next boot. Do NOT `exec` — the shell must stay alive to run
+# the trap. tini (PID 1) still reaps exec'd session zombies.
+shutdown() {
+    log "shutting down project ${PROJECT}"
+    if [ -n "${DOCKERD_PID:-}" ]; then
+        kill -TERM "${DOCKERD_PID}" 2>/dev/null || true
+        wait "${DOCKERD_PID}" 2>/dev/null || true
+    fi
+    umount /var/lib/docker-project 2>/dev/null || true
+    exit 0
+}
+trap shutdown TERM INT
+sleep infinity &
+wait $!

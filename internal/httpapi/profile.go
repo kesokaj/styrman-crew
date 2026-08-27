@@ -25,6 +25,17 @@ type profileStore struct {
 
 var guestNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
+// reservedNames are system accounts that already exist in the image at a
+// non-1000 uid; picking one makes useradd a no-op and the guest run as the
+// wrong uid on a home it can't write (the entrypoint also fails closed).
+var reservedNames = map[string]bool{
+	"root": true, "daemon": true, "bin": true, "sys": true, "sync": true,
+	"games": true, "man": true, "lp": true, "mail": true, "news": true,
+	"proxy": true, "www-data": true, "backup": true, "list": true,
+	"nobody": true, "docker": true, "sshd": true, "systemd-network": true,
+	"messagebus": true, "sudo": true, "adm": true, "tty": true, "disk": true,
+}
+
 func newProfileStore(path, defaultUser string) (*profileStore, error) {
 	p := &profileStore{path: path, def: defaultUser}
 	data, err := os.ReadFile(path)
@@ -63,6 +74,9 @@ func (p *profileStore) HasGuestUser() bool {
 func (p *profileStore) setGuestUser(name string) error {
 	if name != "" && !guestNameRe.MatchString(name) {
 		return fmt.Errorf("invalid username %q: lowercase letters, digits, - and _, starting with a letter", name)
+	}
+	if reservedNames[name] {
+		return fmt.Errorf("%q is a reserved system name — pick another", name)
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()

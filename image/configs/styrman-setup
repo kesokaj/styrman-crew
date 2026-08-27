@@ -17,12 +17,21 @@ if git config --global user.email >/dev/null 2>&1; then
     ok "git: $(git config --global user.name) <$(git config --global user.email)>"
 else
     todo "no git identity yet"
-    read -rp "  your name: " GIT_NAME
-    read -rp "  your email: " GIT_EMAIL
-    git config --global user.name "${GIT_NAME}"
-    git config --global user.email "${GIT_EMAIL}"
-    git config --global init.defaultBranch main
-    ok "git identity saved to ~/.gitconfig"
+    GIT_NAME=""; GIT_EMAIL=""
+    # Loop until both are non-empty. Under a non-interactive exec, read returns
+    # immediately with empty values — bail with guidance instead of saving an
+    # empty identity that makes every commit fail (N32).
+    while [ -z "${GIT_NAME}" ] || [ -z "${GIT_EMAIL}" ]; do
+        [ -t 0 ] || { todo "run styrman-setup in an interactive terminal to set git identity"; break; }
+        [ -z "${GIT_NAME}" ]  && read -rp "  your name: "  GIT_NAME
+        [ -z "${GIT_EMAIL}" ] && read -rp "  your email: " GIT_EMAIL
+    done
+    if [ -n "${GIT_NAME}" ] && [ -n "${GIT_EMAIL}" ]; then
+        git config --global user.name "${GIT_NAME}"
+        git config --global user.email "${GIT_EMAIL}"
+        git config --global init.defaultBranch main
+        ok "git identity saved to ~/.gitconfig"
+    fi
 fi
 
 step "2/5 SSH key (for git over ssh)"
@@ -30,7 +39,10 @@ step "2/5 SSH key (for git over ssh)"
 KEY_COMMENT="$(git config --global user.email 2>/dev/null || true)"
 [ -n "${KEY_COMMENT}" ] || KEY_COMMENT="$(whoami)@styrman"
 if [ -f ~/.ssh/id_ed25519 ]; then
-    CURRENT_COMMENT=$(ssh-keygen -l -f ~/.ssh/id_ed25519.pub 2>/dev/null | awk '{print $3}')
+    # The comment is everything between the fingerprint and the "(ED25519)"
+    # type — not just the first word (a multi-word or empty comment broke the
+    # old `awk '{print $3}'`).
+    CURRENT_COMMENT=$(ssh-keygen -l -f ~/.ssh/id_ed25519.pub 2>/dev/null | sed -E 's/^[0-9]+ [^ ]+ //; s/ \([A-Z0-9]+\)$//')
     if [ "${CURRENT_COMMENT}" = "styrman" ]; then
         # ssh-keygen -c rewrites both the private key and the .pub in place.
         if ssh-keygen -c -C "${KEY_COMMENT}" -f ~/.ssh/id_ed25519 >/dev/null 2>&1; then

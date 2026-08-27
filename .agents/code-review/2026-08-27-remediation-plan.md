@@ -85,11 +85,11 @@
 - **Verify:** `go test -race`; reboot drill (stop server with idle projects, restart, confirm they start); reviewer.
 
 ### Batch C — image / entrypoint reliability (P1, shell) 🟠
-- ☐ **I9** Replace `exec sleep infinity` with a TERM-trapping wrapper: `trap 'kill -TERM $DOCKERD_PID; wait; umount /var/lib/docker-project' TERM; sleep infinity & wait`.
-- ☐ **I10** Verify the `.tmux.conf` `cp` succeeded before appending; do the append as the user, guarded on file existence; heal a root-owned broken conf.
-- ☐ **I11** Reject reserved names in `setGuestUser` (deny `root` + UID<1000) **and** mirror in `setup.tsx`; entrypoint asserts `id -u "$USERNAME" == UID_` or FATAL-exits.
-- ☐ **I12** On vfs fallback, write the chosen driver to a label/file the UI surfaces; log at operator-visible level; `fsck.ext4 -p` before mount.
-- ☐ **N30** `df` free-space check before the 20 GB `truncate`. **N32/N33/N34** styrman-setup non-TTY guard + key-comment parse fix; ready-marker/resolv.conf/logdir/tmux-marker-version fixes; `${VAR:?}` guards; scoped `chown`.
+- ☑ **I9** Replace `exec sleep infinity` with a TERM-trapping wrapper: `trap 'kill -TERM $DOCKERD_PID; wait; umount /var/lib/docker-project' TERM; sleep infinity & wait`.
+- ☑ **I10** Verify the `.tmux.conf` `cp` succeeded before appending; do the append as the user, guarded on file existence; heal a root-owned broken conf.
+- ☑ **I11** Reject reserved names in `setGuestUser` (deny `root` + UID<1000) **and** mirror in `setup.tsx`; entrypoint asserts `id -u "$USERNAME" == UID_` or FATAL-exits.
+- ☑ **I12** On vfs fallback, write the chosen driver to a label/file the UI surfaces; log at operator-visible level; `fsck.ext4 -p` before mount.
+- ☑ **N30** `df` free-space check before the 20 GB `truncate`. **N32/N33/N34** styrman-setup non-TTY guard + key-comment parse fix; ready-marker/resolv.conf/logdir/tmux-marker-version fixes; `${VAR:?}` guards; scoped `chown`.
 - **Verify:** rebuild image; `docker stop` a project and confirm clean dockerd shutdown; suites.
 
 ### Batch D — deploy hardening & reproducibility (P2) 🟠

@@ -35,8 +35,16 @@ function SetupPage() {
       .finally(() => setLoaded(true));
   }, []);
 
-  // Matches the server's guest-name rule (useradd-safe).
-  const valid = /^[a-z][a-z0-9_-]{0,30}$/.test(username);
+  // Matches the server's guest-name rule (useradd-safe) and rejects reserved
+  // system accounts (root/daemon/… break the guest; the server rejects them
+  // too — this is just a friendlier client-side check).
+  const reserved = new Set([
+    "root", "daemon", "bin", "sys", "sync", "games", "man", "lp", "mail",
+    "news", "proxy", "www-data", "backup", "list", "nobody", "docker", "sshd",
+    "sudo", "adm", "tty", "disk", "messagebus",
+  ]);
+  const valid =
+    /^[a-z][a-z0-9_-]{0,31}$/.test(username) && !reserved.has(username);
 
   const start = async () => {
     setPhase("booting");

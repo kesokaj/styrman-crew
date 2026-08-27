@@ -423,12 +423,38 @@ func (o *Orchestrator) waitReady(ctx context.Context, containerID string, timeou
 
 // Stop stops a project's container (home and workspace persist).
 func (o *Orchestrator) Stop(ctx context.Context, user, project string) error {
+	name := config.ContainerName(project)
+	// Kata's `docker stop` powers the microVM off without delivering SIGTERM
+	// to the in-guest init, so the entrypoint's graceful-shutdown trap (clean
+	// dockerd stop + ext4 unmount) never runs — leaving a dirty journal (I9).
+	// Trigger it ourselves by signalling PID 1 inside the guest, give it a
+	// moment, then stop. Best effort: a failed exec (already stopping) just
+	// falls through to ContainerStop.
+	if code, _, err := o.Exec(ctx, name, ExecSpec{Cmd: []string{"kill", "-TERM", "1"}}); err == nil && code == 0 {
+		o.waitStopped(ctx, name, 12*time.Second)
+	}
 	timeout := 30
-	err := o.docker.ContainerStop(ctx, config.ContainerName(project), container.StopOptions{Timeout: &timeout})
+	err := o.docker.ContainerStop(ctx, name, container.StopOptions{Timeout: &timeout})
 	if errdefs.IsNotFound(err) {
 		return nil
 	}
 	return err
+}
+
+// waitStopped polls until the container is no longer running, up to max.
+func (o *Orchestrator) waitStopped(ctx context.Context, name string, max time.Duration) {
+	deadline := time.Now().Add(max)
+	for time.Now().Before(deadline) {
+		insp, err := o.docker.ContainerInspect(ctx, name)
+		if err != nil || insp.State == nil || !insp.State.Running {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
 }
 
 // stopIfIdle stops the project only if it is STILL idle under the per-project
