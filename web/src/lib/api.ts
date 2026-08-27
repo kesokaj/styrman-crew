@@ -73,6 +73,14 @@ export interface PortInfo {
   image?: string;
 }
 
+/** A public, expiring capability link to one exposed port (no login needed). */
+export interface PublicLink {
+  token: string;
+  port: number;
+  url: string;
+  expires: string;
+}
+
 export interface ToolInfo {
   name: string;
   ready: boolean;
@@ -218,6 +226,18 @@ export const api = {
       `/api/projects/${project}/ports/${port}/shares`,
       { method: "PUT", body: JSON.stringify({ emails }) },
     ),
+
+  listLinks: (project: string) =>
+    request<{ links: PublicLink[] }>(`/api/projects/${project}/links`),
+  createLink: (project: string, port: number, ttl: string) =>
+    request<PublicLink>(`/api/projects/${project}/ports/${port}/links`, {
+      method: "POST",
+      body: JSON.stringify({ ttl }),
+    }),
+  revokeLink: (project: string, token: string) =>
+    request<void>(`/api/projects/${project}/links/${token}`, {
+      method: "DELETE",
+    }),
 
   listFiles: (scope: Scope, path: string) =>
     request<{ entries: FileEntry[] }>(

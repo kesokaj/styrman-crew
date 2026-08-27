@@ -65,6 +65,7 @@ var Agents = map[string]string{
 // Config holds runtime configuration resolved from the environment.
 type Config struct {
 	Addr        string        // HTTP listen address
+	PreviewBase string        // public preview host base, e.g. "preview.styrman.xyz" (empty = path-form links only, 1.1)
 	StateDir    string        // root state dir (default /var/lib/styrman)
 	HomesDir    string        // per-user homes root (StateDir/homes)
 	HomeDir     string        // LEGACY single-user home; migrated to HomesDir on boot
@@ -102,6 +103,7 @@ type Config struct {
 func Load() (*Config, error) {
 	c := &Config{
 		Addr:          envOr("STYRMAN_ADDR", "127.0.0.1:8080"),
+		PreviewBase:   envOr("STYRMAN_PREVIEW_BASE", ""),
 		StateDir:      envOr("STYRMAN_STATE_DIR", "/var/lib/styrman"),
 		Image:         envOr("STYRMAN_IMAGE", "styrman-runtime:latest"),
 		Runtime:       envOr("STYRMAN_RUNTIME", "mvm"),

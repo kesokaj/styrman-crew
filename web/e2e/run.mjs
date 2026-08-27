@@ -228,6 +228,15 @@ try {
       timeout: 5000,
     });
   });
+  await check("public link create + revoke", async () => {
+    const revokeBtn = panel().getByRole("button", { name: "Revoke link" });
+    await panel()
+      .getByRole("button", { name: "create public link" })
+      .click();
+    await revokeBtn.waitFor({ state: "visible", timeout: 10000 });
+    await revokeBtn.click();
+    await revokeBtn.waitFor({ state: "detached", timeout: 5000 });
+  });
   await shot("05-ports");
 
   // ── Side panel: History (transcript of what we typed) ───────────────────

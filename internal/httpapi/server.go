@@ -28,6 +28,7 @@ import (
 	"github.com/kesokaj/styrman/internal/files"
 	"github.com/kesokaj/styrman/internal/gitrepo"
 	"github.com/kesokaj/styrman/internal/identity"
+	"github.com/kesokaj/styrman/internal/links"
 	"github.com/kesokaj/styrman/internal/orchestrator"
 	"github.com/kesokaj/styrman/internal/project"
 	"github.com/kesokaj/styrman/internal/terminal"
@@ -53,6 +54,7 @@ type Server struct {
 	bridge *terminal.Bridge
 	users  *userstore.Store
 	logger *slog.Logger
+	links  *links.Store
 
 	spacesMu sync.Mutex
 	spaces   map[string]*userSpace
@@ -71,6 +73,13 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		users:  users,
 		logger: logger,
 		spaces: map[string]*userSpace{},
+	}
+	// Public preview-link store (best-effort: a load failure degrades to
+	// no-links, never blocks server start).
+	if ls, err := links.NewStore(filepath.Join(cfg.StateDir, "links.json")); err != nil {
+		logger.Error("links store unavailable — public links disabled", "error", err)
+	} else {
+		s.links = ls
 	}
 	s.bridge = terminal.NewBridge(orch, cfg, logger, s.termStoreFor, s.ensureFor, s.guestUserFor)
 	return s
@@ -202,6 +211,16 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	// exposed port).
 	mux.HandleFunc("GET /api/projects/{project}/ports/{port}/shares", s.getShares)
 	mux.HandleFunc("PUT /api/projects/{project}/ports/{port}/shares", s.setShares)
+	// Public TTL preview links (owner mints/lists/revokes; the link itself is
+	// public — see the /link/{token} route below).
+	mux.HandleFunc("POST /api/projects/{project}/ports/{port}/links", s.createLink)
+	mux.HandleFunc("GET /api/projects/{project}/links", s.listLinks)
+	mux.HandleFunc("DELETE /api/projects/{project}/links/{token}", s.revokeLink)
+	// Public capability route (authGuard-exempt; token-validated in serveLink).
+	for _, m := range []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"} {
+		mux.HandleFunc(m+" /link/{token}/", s.serveLink)
+	}
+	mux.HandleFunc("GET /link/{token}", redirectSlash)
 	for _, m := range []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"} {
 		mux.HandleFunc(m+" /proxy/{project}/{port}/", s.proxyPort)
 		mux.HandleFunc(m+" /p/{project}/{term}/port/{port}/", s.proxyPort)

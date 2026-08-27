@@ -133,6 +133,20 @@ check "legacy proxy URL still works" \
 check "bare URL redirects to trailing slash" \
     "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/p/${ID}/1/port/4100) = 301 ]"
 
+say "public TTL preview links (1.1 foundation)"
+LINK_TOK=$(curl -fsS -X POST "${API}/api/projects/${ID}/ports/4100/links" -d '{"ttl":"1h"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])' 2>/dev/null || true)
+check "link minted" "[ -n \"${LINK_TOK}\" ]"
+check "public link serves the app (no auth)" \
+    "curl -fsS ${API}/link/${LINK_TOK}/i.html | grep -q preview"
+check "link listed for the project" \
+    "curl -fsS ${API}/api/projects/${ID}/links | grep -q ${LINK_TOK}"
+check "bad token 404s" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/link/deadbeef/) = 404 ]"
+check "revoke deletes the link" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X DELETE ${API}/api/projects/${ID}/links/${LINK_TOK}) = 204 ]"
+check "revoked link no longer serves" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/link/${LINK_TOK}/i.html) = 404 ]"
+
 say "git diff"
 check "diff reports the repo" "curl -fsS ${API}/api/projects/${ID}/diff | grep -q '\"repo\":true'"
 check "diff sees the new file" "curl -fsS ${API}/api/projects/${ID}/diff | grep -q 'note.txt'"

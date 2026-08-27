@@ -29,6 +29,13 @@ func (s *Server) authGuard(mode string, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// Public preview links: the unguessable token IS the capability, so
+		// these need no identity and no ingress token (they're served on the
+		// public wildcard host). serveLink validates the token itself.
+		if isLinkPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		var u identity.User
 		if mode == "header" {
 			// Ingress token (opt-in): the server container is joined to project

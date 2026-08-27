@@ -54,26 +54,30 @@ func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, fmt.Errorf("you don't have access to this project's ports"))
 		return
 	}
-	name := p.ID
-	// attach/IP lookups run in the OWNER's namespace (the guest doesn't own it).
-	if fresh := s.orch.EnsureSelfAttached(r.Context(), ownerUser, name); fresh {
+	s.serveProxy(w, r, ownerUser, p.ID, port, proxyPrefix(r))
+}
+
+// serveProxy runs the shared preview-proxy path: attach in the owner's
+// namespace, resolve the guest IP, and reverse-proxy to it under prefix. Used
+// by both the authenticated port preview and the public link handler.
+func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request, ownerUser, projectID string, port int, prefix string) {
+	if fresh := s.orch.EnsureSelfAttached(r.Context(), ownerUser, projectID); fresh {
 		// The attach just reconfigured this container's network namespace —
 		// this request's own connection may be doomed. Send the browser
 		// around again on a fresh connection.
 		http.Redirect(w, r, r.URL.String(), http.StatusTemporaryRedirect)
 		return
 	}
-	ip, err := s.orch.IPAddress(r.Context(), ownerUser, name)
+	ip, err := s.orch.IPAddress(r.Context(), ownerUser, projectID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	if ip == "" {
-		writeErr(w, http.StatusBadGateway, fmt.Errorf("project %s is not running", name))
+		writeErr(w, http.StatusBadGateway, fmt.Errorf("project %s is not running", projectID))
 		return
 	}
-
-	s.proxyFor(ip, port, proxyPrefix(r)).ServeHTTP(w, r)
+	s.proxyFor(ip, port, prefix).ServeHTTP(w, r)
 }
 
 // proxyPrefix reconstructs the mount prefix from the matched route values

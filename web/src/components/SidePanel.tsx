@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore } from "react";
-import { api, portUrl, type PortInfo } from "../lib/api";
+import { api, portUrl, type PortInfo, type PublicLink } from "../lib/api";
 import { clearClips, getClips, subscribeClips, type Clip } from "../lib/clips";
 import { usePolled } from "../lib/hooks";
 import { FileExplorer } from "./FileExplorer";
@@ -238,6 +238,97 @@ function PortShare({ project, port }: { project: string; port: number }) {
           className="rounded bg-accent-soft px-2 py-1 text-[11px] text-accent hover:brightness-110 disabled:opacity-40"
         >
           add
+        </button>
+      </div>
+      <PublicLinks project={project} port={port} />
+    </div>
+  );
+}
+
+/**
+ * Public, expiring links to one port — no Google login needed. The recipient
+ * just opens the URL until it expires or you revoke it.
+ */
+function PublicLinks({ project, port }: { project: string; port: number }) {
+  const { data } = usePolled(() => api.listLinks(project), 30000);
+  const [ttl, setTtl] = useState("24h");
+  const [busy, setBusy] = useState(false);
+  // Local override updated from create/revoke responses — a poll can be up to
+  // 30 s stale (and refresh() no-ops while one is in flight), so don't rely on
+  // it to reflect a change just made.
+  const [override, setOverride] = useState<PublicLink[]>();
+  const all = override ?? data?.links ?? [];
+  const links = all.filter((l) => l.port === port); // this port only
+
+  const create = () =>
+    run(async () => {
+      const l = await api.createLink(project, port, ttl);
+      setOverride([...all, l]);
+    });
+  const revoke = (token: string) =>
+    run(async () => {
+      await api.revokeLink(project, token);
+      setOverride(all.filter((l) => l.token !== token));
+    });
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      alert((e as Error).message || "Request failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-2 border-t border-border pt-1.5">
+      <p className="px-1 pb-1 text-[11px] text-text-dim">
+        Or make a public link — no login, expires on its own.
+      </p>
+      {links.map((l) => (
+        <div
+          key={l.token}
+          className="flex items-center gap-2 rounded px-1 py-0.5 text-[11px] hover:bg-bg-hover"
+        >
+          <button
+            onClick={() =>
+              navigator.clipboard?.writeText(
+                l.url.startsWith("http") ? l.url : location.origin + l.url,
+              )
+            }
+            className="min-w-0 flex-1 truncate text-left text-accent hover:brightness-110"
+            title={l.url}
+          >
+            copy link · expires {new Date(l.expires).toLocaleString()}
+          </button>
+          <button
+            disabled={busy}
+            onClick={() => revoke(l.token)}
+            className="shrink-0 rounded border border-border px-1.5 py-0.5 text-text-dim hover:border-danger hover:text-danger disabled:opacity-40"
+            aria-label="Revoke link"
+          >
+            revoke
+          </button>
+        </div>
+      ))}
+      <div className="mt-1 flex gap-1">
+        <select
+          value={ttl}
+          onChange={(e) => setTtl(e.target.value)}
+          className="rounded border border-border bg-bg px-1 py-1 text-[11px] outline-none focus:border-accent"
+        >
+          <option value="1h">1 hour</option>
+          <option value="24h">24 hours</option>
+          <option value="7d">7 days</option>
+        </select>
+        <button
+          onClick={create}
+          disabled={busy}
+          className="flex-1 rounded bg-accent-soft px-2 py-1 text-[11px] text-accent hover:brightness-110 disabled:opacity-40"
+        >
+          create public link
         </button>
       </div>
     </div>
