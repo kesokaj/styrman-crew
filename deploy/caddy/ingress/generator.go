@@ -18,6 +18,7 @@ type GeneratorConfig struct {
 	AuthDomain        string   // Absolute FQDN for auth portal (e.g., "auth.a.styrman.io")
 	ShellDomain       string   // Absolute FQDN for shell (e.g., "shell.a.styrman.io")
 	AppsDomain        string   // Wildcard base for user apps (e.g., "apps.a.styrman.io")
+	PreviewDomain     string   // Public preview wildcard base (e.g., "preview.styrman.xyz"); empty = off
 	IngressToken      string   // shared secret injected as X-Styrman-Ingress (proves ingress origin)
 	JWTKey            string   // stable HMAC key so caddy-security JWTs survive restarts (else sessions break on redeploy)
 }
@@ -76,7 +77,47 @@ func GenerateCaddyfile(apps []App, cfg GeneratorConfig) string {
 		writeAppBlock(&b, app, cfg)
 	}
 
+	// Public preview wildcard (*.PREVIEW_DOMAIN → the styrman server, no auth).
+	// The server validates the per-link token itself and serves exactly one
+	// port; the token is carried in the subdomain (Host preserved).
+	if cfg.PreviewDomain != "" {
+		for _, app := range sorted {
+			if app.PreviewTarget {
+				writePreviewWildcard(&b, app, cfg)
+				break
+			}
+		}
+	}
+
 	return b.String()
+}
+
+// writePreviewWildcard emits the public *.PREVIEW_DOMAIN block that fronts the
+// styrman server for capability links. No OAuth (the unguessable token IS the
+// credential); client-supplied identity headers are stripped and the ingress
+// token is injected so the server knows the request came through the ingress.
+func writePreviewWildcard(b *strings.Builder, app App, cfg GeneratorConfig) {
+	fmt.Fprintf(b, "# public preview links (*.%s → styrman server, no auth)\n", cfg.PreviewDomain)
+	fmt.Fprintf(b, "*.%s {\n", cfg.PreviewDomain)
+	fmt.Fprintf(b, "    rate_limit {\n")
+	fmt.Fprintf(b, "        zone preview_rl {\n")
+	fmt.Fprintf(b, "            key {remote_host}\n")
+	fmt.Fprintf(b, "            events %d\n", cfg.DefaultRPS)
+	fmt.Fprintf(b, "            window 1s\n")
+	fmt.Fprintf(b, "        }\n")
+	fmt.Fprintf(b, "    }\n")
+	// Strip any client-supplied identity; the preview host must never carry one.
+	for _, h := range []string{HeaderEmail, HeaderUser, HeaderRole, HeaderSubject} {
+		fmt.Fprintf(b, "    request_header -%s\n", h)
+	}
+	if cfg.IngressToken != "" {
+		fmt.Fprintf(b, "    request_header %s %q\n", HeaderIngress, cfg.IngressToken)
+	}
+	// Preserve the incoming Host so the server can read the <token> subdomain.
+	fmt.Fprintf(b, "    reverse_proxy %s:%d {\n", app.ContainerIP, app.Port)
+	fmt.Fprintf(b, "        header_up Host {host}\n")
+	fmt.Fprintf(b, "    }\n")
+	b.WriteString("}\n\n")
 }
 
 // writeGlobalOptions writes the global options block including ACME, directive

@@ -38,6 +38,9 @@ type App struct {
 	SuperAdmins []string
 	// RPS is the rate limit in requests per second per client IP.
 	RPS int
+	// PreviewTarget marks this app as the backend for the public preview
+	// wildcard (*.PREVIEW_DOMAIN). Only the styrman server sets it.
+	PreviewTarget bool
 }
 
 // ParseLabels extracts an App from a Docker container's labels.
@@ -102,6 +105,8 @@ func ParseLabels(labels map[string]string, containerName string, exposedPorts []
 			app.Mode = ModeAuthenticated
 		}
 	}
+
+	app.PreviewTarget = isTrue(labels[LabelPreviewTarget])
 
 	// Rate limit
 	if r := strings.TrimSpace(labels[LabelRPS]); r != "" {

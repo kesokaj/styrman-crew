@@ -21,6 +21,9 @@ services:
     env_file: .env
     environment:
       - CADDYFILE_BASE_PATH=/etc/caddy/Caddyfile.base
+      # Public preview links (1.1): when set, the ingress adds a *.PREVIEW_DOMAIN
+      # public wildcard → the server, plus its DNS + cert. Empty = feature off.
+      - PREVIEW_DOMAIN=${STYRMAN_PREVIEW_DOMAIN:-}
     dns: [8.8.8.8, 1.1.1.1]
     restart: unless-stopped
 
@@ -61,6 +64,9 @@ services:
       # blocks a project VM on the shared bridge from spoofing X-Caddy-Email
       # directly against :8080. Enable with the ingress in Batch A part 2.
       - STYRMAN_INGRESS_TOKEN=${STYRMAN_INGRESS_TOKEN:-}
+      # Public preview links (1.1): must equal the ingress PREVIEW_DOMAIN so a
+      # <token>.PREVIEW_BASE subdomain resolves to the link. Empty = off.
+      - STYRMAN_PREVIEW_BASE=${STYRMAN_PREVIEW_DOMAIN:-}
     # SECURITY: no auth-bypass dev listener in production. It bound 0.0.0.0
     # inside a container joined to every project bridge, handing any project
     # VM unauthenticated admin (confirmed live in the 2026-08-27 review). Local
@@ -85,6 +91,8 @@ services:
       # previews shared with them. Admin rights come from STYRMAN_ALLOWED_EMAILS
       # (server env, above) via the userstore — NOT from an ingress role, so a
       # guest can never become an admin by being allowed through the ingress.
+      # Backs the public preview wildcard (*.PREVIEW_DOMAIN) when enabled.
+      caddy_preview_target: 'true'
     restart: unless-stopped
 
 networks:

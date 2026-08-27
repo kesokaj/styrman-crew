@@ -305,8 +305,33 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFileFS(w, r, dist, "_shell.html")
 	})
-	// Auth outermost: identity/permission first, then CSRF, then routing.
-	return s.authGuard(authMode, csrfGuard(mux))
+	// previewHostRewrite outermost so a <token>.preview host is mapped to the
+	// public /link route before auth even looks at it; then auth (identity /
+	// permission), then CSRF, then routing.
+	return s.previewHostRewrite(s.authGuard(authMode, csrfGuard(mux)))
+}
+
+// previewHostRewrite maps a public preview subdomain
+// (<token>.STYRMAN_PREVIEW_BASE) to the internal /link/{token}/… route. The
+// token lives in the subdomain, so the previewed app gets its OWN origin and
+// root — its root-relative asset paths work unchanged. No-op when
+// STYRMAN_PREVIEW_BASE is unset or the host doesn't match.
+func (s *Server) previewHostRewrite(next http.Handler) http.Handler {
+	base := s.cfg.PreviewBase
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if base != "" {
+			host := r.Host
+			if i := strings.IndexByte(host, ':'); i >= 0 {
+				host = host[:i]
+			}
+			if suffix := "." + base; strings.HasSuffix(host, suffix) {
+				if token := strings.TrimSuffix(host, suffix); links.ValidToken(token) {
+					r.URL.Path = "/link/" + token + r.URL.Path
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // redirectSlash sends /p/x/1/port/3000 → …/3000/ so the proxied app's

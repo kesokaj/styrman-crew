@@ -297,3 +297,31 @@ func TestIngressTokenHeaderInjected(t *testing.T) {
 		t.Fatal("token header must not appear when IngressToken is empty")
 	}
 }
+
+func TestPreviewWildcardBlock(t *testing.T) {
+	apps := []App{
+		{Hostname: "styrman", ContainerIP: "10.0.0.5", Port: 8080, Mode: ModeAuthenticated, RPS: 100, PreviewTarget: true},
+	}
+	cfg := GeneratorConfig{
+		BaseDomain: "styrman.xyz", AdminEmail: "a@b.c", AppsDomain: "styrman.xyz",
+		AuthDomain: "auth.styrman.xyz", PreviewDomain: "preview.styrman.xyz",
+		IngressToken: "tok123", DefaultRPS: 100,
+	}
+	out := GenerateCaddyfile(apps, cfg)
+	for _, want := range []string{
+		"*.preview.styrman.xyz {",
+		"reverse_proxy 10.0.0.5:8080",
+		"header_up Host {host}",
+		"request_header -X-Caddy-Email",
+		"request_header X-Styrman-Ingress",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("preview wildcard block missing %q\n%s", want, out)
+		}
+	}
+	// Disabled when PreviewDomain is empty.
+	cfg.PreviewDomain = ""
+	if strings.Contains(GenerateCaddyfile(apps, cfg), "preview.styrman.xyz {") {
+		t.Error("preview block emitted with PreviewDomain empty")
+	}
+}

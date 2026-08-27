@@ -18,6 +18,9 @@ const (
 	LabelViewers     = "caddy_viewers"
 	LabelSuperAdmins = "caddy_superadmins"
 	LabelRPS         = "caddy_rps"
+	// LabelPreviewTarget marks the container that backs the public preview
+	// wildcard (*.PREVIEW_DOMAIN). Only the styrman server sets it.
+	LabelPreviewTarget = "caddy_preview_target"
 )
 
 // Clean identity headers injected into downstream requests.
@@ -85,6 +88,7 @@ const (
 	EnvAuthDomain        = "AUTH_DOMAIN"           // Absolute FQDN for auth portal (default: auth.<BASE_DOMAIN>)
 	EnvShellDomain       = "SHELL_DOMAIN"          // Absolute FQDN for shell (default: shell.<BASE_DOMAIN>)
 	EnvAppsDomain        = "APPS_DOMAIN"           // Wildcard base for user apps (default: <BASE_DOMAIN>)
+	EnvPreviewDomain     = "PREVIEW_DOMAIN"        // Public preview wildcard base, e.g. preview.<BASE_DOMAIN> (empty = off)
 	EnvIngressToken      = "STYRMAN_INGRESS_TOKEN" // shared secret injected as X-Styrman-Ingress on authenticated routes
 	EnvJWTKey            = "STYRMAN_JWT_KEY"       // stable HMAC key for caddy-security JWTs (survives restarts)
 )

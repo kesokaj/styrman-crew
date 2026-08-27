@@ -66,3 +66,19 @@ active links each with revoke. Clear labeling that a public link needs no login.
 2. Ingress: wildcard DNS + cert + public host route.
 3. UI: TTL picker + link management in the port share row.
 4. e2e: mint a link, fetch it unauthenticated, let it expire / revoke → denied.
+
+---
+
+## Status: SHIPPED 2026-08-27
+
+Fully wired and verified live. `STYRMAN_PREVIEW_DOMAIN=preview.styrman.xyz`
+enables it (one var → ingress `PREVIEW_DOMAIN` + server `STYRMAN_PREVIEW_BASE`).
+
+- Ingress: `caddy_preview_target` label + a `*.PREVIEW_DOMAIN` ModePublic block
+  (Host preserved, identity stripped, ingress token injected) + the wildcard
+  DNS A record via `EnsureDNS`. Caddy auto-issued the `*.preview.styrman.xyz`
+  cert (DNS-01).
+- Server: `previewHostRewrite` maps `<token>.PREVIEW_BASE` → `/link/{token}/…`
+  so each link gets its own origin/root; the mint returns the subdomain URL.
+- Verified live: `https://<token>.preview.styrman.xyz/` served the app over TLS
+  with NO auth; a bogus-token subdomain 404'd; revoke → 404 immediately.

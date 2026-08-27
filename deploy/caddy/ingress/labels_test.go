@@ -288,9 +288,9 @@ func TestParseLabels_ReservedHostnameAllowedForInfra(t *testing.T) {
 		"caddy_port":     "3000",
 		"caddy_admins":   "admin@example.com",
 	}
-	app, err := ParseLabels(labels, "devbox-launcher", []int{3000}, 100)
+	app, err := ParseLabels(labels, "styrman-launcher", []int{3000}, 100)
 	if err != nil {
-		t.Fatalf("expected devbox- container to use reserved hostname, got error: %v", err)
+		t.Fatalf("expected styrman- container to use reserved hostname, got error: %v", err)
 	}
 	if app == nil {
 		t.Fatal("expected app, got nil")
