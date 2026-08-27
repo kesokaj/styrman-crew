@@ -28,10 +28,11 @@ type Project struct {
 	CreatedAt time.Time `json:"createdAt"`
 	GitInit   bool      `json:"gitInit"`
 	Archived  bool      `json:"archived"`
-	// SharedEmails may access this project's port previews (read-only, only
-	// the previews — never the terminal, files, or the dashboard). Empty =
-	// owner-only. Emails are authenticated by the Google OAuth ingress.
-	SharedEmails []string `json:"sharedEmails,omitempty"`
+	// SharedPorts maps an exposed port → the Google emails allowed to open
+	// THAT port's preview (and only that port — never the terminal, files, or
+	// dashboard). Per-port so a share is least-privilege; an empty/absent entry
+	// is owner-only. Emails are authenticated by the Google OAuth ingress.
+	SharedPorts map[int][]string `json:"sharedPorts,omitempty"`
 }
 
 // nameRe accepts short kebab-case slugs. First char a letter so names are
@@ -145,16 +146,29 @@ func (s *Store) Rename(id, name string) error {
 	return s.save()
 }
 
-// SetShares replaces the project's shared-email list (already validated +
-// normalized by the caller).
-func (s *Store) SetShares(id string, emails []string) error {
+// SetPortShares replaces the shared-email list for one exposed port (emails
+// already validated + normalized by the caller). An empty list clears it.
+func (s *Store) SetPortShares(id string, port int, emails []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, ok := s.projects[id]
 	if !ok {
 		return ErrNotFound
 	}
-	p.SharedEmails = emails
+	// Copy-on-write so the stored map isn't mutated in place (Get returns it).
+	next := map[int][]string{}
+	for k, v := range p.SharedPorts {
+		if k != port {
+			next[k] = v
+		}
+	}
+	if len(emails) > 0 {
+		next[port] = emails
+	}
+	if len(next) == 0 {
+		next = nil
+	}
+	p.SharedPorts = next
 	s.projects[id] = p
 	return s.save()
 }

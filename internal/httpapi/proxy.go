@@ -45,7 +45,7 @@ func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request) {
 	// Resolve the project across owners (a shared guest doesn't own it) and
 	// enforce the per-project share list: the owner always has access, a
 	// shared Google email has preview-only access, everyone else is refused.
-	ownerUser, p, allowed, found := s.previewAccess(r.PathValue("project"), u)
+	ownerUser, p, allowed, found := s.previewAccess(r.PathValue("project"), port, u)
 	if !found {
 		writeErr(w, http.StatusNotFound, fmt.Errorf("no such project"))
 		return

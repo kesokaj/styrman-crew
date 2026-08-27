@@ -198,9 +198,10 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	// the terminal-independent form. Per-method registration: a method-less
 	// pattern conflicts with the "GET /" SPA catch-all.
 	mux.HandleFunc("GET /api/projects/{project}/ports", s.listPorts)
-	// Port-preview sharing (owner grants specific Google emails access).
-	mux.HandleFunc("GET /api/projects/{project}/shares", s.getShares)
-	mux.HandleFunc("PUT /api/projects/{project}/shares", s.setShares)
+	// Port-preview sharing (owner grants specific Google emails access to ONE
+	// exposed port).
+	mux.HandleFunc("GET /api/projects/{project}/ports/{port}/shares", s.getShares)
+	mux.HandleFunc("PUT /api/projects/{project}/ports/{port}/shares", s.setShares)
 	for _, m := range []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"} {
 		mux.HandleFunc(m+" /proxy/{project}/{port}/", s.proxyPort)
 		mux.HandleFunc(m+" /p/{project}/{term}/port/{port}/", s.proxyPort)

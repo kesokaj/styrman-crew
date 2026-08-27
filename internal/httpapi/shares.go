@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/kesokaj/styrman/internal/identity"
@@ -35,9 +36,9 @@ func (s *Server) allUsers() []string {
 }
 
 // previewAccess resolves a project by UUID across all owners and decides
-// whether the requester may reach its port previews. found is false when no
-// such project exists anywhere.
-func (s *Server) previewAccess(projectID string, u identity.User) (owner string, p project.Project, allowed, found bool) {
+// whether the requester may reach the preview of THIS port. found is false when
+// no such project exists anywhere.
+func (s *Server) previewAccess(projectID string, port int, u identity.User) (owner string, p project.Project, allowed, found bool) {
 	for _, user := range s.allUsers() {
 		sp, err := s.space(user)
 		if err != nil {
@@ -47,21 +48,21 @@ func (s *Server) previewAccess(projectID string, u identity.User) (owner string,
 		if err != nil {
 			continue
 		}
-		return user, pr, previewAllowed(u, user, pr.SharedEmails), true
+		return user, pr, previewAllowed(u, user, pr.SharedPorts[port]), true
 	}
 	return "", project.Project{}, false, false
 }
 
-// previewAllowed decides whether requester u may reach the previews of a
-// project owned by ownerUser with the given shared-email list. The owner branch
-// requires an AUTHORIZED user whose slug matches the owner store — never a
-// guest, whose derived Username could collide with an owner's slug (B2). The
+// previewAllowed decides whether requester u may reach a port preview of a
+// project owned by ownerUser, given the emails shared for THAT port. The owner
+// branch requires an AUTHORIZED user whose slug matches the owner store — never
+// a guest, whose derived Username could collide with an owner's slug (B2). The
 // share branch is email-based and case-insensitive.
-func previewAllowed(u identity.User, ownerUser string, shared []string) bool {
+func previewAllowed(u identity.User, ownerUser string, sharedForPort []string) bool {
 	if u.Authorized && ownerUser == u.Username {
 		return true
 	}
-	return emailIn(shared, u.Email)
+	return emailIn(sharedForPort, u.Email)
 }
 
 func emailIn(list []string, email string) bool {
@@ -87,14 +88,28 @@ func isPreviewPath(p string) bool {
 	return strings.HasPrefix(p, "/p/") && strings.Contains(p, "/port/")
 }
 
-// getShares returns a project's shared-email list (owner only).
+// sharePort parses + range-checks the {port} path value.
+func sharePort(r *http.Request) (int, error) {
+	port, err := strconv.Atoi(r.PathValue("port"))
+	if err != nil || port < 1024 || port > 65535 {
+		return 0, fmt.Errorf("invalid port")
+	}
+	return port, nil
+}
+
+// getShares returns the shared-email list for one port (owner only).
 func (s *Server) getShares(w http.ResponseWriter, r *http.Request) {
+	port, err := sharePort(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
 	_, _, p, err := s.getProjectFor(r) // resolves in the requester's OWN store
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	emails := p.SharedEmails
+	emails := p.SharedPorts[port]
 	if emails == nil {
 		emails = []string{}
 	}
@@ -108,8 +123,13 @@ const (
 	maxEmailLen = 254 // RFC 5321 max
 )
 
-// setShares replaces a project's shared-email list (owner only).
+// setShares replaces the shared-email list for one port (owner only).
 func (s *Server) setShares(w http.ResponseWriter, r *http.Request) {
+	port, err := sharePort(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
 	u, sp, p, err := s.getProjectFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
@@ -141,13 +161,13 @@ func (s *Server) setShares(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("too many shares (max %d)", maxShares))
 		return
 	}
-	if err := sp.projects.SetShares(p.ID, clean); err != nil {
+	if err := sp.projects.SetPortShares(p.ID, port, clean); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	// Audit: an access-control change is worth a durable log line.
-	s.logger.Info("project shares updated", "by", u.Email, "project", p.ID,
-		"projectName", p.Name, "count", len(clean))
+	s.logger.Info("port shares updated", "by", u.Email, "project", p.ID,
+		"projectName", p.Name, "port", port, "count", len(clean))
 	if clean == nil {
 		clean = []string{}
 	}

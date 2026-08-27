@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore } from "react";
-import { api, portUrl } from "../lib/api";
+import { api, portUrl, type PortInfo } from "../lib/api";
 import { clearClips, getClips, subscribeClips, type Clip } from "../lib/clips";
 import { usePolled } from "../lib/hooks";
 import { FileExplorer } from "./FileExplorer";
@@ -82,60 +82,83 @@ function PortsTab({ project, term }: { project: string; term: string }) {
   const { data } = usePolled(() => api.listPorts(project), 7000);
   const ports = data?.ports ?? [];
   return (
-    <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        <p className="px-1 pb-2 text-[11px] text-text-dim">
-          Ports listening inside this project's microVM. Links open the app
-          through styrman.
+    <div className="h-full overflow-y-auto p-2">
+      <p className="px-1 pb-2 text-[11px] text-text-dim">
+        Ports listening inside this project's microVM. Links open the app
+        through styrman; “share” grants specific Google accounts access to that
+        one port.
+      </p>
+      {ports.length === 0 && (
+        <p className="px-1 text-xs text-text-dim">
+          Nothing listening. Start a dev server in a terminal and it appears
+          here.
         </p>
-        {ports.length === 0 && (
-          <p className="px-1 text-xs text-text-dim">
-            Nothing listening. Start a dev server in a terminal and it appears
-            here.
-          </p>
-        )}
-        {ports.map((p) => (
-          <div
-            key={p.port}
-            className="flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-bg-hover"
-          >
-            <a
-              href={portUrl(project, term, p.port)}
-              target="_blank"
-              rel="noreferrer"
-              className="rounded bg-accent-soft px-2 py-0.5 text-accent hover:brightness-110"
-            >
-              :{p.port}
-            </a>
-            <span className="min-w-0 flex-1 truncate text-[11px] text-text-dim">
-              {p.image ? `🐳 ${p.image}` : p.process || ""}
-            </span>
-            <button
-              className="shrink-0 text-[11px] text-text-dim hover:text-text"
-              onClick={() =>
-                navigator.clipboard?.writeText(
-                  location.origin + portUrl(project, term, p.port),
-                )
-              }
-              title="Copy link"
-            >
-              copy link
-            </button>
-          </div>
-        ))}
+      )}
+      {ports.map((p) => (
+        <PortRow key={p.port} project={project} term={term} info={p} />
+      ))}
+    </div>
+  );
+}
+
+function PortRow({
+  project,
+  term,
+  info,
+}: {
+  project: string;
+  term: string;
+  info: PortInfo;
+}) {
+  const [sharing, setSharing] = useState(false);
+  return (
+    <div className="rounded hover:bg-bg-hover">
+      <div className="flex items-center gap-2 px-1 py-1 text-xs">
+        <a
+          href={portUrl(project, term, info.port)}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded bg-accent-soft px-2 py-0.5 text-accent hover:brightness-110"
+        >
+          :{info.port}
+        </a>
+        <span className="min-w-0 flex-1 truncate text-[11px] text-text-dim">
+          {info.image ? `🐳 ${info.image}` : info.process || ""}
+        </span>
+        <button
+          className="shrink-0 text-[11px] text-text-dim hover:text-text"
+          onClick={() =>
+            navigator.clipboard?.writeText(
+              location.origin + portUrl(project, term, info.port),
+            )
+          }
+          title="Copy link"
+        >
+          copy link
+        </button>
+        <button
+          className={`shrink-0 text-[11px] ${sharing ? "text-accent" : "text-text-dim hover:text-text"}`}
+          onClick={() => setSharing((v) => !v)}
+          aria-expanded={sharing}
+        >
+          share
+        </button>
       </div>
-      <ShareBox project={project} />
+      {sharing && <PortShare project={project} port={info.port} />}
     </div>
   );
 }
 
 /**
- * Who can open this project's port previews. Owner-only by default; add Google
- * emails to grant preview-only access (they sign in with Google and see only
- * this project's exposed ports — never the terminal, files, or dashboard).
+ * Who can open ONE port's preview. Owner-only by default; add Google emails to
+ * grant preview-only access to this port (they sign in with Google and see only
+ * this port — never the terminal, files, dashboard, or other ports).
  */
-function ShareBox({ project }: { project: string }) {
-  const { data, error } = usePolled(() => api.getShares(project), 30000);
+function PortShare({ project, port }: { project: string; port: number }) {
+  const { data, error } = usePolled(
+    () => api.getPortShares(project, port),
+    30000,
+  );
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   // `override` holds the canonical list returned by the last PUT, so a save is
@@ -150,7 +173,7 @@ function ShareBox({ project }: { project: string }) {
   const save = async (next: string[]): Promise<boolean> => {
     setBusy(true);
     try {
-      const res = await api.setShares(project, next);
+      const res = await api.setPortShares(project, port, next);
       setOverride(res.emails); // trust the server's normalized list
       return true;
     } catch (e) {
@@ -168,14 +191,11 @@ function ShareBox({ project }: { project: string }) {
   };
 
   return (
-    <div className="shrink-0 border-t border-border p-2">
-      <div className="px-1 pb-1 text-[11px] font-medium uppercase tracking-wider text-text-dim">
-        Share port previews
-      </div>
-      <p className="px-1 pb-1.5 text-[11px] text-text-dim">
-        Owner-only by default. Add a Google email to let that person sign in and
-        open this project's exposed ports — previews only, nothing else. Access
-        covers every port the project exposes, not one link.
+    <div className="ml-3 border-l border-border pl-2 pb-1.5">
+      <p className="px-1 py-1 text-[11px] text-text-dim">
+        Add a Google email to let that person sign in and open{" "}
+        <span className="text-text">:{port}</span> — this port only, nothing
+        else. Empty = owner-only.
       </p>
       {error && !loaded && (
         <p className="px-1 pb-1 text-[11px] text-danger">
