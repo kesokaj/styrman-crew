@@ -25,6 +25,8 @@ done
 [[ $(id -u) -eq 0 ]] || { echo "run as root (sudo)"; exit 1; }
 [[ -n "${OPERATOR}" ]] || { echo "pass --user <operator account>"; exit 1; }
 id "${OPERATOR}" >/dev/null
+# python3 is used to merge daemon.json; fail early with a clear message.
+command -v python3 >/dev/null || { echo "FATAL: python3 is required (apt-get install -y python3)"; exit 1; }
 
 log() { echo "==> $*"; }
 
@@ -160,9 +162,44 @@ if [[ ! -f "${SCRIPT_DIR}/.env" && -f "${SCRIPT_DIR}/.env.example" ]]; then
     log "created deploy/.env with computed identity — fill in the secrets section"
 fi
 
-# ─── 6. Verify ──────────────────────────────────────────────────────────────
+# ─── 6. Verify Kata ──────────────────────────────────────────────────────────
 log "verifying Kata microVM boots..."
 docker pull -q debian:trixie >/dev/null
 GUEST=$(docker run --runtime mvm --rm debian:trixie uname -r)
 log "OK — guest kernel ${GUEST}, host kernel $(uname -r)"
-log "host setup complete. Next: bash deploy/home-init.sh && go run ./cmd/styrman/"
+
+# ─── 7. Build the runtime image (image-only; no secrets needed) ──────────────
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+RUNTIME_IMAGE="${STYRMAN_IMAGE:-styrman-runtime:latest}"
+if ! docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
+    log "building runtime image ${RUNTIME_IMAGE} (a few minutes)"
+    docker build -t "${RUNTIME_IMAGE}" "${REPO_ROOT}/image" \
+        || { echo "FATAL: runtime image build failed"; exit 1; }
+else
+    log "runtime image ${RUNTIME_IMAGE} present"
+fi
+
+# ─── 8. Seed the shared home (dotfiles + agent harness, R5) ──────────────────
+# Seeds the legacy path (${STATE_DIR}/home); the server's migrateLegacy renames
+# it into homes/<admin-email-slug> on first boot (the email slug isn't known
+# until the operator fills STYRMAN_ALLOWED_EMAILS in .env, step 1 below).
+if [[ -x "${SCRIPT_DIR}/home-init.sh" && ! -d "${STATE_DIR}/homes" ]]; then
+    log "seeding shared home (dotfiles + agent harness)"
+    sudo -u "${OPERATOR}" bash "${SCRIPT_DIR}/home-init.sh" \
+        || log "WARN: home-init reported errors (continuing)"
+fi
+
+# ─── 9. Next steps (secrets can't be auto-filled) ────────────────────────────
+cat <<NEXT
+
+==> host setup complete. To bring styrman up (production, Caddy + OAuth):
+    1. Edit ${SCRIPT_DIR}/.env — fill GOOGLE_CLIENT_ID/SECRET, CLOUDFLARE_API_TOKEN,
+       STYRMAN_ALLOWED_EMAILS, BASE_DOMAIN. (Identity + secrets like
+       STYRMAN_INGRESS_TOKEN / STYRMAN_JWT_KEY / STYRMAN_KEYRING_PW are already
+       generated.)
+    2. cd ${SCRIPT_DIR} && docker compose up -d --build
+
+    For local testing without OAuth (no ingress): run the integration suite
+    (.agents/docs/testing/styrman/integration.sh) or web/e2e/run.sh — both
+    self-host a server on 127.0.0.1. There is no auth-bypass listener in prod.
+NEXT

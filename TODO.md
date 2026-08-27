@@ -64,3 +64,19 @@ Deferred work items. Not blocking current work, but should be addressed later.
   - **I15** make host-setup.sh the single convergent fresh-install entry point
     (build runtime image, run home-init, print compose command) + per-user
     harness in ensureHome; align deploy.md. (R11/R5.)
+
+- **WON'T DO (operator decision 2026-08-27):**
+  - **I14** docker-socket proxy for Caddy — declined.
+  - **I13** version-pinning Go/Node/claude/yq in the runtime image — declined:
+    the terminal is a dev environment and intentionally ships current tool
+    versions; pinning would defeat the purpose. (Kata tarball checksum in
+    host-setup.sh stays — that's supply-chain, not version pinning.)
+
+- **Multi-user harness (I15 residual, 2026-08-27):** host-setup.sh + home-init.sh
+  now seed the OPERATOR's home (dotfiles + agent harness) and converge to the
+  compose bring-up. But additional users' homes are created by ensureHome
+  (internal/httpapi/server.go) inside the server container, which has no
+  devshell_prompt/harness checkout — so users 2+ get dotfiles but NOT the
+  harness (R5 gap for multi-user). Decide: bake the harness into the server
+  image, or mount it, then have ensureHome deploy it. Single-operator installs
+  are unaffected.

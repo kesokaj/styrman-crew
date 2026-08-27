@@ -93,9 +93,9 @@
 - **Verify:** rebuild image; `docker stop` a project and confirm clean dockerd shutdown; suites.
 
 ### Batch D — deploy hardening & reproducibility (P2) 🟠
-- ◐ **I14** (deferred — needs socket-proxy sidecar + live ingress test, see TODO) Front `docker.sock` with a read-only socket proxy (`CONTAINERS=1,EVENTS=1`) for Caddy; correct the "read-only" docs.
-- ◐ **I13** (Kata tarball checksum DONE; OpenTofu skip-verify + version pins deferred, see TODO) Pin + verify the Kata release SHA256; drop OpenTofu `--skip-verify`; pin `yq`/Go/claude/node versions (**N27/N29**).
-- ◐ **I15** (deferred, see TODO) Make `host-setup.sh` the single entry point: check `python3`, build the runtime image, invoke `home-init.sh`, print the compose command; give `home-init.sh` a `--user <slug>` flag and have `ensureHome` shell out to it (kill the drifted Go dotfile copy); align `deploy.md`. **N31** healthcheck comment.
+- ✗ **I14** DECLINED (operator decision) Front `docker.sock` with a read-only socket proxy (`CONTAINERS=1,EVENTS=1`) for Caddy; correct the "read-only" docs.
+- ✗ **I13** DECLINED (version pinning defeats the dev-terminal purpose); Kata tarball checksum DONE Pin + verify the Kata release SHA256; drop OpenTofu `--skip-verify`; pin `yq`/Go/claude/node versions (**N27/N29**).
+- ◐ **I15** (host-setup convergence + home seeding DONE; multi-user harness in ensureHome still open, see TODO) Make `host-setup.sh` the single entry point: check `python3`, build the runtime image, invoke `home-init.sh`, print the compose command; give `home-init.sh` a `--user <slug>` flag and have `ensureHome` shell out to it (kill the drifted Go dotfile copy); align `deploy.md`. **N31** healthcheck comment.
 - **Verify:** dry-run the fresh-install path end to end (ideally the R11 second machine).
 
 ### Batch E — frontend correctness & UX (P3) 🟡

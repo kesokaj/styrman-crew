@@ -6,11 +6,14 @@ Two ways to run styrman; both share the same state under `/var/lib/styrman`.
 
 ```bash
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/          # 127.0.0.1:8080
-STYRMAN_ADDR=0.0.0.0:8080 ... go run ./cmd/styrman/              # LAN
 ```
 
 `STYRMAN_AUTH` defaults to `none`; whoever reaches the port acts as the
-default user (first allowed email, else the OS user) with admin rights.
+default user (first allowed email, else the OS user) with admin rights. The
+server now **refuses to start** with `auth=none` on a non-loopback `STYRMAN_ADDR`
+(and refuses a non-loopback dev listener) — an unauthenticated admin API must
+never be exposed beyond loopback. To reach a dev server from the LAN, front it
+with the Caddy ingress (`auth=header`), don't bind `0.0.0.0` with `auth=none`.
 Never expose this beyond loopback/trusted networks. The compose deploy runs
 **no** auth-bypass listener at all (`STYRMAN_DEV_ADDR` is opt-in, must bind
 loopback, and is unset in `docker-compose.yml`). Before the 2026-08-27
