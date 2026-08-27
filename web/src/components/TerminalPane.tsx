@@ -160,13 +160,22 @@ export function TerminalPane({
       }
     });
 
+    // Debounce: dragging the window edge fires this dozens of times/s, and
+    // each resize is a full tmux pane resize + TUI redraw inside the microVM.
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     const onResize = () => {
-      fit.fit();
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
-        );
-      }
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        fit.fit();
+        // FitAddon clamps to 2×1; don't ship a nonsense size for a collapsed
+        // pane.
+        if (term.cols < 10 || term.rows < 3) return;
+        if (ws?.readyState === WebSocket.OPEN) {
+          ws.send(
+            JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
+          );
+        }
+      }, 120);
     };
     const resizeObserver = new ResizeObserver(onResize);
     resizeObserver.observe(host);
@@ -175,6 +184,7 @@ export function TerminalPane({
       closedForGood = true;
       clearTimeout(reconnectTimer);
       clearTimeout(scanTimer);
+      clearTimeout(resizeTimer);
       dataSub.dispose();
       resizeObserver.disconnect();
       if (ws) {
@@ -229,12 +239,14 @@ export function TerminalPane({
                 href={u}
                 target="_blank"
                 rel="noopener noreferrer"
+                aria-label={`Open ${u}`}
                 className="font-medium text-accent hover:brightness-110"
               >
                 Open
               </a>
               <button
                 onClick={() => copyUrl(u)}
+                aria-label={`Copy ${u}`}
                 className="text-text-dim hover:text-text"
               >
                 {copied === u ? "✓" : "Copy"}
@@ -242,7 +254,7 @@ export function TerminalPane({
               <button
                 onClick={() => setDismissed((d) => [...d, u])}
                 className="text-text-dim hover:text-text"
-                aria-label="Dismiss link"
+                aria-label={`Dismiss ${u}`}
               >
                 ✕
               </button>
@@ -282,7 +294,11 @@ export function TerminalPane({
       <div className="relative min-h-0 flex-1">
         <div ref={hostRef} className="term-host h-full w-full p-1.5" />
         {toast && (
-          <span className="absolute bottom-2 right-3 z-10 rounded-full bg-bg-raised/90 px-2.5 py-0.5 text-[11px] text-ok shadow">
+          <span
+            role="status"
+            aria-live="polite"
+            className="absolute bottom-2 right-3 z-10 rounded-full bg-bg-raised/90 px-2.5 py-0.5 text-[11px] text-ok shadow"
+          >
             ✓ {toast}
           </span>
         )}

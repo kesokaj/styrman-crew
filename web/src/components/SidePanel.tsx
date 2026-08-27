@@ -194,7 +194,10 @@ function HistoryTab({ project }: { project: string }) {
  * safety checkpoint of the current state is taken first).
  */
 function GitTab({ project }: { project: string }) {
-  const { data, refresh: refreshDiff } = usePolled(() => api.diff(project), 10000);
+  const { data, error: diffError, refresh: refreshDiff } = usePolled(
+    () => api.diff(project),
+    10000,
+  );
   const { data: cpData, error: cpError, refresh: refreshCps } = usePolled(
     () => api.listCheckpoints(project),
     15000,
@@ -237,7 +240,11 @@ function GitTab({ project }: { project: string }) {
     }
   };
 
-  if (!data) return <p className="p-2 text-xs text-text-dim">Loading…</p>;
+  if (!data) {
+    if (diffError)
+      return <p className="p-2 text-xs text-danger">{diffError}</p>;
+    return <p className="p-2 text-xs text-text-dim">Loading…</p>;
+  }
   if (!data.repo) {
     return (
       <p className="p-2 text-xs text-text-dim">

@@ -12,15 +12,37 @@ export function usePolled<T>(fetcher: () => Promise<T>, intervalMs: number): {
   useEffect(() => {
     fetcherRef.current = fetcher
   })
+  // Guards: skip if a request is still in flight (slow VM boots stacked polls
+  // otherwise), drop stale responses (a slow earlier reply must not overwrite
+  // a newer one), and ignore results after unmount.
+  const inFlight = useRef(false)
+  const gen = useRef(0)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
 
   const refresh = useCallback(() => {
+    if (inFlight.current) return
+    inFlight.current = true
+    const myGen = ++gen.current
     fetcherRef
       .current()
       .then((d) => {
+        if (!mounted.current || myGen !== gen.current) return
         setData(d)
         setError(undefined)
       })
-      .catch((e: Error) => setError(e.message))
+      .catch((e: Error) => {
+        if (!mounted.current || myGen !== gen.current) return
+        setError(e.message)
+      })
+      .finally(() => {
+        inFlight.current = false
+      })
   }, [])
 
   useEffect(() => {

@@ -41,6 +41,18 @@ await fetch(`${BASE}/api/projects/${PROJECT}?wipe=true`, {
 
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1440, height: 860 } });
+// Surface uncaught client errors as suite failures (they were invisible).
+// React hydration warnings (#418/#423/#425) are recoverable — React re-renders
+// on the client — and pre-date this suite; track them separately (TODO: the
+// SPA-prerender hydration mismatch) so a genuine runtime error still fails.
+const HYDRATION = /Minified React error #(418|423|425)/;
+const pageErrors = [];
+const hydrationWarns = [];
+const record = (s) => (HYDRATION.test(s) ? hydrationWarns : pageErrors).push(s);
+page.on("pageerror", (e) => record(String(e)));
+page.on("console", (m) => {
+  if (m.type() === "error") record(m.text());
+});
 page.setDefaultTimeout(15000);
 const shot = (name) => page.screenshot({ path: `${SHOTS}/${name}.png` });
 const panel = () => page.locator("aside").last();
@@ -133,12 +145,19 @@ try {
   });
 
   await check("both agents are installed", async () => {
-    await page.keyboard.type("command -v claude agy | wc -l", { delay: 10 });
+    // Assert the OUTPUT sentinel, not the echoed command — otherwise this
+    // passes even if neither agent exists (F10).
+    await page.keyboard.type('echo agents=$(command -v claude agy | wc -l)', {
+      delay: 10,
+    });
     await page.keyboard.press("Enter");
-    await page.waitForFunction(() =>
-      [...document.querySelectorAll(".xterm-rows")].some((r) =>
-        (r.textContent ?? "").includes("command -v claude agy | wc -l"),
-      ),
+    await page.waitForFunction(
+      () =>
+        [...document.querySelectorAll(".xterm-rows")].some((r) =>
+          (r.textContent ?? "").includes("agents=2"),
+        ),
+      null,
+      { timeout: 30000 },
     );
   });
   await shot("03-terminal");
@@ -325,6 +344,16 @@ try {
   await shot("99-failure");
 } finally {
   await browser.close();
+  if (hydrationWarns.length)
+    console.log(`  (note: ${hydrationWarns.length} recoverable hydration warning(s) — see TODO)`);
+  if (pageErrors.length) {
+    failed++;
+    console.log(`FAIL no uncaught client errors — saw ${pageErrors.length}:`);
+    for (const e of pageErrors.slice(0, 5)) console.log(`  ${e.slice(0, 160)}`);
+  } else {
+    passed++;
+    console.log("PASS no uncaught client errors");
+  }
   console.log(`\npassed=${passed} failed=${failed}`);
   process.exit(failed === 0 ? 0 : 1);
 }

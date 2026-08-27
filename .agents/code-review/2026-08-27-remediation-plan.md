@@ -99,14 +99,14 @@
 - **Verify:** dry-run the fresh-install path end to end (ideally the R11 second machine).
 
 ### Batch E — frontend correctness & UX (P3) 🟡
-- ☐ **F1** e2e pre-clean: look up the project by name via `GET /api/projects`, delete by UUID (handle duplicates). **F10** assert an agent sentinel (`agents=2`); add `page.on('pageerror')`/console listeners that fail the suite.
-- ☐ **F6** `request()` gets `AbortSignal.timeout(15000)`; `usePolled` gets an in-flight guard + generation/ordering guard + unmount guard.
-- ☐ **F5** Debounce resize ~100 ms; skip send when `cols<10||rows<3`.
-- ☐ **F4** Render the diff error in the Git tab (destructure `error`).
-- ☐ **F2** Confirm-on-discard for the file editor backdrop + ✕ when `dirty`.
-- ☐ **F3** Decide clips storage: `sessionStorage`/in-memory + short TTL, redact obvious secrets, or gate history off for the setup terminal; write an ADR (R10).
-- ☐ **F7** One shared `copy(text)` helper with `.catch` → toast; route all four call sites + `markDone` through consistent error surfacing.
-- ☐ **F8** Add `aria-label`s w/ URL to link chips; `role=status`/`aria-live` on the toast; label the search ✕; `role=dialog aria-modal`, Escape, focus-trap/restore on all three modals.
+- ☑ **F1** e2e pre-clean: look up the project by name via `GET /api/projects`, delete by UUID (handle duplicates). **F10** assert an agent sentinel (`agents=2`); add `page.on('pageerror')`/console listeners that fail the suite.
+- ☑ **F6** `request()` gets `AbortSignal.timeout(15000)`; `usePolled` gets an in-flight guard + generation/ordering guard + unmount guard.
+- ☑ **F5** Debounce resize ~100 ms; skip send when `cols<10||rows<3`.
+- ☑ **F4** Render the diff error in the Git tab (destructure `error`).
+- ☑ **F2** Confirm-on-discard for the file editor backdrop + ✕ when `dirty`.
+- ☑ **F3** Decide clips storage: `sessionStorage`/in-memory + short TTL, redact obvious secrets, or gate history off for the setup terminal; write an ADR (R10).
+- ☑ **F7** One shared `copy(text)` helper with `.catch` → toast; route all four call sites + `markDone` through consistent error surfacing.
+- ☑ **F8** Add `aria-label`s w/ URL to link chips; `role=status`/`aria-live` on the toast; label the search ✕; `role=dialog aria-modal`, Escape, focus-trap/restore on all three modals.
 - ☐ **N1–N11** frontend nits: fix stale terminal.ts header; clear `selTimer`/`toastTimer` on dispose; scan only new chunk (**N3**); reset `dismissed`/`urls` on epoch (**N5**); outbound queue during reconnect (**N6**); `onExited` ref (**N7**); `useSyncExternalStore` for clips + stable key (**N8**); lazy clips init (**N9**); setup error retry (**N10**); `.oxlintrc.json` ignoring `dist` (**N11**); prettier `api.ts`.
 - **Verify:** `tsc`, e2e, manual copy/link/resize checks.
 

@@ -504,3 +504,22 @@ branches, stash, or remotes. REQUIREMENTS.md gained R13 (operator-approved)
 to make this non-negotiable. Follow-up gap: the idle-reaper does not yet
 auto-snapshot before stopping a project (see TODO.md) because the reaper
 doesn't currently have the workspace `Dir` plumbed into it.
+
+## ADR-023: Clipboard history is session-scoped, not persisted (2026-08-27)
+
+**Context.** The terminal copies on select (mouse-up), and a Clips side-panel
+tab shows what styrman copied — genuinely useful ("what was that URL from ten
+minutes ago"). But copy-on-select means selecting an OAuth code or token
+during first-run setup lands it in that history. The initial implementation
+used `localStorage` (persists indefinitely, survives sign-out).
+
+**Decision.** Clipboard history lives in `sessionStorage` with a 1-hour TTL,
+capped at 30 entries, lazily initialized (never touched at module import — the
+SPA is prerendered). It clears when the tab closes, never syncs across
+tabs/devices, and is never sent to the server. It is a short-lived
+convenience, deliberately not durable (R10).
+
+**Alternatives.** `localStorage` (rejected: durable secret exposure);
+in-memory only (rejected: lost on reload, too lossy to be useful); redacting
+token-shaped strings (rejected: unreliable, and the link-bar already gives a
+safe path for auth URLs). Session scope + TTL is the balance.

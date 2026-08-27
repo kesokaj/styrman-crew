@@ -250,10 +250,15 @@ function FileViewer({
     });
   };
 
+  // Don't silently drop edits when clicking the backdrop or ✕.
+  const tryClose = () => {
+    if (!dirty || confirm("Discard unsaved changes?")) onClose();
+  };
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-8"
-      onClick={onClose}
+      onClick={tryClose}
     >
       <div
         className="flex h-full w-full max-w-4xl flex-col rounded-lg border border-border bg-bg-raised shadow-2xl"
@@ -279,7 +284,7 @@ function FileViewer({
                 {saving ? "Saving…" : "Save"}
               </button>
             )}
-            <button onClick={onClose} className="text-text-dim hover:text-text">
+            <button onClick={tryClose} className="text-text-dim hover:text-text">
               ✕
             </button>
           </div>

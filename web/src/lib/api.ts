@@ -132,6 +132,9 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json" },
+    // Don't hang forever if the server is wedged (a stuck VM boot pinning the
+    // box); surface a timeout the UI can show instead of a spinner forever.
+    signal: init?.signal ?? AbortSignal.timeout(20000),
     ...init,
   });
   if (res.status === 204) return undefined as T;

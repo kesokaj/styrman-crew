@@ -1,5 +1,5 @@
 import { useNavigate, useRouterState } from '@tanstack/react-router'
-import { api } from '../lib/api'
+import { api, tryUI } from '../lib/api'
 import { usePolled } from '../lib/hooks'
 
 export function SetupBanner() {
@@ -17,12 +17,18 @@ export function SetupBanner() {
     ['keyring', st.keyring],
   ]
 
-  const markDone = async () => {
-    if (!confirm('Mark setup as done? The hidden setup VM is removed; your sign-ins stay in the shared home.')) return
-    await api.setupDone()
-    refresh()
-    if (onSetupPage) navigate({ to: '/' })
-  }
+  const markDone = () =>
+    tryUI(async () => {
+      if (
+        !confirm(
+          'Mark setup as done? The hidden setup VM is removed; your sign-ins stay in the shared home.',
+        )
+      )
+        return
+      await api.setupDone()
+      refresh()
+      if (onSetupPage) navigate({ to: '/' })
+    })
 
   return (
     <div className="mx-2 mb-1 rounded-md border border-warn/30 bg-warn/10 p-2.5 text-xs">
