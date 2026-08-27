@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/kesokaj/styrman/internal/files"
@@ -18,53 +19,62 @@ import (
 	"github.com/kesokaj/styrman/internal/identity"
 )
 
-// rootFor resolves the file-explorer root for a scope: a project's workspace
-// or the requesting user's home.
-func (s *Server) rootFor(r *http.Request) (string, error) {
+// scopeFor resolves the file-explorer scope. The root is ALWAYS the user's
+// home (a real, server-created directory) so os.Root confinement holds; the
+// prefix narrows it to a project workspace. A guest-planted symlink at
+// projects/<dir> can therefore never escape the home (fixes the pre-os.Root
+// cross-tenant read/write via a symlinked workspace root).
+func (s *Server) scopeFor(r *http.Request) (root, prefix string, err error) {
 	u, sp, err := s.who(r)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
+	root = s.cfg.UserHome(u.Username)
 	if id := r.PathValue("project"); id != "" {
-		p, err := sp.projects.Get(id)
-		if err != nil {
-			return "", err
+		p, perr := sp.projects.Get(id)
+		if perr != nil {
+			return "", "", perr
 		}
-		return filepath.Join(s.cfg.UserHome(u.Username), "projects", p.Dir), nil
+		prefix = path.Join("projects", p.Dir)
 	}
-	return s.cfg.UserHome(u.Username), nil
+	return root, prefix, nil
+}
+
+// scopedPath joins the request's ?path= onto the scope prefix.
+func scopedPath(prefix, rel string) string {
+	return path.Join(prefix, strings.TrimPrefix(path.Clean("/"+rel), "/"))
 }
 
 func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) {
-	root, err := s.rootFor(r)
+	root, prefix, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	entries, err := files.List(root, r.URL.Query().Get("path"))
+	entries, err := files.List(root, scopedPath(prefix, r.URL.Query().Get("path")))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, http.StatusBadRequest, errors.New("cannot list path"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
 
 func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
-	root, err := s.rootFor(r)
+	root, prefix, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	fc, err := files.Read(root, r.URL.Query().Get("path"))
+	fc, err := files.Read(root, scopedPath(prefix, r.URL.Query().Get("path")))
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, http.StatusBadRequest, errors.New("cannot read file"))
 		return
 	}
 	writeJSON(w, http.StatusOK, fc)
 }
 
 func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
-	root, err := s.rootFor(r)
+	root, prefix, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
@@ -76,8 +86,8 @@ func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := files.Write(root, r.URL.Query().Get("path"), body.Content); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+	if err := files.Write(root, scopedPath(prefix, r.URL.Query().Get("path")), body.Content); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("cannot write file"))
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -87,7 +97,7 @@ func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 // directory); each part keeps its filename. Binary-safe, 512 MB cap via the
 // csrf guard's MaxBytesReader.
 func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
-	root, err := s.rootFor(r)
+	root, prefix, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
@@ -112,22 +122,10 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 		if name == "" || name == "." || name == "/" {
 			continue
 		}
-		full, err := files.Resolve(root, filepath.Join(dir, name))
-		if err != nil {
-			writeErr(w, http.StatusBadRequest, err)
+		if err := files.SaveStream(root, scopedPath(prefix, path.Join(dir, name)), part); err != nil {
+			writeErr(w, http.StatusInternalServerError, errors.New("cannot save upload"))
 			return
 		}
-		f, err := os.Create(full)
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-		if _, err := io.Copy(f, part); err != nil {
-			f.Close()
-			writeErr(w, http.StatusInternalServerError, err)
-			return
-		}
-		f.Close()
 		saved = append(saved, name)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"saved": saved})
@@ -135,18 +133,21 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 
 // downloadFile streams a raw file (any type) as an attachment.
 func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
-	root, err := s.rootFor(r)
+	root, prefix, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	full, err := files.Resolve(root, r.URL.Query().Get("path"))
+	rel := scopedPath(prefix, r.URL.Query().Get("path"))
+	f, st, err := files.OpenForDownload(root, rel)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+		writeErr(w, http.StatusBadRequest, errors.New("cannot open file"))
 		return
 	}
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(full)+"\"")
-	http.ServeFile(w, r, full)
+	defer f.Close()
+	w.Header().Set("Content-Disposition",
+		"attachment; filename=\""+strings.ReplaceAll(path.Base(rel), "\"", "")+"\"")
+	http.ServeContent(w, r, path.Base(rel), st.ModTime(), f)
 }
 
 // listHistory returns the project's terminal transcripts.

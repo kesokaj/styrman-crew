@@ -150,7 +150,9 @@ try {
   });
   await check("home scope switches root", async () => {
     await panel().getByText("Home", { exact: true }).click();
-    await page.waitForSelector("aside >> text=.claude");
+    // .bashrc is always in the fresh home skeleton (ensureHome); .claude only
+    // exists after a real sign-in, so don't depend on it.
+    await page.waitForSelector("aside >> text=.bashrc");
   });
   await check("project scope returns", async () => {
     await panel().getByText("Project", { exact: true }).click();

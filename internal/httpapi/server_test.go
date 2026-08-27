@@ -132,8 +132,8 @@ func TestRedactURL(t *testing.T) {
 	cases := map[string]string{
 		"https://user:ghp_secret@github.com/o/r.git": "https://***@github.com/o/r.git",
 		"https://github.com/o/r.git":                 "https://github.com/o/r.git",
-		"git@github.com:o/r.git":                      "git@github.com:o/r.git",
-		"ssh://git@host/o/r":                          "ssh://***@host/o/r",
+		"git@github.com:o/r.git":                     "git@github.com:o/r.git",
+		"ssh://git@host/o/r":                         "ssh://***@host/o/r",
 	}
 	for in, want := range cases {
 		if got := redactURL(in); got != want {

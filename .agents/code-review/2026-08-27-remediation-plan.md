@@ -59,14 +59,14 @@
 ### Batch A — security lockdown (P0) 🔴
 **Theme:** close the tenancy boundary. Do this first; nothing else matters if a VM is admin.
 
-- ☐ **B1a** Drop `STYRMAN_DEV_ADDR` from `deploy/docker-compose.yml`. Keep it only for local `go run`.
-- ☐ **B1b** In `config.Load()`: refuse to start the dev listener unless `DevAddr` resolves to a loopback IP (fail loudly, not a comment).
+- ☑ **B1a** Drop `STYRMAN_DEV_ADDR` from `deploy/docker-compose.yml`. Keep it only for local `go run`.
+- ☑ **B1b** In `config.Load()`: refuse to start the dev listener unless `DevAddr` resolves to a loopback IP (fail loudly, not a comment).
 - ☐ **B1c** Keep the server off project bridges: dial guests for the port-preview via an explicit `net.Dialer` (or a dedicated attach that is torn down after use) instead of a standing `EnsureSelfAttached`; bind the main listener to the `styrman-ingress` endpoint IP.
-- ☐ **B1d** `authGuard` (`header` mode): reject requests whose `RemoteAddr` is not the ingress; optional per-deploy `X-Styrman-Ingress-Token`.
-- ☐ **B2–B5 (one change)** Introduce `files.OpenInRoot`/switch to `os.OpenRoot(root)` (Go 1.25) and route **every** home-relative I/O through it: `explorer.go` (`rootFor` + files/file/upload/download), `setup.go` (`toolDetails`, `userSetupStatus`, `finishSetup`), `history.go` (`LogsDir`+`Read`+`List`), `server.go` `writeOnce`. Return a fingerprint for the SSH pubkey, not raw bytes.
-- ☐ **B2–B5 tests** Add `internal/files/files_test.go` escape cases; add httpapi tests proving a symlinked project dir / logs dir / pubkey is refused cross-tenant.
-- ☐ **B6a** Add root `.dockerignore` (`.git`, `**/.env`, `*.env`, `web/node_modules`, `**/node_modules`, `*.png`, `.agents`, `dist` caches as appropriate).
-- ☐ **B6b** `host-setup.sh` generates `STYRMAN_KEYRING_PW` (`openssl rand -base64 24`); drop the `:-styrman` compose default (`${STYRMAN_KEYRING_PW:?}`).
+- ◐ **B1d** (opt-in mechanism landed; enable with Caddy in part 2) `authGuard` (`header` mode): reject requests whose `RemoteAddr` is not the ingress; optional per-deploy `X-Styrman-Ingress-Token`.
+- ☑ **B2–B5 (one change)** Introduce `files.OpenInRoot`/switch to `os.OpenRoot(root)` (Go 1.25) and route **every** home-relative I/O through it: `explorer.go` (`rootFor` + files/file/upload/download), `setup.go` (`toolDetails`, `userSetupStatus`, `finishSetup`), `history.go` (`LogsDir`+`Read`+`List`), `server.go` `writeOnce`. Return a fingerprint for the SSH pubkey, not raw bytes.
+- ☑ **B2–B5 tests** Add `internal/files/files_test.go` escape cases; add httpapi tests proving a symlinked project dir / logs dir / pubkey is refused cross-tenant.
+- ☑ **B6a** Add root `.dockerignore` (`.git`, `**/.env`, `*.env`, `web/node_modules`, `**/node_modules`, `*.png`, `.agents`, `dist` caches as appropriate).
+- ☑ **B6b** `host-setup.sh` generates `STYRMAN_KEYRING_PW` (`openssl rand -base64 24`); drop the `:-styrman` compose default (`${STYRMAN_KEYRING_PW:?}`).
 - ☐ **B6c** Deliver the keyring pw to the guest via a mounted tmpfs file/stdin, not `Env`; drop the misleading `unset`.
 - ☐ **N22** In `proxy.go` `Rewrite`: strip `Cookie`/`Authorization`/`X-Caddy-*` from `pr.Out`; add a restrictive `Content-Security-Policy`; plan previews on a distinct origin or sandboxed iframe (follow-up if origin split is large).
 - **Verify:** re-run security reviewer; from inside a project VM, confirm `:8081` is unreachable and a symlinked project dir 403s; suites green.

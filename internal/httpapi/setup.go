@@ -3,11 +3,11 @@ package httpapi
 import (
 	"context"
 	"net/http"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/kesokaj/styrman/internal/files"
 )
 
 // setupStatus reports which credentials already exist in the user's home.
@@ -26,15 +26,17 @@ type setupStatus struct {
 const setupDoneMarker = ".styrman/setup-done"
 
 func (s *Server) userSetupStatus(ctx context.Context, user string) setupStatus {
+	// All reads are confined to the user's home (os.Root): a guest-planted
+	// symlink pointing at another tenant's file is refused, not followed.
 	h := s.cfg.UserHome(user)
 	st := setupStatus{
-		SSHKey:  fileExists(filepath.Join(h, ".ssh", "id_ed25519")),
-		GitHub:  fileExists(filepath.Join(h, ".config", "gh", "hosts.yml")),
-		Claude:  fileExists(filepath.Join(h, ".claude", ".credentials.json")),
-		Keyring: fileExists(filepath.Join(h, ".local", "share", "keyrings", "login.keyring")),
-		Done:    fileExists(filepath.Join(h, setupDoneMarker)),
+		SSHKey:  files.Exists(h, ".ssh/id_ed25519"),
+		GitHub:  files.Exists(h, ".config/gh/hosts.yml"),
+		Claude:  files.Exists(h, ".claude/.credentials.json"),
+		Keyring: files.Exists(h, ".local/share/keyrings/login.keyring"),
+		Done:    files.Exists(h, setupDoneMarker),
 	}
-	if data, err := os.ReadFile(filepath.Join(h, ".gitconfig")); err == nil {
+	if data, err := files.ReadRaw(h, ".gitconfig", 0); err == nil {
 		st.GitIdentity = strings.Contains(string(data), "email")
 	}
 	if running, err := s.orch.SetupStatus(ctx, user); err == nil {
@@ -76,12 +78,10 @@ func (s *Server) finishSetup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	marker := filepath.Join(s.cfg.UserHome(u.Username), setupDoneMarker)
-	if err := os.MkdirAll(filepath.Dir(marker), 0o755); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	if err := os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644); err != nil {
+	// Confined write: refuses to follow a symlinked marker planted at
+	// another tenant's file (was an arbitrary-overwrite vector).
+	stamp := []byte(time.Now().UTC().Format(time.RFC3339) + "\n")
+	if err := files.Save(s.cfg.UserHome(u.Username), setupDoneMarker, stamp, 0o644); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -120,14 +120,12 @@ type toolInfo struct {
 	ConfigDir string   `json:"configDir,omitempty"`
 }
 
-func listNames(dir string) []string {
-	des, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
+// listNames enumerates a harness dir (skills/agents/commands) relative to
+// the user's home, confined to it.
+func listNames(home, rel string) []string {
 	var out []string
-	for _, de := range des {
-		name := strings.TrimSuffix(de.Name(), ".md")
+	for _, n := range files.ListNames(home, rel) {
+		name := strings.TrimSuffix(n, ".md")
 		if strings.HasPrefix(name, ".") {
 			continue
 		}
@@ -146,8 +144,8 @@ func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h := s.cfg.UserHome(u.Username)
-	read := func(path string) string {
-		b, _ := os.ReadFile(filepath.Join(h, path))
+	read := func(rel string) string {
+		b, _ := files.ReadRaw(h, rel, 0)
 		return string(b)
 	}
 
@@ -185,21 +183,21 @@ func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
 	// claude
 	claude := toolInfo{
 		Name:      "claude",
-		Ready:     fileExists(filepath.Join(h, ".claude", ".credentials.json")),
+		Ready:     files.Exists(h, ".claude/.credentials.json"),
 		ConfigDir: "~/.claude",
-		Skills:    listNames(filepath.Join(h, ".claude", "skills")),
-		Agents:    listNames(filepath.Join(h, ".claude", "agents")),
-		Commands:  listNames(filepath.Join(h, ".claude", "commands")),
+		Skills:    listNames(h, ".claude/skills"),
+		Agents:    listNames(h, ".claude/agents"),
+		Commands:  listNames(h, ".claude/commands"),
 	}
 	tools = append(tools, claude)
 
 	// agy
 	agy := toolInfo{
 		Name:      "agy",
-		Ready:     fileExists(filepath.Join(h, ".local", "share", "keyrings", "login.keyring")),
+		Ready:     files.Exists(h, ".local/share/keyrings/login.keyring"),
 		ConfigDir: "~/.gemini/config",
-		Skills:    listNames(filepath.Join(h, ".gemini", "config", "skills")),
-		Agents:    listNames(filepath.Join(h, ".gemini", "config", "plugins", "harness", "agents")),
+		Skills:    listNames(h, ".gemini/config/skills"),
+		Agents:    listNames(h, ".gemini/config/plugins/harness/agents"),
 	}
 	if agy.Ready {
 		agy.Details = []string{"keyring present (Google OAuth token stored)"}
@@ -207,9 +205,4 @@ func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
 	tools = append(tools, agy)
 
 	writeJSON(w, http.StatusOK, map[string]any{"tools": tools})
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }

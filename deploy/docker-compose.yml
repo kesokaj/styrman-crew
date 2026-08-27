@@ -48,15 +48,20 @@ services:
       - STYRMAN_ALLOWED_EMAILS=${STYRMAN_ALLOWED_EMAILS}
       - STYRMAN_USER=${STYRMAN_USER}
       - STYRMAN_IMAGE=${STYRMAN_IMAGE:-styrman-runtime:latest}
-      - STYRMAN_KEYRING_PW=${STYRMAN_KEYRING_PW:-styrman}
+      - STYRMAN_KEYRING_PW=${STYRMAN_KEYRING_PW:?set STYRMAN_KEYRING_PW in deploy/.env (host-setup.sh generates one)}
       - STYRMAN_IDLE_TIMEOUT=${STYRMAN_IDLE_TIMEOUT:-24h}
       - HOME=/var/lib/styrman # user.Current() needs a home for uid lookups
-      - STYRMAN_DEV_ADDR=0.0.0.0:8081
       - STYRMAN_SELF_CONTAINER=styrman-server
-    # Dev/test door: auth-bypassed listener published ONLY on the host's
-    # loopback — reachable from dave itself, never from the LAN/internet.
-    ports:
-      - '127.0.0.1:8080:8081'
+      # Optional: when set (and injected by the Caddy ingress as
+      # X-Styrman-Ingress), header-mode requests without it are rejected —
+      # blocks a project VM on the shared bridge from spoofing X-Caddy-Email
+      # directly against :8080. Enable with the ingress in Batch A part 2.
+      - STYRMAN_INGRESS_TOKEN=${STYRMAN_INGRESS_TOKEN:-}
+    # SECURITY: no auth-bypass dev listener in production. It bound 0.0.0.0
+    # inside a container joined to every project bridge, handing any project
+    # VM unauthenticated admin (confirmed live in the 2026-08-27 review). Local
+    # testing without OAuth uses a HOST server on 127.0.0.1 (integration.sh /
+    # e2e), which project VMs cannot reach.
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       # Same path inside as on the host: bind sources passed to project

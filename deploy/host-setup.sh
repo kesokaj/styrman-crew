@@ -123,10 +123,15 @@ if [[ ! -f "${SCRIPT_DIR}/.env" && -f "${SCRIPT_DIR}/.env.example" ]]; then
     OP_UID=$(id -u "${OPERATOR}")
     OP_GID=$(id -g "${OPERATOR}")
     DOCKER_GID=$(getent group docker | cut -d: -f3)
+    [[ -n "${DOCKER_GID}" ]] || { echo "FATAL: docker group not found — is Docker installed?"; exit 1; }
+    # Generate a real keyring password instead of shipping the literal default,
+    # which would leave every user's agy OAuth token unprotected at rest (R10).
+    KEYRING_PW=$(openssl rand -base64 24 2>/dev/null || head -c18 /dev/urandom | base64)
     sed -e "s/^STYRMAN_UID=.*/STYRMAN_UID=${OP_UID}/" \
         -e "s/^STYRMAN_GID=.*/STYRMAN_GID=${OP_GID}/" \
         -e "s/^DOCKER_GID=.*/DOCKER_GID=${DOCKER_GID}/" \
         -e "s/^STYRMAN_USER=.*/STYRMAN_USER=${OPERATOR}/" \
+        -e "s#^STYRMAN_KEYRING_PW=.*#STYRMAN_KEYRING_PW=${KEYRING_PW}#" \
         "${SCRIPT_DIR}/.env.example" > "${SCRIPT_DIR}/.env"
     chown "${OPERATOR}:${OPERATOR}" "${SCRIPT_DIR}/.env"
     chmod 600 "${SCRIPT_DIR}/.env"

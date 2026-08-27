@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -89,6 +90,11 @@ type Config struct {
 	// without the OAuth ingress. Publish it on host loopback ONLY
 	// (compose: "127.0.0.1:8080:8081") — anyone who can reach it is operator.
 	DevAddr string
+	// IngressToken: when set, header-mode requests must carry it in
+	// X-Styrman-Ingress (injected by the Caddy ingress). Blocks a project VM
+	// on the shared bridge from reaching :8080 and spoofing X-Caddy-Email.
+	// Empty = disabled (current behavior) — enable with the ingress.
+	IngressToken string
 }
 
 // Load resolves configuration from the environment with sensible defaults.
@@ -105,6 +111,7 @@ func Load() (*Config, error) {
 		AuthMode:      envOr("STYRMAN_AUTH", "none"),
 		DevAddr:       os.Getenv("STYRMAN_DEV_ADDR"),
 		SelfContainer: os.Getenv("STYRMAN_SELF_CONTAINER"),
+		IngressToken:  os.Getenv("STYRMAN_INGRESS_TOKEN"),
 	}
 	for _, e := range strings.Split(os.Getenv("STYRMAN_ALLOWED_EMAILS"), ",") {
 		if e = strings.TrimSpace(e); e != "" {
@@ -124,6 +131,13 @@ func Load() (*Config, error) {
 	}
 	if c.Username == "" {
 		return nil, fmt.Errorf("cannot determine username — set STYRMAN_USER")
+	}
+	// The dev listener bypasses auth entirely, so it MUST bind loopback only.
+	// The server container is joined to project bridges for port-preview, so a
+	// 0.0.0.0 bind would hand every project VM unauthenticated admin — refuse
+	// to start rather than trust a compose comment.
+	if c.DevAddr != "" && !isLoopbackAddr(c.DevAddr) {
+		return nil, fmt.Errorf("STYRMAN_DEV_ADDR=%q must bind a loopback address (127.0.0.1/::1) — it bypasses auth", c.DevAddr)
 	}
 	// The shared home's owner is authoritative for the in-guest uid/gid.
 	if st, err := os.Stat(c.HomeDir); err == nil {
@@ -210,4 +224,18 @@ func envDurationOr(key string, def time.Duration) time.Duration {
 		}
 	}
 	return def
+}
+
+// isLoopbackAddr reports whether a host:port listen address binds only the
+// loopback interface. An empty or "*"/0.0.0.0 host is NOT loopback.
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

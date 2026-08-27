@@ -15,10 +15,11 @@ import (
 // workspacePath is the host-side path of a project's working tree, resolved
 // through the symlink-containment guard: the shared home is mounted into the
 // server, and every guest runs as the same uid, so a project could symlink
-// its workspace at another user's home. files.Resolve rejects any path whose
-// real target escapes this user's home (same guard the file explorer uses).
+// its workspace at another user's home. files.ContainedPath rejects any path
+// whose real target escapes this user's home (git needs a real path, so this
+// uses the path-containment guard rather than an os.Root handle).
 func (s *Server) workspacePath(user string, p project.Project) (string, error) {
-	return files.Resolve(s.cfg.UserHome(user), "projects/"+p.Dir)
+	return files.ContainedPath(s.cfg.UserHome(user), "projects/"+p.Dir)
 }
 
 // snapshot takes a best-effort automatic checkpoint (R13); failures are

@@ -1,0 +1,18 @@
+# Keep secrets and bulk out of every build context (R10).
+.git
+.gitignore
+**/.env
+*.env
+!*.env.example
+deploy/.env
+web/node_modules
+**/node_modules
+web/.output
+web/.nitro
+web/.tanstack
+*.png
+*.jpg
+*.jpeg
+.agents
+.claude
+**/*_test.go

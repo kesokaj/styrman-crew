@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -15,8 +16,16 @@ import (
 	"time"
 )
 
-// LogsDir returns the transcript directory for a project, matching the path
-// the in-guest tmux hook writes to (see image/entrypoint.sh).
+// logsRel is the transcript directory relative to the user home, matching
+// the path the in-guest tmux hook writes to (see image/entrypoint.sh). It is
+// addressed relative to the home so os.Root confinement refuses a
+// guest-planted symlink under ~/.styrman/logs from escaping the home.
+func logsRel(project string) string {
+	return path.Join(".styrman", "logs", project)
+}
+
+// LogsDir returns the absolute transcript directory (for callers that only
+// need the path, e.g. cleanup); reads/lists go through the confined helpers.
 func LogsDir(homeDir, project string) string {
 	return filepath.Join(homeDir, ".styrman", "logs", project)
 }
@@ -29,14 +38,21 @@ type Transcript struct {
 }
 
 // List returns the project's transcripts, most recently written first.
+// homeDir is the confinement root; the logs dir is addressed relative to it.
 func List(homeDir, project string) ([]Transcript, error) {
-	dir := LogsDir(homeDir, project)
-	des, err := os.ReadDir(dir)
+	rt, err := os.OpenRoot(homeDir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return []Transcript{}, nil
-		}
-		return nil, err
+		return []Transcript{}, nil
+	}
+	defer rt.Close()
+	d, err := rt.Open(logsRel(project))
+	if err != nil {
+		return []Transcript{}, nil // missing dir (or a symlink escaping home) = empty
+	}
+	defer d.Close()
+	des, err := d.ReadDir(-1)
+	if err != nil {
+		return []Transcript{}, nil
 	}
 	var out []Transcript
 	for _, de := range des {
@@ -75,8 +91,14 @@ func Read(homeDir, project, id string, maxBytes int64) (string, error) {
 	if maxBytes <= 0 {
 		maxBytes = 256 << 10
 	}
-	path := filepath.Join(LogsDir(homeDir, project), id+".log")
-	f, err := os.Open(path)
+	rt, err := os.OpenRoot(homeDir)
+	if err != nil {
+		return "", err
+	}
+	defer rt.Close()
+	// Confined open: a guest symlink under ~/.styrman/logs pointing outside
+	// the home is refused, not followed.
+	f, err := rt.Open(path.Join(logsRel(project), id+".log"))
 	if err != nil {
 		return "", err
 	}
