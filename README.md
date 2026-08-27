@@ -24,6 +24,11 @@ forever; containers disposable always.
 - **Hard isolation.** 1 project = 1 microVM (own kernel, own dockerd, own
   network — projects can never reach each other). 1 user = 1 home disk —
   users never see each other's worlds.
+- **Share previews, not access.** A project owner can grant specific Google
+  emails access to ONE exposed port's preview (ADR-024) — never the
+  terminal, files, dashboard, or other ports — or mint a public, expiring
+  link to that port (`1h`/`24h`/`7d`, no login, revocable) served from its
+  own subdomain (ADR-025). Both are least-privilege by construction.
 - **Credentials once, forever.** Each user's home (`~/.ssh`, `~/.claude`,
   `~/.gemini`, gh) survives container rebuilds, project deletion, and host
   reboots. Terminal transcripts are captured there too.
@@ -38,6 +43,9 @@ Browser ──HTTPS──► Caddy (Google OAuth, TLS, Cloudflare DNS — vendor
                 ├── per-user spaces: homes/<user>, metadata JSON stores
                 ├── REST + WS /ws/term/{projectId}/{terminal}
                 ├── /p/{id}/{t}/port/{port}/ → apps inside the microVM
+                │     (owner, or a Google email the owner shared that port with)
+                ├── /link/{token}/ → public, expiring, no-login preview of one
+                │     port, also served at https://<token>.PREVIEW_DOMAIN/
                 └── Docker SDK ──► per-project Kata microVM  styrman-<uuid>
                                      ├── tmux session per terminal → transcripts
                                      ├── own dockerd (overlay2 on a per-project disk)
@@ -52,7 +60,9 @@ stores — a restart or reboot recovers everything by adoption.
 Beta, deployed: https://app.styrman.xyz (Google sign-in, admin-managed
 access). All four build phases landed — microVM runtime, UI, OAuth ingress,
 multi-tenancy — verified by 3 suites (unit, 56 integration checks against
-real Kata, 33 self-hosted Playwright browser checks). The living
+real Kata, 33 self-hosted Playwright browser checks). Since launch: per-port
+preview sharing (ADR-024) and public TTL preview links (ADR-025), both owner
+opt-in and scoped to one port at a time. The living
 documentation is `.agents/docs/specs/styrman/guide.md`; the phase plans
 under `.agents/docs/plans/` are historical.
 

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"time"
 )
@@ -68,6 +69,13 @@ func newToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// MaxLivePerProject caps how many live links one project may hold, bounding
+// both the file size and the O(N) rewrite cost.
+const MaxLivePerProject = 20
+
+// ErrTooManyLinks is returned when a project is at MaxLivePerProject.
+var ErrTooManyLinks = fmt.Errorf("too many active links (max %d) — revoke one first", MaxLivePerProject)
+
 // Create mints a link for {project, owner, port} valid for ttl from now.
 func (s *Store) Create(project, owner string, port int, createdBy string, ttl time.Duration, now time.Time) (Link, error) {
 	token, err := newToken()
@@ -81,9 +89,18 @@ func (s *Store) Create(project, owner string, port int, createdBy string, ttl ti
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(now)
+	live := 0
+	for _, e := range s.links {
+		if e.Project == project {
+			live++
+		}
+	}
+	if live >= MaxLivePerProject {
+		return Link{}, ErrTooManyLinks
+	}
 	s.links[token] = l
 	if err := s.saveLocked(); err != nil {
-		delete(s.links, token)
+		delete(s.links, token) // roll back so memory matches disk
 		return Link{}, err
 	}
 	return l, nil
@@ -100,34 +117,58 @@ func (s *Store) Get(token string, now time.Time) (Link, bool) {
 	return l, true
 }
 
-// ListFor returns the project's live links, newest first.
+// ListFor returns the project's live links, newest first. It also prunes any
+// expired records it encounters (S4: pruning shouldn't depend on Create).
 func (s *Store) ListFor(project string, now time.Time) []Link {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	before := len(s.links)
+	s.pruneLocked(now)
+	if len(s.links) != before {
+		_ = s.saveLocked() // best-effort: dropping expired rows is not critical
+	}
 	var out []Link
 	for _, l := range s.links {
-		if l.Project == project && !l.Expired(now) {
+		if l.Project == project {
 			out = append(out, l)
 		}
 	}
-	// newest first (no time.Now sort key beyond CreatedAt)
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j].CreatedAt.After(out[j-1].CreatedAt); j-- {
-			out[j], out[j-1] = out[j-1], out[j]
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out
+}
+
+// DeleteProject revokes every link belonging to a project (S8: link revocation
+// must cascade when the project is deleted).
+func (s *Store) DeleteProject(project string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed := false
+	for t, l := range s.links {
+		if l.Project == project {
+			delete(s.links, t)
+			changed = true
 		}
 	}
-	return out
+	if !changed {
+		return nil
+	}
+	return s.saveLocked()
 }
 
 // Delete revokes a link. Revoking an unknown/expired token is a no-op success.
 func (s *Store) Delete(token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.links[token]; !ok {
+	l, ok := s.links[token]
+	if !ok {
 		return nil
 	}
 	delete(s.links, token)
-	return s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.links[token] = l // B3: restore so memory matches disk on write failure
+		return err
+	}
+	return nil
 }
 
 // pruneLocked drops expired links (caller holds mu). Does not persist by itself.
@@ -144,12 +185,27 @@ func (s *Store) saveLocked() error {
 	for _, l := range s.links {
 		f.Links = append(f.Links, l)
 	}
+	sort.Slice(f.Links, func(i, j int) bool { return f.Links[i].Token < f.Links[j].Token })
 	b, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return err
 	}
+	// Atomic + durable (S5): fsync the temp file before rename so a power cut
+	// just after a revoke can't lose the write and resurrect the link.
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	fh, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := fh.Write(b); err != nil {
+		fh.Close()
+		return err
+	}
+	if err := fh.Sync(); err != nil {
+		fh.Close()
+		return err
+	}
+	if err := fh.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.path)

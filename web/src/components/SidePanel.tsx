@@ -80,6 +80,11 @@ export function SidePanel({
 
 function PortsTab({ project, term }: { project: string; term: string }) {
   const { data } = usePolled(() => api.listPorts(project), 7000);
+  // One project-wide links poll shared by all rows (not one per open row).
+  const { data: linkData, refresh: refreshLinks } = usePolled(
+    () => api.listLinks(project),
+    30000,
+  );
   const ports = data?.ports ?? [];
   return (
     <div className="h-full overflow-y-auto p-2">
@@ -95,7 +100,14 @@ function PortsTab({ project, term }: { project: string; term: string }) {
         </p>
       )}
       {ports.map((p) => (
-        <PortRow key={p.port} project={project} term={term} info={p} />
+        <PortRow
+          key={p.port}
+          project={project}
+          term={term}
+          info={p}
+          links={linkData?.links ?? []}
+          refreshLinks={refreshLinks}
+        />
       ))}
     </div>
   );
@@ -105,10 +117,14 @@ function PortRow({
   project,
   term,
   info,
+  links,
+  refreshLinks,
 }: {
   project: string;
   term: string;
   info: PortInfo;
+  links: PublicLink[];
+  refreshLinks: () => void;
 }) {
   const [sharing, setSharing] = useState(false);
   return (
@@ -144,7 +160,14 @@ function PortRow({
           share
         </button>
       </div>
-      {sharing && <PortShare project={project} port={info.port} />}
+      {sharing && (
+        <PortShare
+          project={project}
+          port={info.port}
+          links={links}
+          refreshLinks={refreshLinks}
+        />
+      )}
     </div>
   );
 }
@@ -154,7 +177,17 @@ function PortRow({
  * grant preview-only access to this port (they sign in with Google and see only
  * this port — never the terminal, files, dashboard, or other ports).
  */
-function PortShare({ project, port }: { project: string; port: number }) {
+function PortShare({
+  project,
+  port,
+  links,
+  refreshLinks,
+}: {
+  project: string;
+  port: number;
+  links: PublicLink[];
+  refreshLinks: () => void;
+}) {
   const { data, error } = usePolled(
     () => api.getPortShares(project, port),
     30000,
@@ -240,7 +273,12 @@ function PortShare({ project, port }: { project: string; port: number }) {
           add
         </button>
       </div>
-      <PublicLinks project={project} port={port} />
+      <PublicLinks
+        project={project}
+        port={port}
+        links={links}
+        refresh={refreshLinks}
+      />
     </div>
   );
 }
@@ -249,26 +287,37 @@ function PortShare({ project, port }: { project: string; port: number }) {
  * Public, expiring links to one port — no Google login needed. The recipient
  * just opens the URL until it expires or you revoke it.
  */
-function PublicLinks({ project, port }: { project: string; port: number }) {
-  const { data } = usePolled(() => api.listLinks(project), 30000);
+function PublicLinks({
+  project,
+  port,
+  links: projectLinks,
+  refresh,
+}: {
+  project: string;
+  port: number;
+  links: PublicLink[];
+  refresh: () => void;
+}) {
   const [ttl, setTtl] = useState("24h");
   const [busy, setBusy] = useState(false);
-  // Local override updated from create/revoke responses — a poll can be up to
-  // 30 s stale (and refresh() no-ops while one is in flight), so don't rely on
-  // it to reflect a change just made.
+  // Local override updated from create/revoke responses — the shared poll can be
+  // up to 30 s stale (and refresh() no-ops while one is in flight), so don't
+  // rely on it to reflect a change just made.
   const [override, setOverride] = useState<PublicLink[]>();
-  const all = override ?? data?.links ?? [];
+  const all = override ?? projectLinks;
   const links = all.filter((l) => l.port === port); // this port only
 
   const create = () =>
     run(async () => {
       const l = await api.createLink(project, port, ttl);
       setOverride([...all, l]);
+      refresh();
     });
   const revoke = (token: string) =>
     run(async () => {
       await api.revokeLink(project, token);
       setOverride(all.filter((l) => l.token !== token));
+      refresh();
     });
 
   const run = async (fn: () => Promise<void>) => {

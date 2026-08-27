@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -63,6 +64,10 @@ func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l, err := s.links.Create(p.ID, u.Username, port, u.Email, ttl, time.Now())
+	if errors.Is(err, links.ErrTooManyLinks) {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -112,7 +117,7 @@ func (s *Server) revokeLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := r.Header.Get(HeaderEmail)
-	s.logger.Info("public link revoked", "by", u, "project", p.ID, "token", token)
+	s.logger.Info("public link revoked", "by", u, "project", p.ID, "token", token[:8]+"…")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -135,8 +140,10 @@ func (s *Server) serveLink(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, fmt.Errorf("link not found or expired"))
 		return
 	}
+	// sandbox=false: the token subdomain is already its own origin, so the app
+	// runs normally there and is still isolated from the SPA.
 	prefix := "/link/" + token
-	s.serveProxy(w, r, l.Owner, l.Project, l.Port, prefix)
+	s.serveProxy(w, r, l.Owner, l.Project, l.Port, prefix, false)
 }
 
 // isLinkPath reports whether a path is the public link route (authGuard exempts

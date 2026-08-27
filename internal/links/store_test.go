@@ -62,3 +62,44 @@ func TestValidToken(t *testing.T) {
 		t.Error("valid token rejected")
 	}
 }
+
+func TestCapAndCascade(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewStore(filepath.Join(dir, "links.json"))
+	now := time.Unix(1_700_000_000, 0)
+	// Fill to the cap for project A.
+	for i := 0; i < MaxLivePerProject; i++ {
+		if _, err := s.Create("A", "o", 3000, "e", time.Hour, now); err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+	}
+	if _, err := s.Create("A", "o", 3000, "e", time.Hour, now); err != ErrTooManyLinks {
+		t.Errorf("expected ErrTooManyLinks at cap, got %v", err)
+	}
+	// A different project is unaffected.
+	if _, err := s.Create("B", "o", 3000, "e", time.Hour, now); err != nil {
+		t.Errorf("project B create failed: %v", err)
+	}
+	// Cascade delete drops all of A's links, leaves B.
+	if err := s.DeleteProject("A"); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(s.ListFor("A", now)); got != 0 {
+		t.Errorf("after DeleteProject(A): %d links, want 0", got)
+	}
+	if got := len(s.ListFor("B", now)); got != 1 {
+		t.Errorf("project B: %d links, want 1", got)
+	}
+}
+
+func TestListForPrunesExpired(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := NewStore(filepath.Join(dir, "links.json"))
+	now := time.Unix(1_700_000_000, 0)
+	s.Create("A", "o", 3000, "e", time.Hour, now)
+	// After expiry, ListFor prunes and returns nothing, and the map shrinks.
+	_ = s.ListFor("A", now.Add(2*time.Hour))
+	if len(s.links) != 0 {
+		t.Errorf("expired link not pruned by ListFor: %d remain", len(s.links))
+	}
+}

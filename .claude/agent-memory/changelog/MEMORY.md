@@ -1,1 +1,2 @@
 - [Changelog format used in super-devbox](changelog_format_super-devbox.md) — this repo's actual .agents/docs/changes/ style diverges from the generic template; follow the repo precedent.
+- [ADR format used in super-devbox](adr_format_super-devbox.md) — inline-date heading, bold-lead paragraphs, `---` separators, trailing `Source:` line; ADR-022+ style.

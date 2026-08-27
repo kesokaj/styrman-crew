@@ -81,4 +81,33 @@ select, link-rescue bar sniffing both buffer and raw stream, Ctrl+Shift+F
 search, OSC 52) plus `web/src/lib/clips.ts` (session-scoped clipboard
 history, ADR-023) and `SidePanel.tsx`'s Clips tab.
 
+**2026-08-27 sharing + public links (ADR-024, ADR-025) doc sync:** two
+features landed same-day as the security review above (don't confuse the
+dates). ADR-024 = per-port preview sharing: owner grants specific Google
+emails access to ONE port's preview via `project.Project.SharedPorts
+map[int][]string` (JSON `sharedPorts`), enforced by `previewAllowed`
+(`internal/httpapi/shares.go`) on the *existing* `/p/.../port/{port}/` and
+`/proxy/.../` routes — NOT a new route. Required flipping the ingress label
+on `styrman-server` from role-gated (`caddy_admins`) to `ModeAuthenticated`
+(`docker-compose.yml`) so any Google account can sign in at all; the
+server's own `authGuard` is still the real permission gate. ADR-025 = public
+TTL preview links: owner mints a stateful, revocable token
+(`internal/links`) for one port, served at `/link/{token}/...` (authGuard-
+exempt, public, no oracle on 404) and — when `STYRMAN_PREVIEW_DOMAIN` is set
+in `deploy/.env` — also at `https://<token>.<domain>/` via
+`previewHostRewrite` + a `*.PREVIEW_DOMAIN` `ModePublic` wildcard block on
+the ingress (`deploy/caddy/ingress/generator.go`). One env var
+(`STYRMAN_PREVIEW_DOMAIN`) drives both the ingress `PREVIEW_DOMAIN` and the
+server's `STYRMAN_PREVIEW_BASE`; empty = feature off. Docs touched: root
+`README.md` (new Why bullet, architecture diagram gained a `/link/{token}/`
+line, Status paragraph), `api.md` (new rows under "Ports & preview" for
+`.../shares` and `.../links` + `/link/{token}`, `STYRMAN_PREVIEW_BASE` added
+to the Server environment table), `deploy.md` (new paragraph after the
+compose composition list explaining `ModeAuthenticated`, new "### Public
+preview links (optional, ADR-025)" section, bring-up fill-in comment grew
+`STYRMAN_PREVIEW_DOMAIN`). `guide.md` and `terminal-protocol.md` were NOT
+touched — this feature has no terminal/WS surface. Full design rationale
+lives in `.agents/docs/architecture/DECISIONS.md` ADR-024/ADR-025 (very
+detailed — read those first before re-deriving from code next time).
+
 See [[feedback-styrman-doc-edits]] for edit-process lessons.

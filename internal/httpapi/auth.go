@@ -30,9 +30,17 @@ func (s *Server) authGuard(mode string, next http.Handler) http.Handler {
 			return
 		}
 		// Public preview links: the unguessable token IS the capability, so
-		// these need no identity and no ingress token (they're served on the
-		// public wildcard host). serveLink validates the token itself.
+		// these need no identity. But they must still prove they came through
+		// the ingress (S7) — otherwise a project VM on the shared bridge could
+		// hit /link/<token> on :8080 directly and be proxied into ANOTHER
+		// project's port, defeating R12. The ingress injects the token on the
+		// preview block; a direct VM request lacks it.
 		if isLinkPath(r.URL.Path) {
+			if s.cfg.IngressToken != "" &&
+				subtle.ConstantTimeCompare([]byte(r.Header.Get(HeaderIngress)), []byte(s.cfg.IngressToken)) != 1 {
+				writeErr(w, http.StatusForbidden, fmt.Errorf("request did not come through the ingress"))
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}

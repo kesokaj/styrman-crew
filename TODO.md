@@ -83,16 +83,25 @@ Deferred work items. Not blocking current work, but should be addressed later.
 
 ## Post-1.0.0 (from the pre-1.0.0 review, 2026-08-27)
 
-- **Public TTL preview links on `*.preview.styrman.xyz`.** A signed, expiring
-  capability link (no guest Google login) served from a wildcard public host —
-  each token gets its own origin, which also gives perfect cross-origin
-  isolation from the SPA for free (supersedes the CSP-sandbox workaround).
-  Needs: wildcard DNS + cert in the ingress, a public route to the server, and
-  server-side token mint/validate `{project, port, exp}`. Sits alongside the
-  email sharing shipped in 1.0.0.
+- [x] ~~Public TTL preview links on `*.preview.styrman.xyz`~~ — shipped
+      2026-08-27, see ADR-025 (internal/links, internal/httpapi/links_api.go,
+      previewHostRewrite, ingress wildcard + wildcard DNS/cert). Stateful
+      token store instead of a signed blob so links are revocable/listable.
+- [x] ~~Per-port share scoping~~ — shipped 2026-08-27, see ADR-024
+      (`project.Project.SharedPorts map[int][]string`, keyed per port, not
+      project-wide).
 - **Proxy attach cache** — cache `EnsureSelfAttached` per project (TTL) instead
   of a Docker `NetworkConnect` per proxied request.
 - **`projectID→owner` index** so `previewAccess` doesn't scan all user dirs.
-- **Per-port share scoping** — today a share grants every exposed port in the VM.
 - **Proxy path normalization** — `path.Clean` + `RawPath` on the forwarded URL.
 - **Bridge sessionAlive integration test** behind a small `Exec` interface.
+
+## Post-1.1 (from the 1.1 review, 2026-08-27)
+
+- **S9** — migrate a legacy `sharedEmails` (project-wide) field into `SharedPorts`
+  on load, or log affected projects. Only matters for unreleased intermediate data.
+- **S10** — force-close proxied WebSocket/stream connections at link expiry
+  (ReverseProxy doesn't re-check the token after the upgrade handshake).
+- Guest app sees `Host: <ip>:<port>` — rewrite `Location` on absolute redirects.
+- `linkURL` returns a login-gated path form when STYRMAN_PREVIEW_BASE is unset;
+  surface "public links need STYRMAN_PREVIEW_DOMAIN" in the UI or 503 the mint.

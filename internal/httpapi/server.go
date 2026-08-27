@@ -324,15 +324,30 @@ func (s *Server) previewHostRewrite(next http.Handler) http.Handler {
 			if i := strings.IndexByte(host, ':'); i >= 0 {
 				host = host[:i]
 			}
+			host = strings.ToLower(strings.TrimSuffix(host, ".")) // normalize (nit)
 			if suffix := "." + base; strings.HasSuffix(host, suffix) {
-				if token := strings.TrimSuffix(host, suffix); links.ValidToken(token) {
+				token := strings.TrimSuffix(host, suffix)
+				if links.ValidToken(token) {
+					// Stash the original path so serveProxy's cold-attach
+					// redirect bounces to the URL the visitor used, not the
+					// internal /link/<token> form (B1).
+					r = r.WithContext(context.WithValue(r.Context(), origPathKey{}, r.URL.Path))
 					r.URL.Path = "/link/" + token + r.URL.Path
+				} else {
+					// A preview host whose subdomain isn't a live token must
+					// serve NOTHING (not /api/health, not the SPA) — 404 (S6).
+					http.NotFound(w, r)
+					return
 				}
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
 }
+
+// origPathKey carries the pre-rewrite request path from previewHostRewrite to
+// serveProxy (for the cold-attach redirect).
+type origPathKey struct{}
 
 // redirectSlash sends /p/x/1/port/3000 → …/3000/ so the proxied app's
 // relative asset paths resolve under the prefix.
@@ -346,6 +361,14 @@ func redirectSlash(w http.ResponseWriter, r *http.Request) {
 // (WebSocket origin checking is handled separately by websocket.Accept.)
 func csrfGuard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Preview / link paths merely tunnel bytes to a guest app — styrman's
+		// CSRF concern (protecting its OWN API) doesn't apply, and the JSON body
+		// cap would truncate the app's uploads. A sandboxed preview also sends
+		// Origin: null, which would 403 every mutation the app makes (B2).
+		if isPreviewPath(r.URL.Path) || isLinkPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			if origin := r.Header.Get("Origin"); origin != "" {
 				if u, err := url.Parse(origin); err != nil || u.Host != r.Host {
@@ -602,6 +625,12 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := sp.terms.DeleteProject(p.ID); err != nil {
 		s.logger.Warn("terminal records cleanup failed", "project", p.Name, "error", err)
+	}
+	// S8: public links must not outlive the project they point at.
+	if s.links != nil {
+		if err := s.links.DeleteProject(p.ID); err != nil {
+			s.logger.Warn("public-link cleanup failed", "project", p.Name, "error", err)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

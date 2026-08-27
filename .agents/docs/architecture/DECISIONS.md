@@ -523,3 +523,80 @@ convenience, deliberately not durable (R10).
 in-memory only (rejected: lost on reload, too lossy to be useful); redacting
 token-shaped strings (rejected: unreliable, and the link-bar already gives a
 safe path for auth URLs). Session scope + TTL is the balance.
+
+---
+
+## ADR-024: Per-port preview sharing, not project-wide (2026-08-27)
+
+**Context.** Sharing a project's live preview with a guest (a client, a
+teammate without a styrman account) needs a real access-control decision:
+what exactly does the shared link expose? A project VM can have several
+listening ports at once (dev server, API, admin panel, ad hoc debug tools).
+
+**Decision.** A project owner grants specific Google emails access to ONE
+exposed port's preview: `project.Project.SharedPorts map[int][]string`,
+keyed per-port, not project-wide. `previewAllowed` (internal/httpapi/shares.go)
+gates the owner branch on an *authorized* user whose slug matches the
+owner's store (`u.Authorized && ownerUser == u.Username`) — never a guest,
+whose derived username could otherwise collide with an owner's slug and
+grant them the owner's projects (tracked as finding B2 in the pre-1.0.0
+review). The guest branch is a case-insensitive email match against
+`SharedPorts[port]`. Deploying this required flipping the styrman ingress
+host from admin-only to `ModeAuthenticated` (`deploy/docker-compose.yml`) so
+any Google account can sign in and reach the server at all; the server's own
+`authGuard` (internal/httpapi/auth.go) is the real gate — an authenticated
+but non-authorized email is 403'd everywhere except `isPreviewPath` routes
+(`/proxy/…`, `/p/{project}/{term}/port/{port}/…`).
+
+**Consequences.** Least privilege: a shared guest reaches exactly the one
+port shared with them, never a port-scan surface across the whole VM. Admin
+rights still come only from `STYRMAN_ALLOWED_EMAILS` server-side, never from
+merely passing the ingress. Cost: any Google account can now reach the
+login page (though it gets 403 on the SPA shell and every non-preview route
+unless it's an authorized styrman user).
+
+Source: internal/httpapi/shares.go, internal/httpapi/auth.go,
+internal/project/store.go, deploy/docker-compose.yml.
+
+---
+
+## ADR-025: Public TTL preview links via a wildcard subdomain (2026-08-27)
+
+**Context.** Email-based sharing (ADR-024) still requires the guest to have
+a Google account and sign in. The pre-1.0.0 backlog wanted a lower-friction
+option: a link anyone holding it can open, no login, that expires on its
+own. The design also had to solve the SPA's cross-origin isolation problem
+for previewed apps without a CSP-sandbox workaround.
+
+**Decision.** Public, expiring capability links to one port, served at
+`https://<token>.<PREVIEW_DOMAIN>/`, backed by a stateful token store
+(`internal/links`) rather than a signed blob — stateful means a link can be
+revoked and listed, which a signed blob can't (no revocation before its own
+expiry). The 128-bit hex token is the capability: `GET /link/{token}/…`
+(`internal/httpapi/links_api.go`) is exempt from `authGuard` and fully
+public; a bogus or expired token 404s with no distinguishing error (no
+oracle). TTL is bounded to one of 1h/24h/7d and every mint/revoke is
+audit-logged. Giving each token its own subdomain (rather than a path under
+the main host) means each preview gets a clean origin/root — the previewed
+app's root-relative asset paths work unchanged, and it's naturally
+cross-origin-isolated from the SPA.
+
+Wiring: the ingress adds a `*.PREVIEW_DOMAIN` `ModePublic` wildcard site
+block (Host preserved so the server can read the token subdomain,
+client-supplied identity headers stripped, ingress token injected) plus
+wildcard DNS (`EnsureDNS`) and an auto-issued wildcard cert
+(`deploy/caddy/ingress/generator.go`, `cloudflare.go`). The server's
+`previewHostRewrite` (internal/httpapi/server.go), run outermost before
+`authGuard`, maps `<token>.PREVIEW_BASE` → `/link/{token}/…`. One compose
+var, `STYRMAN_PREVIEW_DOMAIN`, drives both the ingress `PREVIEW_DOMAIN` and
+the server's `STYRMAN_PREVIEW_BASE`.
+
+**Consequences.** A public wildcard host now exists on the ingress whenever
+`STYRMAN_PREVIEW_DOMAIN` is set (empty = feature fully off, the default).
+Revocation and expiry deny immediately (`links.Store.Get` filters expired
+entries). Shipped and verified live 2026-08-27 against
+`preview.styrman.xyz`.
+
+Source: internal/links/store.go, internal/httpapi/links_api.go,
+internal/httpapi/server.go (previewHostRewrite), deploy/docker-compose.yml,
+deploy/caddy/ingress/generator.go, deploy/caddy/ingress/cloudflare.go.
