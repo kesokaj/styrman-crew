@@ -1,6 +1,10 @@
 package httpapi
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/kesokaj/styrman/internal/identity"
+)
 
 func TestEmailIn(t *testing.T) {
 	list := []string{"Alice@Gmail.com", "bob@example.org"}
@@ -47,5 +51,33 @@ func TestEmailValidation(t *testing.T) {
 		if emailRe.MatchString(e) {
 			t.Errorf("%q should be invalid", e)
 		}
+	}
+}
+
+func TestPreviewAllowed(t *testing.T) {
+	u := func(email, username string, authorized bool) identity.User {
+		return identity.User{Email: email, Username: username, Authorized: authorized}
+	}
+	shared := []string{"friend@gmail.com"}
+	cases := []struct {
+		name  string
+		user  identity.User
+		owner string
+		want  bool
+	}{
+		{"authorized owner", u("o@gmail.com", "o", true), "o", true},
+		{"shared guest", u("friend@gmail.com", "", false), "o", true},
+		{"shared guest case-insensitive", u("FRIEND@gmail.com", "", false), "o", true},
+		{"unshared guest", u("stranger@gmail.com", "", false), "o", false},
+		// B2: a GUEST whose slug collides with the owner must NOT be treated as owner.
+		{"slug-collision guest denied", u("o@evil.com", "o", false), "o", false},
+		{"empty email never matches", u("", "", false), "o", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := previewAllowed(c.user, c.owner, shared); got != c.want {
+				t.Errorf("previewAllowed = %v, want %v", got, c.want)
+			}
+		})
 	}
 }

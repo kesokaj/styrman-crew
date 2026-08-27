@@ -30,6 +30,10 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.server
+      args:
+        # Stamp the binary's reported version (falls back to 0.0.0). Set e.g.
+        # `STYRMAN_VERSION=1.0.0 docker compose ... up -d --build`.
+        STYRMAN_VERSION: '${STYRMAN_VERSION:-0.0.0}'
       network: host
     # The operator's uid:gid (files created in the shared home must match the
     # in-guest user) + the host's docker group for the socket.
@@ -73,9 +77,14 @@ services:
       caddy: 'true'
       caddy_hostname: '${STYRMAN_HOSTNAME:-styrman}'
       caddy_port: '8080'
-      # Google OAuth required; only these accounts pass (the server re-checks
-      # X-Caddy-Email against its userstore as the second layer, R8).
-      caddy_admins: '${STYRMAN_ALLOWED_EMAILS}'
+      # ModeAuthenticated: any Google account may sign in and reach the server,
+      # but the server's authGuard is the real gate — it 403s every request
+      # whose X-Caddy-Email is not in the userstore, EXCEPT port previews a
+      # project owner shared with that email. This is what makes port-sharing
+      # deployable: a shared guest signs in with Google and sees ONLY the
+      # previews shared with them. Admin rights come from STYRMAN_ALLOWED_EMAILS
+      # (server env, above) via the userstore — NOT from an ingress role, so a
+      # guest can never become an admin by being allowed through the ingress.
     restart: unless-stopped
 
 networks:

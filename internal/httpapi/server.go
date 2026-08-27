@@ -257,6 +257,14 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 			writeErr(w, http.StatusNotFound, fmt.Errorf("no such endpoint: %s", r.URL.Path))
 			return
 		}
+		// A preview-only guest reaches authGuard for preview-shaped paths; any
+		// that fall through to here (a malformed /proxy/… that didn't match the
+		// proxy routes) must NOT be served the SPA shell (I1). Only real styrman
+		// users get the app.
+		if !identity.FromContext(r.Context()).Authorized {
+			writeErr(w, http.StatusNotFound, fmt.Errorf("no such endpoint: %s", r.URL.Path))
+			return
+		}
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		if p != "" {
 			if st, err := fs.Stat(dist, p); err == nil && !st.IsDir() {
@@ -727,7 +735,10 @@ func (s *Server) deleteAllTerminals(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.orch.Adopt(r.Context()); err != nil {
+	// Cheap daemon ping, not a full container Adopt — /api/health is exempt
+	// from auth for the container's own probe, so it must not be an expensive
+	// unauthenticated endpoint a shared-bridge VM could hammer.
+	if err := s.orch.Ping(r.Context()); err != nil {
 		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("docker unavailable: %w", err))
 		return
 	}

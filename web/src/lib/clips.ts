@@ -68,9 +68,14 @@ export function addClip(text: string) {
   listeners.forEach((l) => l());
 }
 
+// getClips MUST return a stable reference when nothing changed — it backs
+// useSyncExternalStore, which compares snapshots by identity and infinite-loops
+// on a fresh array each call. So only swap the reference when TTL expiry
+// actually drops a clip (length shrinks); otherwise return the same array.
 export function getClips(): Clip[] {
   ensureLoaded();
-  clips = fresh(clips);
+  const next = fresh(clips);
+  if (next.length !== clips.length) clips = next;
   return clips;
 }
 

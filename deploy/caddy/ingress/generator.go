@@ -267,6 +267,14 @@ func writeAppBlock(b *strings.Builder, app App, cfg GeneratorConfig) {
 		// authorize → set clean headers → strip upstream headers → reverse_proxy
 		policyName := sanitizePolicyName(app.Hostname)
 		b.WriteString("    route {\n")
+		// Defense in depth: strip any CLIENT-supplied copies of the upstream
+		// claim headers BEFORE the authorizer injects the authentic ones, so a
+		// spoofed X-Token-User-Email can never win the placeholder below (guards
+		// against caddy-security using Header.Add rather than Set).
+		fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderEmail)
+		fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderName)
+		fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderRoles)
+		fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderSub)
 		fmt.Fprintf(b, "        authorize with %s_policy\n", policyName)
 
 		// Set clean identity headers from caddy-security's injected upstream headers

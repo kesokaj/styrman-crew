@@ -236,6 +236,14 @@ try {
     await panel().getByRole("button", { name: "Checkpoint now" }).click();
     await page.waitForSelector("aside >> text=manual");
   });
+  // Clips tab must open without spinning: getClips backs useSyncExternalStore,
+  // and an unstable snapshot infinite-loops the SPA (regression guard).
+  await check("clips tab opens (no render loop)", async () => {
+    await panel().getByText("Clips", { exact: true }).click();
+    await page.waitForSelector("aside >> text=Copied in styrman", {
+      timeout: 4000,
+    });
+  });
 
   // ── Terminals: rename + second terminal ─────────────────────────────────
   await page.locator("header button").first().click();

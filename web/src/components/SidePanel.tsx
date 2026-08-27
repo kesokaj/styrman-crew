@@ -1,5 +1,5 @@
 import { useState, useSyncExternalStore } from "react";
-import { api, portUrl, tryUI } from "../lib/api";
+import { api, portUrl } from "../lib/api";
 import { clearClips, getClips, subscribeClips, type Clip } from "../lib/clips";
 import { usePolled } from "../lib/hooks";
 import { FileExplorer } from "./FileExplorer";
@@ -131,32 +131,40 @@ function PortsTab({ project, term }: { project: string; term: string }) {
 
 /**
  * Who can open this project's port previews. Owner-only by default; add Google
- * emails to grant preview-only access (they never see the terminal, files, or
- * dashboard — only the port links you send them).
+ * emails to grant preview-only access (they sign in with Google and see only
+ * this project's exposed ports — never the terminal, files, or dashboard).
  */
 function ShareBox({ project }: { project: string }) {
-  const { data, refresh } = usePolled(() => api.getShares(project), 30000);
+  const { data, error } = usePolled(() => api.getShares(project), 30000);
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
-  const emails = data?.emails ?? [];
+  // `override` holds the canonical list returned by the last PUT, so a save is
+  // never based on a value that's up to 30 s stale (lost-update) and never on a
+  // not-yet-loaded list (which would wipe it). Until the first load, emails is
+  // undefined and editing is disabled.
+  const [override, setOverride] = useState<string[]>();
+  const emails = override ?? data?.emails;
+  const loaded = emails !== undefined;
   const valid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
 
-  const save = (next: string[]) =>
-    tryUI(async () => {
-      setBusy(true);
-      try {
-        await api.setShares(project, next);
-        refresh();
-      } finally {
-        setBusy(false);
-      }
-    });
+  const save = async (next: string[]): Promise<boolean> => {
+    setBusy(true);
+    try {
+      const res = await api.setShares(project, next);
+      setOverride(res.emails); // trust the server's normalized list
+      return true;
+    } catch (e) {
+      alert((e as Error).message || "Request failed");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
 
-  const add = () => {
+  const add = async () => {
     const e = email.trim().toLowerCase();
-    if (!valid || emails.includes(e)) return;
-    setEmail("");
-    save([...emails, e]);
+    if (!valid || !loaded || emails.includes(e)) return;
+    if (await save([...emails, e])) setEmail(""); // keep input on failure
   };
 
   return (
@@ -165,10 +173,16 @@ function ShareBox({ project }: { project: string }) {
         Share port previews
       </div>
       <p className="px-1 pb-1.5 text-[11px] text-text-dim">
-        Owner-only by default. Add a Google email to let that person open this
-        project's port links (previews only — nothing else).
+        Owner-only by default. Add a Google email to let that person sign in and
+        open this project's exposed ports — previews only, nothing else. Access
+        covers every port the project exposes, not one link.
       </p>
-      {emails.map((e) => (
+      {error && !loaded && (
+        <p className="px-1 pb-1 text-[11px] text-danger">
+          Couldn't load the share list — not editable until it loads.
+        </p>
+      )}
+      {(emails ?? []).map((e) => (
         <div
           key={e}
           className="group flex items-center gap-2 rounded px-1 py-0.5 text-[11px] hover:bg-bg-hover"
@@ -176,8 +190,8 @@ function ShareBox({ project }: { project: string }) {
           <span className="min-w-0 flex-1 truncate">{e}</span>
           <button
             disabled={busy}
-            onClick={() => save(emails.filter((x) => x !== e))}
-            className="invisible text-text-dim hover:text-danger group-hover:visible"
+            onClick={() => save((emails ?? []).filter((x) => x !== e))}
+            className="text-text-dim opacity-0 hover:text-danger focus:opacity-100 group-hover:opacity-100"
             aria-label={`Remove ${e}`}
           >
             remove
@@ -187,17 +201,20 @@ function ShareBox({ project }: { project: string }) {
       <div className="mt-1 flex gap-1">
         <input
           value={email}
+          disabled={!loaded}
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
           onChange={(e) => setEmail(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && add()}
-          placeholder="name@gmail.com"
-          className="min-w-0 flex-1 rounded border border-border bg-bg px-2 py-1 text-[11px] outline-none focus:border-accent"
+          onKeyDown={(e) =>
+            e.key === "Enter" && !e.nativeEvent.isComposing && add()
+          }
+          placeholder={loaded ? "name@gmail.com" : "loading…"}
+          className="min-w-0 flex-1 rounded border border-border bg-bg px-2 py-1 text-[11px] outline-none focus:border-accent disabled:opacity-50"
         />
         <button
           onClick={add}
-          disabled={!valid || busy}
+          disabled={!valid || busy || !loaded}
           className="rounded bg-accent-soft px-2 py-1 text-[11px] text-accent hover:brightness-110 disabled:opacity-40"
         >
           add

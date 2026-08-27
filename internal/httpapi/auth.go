@@ -51,23 +51,25 @@ func (s *Server) authGuard(mode string, next http.Handler) http.Handler {
 				// project's port PREVIEW if its owner shared it with them
 				// (proxyPort enforces the per-project share list). Every other
 				// route is refused — they never see the dashboard, terminals,
-				// or files.
+				// or files. Authorized stays false and Username is left empty so
+				// a slug collision can never satisfy an ownership check.
 				if !isPreviewPath(r.URL.Path) {
 					writeErr(w, http.StatusForbidden, fmt.Errorf("%s is not authorized for styrman", email))
 					return
 				}
-				u = identity.User{Email: email, Username: identity.DeriveUsername(email)}
+				u = identity.User{Email: email}
 				next.ServeHTTP(w, identity.WithUser(r, u))
 				return
 			}
 			u = identity.User{
-				Email:    email,
-				Username: identity.DeriveUsername(email),
-				Admin:    s.users.IsAdmin(email),
+				Email:      email,
+				Username:   identity.DeriveUsername(email),
+				Admin:      s.users.IsAdmin(email),
+				Authorized: true,
 			}
 		} else {
 			email, username := s.cfg.DefaultUser()
-			u = identity.User{Email: email, Username: username, Admin: true}
+			u = identity.User{Email: email, Username: username, Admin: true, Authorized: true}
 		}
 		next.ServeHTTP(w, identity.WithUser(r, u))
 	})

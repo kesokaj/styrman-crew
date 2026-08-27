@@ -34,11 +34,18 @@ func (s *Server) listPorts(w http.ResponseWriter, r *http.Request) {
 // WebSocket upgrades through, so dev servers with HMR work too. The proxy
 // sits behind authGuard like every other route.
 func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request) {
+	// Validate the port BEFORE the cross-owner scan so garbage input is
+	// cheap-rejected without touching the filesystem / spacesMu (I8).
+	port, err := strconv.Atoi(r.PathValue("port"))
+	if err != nil || port < 1024 || port > 65535 {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid port"))
+		return
+	}
 	u := identity.FromContext(r.Context())
 	// Resolve the project across owners (a shared guest doesn't own it) and
 	// enforce the per-project share list: the owner always has access, a
 	// shared Google email has preview-only access, everyone else is refused.
-	owner, p, allowed, found := s.previewAccess(r.PathValue("project"), u)
+	ownerUser, p, allowed, found := s.previewAccess(r.PathValue("project"), u)
 	if !found {
 		writeErr(w, http.StatusNotFound, fmt.Errorf("no such project"))
 		return
@@ -47,21 +54,16 @@ func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, fmt.Errorf("you don't have access to this project's ports"))
 		return
 	}
-	u.Username = owner // attach/IP lookups run in the owner's namespace
 	name := p.ID
-	port, err := strconv.Atoi(r.PathValue("port"))
-	if err != nil || port < 1024 || port > 65535 {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid port"))
-		return
-	}
-	if fresh := s.orch.EnsureSelfAttached(r.Context(), u.Username, name); fresh {
+	// attach/IP lookups run in the OWNER's namespace (the guest doesn't own it).
+	if fresh := s.orch.EnsureSelfAttached(r.Context(), ownerUser, name); fresh {
 		// The attach just reconfigured this container's network namespace —
 		// this request's own connection may be doomed. Send the browser
 		// around again on a fresh connection.
 		http.Redirect(w, r, r.URL.String(), http.StatusTemporaryRedirect)
 		return
 	}
-	ip, err := s.orch.IPAddress(r.Context(), u.Username, name)
+	ip, err := s.orch.IPAddress(r.Context(), ownerUser, name)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -116,13 +118,18 @@ func (s *Server) proxyFor(ip string, port int, prefix string) *httputil.ReverseP
 			pr.SetXForwarded()
 			// N22: never hand the user's styrman session/identity to a
 			// project's app — code in a VM could capture the caddy-security
-			// cookie or replay the ingress token.
+			// cookie or replay the ingress token. Explicit set + a prefix sweep
+			// so a future X-Caddy-* header is stripped by default, not leaked.
 			for _, h := range []string{
-				"Cookie", "Authorization",
-				"X-Caddy-Email", "X-Caddy-User", "X-Caddy-Role",
-				"X-Caddy-Subject", "X-Caddy-Picture", "X-Styrman-Ingress",
+				"Cookie", "Authorization", "Proxy-Authorization",
+				"X-Styrman-Ingress",
 			} {
 				pr.Out.Header.Del(h)
+			}
+			for h := range pr.Out.Header {
+				if strings.HasPrefix(http.CanonicalHeaderKey(h), "X-Caddy-") {
+					pr.Out.Header.Del(h)
+				}
 			}
 		},
 		ModifyResponse: func(resp *http.Response) error {

@@ -40,6 +40,13 @@ type User struct {
 	Email    string // "" in auth-none mode with no default email
 	Username string // home-dir + in-guest username slug
 	Admin    bool
+	// Authorized is true for a real styrman user (loopback dev, or an email in
+	// the userstore). It is FALSE for a preview-only guest — a Google account
+	// that authenticated at the ingress but is not a styrman user and may reach
+	// ONLY the port previews shared with its email. Never treat the derived
+	// Username as an ownership claim for an unauthorized user (a slug collision
+	// would otherwise grant a guest an owner's projects).
+	Authorized bool
 }
 
 // WithUser stores the user on the request context.

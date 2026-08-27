@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,12 +47,21 @@ func (s *Server) previewAccess(projectID string, u identity.User) (owner string,
 		if err != nil {
 			continue
 		}
-		// The owner always has access; a shared Google email has preview-only
-		// access. Email match is case-insensitive.
-		allowed = user == u.Username || emailIn(pr.SharedEmails, u.Email)
-		return user, pr, allowed, true
+		return user, pr, previewAllowed(u, user, pr.SharedEmails), true
 	}
 	return "", project.Project{}, false, false
+}
+
+// previewAllowed decides whether requester u may reach the previews of a
+// project owned by ownerUser with the given shared-email list. The owner branch
+// requires an AUTHORIZED user whose slug matches the owner store — never a
+// guest, whose derived Username could collide with an owner's slug (B2). The
+// share branch is email-based and case-insensitive.
+func previewAllowed(u identity.User, ownerUser string, shared []string) bool {
+	if u.Authorized && ownerUser == u.Username {
+		return true
+	}
+	return emailIn(shared, u.Email)
 }
 
 func emailIn(list []string, email string) bool {
@@ -91,9 +101,16 @@ func (s *Server) getShares(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"emails": emails})
 }
 
+// maxShares / maxEmailLen bound the per-project share list — it is rewritten
+// with fsync on every change and linear-scanned on every proxied request.
+const (
+	maxShares   = 50
+	maxEmailLen = 254 // RFC 5321 max
+)
+
 // setShares replaces a project's shared-email list (owner only).
 func (s *Server) setShares(w http.ResponseWriter, r *http.Request) {
-	_, sp, p, err := s.getProjectFor(r)
+	u, sp, p, err := s.getProjectFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
@@ -113,17 +130,24 @@ func (s *Server) setShares(w http.ResponseWriter, r *http.Request) {
 		if e == "" || seen[e] {
 			continue
 		}
-		if !emailRe.MatchString(e) {
+		if len(e) > maxEmailLen || !emailRe.MatchString(e) {
 			writeErr(w, http.StatusBadRequest, errInvalidEmail(e))
 			return
 		}
 		seen[e] = true
 		clean = append(clean, e)
 	}
+	if len(clean) > maxShares {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("too many shares (max %d)", maxShares))
+		return
+	}
 	if err := sp.projects.SetShares(p.ID, clean); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Audit: an access-control change is worth a durable log line.
+	s.logger.Info("project shares updated", "by", u.Email, "project", p.ID,
+		"projectName", p.Name, "count", len(clean))
 	if clean == nil {
 		clean = []string{}
 	}
@@ -131,9 +155,5 @@ func (s *Server) setShares(w http.ResponseWriter, r *http.Request) {
 }
 
 func errInvalidEmail(e string) error {
-	return &apiError{msg: "invalid email: " + e}
+	return fmt.Errorf("invalid email: %q", e)
 }
-
-type apiError struct{ msg string }
-
-func (e *apiError) Error() string { return e.msg }

@@ -67,6 +67,7 @@ export function TerminalPane({
     setUrls([]);
     setDismissed([]);
     setCopied(undefined);
+    setToast(undefined); // a stale "✓ Copied" pill must not survive a switch
   }, [targetKey]);
 
   useEffect(() => {
@@ -181,8 +182,10 @@ export function TerminalPane({
       if (ws?.readyState === WebSocket.OPEN) {
         // Binary frame = raw input bytes (text frames are control messages).
         ws.send(new TextEncoder().encode(d).buffer as ArrayBuffer);
-      } else if (outbox.length < 256) {
-        outbox.push(d); // dropped only under a very long outage
+      } else if (!closedForGood && outbox.length < 256) {
+        // Queue only while a reconnect is expected; bytes typed after a
+        // terminal-for-good close (exited/replaced) could never flush.
+        outbox.push(d);
       }
     });
 

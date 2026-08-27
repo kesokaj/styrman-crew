@@ -135,8 +135,10 @@ func (m *Manager) KillSession(ctx context.Context, user, project, guest, prefix,
 	}
 	code, out, err := m.orch.Exec(ctx, st.ContainerID, orchestrator.ExecSpec{
 		User: guest,
-		Cmd:  []string{"tmux", "kill-session", "-t", prefix + id},
-		Env:  []string{"HOME=/home/" + guest, "USER=" + guest},
+		// '=' forces exact matching: without it `kill-session -t conv-1` would
+		// prefix-match and kill a live `conv-10` when conv-1 is already gone.
+		Cmd: []string{"tmux", "kill-session", "-t", "=" + prefix + id},
+		Env: []string{"HOME=/home/" + guest, "USER=" + guest},
 	})
 	if err != nil {
 		return err

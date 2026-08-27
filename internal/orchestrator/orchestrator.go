@@ -493,6 +493,14 @@ func (o *Orchestrator) Destroy(ctx context.Context, user, project string) error 
 	return nil
 }
 
+// Ping cheaply checks that the Docker daemon is reachable — used by the health
+// probe, which is unauthenticated, so it must stay lightweight (a full Adopt
+// list there let a shared-bridge VM drive real daemon load).
+func (o *Orchestrator) Ping(ctx context.Context) error {
+	_, err := o.docker.Ping(ctx)
+	return err
+}
+
 // Adopt lists all styrman-managed containers, reconciling reality after a
 // server restart (ADR-007). Returns project name → Status.
 func (o *Orchestrator) Adopt(ctx context.Context) (map[string]Status, error) {

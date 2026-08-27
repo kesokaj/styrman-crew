@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -247,6 +248,12 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 
 	var wg sync.WaitGroup
 
+	// browserGone marks that the WebSocket peer died (read error or missed
+	// heartbeat) — as opposed to the tmux session ending. When it's set, the
+	// close code is moot (nobody's listening) and we skip the has-session probe
+	// (N16/I3: don't pay an extra exec round-trip on every tab close).
+	var browserGone atomic.Bool
+
 	// Heartbeat: detect dead connections faster than TCP keepalive would.
 	// Each ping gets its own deadline — Ping blocks until pong or ctx done,
 	// so an undeadlined ping on a half-open connection never returns.
@@ -264,6 +271,7 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 				err := conn.Ping(pctx)
 				pcancel()
 				if err != nil {
+					browserGone.Store(true)
 					hcancel()
 					return
 				}
@@ -302,6 +310,12 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 		for {
 			msgType, data, err := conn.Read(hctx)
 			if err != nil {
+				// Only a genuine peer failure marks the browser gone; a read
+				// error caused by our own hcancel (session exit/detach) leaves
+				// hctx cancelled and must NOT suppress the 4000 close code.
+				if hctx.Err() == nil {
+					browserGone.Store(true)
+				}
 				return
 			}
 			touch()
@@ -320,42 +334,69 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 
 	<-streamDone
 
-	// The exec ends either because the session truly exited (user typed exit,
-	// agent quit) or because our attach was torn down. Only a finished exec
-	// gets the semantic close code (4000); everything else closes normally and
-	// the client may silently reconnect. ExitCodeWait polls briefly: dockerd's
-	// exec bookkeeping lags stream EOF by a few ms, and misreading it would
-	// send a normal close where 4000 belongs (review finding).
-	if code, done := ex.ExitCodeWait(context.Background(), time.Second); done {
-		// The attach exec ended — but `tmux detach` (or `tmux attach -d` from
-		// another pane) also ends it cleanly while the SESSION lives on (N16).
-		// Sending 4000 there would strand a live session (the client won't
-		// reconnect). Disambiguate: if the tmux session still exists, treat it
-		// as a detach (normal close → client reconnects); only a truly gone
-		// session gets 4000.
-		if b.sessionAlive(s) {
-			b.logger.Info("client detached (session alive)", "session", s.key)
-			conn.Close(websocket.StatusNormalClosure, "detached")
-		} else {
-			b.logger.Info("session exited", "session", s.key, "exitCode", code)
-			conn.Close(websocket.StatusCode(config.CloseShellExited), "shell exited")
+	// Decide the close code. The has-session probe is a side effect, so it runs
+	// only where its answer matters — the browser is still here AND the exec
+	// finished — never on a plain tab close (I3). browserGone → the peer's gone,
+	// code is moot. done+probed disambiguate `tmux detach` (session lives →
+	// reconnect) from a real exit (4000). Probe error → fail toward reconnect,
+	// not a stranded 4000 (I2). ExitCodeWait polls briefly: dockerd's exec
+	// bookkeeping lags stream EOF by a few ms.
+	gone := browserGone.Load()
+	var exitCode int
+	var done, alive, probed bool
+	if !gone {
+		if exitCode, done = ex.ExitCodeWait(context.Background(), time.Second); done {
+			alive, probed = b.sessionAlive(s)
 		}
-	} else {
-		conn.Close(websocket.StatusNormalClosure, "detached")
 	}
+	code, reason := closeDecision(gone, done, alive, probed)
+	if code == config.CloseShellExited {
+		b.logger.Info("session exited", "session", s.key, "exitCode", exitCode)
+	} else {
+		b.logger.Info("terminal closed", "session", s.key, "reason", reason)
+	}
+	conn.Close(websocket.StatusCode(code), reason)
 	hcancel()
 	wg.Wait()
 }
 
+// closeDecision maps the post-stream state to a WebSocket close code (extracted
+// for testing). CloseShellExited (4000) tells the client the shell genuinely
+// ended ("Paused"); StatusNormalClosure lets it silently reconnect.
+func closeDecision(browserGone, done, alive, probed bool) (code int, reason string) {
+	switch {
+	case browserGone:
+		return int(websocket.StatusNormalClosure), "peer gone"
+	case !done:
+		return int(websocket.StatusNormalClosure), "detached"
+	case probed && !alive:
+		return config.CloseShellExited, "shell exited"
+	case probed && alive:
+		return int(websocket.StatusNormalClosure), "detached"
+	default: // probe failed — don't strand a possibly-live session
+		return int(websocket.StatusNormalClosure), "detached (probe failed)"
+	}
+}
+
 // sessionAlive reports whether the tmux session still exists in the guest —
-// used to tell a `tmux detach` (session lives) from a real shell exit.
-func (b *Bridge) sessionAlive(s session) bool {
+// used to tell a `tmux detach` (session lives) from a real shell exit. Returns
+// probed=false when the check itself failed (dockerd hiccup, timeout), so the
+// caller can pick a safe fallback instead of trusting a guessed answer.
+//
+// The target is prefixed with '=' to force EXACT matching: without it tmux
+// resolves `conv-1` to the live `conv-10` (prefix match), so a real exit of
+// terminal 1 would look alive whenever a conv-1x session exists (B3).
+func (b *Bridge) sessionAlive(s session) (alive, probed bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	code, _, err := b.orch.Exec(ctx, s.containerID, orchestrator.ExecSpec{
 		User: s.guest,
-		Cmd:  []string{"tmux", "has-session", "-t", s.tmuxName},
+		Cmd:  []string{"tmux", "has-session", "-t", "=" + s.tmuxName},
 		Env:  []string{"HOME=/home/" + s.guest, "USER=" + s.guest},
 	})
-	return err == nil && code == 0
+	if err != nil {
+		b.logger.Warn("has-session probe failed", "session", s.key, "error", err)
+		return false, false
+	}
+	return code == 0, true
 }

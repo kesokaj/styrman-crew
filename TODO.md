@@ -80,3 +80,19 @@ Deferred work items. Not blocking current work, but should be addressed later.
   harness (R5 gap for multi-user). Decide: bake the harness into the server
   image, or mount it, then have ensureHome deploy it. Single-operator installs
   are unaffected.
+
+## Post-1.0.0 (from the pre-1.0.0 review, 2026-08-27)
+
+- **Public TTL preview links on `*.preview.styrman.xyz`.** A signed, expiring
+  capability link (no guest Google login) served from a wildcard public host —
+  each token gets its own origin, which also gives perfect cross-origin
+  isolation from the SPA for free (supersedes the CSP-sandbox workaround).
+  Needs: wildcard DNS + cert in the ingress, a public route to the server, and
+  server-side token mint/validate `{project, port, exp}`. Sits alongside the
+  email sharing shipped in 1.0.0.
+- **Proxy attach cache** — cache `EnsureSelfAttached` per project (TTL) instead
+  of a Docker `NetworkConnect` per proxied request.
+- **`projectID→owner` index** so `previewAccess` doesn't scan all user dirs.
+- **Per-port share scoping** — today a share grants every exposed port in the VM.
+- **Proxy path normalization** — `path.Clean` + `RawPath` on the forwarded URL.
+- **Bridge sessionAlive integration test** behind a small `Exec` interface.
