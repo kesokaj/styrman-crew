@@ -336,6 +336,9 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 type createProjectRequest struct {
 	Name    string `json:"name"`
 	GitInit bool   `json:"gitInit"`
+	// GitHub: "" or "none" = local repo only; "private"/"public" = also
+	// create a GitHub repo via the user's gh credentials and push.
+	GitHub string `json:"github"`
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -382,14 +385,30 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		if req.GitInit {
 			// git init inside the guest as the user, so their gitconfig applies.
 			home := "/home/" + guest
-			code, out, err := s.orch.Exec(ctx, containerID, orchestrator.ExecSpec{
-				User:    guest,
-				WorkDir: home + "/projects/" + p.Dir,
-				Env:     []string{"HOME=" + home, "USER=" + guest},
-				Cmd:     []string{"git", "init", "-b", "main"},
-			})
-			if err != nil || code != 0 {
+			workdir := home + "/projects/" + p.Dir
+			run := func(cmd ...string) (int, string, error) {
+				return s.orch.Exec(ctx, containerID, orchestrator.ExecSpec{
+					User:    guest,
+					WorkDir: workdir,
+					Env:     []string{"HOME=" + home, "USER=" + guest},
+					Cmd:     cmd,
+				})
+			}
+			if code, out, err := run("git", "init", "-b", "main"); err != nil || code != 0 {
 				s.logger.Warn("git init failed", "project", p.Name, "exit", code, "output", out, "error", err)
+			}
+			if req.GitHub == "private" || req.GitHub == "public" {
+				// Needs the user's gh login (styrman-setup); logged, not fatal —
+				// the local repo exists either way.
+				if code, out, err := run("git", "commit", "--allow-empty", "-m", "Initialize styrman project"); err != nil || code != 0 {
+					s.logger.Warn("initial commit failed", "project", p.Name, "exit", code, "output", out, "error", err)
+				}
+				vis := "--" + req.GitHub
+				if code, out, err := run("bash", "-lc",
+					"gh repo create "+p.Name+" "+vis+" --source=. --remote=origin --push"); err != nil || code != 0 {
+					s.logger.Warn("github repo create failed (is gh signed in?)",
+						"project", p.Name, "exit", code, "output", out, "error", err)
+				}
 			}
 		}
 		// Pre-attach for port-preview while nothing depends on it (a fresh

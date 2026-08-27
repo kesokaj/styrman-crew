@@ -131,10 +131,10 @@ const scopeBase = (s: Scope) =>
 
 export const api = {
   listProjects: () => request<{ projects: Project[] }>("/api/projects"),
-  createProject: (name: string, gitInit: boolean) =>
+  createProject: (name: string, gitInit: boolean, github: "none" | "private" | "public" = "none") =>
     request<Project>("/api/projects", {
       method: "POST",
-      body: JSON.stringify({ name, gitInit }),
+      body: JSON.stringify({ name, gitInit, github }),
     }),
   getProject: (id: string) => request<Project>(`/api/projects/${id}`),
   renameProject: (id: string, name: string) =>
