@@ -60,6 +60,13 @@ export interface Diff {
   diff?: string;
 }
 
+/** A whole-tree snapshot stored under refs/styrman/* — never on branches. */
+export interface Checkpoint {
+  id: string;
+  time: string;
+  subject: string;
+}
+
 export interface PortInfo {
   port: number;
   process?: string;
@@ -141,10 +148,17 @@ const scopeBase = (s: Scope) =>
 
 export const api = {
   listProjects: () => request<{ projects: Project[] }>("/api/projects"),
-  createProject: (name: string, gitInit: boolean, github: "none" | "private" | "public" = "none") =>
+  createProject: (
+    name: string,
+    opts: { github?: "none" | "private" | "public"; cloneUrl?: string } = {},
+  ) =>
     request<Project>("/api/projects", {
       method: "POST",
-      body: JSON.stringify({ name, gitInit, github }),
+      body: JSON.stringify({
+        name,
+        github: opts.github ?? "none",
+        cloneUrl: opts.cloneUrl ?? "",
+      }),
     }),
   getProject: (id: string) => request<Project>(`/api/projects/${id}`),
   renameProject: (id: string, name: string) =>
@@ -225,6 +239,21 @@ export const api = {
       `/api/projects/${project}/history/${id}`,
     ),
   diff: (project: string) => request<Diff>(`/api/projects/${project}/diff`),
+
+  listCheckpoints: (project: string) =>
+    request<{ checkpoints: Checkpoint[] }>(
+      `/api/projects/${project}/checkpoints`,
+    ),
+  createCheckpoint: (project: string, label?: string) =>
+    request<{ id: string; created: boolean }>(
+      `/api/projects/${project}/checkpoints`,
+      { method: "POST", body: JSON.stringify({ label: label ?? "" }) },
+    ),
+  restoreCheckpoint: (project: string, id: string) =>
+    request<{ restored: string; safetyId: string }>(
+      `/api/projects/${project}/checkpoints/${id}/restore`,
+      { method: "POST" },
+    ),
 
   settings: () => request<Settings>("/api/settings"),
   tools: () => request<{ tools: ToolInfo[] }>("/api/settings/tools"),

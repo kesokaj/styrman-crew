@@ -438,3 +438,69 @@ dialing through a doomed one.
 
 **Consequences:** Creation UX is instant; the flake class is gone (verified
 by repeated e2e runs). First-ever preview of a project may redirect once.
+
+---
+
+## ADR-022: Git as the substrate (R13)
+
+**Date:** 2026-08-27 · **Status:** accepted (operator directive)
+
+**Context:** Operator: "You always need git, at least the local one. This
+can power history and diffs." Project workspaces up to this point were git
+repos only incidentally (if the user happened to `git init`, or if the
+project was created by cloning). There was no guaranteed local history, and
+no undo mechanism for in-progress work beyond the file explorer's raw reads
+(ADR-018) and terminal transcripts (ADR-017), neither of which is a diffable
+snapshot.
+
+**Decision:** Every project workspace IS a git repository, no exceptions.
+
+- **Creation:** empty projects get server-side `git init -b main` run
+  synchronously at creation time, before the `201` is returned (unlike the
+  rest of project creation, which is async per ADR-021 — this step is cheap
+  and local, no network, no microVM boot dependency). Clone-on-create runs
+  in-guest instead (needs the user's ssh key/agent and gitconfig, which only
+  exist inside the guest per ADR-003), with `StrictHostKeyChecking=accept-new`,
+  and falls back to an empty `git init` repo if the clone fails so the
+  no-exceptions invariant still holds.
+- **Boot-time sweep:** `ensureRepos` in `cmd/styrman/main.go` walks existing
+  workspaces at startup and `git init`s any that are repo-less (adopted
+  pre-R13 projects, or projects whose init failed for some reason).
+- **Checkpoints** are whole-tree snapshots (tracked + untracked files;
+  `.gitignore`d files excluded, matching normal git semantics) taken via a
+  **private index file** (`.git/styrman-index`, `GIT_INDEX_FILE` override) so
+  they never touch the user's own staging area. The snapshot is committed
+  with `commit-tree` under a neutral `styrman` author/committer identity, to
+  `refs/styrman/checkpoints/<nanosecond-utc-stamp>-<sha8>` — never a branch.
+  These refs are never pushed: `git push` only sends `refs/heads/*` and
+  `refs/tags/*` by default, so the checkpoint namespace is invisible to the
+  user's own git remotes without extra effort. Pruned to the newest 40.
+- **Triggers:** manual button, project stop, terminal pause/close/close-all,
+  and pre-restore (see below).
+- **Restore** = `read-tree --reset <ref>` + `checkout-index -f -a` + `clean
+  -fd` (so files not tracked by the checkpoint but present as ignored
+  survive — restore only touches what git tracked at snapshot time). Every
+  restore first snapshots the *current* state (via the same checkpoint path)
+  before restoring, so a restore is itself undoable. Documented side effect:
+  after a restore the user's own index equals the checkpoint tree, so `git
+  diff --cached` against `HEAD` will show the restored files as staged —
+  this is a consequence of using git's index/worktree primitives for the
+  restore and is called out in the UI copy rather than worked around.
+- **Alternatives considered and rejected:** a shadow branch (pollutes
+  `git log`/`git push` for the user's real branches); `git stash` (stack
+  semantics don't fit "N labeled restore points", and stash is user-visible
+  and can be popped/dropped by the user's own git usage, making it fragile
+  as an internal mechanism); a separate backup directory outside `.git`
+  (duplicates what git already does, no content-addressed dedup, doubles
+  disk cost).
+- The pre-existing `gitInit` config flag is now dead code — every project
+  always gets git regardless of its value. Accepted as-is (ignored, not
+  removed) rather than spending a cleanup pass on it now.
+
+**Consequences:** Every project has real git history from creation, usable
+for diffs and manual commits by the user as normal, plus a parallel,
+git-native undo/checkpoint system that never interferes with the user's own
+branches, stash, or remotes. REQUIREMENTS.md gained R13 (operator-approved)
+to make this non-negotiable. Follow-up gap: the idle-reaper does not yet
+auto-snapshot before stopping a project (see TODO.md) because the reaper
+doesn't currently have the workspace `Dir` plumbed into it.

@@ -13,8 +13,10 @@ import (
 	"time"
 
 	"github.com/kesokaj/styrman/internal/config"
+	"github.com/kesokaj/styrman/internal/gitrepo"
 	"github.com/kesokaj/styrman/internal/httpapi"
 	"github.com/kesokaj/styrman/internal/orchestrator"
+	"github.com/kesokaj/styrman/internal/project"
 	"github.com/kesokaj/styrman/internal/userstore"
 )
 
@@ -36,6 +38,7 @@ func main() {
 	}
 
 	migrateLegacy(cfg, logger)
+	ensureRepos(cfg, logger)
 
 	users, err := userstore.New(filepath.Join(cfg.StateDir, "users.json"), cfg.AllowedEmails)
 	if err != nil {
@@ -153,4 +156,43 @@ func migrateLegacy(cfg *config.Config, logger *slog.Logger) {
 	// 3. Previous-scheme containers are removed via the Docker SDK after the
 	// orchestrator is up (CleanupLegacy) — the containerized server has no
 	// docker CLI.
+}
+
+// ensureRepos upholds the R13 invariant on every boot: any project
+// workspace without a git repository (pre-R13 projects, or dirs restored
+// from backup) gets one initialized in place. Never touches existing repos.
+func ensureRepos(cfg *config.Config, logger *slog.Logger) {
+	usersDir := filepath.Join(cfg.StateDir, "users")
+	des, err := os.ReadDir(usersDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logger.Warn("R13 sweep: users dir unreadable", "dir", usersDir, "error", err)
+		}
+		return // no users yet — creation handles new projects
+	}
+	for _, de := range des {
+		if !de.IsDir() {
+			continue
+		}
+		user := de.Name()
+		store, err := project.NewStore(filepath.Join(cfg.UserStateDir(user), "projects.json"))
+		if err != nil {
+			logger.Warn("R13 sweep: project store unreadable", "user", user, "error", err)
+			continue
+		}
+		for _, p := range store.List() {
+			ws := filepath.Join(cfg.UserHome(user), "projects", p.Dir)
+			if _, err := os.Stat(ws); err != nil {
+				continue // workspace missing — nothing to init
+			}
+			if gitrepo.IsRepo(ws) {
+				continue
+			}
+			if err := gitrepo.EnsureRepo(ws); err != nil {
+				logger.Warn("R13 sweep: git init failed", "user", user, "project", p.ID, "error", err)
+			} else {
+				logger.Info("R13 sweep: initialized git repo", "user", user, "project", p.Name)
+			}
+		}
+	}
 }

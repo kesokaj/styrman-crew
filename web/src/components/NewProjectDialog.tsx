@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 
-type Repo = "none" | "local" | "private" | "public";
+type Repo = "local" | "private" | "public" | "clone";
 
 export function NewProjectDialog({
   onClose,
@@ -12,6 +12,7 @@ export function NewProjectDialog({
 }) {
   const [name, setName] = useState("");
   const [repo, setRepo] = useState<Repo>("local");
+  const [cloneUrl, setCloneUrl] = useState("");
   const [ghReady, setGhReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -24,17 +25,19 @@ export function NewProjectDialog({
       .catch(() => {});
   }, []);
 
-  const valid = /^[a-z][a-z0-9-]{0,30}$/.test(name);
+  const nameValid = /^[a-z][a-z0-9-]{0,30}$/.test(name);
+  // Mirror the server's cloneURLRe so the client rejects the same shapes.
+  const cloneValid = /^(https:\/\/|ssh:\/\/|git@)[\w.@:/~+-]+$/.test(cloneUrl);
+  const valid = nameValid && (repo !== "clone" || cloneValid);
 
   const create = async () => {
     setBusy(true);
     setError(undefined);
     try {
-      const p = await api.createProject(
-        name,
-        repo !== "none",
-        repo === "private" || repo === "public" ? repo : "none",
-      );
+      const p = await api.createProject(name, {
+        github: repo === "private" || repo === "public" ? repo : "none",
+        cloneUrl: repo === "clone" ? cloneUrl.trim() : undefined,
+      });
       const term = await api.createTerminal(p.id);
       onCreated(p.id, term.id);
     } catch (e) {
@@ -44,10 +47,10 @@ export function NewProjectDialog({
   };
 
   const repoOptions: Array<[Repo, string, boolean]> = [
-    ["local", "Local git repo", false],
+    ["local", "Empty git repo", false],
     ["private", "GitHub · private", !ghReady],
     ["public", "GitHub · public", !ghReady],
-    ["none", "No git", false],
+    ["clone", "Clone a repo", false],
   ];
 
   return (
@@ -77,7 +80,7 @@ export function NewProjectDialog({
           className="mb-1 w-full rounded-md border border-border bg-bg px-2 py-1.5 outline-none focus:border-accent"
         />
         <p className="mb-3 min-h-4 text-[11px] text-warn">
-          {name && !valid
+          {name && !nameValid
             ? "Must start with a letter; only a-z, 0-9 and dashes."
             : " "}
         </p>
@@ -100,10 +103,23 @@ export function NewProjectDialog({
             </button>
           ))}
         </div>
+        {repo === "clone" && (
+          <input
+            aria-label="Repository URL to clone"
+            autoCapitalize="none"
+            autoCorrect="off"
+            autoComplete="off"
+            spellCheck={false}
+            value={cloneUrl}
+            onChange={(e) => setCloneUrl(e.target.value)}
+            placeholder="git@github.com:user/repo.git or https://…"
+            className="mb-3 w-full rounded-md border border-border bg-bg px-2 py-1.5 text-xs outline-none focus:border-accent"
+          />
+        )}
         {!ghReady && (
           <p className="mb-3 text-[11px] text-text-dim">
-            GitHub options unlock after the gh sign-in in first-time setup. Local repos need no
-            credentials.
+            GitHub options unlock after the gh sign-in in first-time setup. Empty repos and public
+            https clones need no credentials.
           </p>
         )}
         <p className="mb-3 text-xs text-text-dim">

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -184,7 +185,14 @@ func (s *Server) projectDiff(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	d, err := history.GitDiff(filepath.Join(s.cfg.UserHome(u.Username), "projects", p.Dir))
+	// Resolve through the symlink-containment guard: a guest could point its
+	// workspace at another user's home (same uid on the shared mount).
+	ws, err := s.workspacePath(u.Username, p)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("workspace unavailable"))
+		return
+	}
+	d, err := history.GitDiff(ws)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

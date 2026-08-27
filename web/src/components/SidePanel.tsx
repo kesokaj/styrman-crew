@@ -3,12 +3,12 @@ import { api, portUrl } from "../lib/api";
 import { usePolled } from "../lib/hooks";
 import { FileExplorer } from "./FileExplorer";
 
-type Tab = "files" | "ports" | "history" | "diff";
+type Tab = "files" | "ports" | "history" | "git";
 const TABS: Array<[Tab, string]> = [
   ["files", "Files"],
   ["ports", "Ports"],
   ["history", "History"],
-  ["diff", "Diff"],
+  ["git", "Git"],
 ];
 
 /**
@@ -69,7 +69,7 @@ export function SidePanel({
         {tab === "files" && <FileExplorer project={project} />}
         {tab === "ports" && <PortsTab project={project} term={term} />}
         {tab === "history" && <HistoryTab project={project} />}
-        {tab === "diff" && <DiffTab project={project} />}
+        {tab === "git" && <GitTab project={project} />}
       </div>
     </aside>
   );
@@ -183,21 +183,115 @@ function HistoryTab({ project }: { project: string }) {
   );
 }
 
-function DiffTab({ project }: { project: string }) {
-  const { data } = usePolled(() => api.diff(project), 10000);
+/**
+ * Every project is a git repo (R13): working-tree diff on top, checkpoints
+ * below. Checkpoints are automatic whole-tree snapshots (plus a manual
+ * button) living under refs/styrman/* — invisible to normal git, never
+ * pushed — and restoring one rewrites the tree to exactly that moment (a
+ * safety checkpoint of the current state is taken first).
+ */
+function GitTab({ project }: { project: string }) {
+  const { data, refresh: refreshDiff } = usePolled(() => api.diff(project), 10000);
+  const { data: cpData, error: cpError, refresh: refreshCps } = usePolled(
+    () => api.listCheckpoints(project),
+    15000,
+  );
+  const [busy, setBusy] = useState(false);
+  const checkpoints = cpData?.checkpoints ?? [];
+
+  const afterChange = () => {
+    refreshCps();
+    refreshDiff(); // the tree just changed — don't wait for the 10s poll
+  };
+
+  const checkpointNow = async () => {
+    setBusy(true);
+    try {
+      await api.createCheckpoint(project, "manual");
+      afterChange();
+    } catch (e) {
+      alert((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const restore = async (id: string, subject: string) => {
+    if (
+      !confirm(
+        `Restore "${subject}"?\n\nThe working tree is rewritten to that exact state — later edits and new files are removed. The current state is checkpointed first, so this can be undone.`,
+      )
+    )
+      return;
+    setBusy(true);
+    try {
+      await api.restoreCheckpoint(project, id);
+      afterChange();
+    } catch (e) {
+      alert((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (!data) return <p className="p-2 text-xs text-text-dim">Loading…</p>;
   if (!data.repo) {
-    return <p className="p-2 text-xs text-text-dim">Not a git repository.</p>;
+    return (
+      <p className="p-2 text-xs text-text-dim">
+        Not a git repository yet — it initializes on first boot.
+      </p>
+    );
   }
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-border px-2 py-1.5 text-xs">
-        branch <span className="font-medium">{data.branch}</span>
+      <div className="flex items-center gap-2 border-b border-border px-2 py-1.5 text-xs">
+        branch <span className="font-medium">{data.branch || "main"}</span>
+        <button
+          onClick={checkpointNow}
+          disabled={busy}
+          className="ml-auto rounded bg-accent-soft px-2 py-0.5 text-accent hover:brightness-110 disabled:opacity-40"
+          title="Snapshot the whole working tree (kept outside your branches)"
+        >
+          Checkpoint now
+        </button>
       </div>
       <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-2 font-mono text-[11px] leading-snug">
         {data.status}
         {data.diff ? "\n" + data.diff : "\nNo uncommitted changes."}
       </pre>
+      <div className="max-h-48 shrink-0 overflow-y-auto border-t border-border p-1.5">
+        <div className="px-1 pb-1 text-[11px] font-medium uppercase tracking-wider text-text-dim">
+          Checkpoints
+        </div>
+        {cpError && (
+          <p className="px-1 pb-1 text-[11px] text-danger">{cpError}</p>
+        )}
+        {!cpError && checkpoints.length === 0 && (
+          <p className="px-1 pb-1 text-[11px] text-text-dim">
+            None yet. Snapshots are taken automatically when terminals pause or
+            the project stops — or use "Checkpoint now".
+          </p>
+        )}
+        {checkpoints.map((c) => (
+          <div
+            key={c.id}
+            className="group flex items-center gap-2 rounded px-1 py-0.5 text-[11px] hover:bg-bg-hover"
+          >
+            <span className="shrink-0 text-text-dim">
+              {c.time.slice(5, 16).replace("T", " ")}
+            </span>
+            <span className="min-w-0 flex-1 truncate">{c.subject}</span>
+            <button
+              onClick={() => restore(c.id, c.subject)}
+              disabled={busy}
+              className="invisible shrink-0 text-accent hover:brightness-110 disabled:opacity-40 group-hover:visible"
+              aria-label={`Restore checkpoint ${c.subject}`}
+            >
+              restore
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

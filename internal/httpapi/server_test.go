@@ -127,3 +127,40 @@ func TestAuthGuard(t *testing.T) {
 		t.Errorf("mode none: got %d, want 200", w.Code)
 	}
 }
+
+func TestRedactURL(t *testing.T) {
+	cases := map[string]string{
+		"https://user:ghp_secret@github.com/o/r.git": "https://***@github.com/o/r.git",
+		"https://github.com/o/r.git":                 "https://github.com/o/r.git",
+		"git@github.com:o/r.git":                      "git@github.com:o/r.git",
+		"ssh://git@host/o/r":                          "ssh://***@host/o/r",
+	}
+	for in, want := range cases {
+		if got := redactURL(in); got != want {
+			t.Errorf("redactURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestCloneURLValidation(t *testing.T) {
+	ok := []string{
+		"https://github.com/o/r.git",
+		"git@github.com:o/r.git",
+		"ssh://git@host:22/o/r",
+		"https://user:tok@github.com/o/r.git",
+	}
+	bad := []string{
+		"", "--upload-pack=evil", "file:///etc/passwd", "http://insecure/o/r",
+		"https://host/o/r; rm -rf /", "https://host/o/r$(whoami)",
+	}
+	for _, u := range ok {
+		if !cloneURLRe.MatchString(u) {
+			t.Errorf("clone URL %q should be accepted", u)
+		}
+	}
+	for _, u := range bad {
+		if cloneURLRe.MatchString(u) {
+			t.Errorf("clone URL %q should be rejected", u)
+		}
+	}
+}

@@ -151,10 +151,14 @@ try {
   })
   await shot('06-history')
 
-  // ── Side panel: Diff ────────────────────────────────────────────────────
-  await check('diff tab shows the repo', async () => {
-    await panel().getByText('Diff', { exact: true }).click()
+  // ── Side panel: Git (diff + checkpoints, R13) ───────────────────────────
+  await check('git tab shows the repo', async () => {
+    await panel().getByText('Git', { exact: true }).click()
     await page.waitForSelector('aside >> text=branch')
+  })
+  await check('manual checkpoint appears', async () => {
+    await panel().getByRole('button', { name: 'Checkpoint now' }).click()
+    await page.waitForSelector('aside >> text=manual')
   })
 
   // ── Terminals: rename + second terminal ─────────────────────────────────

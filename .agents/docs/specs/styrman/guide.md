@@ -40,7 +40,22 @@ Load-bearing ideas:
    edit via a lazy-loaded CodeMirror 6 editor with syntax highlighting by
    filename and Ctrl+S to save, upload by drag, download), Ports (what's
    listening, with process / inner-docker image, shareable
-   `/p/<id>/<t>/port/<port>/` links), History (transcripts), Diff (git).
+   `/p/<id>/<t>/port/<port>/` links), History (transcripts), Git
+   (working-tree diff + branch, and checkpoints — see below).
+5. **Git is the substrate** (R13, ADR-022): every project workspace IS a git
+   repository, no exceptions — `git init -b main` runs synchronously at
+   creation, or a clone runs in-guest instead (new project dialog's "Clone a
+   repo" option, so the user's ssh key/gh credentials apply; falls back to
+   an empty repo on failure), and a boot-time sweep initializes any
+   repo-less workspace it finds (adopted pre-R13 projects). Checkpoints are
+   automatic whole-tree snapshots (tracked + untracked; ignored files
+   excluded) taken via a private index and stored under
+   `refs/styrman/checkpoints/*` — never on the user's branches, never
+   pushed, invisible to `git log`, capped at 40. Triggers: project stop,
+   terminal pause/close/close-all, and before every restore (so restores
+   are undoable); manual via the Git tab's "Checkpoint now" button. Restore
+   rewrites the working tree to that exact snapshot (later files deleted;
+   ignored files survive; the user's branches/commits untouched).
 
 ## 2. Architecture
 
@@ -109,9 +124,15 @@ forever. The same script works in any project terminal.
 
 ## 4. Operating it
 
-- **New project**: name + optional git init → ~3 s to a live terminal; type
-  `claude` or `agy`. Rename any time (⋯ → Rename); delete via the
-  type-"delete" dialog (wipe checkbox controls files).
+- **New project**: name + repo choice (empty git repo, clone an existing
+  one, or create+push a fresh GitHub repo via `gh`) → ~3 s to a live
+  terminal; type `claude` or `agy`. Every workspace is a git repo from
+  creation, no exceptions (R13). Rename any time (⋯ → Rename); delete via
+  the type-"delete" dialog (wipe checkbox controls files).
+- **Checkpoints**: the Git tab lists automatic snapshots (taken on stop,
+  terminal pause/close, and before restores) plus a "Checkpoint now"
+  button; Restore (confirmation required) rewrites the working tree to that
+  point and always checkpoints the current state first, so it's undoable.
 - **Terminals**: sidebar, per project; ⏸ pause / ✕ delete / close all;
   transcripts land in History regardless.
 - **Settings**: account + terminal username, per-tool credential cards
@@ -156,7 +177,8 @@ cd web && npm run build                              # UI → dist/client (commi
 
 Layout: `cmd/styrman` (server) · `cmd/wsprobe` (WS test client) ·
 `internal/{config, identity, userstore, project, conversation, orchestrator,
-terminal, httpapi, files, history}` · `image/` (runtime microVM image) ·
+terminal, httpapi, files, history, gitrepo}` · `image/` (runtime microVM
+image) ·
 `deploy/` (host-setup, compose, vendored caddy ingress, server Dockerfile) ·
 `web/` (TanStack Start SPA). Conventions: `AGENTS.md`; non-negotiables:
 `REQUIREMENTS.md` (R1–R12).

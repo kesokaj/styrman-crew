@@ -137,6 +137,24 @@ say "git diff"
 check "diff reports the repo" "curl -fsS ${API}/api/projects/${ID}/diff | grep -q '\"repo\":true'"
 check "diff sees the new file" "curl -fsS ${API}/api/projects/${ID}/diff | grep -q 'note.txt'"
 
+say "checkpoints (R13)"
+CP_ID=$(curl -fsS -X POST "${API}/api/projects/${ID}/checkpoints" -d '{"label":"itest"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])' 2>/dev/null || true)
+check "checkpoint created" "[ -n \"${CP_ID}\" ]"
+check "checkpoint listed" "curl -fsS ${API}/api/projects/${ID}/checkpoints | grep -q '${CP_ID}'"
+check "identical tree dedups" \
+    "curl -fsS -X POST ${API}/api/projects/${ID}/checkpoints -d '{\"label\":\"dup\"}' | grep -q '\"created\":false'"
+# Prove restore actually reverts: damage the tree, restore, check the file is back.
+"${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/1" \
+    -send "echo DAMAGED > ~/projects/itest/note.txt\r" -wait 2s >/dev/null || true
+check "restore succeeds and reports a safety checkpoint" \
+    "curl -fsS -X POST ${API}/api/projects/${ID}/checkpoints/${CP_ID}/restore | grep -q '\"safetyId\"'"
+check "restore reverted the file to the checkpoint content" \
+    "! grep -q DAMAGED /var/lib/styrman/homes/*/projects/itest/note.txt"
+check "restore of malformed id → 400" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X POST ${API}/api/projects/${ID}/checkpoints/nope/restore) = 400 ]"
+check "restore of absent id → 404" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X POST ${API}/api/projects/${ID}/checkpoints/20260101T000000.000000000Z-deadbeef/restore) = 404 ]"
+
 say "settings"
 check "settings served" "curl -fsS ${API}/api/settings | grep -q '\"authMode\"'"
 

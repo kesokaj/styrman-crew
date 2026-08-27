@@ -18,12 +18,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/kesokaj/styrman/internal/config"
 	"github.com/kesokaj/styrman/internal/conversation"
+	"github.com/kesokaj/styrman/internal/gitrepo"
 	"github.com/kesokaj/styrman/internal/identity"
 	"github.com/kesokaj/styrman/internal/orchestrator"
 	"github.com/kesokaj/styrman/internal/project"
@@ -216,6 +218,10 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("GET /api/projects/{project}/history", s.listHistory)
 	mux.HandleFunc("GET /api/projects/{project}/history/{id}", s.readHistory)
 	mux.HandleFunc("GET /api/projects/{project}/diff", s.projectDiff)
+	// Checkpoints: whole-tree snapshots under refs/styrman/* (R13).
+	mux.HandleFunc("GET /api/projects/{project}/checkpoints", s.listCheckpoints)
+	mux.HandleFunc("POST /api/projects/{project}/checkpoints", s.createCheckpoint)
+	mux.HandleFunc("POST /api/projects/{project}/checkpoints/{id}/restore", s.restoreCheckpoint)
 	// Settings + admin.
 	mux.HandleFunc("GET /api/notifications", s.listNotifications)
 	mux.HandleFunc("GET /api/settings", s.settings)
@@ -335,11 +341,32 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 type createProjectRequest struct {
-	Name    string `json:"name"`
-	GitInit bool   `json:"gitInit"`
+	Name string `json:"name"`
+	// GitInit is accepted for compatibility and ignored: every project is a
+	// git repository (R13).
+	GitInit bool `json:"gitInit"`
 	// GitHub: "" or "none" = local repo only; "private"/"public" = also
 	// create a GitHub repo via the user's gh credentials and push.
 	GitHub string `json:"github"`
+	// CloneURL: clone an existing repository as the workspace instead of
+	// initializing an empty one. Mutually exclusive with GitHub.
+	CloneURL string `json:"cloneUrl"`
+}
+
+// cloneURLRe accepts the common remote shapes and nothing that could read
+// as a git option or shell metacharacter. The clone itself passes the URL
+// as a bare argv element after "--".
+var cloneURLRe = regexp.MustCompile(`^(https://|ssh://|git@)[\w.@:/~+-]+$`)
+
+// redactURL strips any userinfo (a token embedded as https://user:tok@host)
+// before the URL reaches a log line (R10).
+func redactURL(u string) string {
+	if at := strings.LastIndex(u, "@"); at != -1 {
+		if slash := strings.Index(u, "//"); slash != -1 && slash+2 < at {
+			return u[:slash+2] + "***@" + u[at+1:]
+		}
+	}
+	return u
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -357,7 +384,11 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	p, err := sp.projects.Add(project.Project{Name: req.Name, GitInit: req.GitInit, CreatedAt: time.Now().UTC()})
+	if req.CloneURL != "" && !cloneURLRe.MatchString(req.CloneURL) {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid clone URL"))
+		return
+	}
+	p, err := sp.projects.Add(project.Project{Name: req.Name, GitInit: true, CreatedAt: time.Now().UTC()})
 	if err != nil {
 		writeErr(w, http.StatusConflict, err)
 		return
@@ -367,6 +398,15 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		_ = sp.projects.Remove(p.ID)
 		writeErr(w, http.StatusInternalServerError, err)
 		return
+	}
+	// R13: the workspace is a git repo from second zero. A clone fills the
+	// (still empty) directory in the background boot instead.
+	if req.CloneURL == "" {
+		if err := gitrepo.EnsureRepo(workdir); err != nil {
+			_ = sp.projects.Remove(p.ID)
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
 	}
 
 	// Respond immediately and boot the microVM in the background: a
@@ -381,35 +421,52 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest})
 		if err != nil {
 			s.logger.Error("background project boot failed", "project", p.Name, "error", err)
+			// R13 must hold even if the microVM never booted: a clone can't
+			// run without the guest, so leave an empty repo behind.
+			if req.CloneURL != "" {
+				if e := gitrepo.EnsureRepo(workdir); e != nil {
+					s.logger.Error("R13 fallback init failed", "project", p.Name, "error", e)
+				}
+			}
 			return
 		}
-		if req.GitInit {
-			// git init inside the guest as the user, so their gitconfig applies.
-			home := "/home/" + guest
-			workdir := home + "/projects/" + p.Dir
-			run := func(cmd ...string) (int, string, error) {
-				return s.orch.Exec(ctx, containerID, orchestrator.ExecSpec{
-					User:    guest,
-					WorkDir: workdir,
-					Env:     []string{"HOME=" + home, "USER=" + guest},
-					Cmd:     cmd,
-				})
-			}
-			if code, out, err := run("git", "init", "-b", "main"); err != nil || code != 0 {
-				s.logger.Warn("git init failed", "project", p.Name, "exit", code, "output", out, "error", err)
-			}
-			if req.GitHub == "private" || req.GitHub == "public" {
-				// Needs the user's gh login (styrman-setup); logged, not fatal —
-				// the local repo exists either way.
-				if code, out, err := run("git", "commit", "--allow-empty", "-m", "Initialize styrman project"); err != nil || code != 0 {
-					s.logger.Warn("initial commit failed", "project", p.Name, "exit", code, "output", out, "error", err)
+		// Repo provisioning runs in-guest as the user so their gitconfig,
+		// ssh key, and gh login apply. The bare `git init` case needs none
+		// of that and already happened server-side before the 201.
+		home := "/home/" + guest
+		guestWorkdir := home + "/projects/" + p.Dir
+		run := func(cmd ...string) (int, string, error) {
+			return s.orch.Exec(ctx, containerID, orchestrator.ExecSpec{
+				User:    guest,
+				WorkDir: guestWorkdir,
+				Env:     []string{"HOME=" + home, "USER=" + guest},
+				Cmd:     cmd,
+			})
+		}
+		switch {
+		case req.CloneURL != "":
+			// StrictHostKeyChecking=accept-new is deliberate TOFU: first
+			// contact with a new host is trusted, later key changes are not.
+			if code, out, err := run("git",
+				"-c", "core.sshCommand=ssh -o StrictHostKeyChecking=accept-new",
+				"clone", "--", req.CloneURL, "."); err != nil || code != 0 {
+				s.logger.Warn("clone failed — falling back to empty repo",
+					"project", p.Name, "url", redactURL(req.CloneURL), "exit", code, "output", out, "error", err)
+				if err := gitrepo.EnsureRepo(workdir); err != nil {
+					s.logger.Error("fallback git init failed", "project", p.Name, "error", err)
 				}
-				vis := "--" + req.GitHub
-				if code, out, err := run("bash", "-lc",
-					"gh repo create "+p.Name+" "+vis+" --source=. --remote=origin --push"); err != nil || code != 0 {
-					s.logger.Warn("github repo create failed (is gh signed in?)",
-						"project", p.Name, "exit", code, "output", out, "error", err)
-				}
+			}
+		case req.GitHub == "private" || req.GitHub == "public":
+			// Needs the user's gh login (styrman-setup); logged, not fatal —
+			// the local repo exists either way.
+			if code, out, err := run("git", "commit", "--allow-empty", "-m", "Initialize styrman project"); err != nil || code != 0 {
+				s.logger.Warn("initial commit failed", "project", p.Name, "exit", code, "output", out, "error", err)
+			}
+			vis := "--" + req.GitHub
+			if code, out, err := run("bash", "-lc",
+				"gh repo create "+p.Name+" "+vis+" --source=. --remote=origin --push"); err != nil || code != 0 {
+				s.logger.Warn("github repo create failed (is gh signed in?)",
+					"project", p.Name, "exit", code, "output", out, "error", err)
 			}
 		}
 		// Pre-attach for port-preview while nothing depends on it (a fresh
@@ -507,6 +564,9 @@ func (s *Server) stopProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	// Snapshot after the container is down: the tree is quiescent (no agent
+	// mid-write) and the request isn't blocked on git.
+	go s.snapshot(u.Username, p, "project stopped")
 	writeJSON(w, http.StatusOK, map[string]string{"state": "stopped"})
 }
 
@@ -599,6 +659,7 @@ func (s *Server) pauseTerminal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	go s.snapshot(u.Username, p, "terminal "+id+" paused")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -619,6 +680,7 @@ func (s *Server) deleteTerminal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	go s.snapshot(u.Username, p, "terminal "+id+" closed")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -635,6 +697,7 @@ func (s *Server) deleteAllTerminals(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = sp.terms.Delete(p.ID, rec.ID)
 	}
+	go s.snapshot(u.Username, p, "all terminals closed")
 	w.WriteHeader(http.StatusNoContent)
 }
 

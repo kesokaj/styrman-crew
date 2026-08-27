@@ -13,7 +13,7 @@ names are display-only.
 | Method & path | Purpose |
 |---|---|
 | `GET /api/projects` | The user's projects, newest first: `{id, name, dir, createdAt, gitInit, archived, state}`. |
-| `POST /api/projects` | Create: `{"name","gitInit"}`. Returns **201 immediately** with `state:"creating"`; the microVM boots in the background (terminal attach waits for readiness). Name must not collide with a *current* project; reuse after deletion is fine. |
+| `POST /api/projects` | Create: `{"name","cloneUrl","github","gitInit"}`. Every project is a git repo, no exceptions (R13, ADR-022): by default a synchronous `git init -b main` runs before the `201`; `cloneUrl` (mutually exclusive with `github`) clones that URL in-guest instead, using the user's ssh key/gh credentials, falling back to an empty repo on failure; `github` (`"private"` or `"public"`) also creates and pushes a GitHub repo via the user's `gh` login. `gitInit` is accepted for compatibility and ignored. Returns **201 immediately** with `state:"creating"`; the microVM boots in the background (terminal attach waits for readiness). Name must not collide with a *current* project; reuse after deletion is fine. |
 | `GET /api/projects/{id}` | One project + live state. |
 | `PATCH /api/projects/{id}` | Rename (friendly name only): `{"name"}`. The workspace dir (`dir`) never moves. |
 | `DELETE /api/projects/{id}[?wipe=true]` | Destroy the microVM + records. `wipe` also deletes workspace, `~/.dockerd/<id>.img`, and transcripts — the UI requires typing "delete". |
@@ -71,7 +71,22 @@ Traversal and symlink escapes refused.
 |---|---|
 | `GET /api/projects/{id}/history` | Terminal transcripts (`~/.styrman/logs/<id>/`): `{id, size, modified}`. |
 | `GET .../history/{session}` | Transcript text, ANSI-stripped, tail-capped (`?bytes=`). |
-| `GET /api/projects/{id}/diff` | `{repo, branch, status, diff}` from git in the workspace. |
+| `GET /api/projects/{id}/diff` | `{repo, branch, status, diff}` from git in the workspace. Every workspace is a git repo (R13), so this never 404s for a missing repo. |
+
+## Checkpoints (ADR-022)
+
+Automatic whole-tree snapshots of the workspace (tracked + untracked files;
+`.gitignore`d files excluded), stored under `refs/styrman/checkpoints/*` via
+a private index — never on the user's branches, never pushed, invisible to
+`git log`. Capped at 40 (oldest pruned). Auto-triggers: project stop,
+terminal pause/close/close-all, and before every restore; manual via the
+Git tab's "Checkpoint now" button or the POST below.
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/projects/{id}/checkpoints` | Newest first: `{"checkpoints":[{id,time,subject}]}`. |
+| `POST /api/projects/{id}/checkpoints` | Create: `{"label"}` optional (default `"manual"`). **201** `{"id","created":true}`; **200** `{"created":false}` when the tree is unchanged since the newest checkpoint (dedup). |
+| `POST .../checkpoints/{id}/restore` | Rewrite the working tree to that checkpoint exactly (later files deleted; ignored files survive; the user's branches/commits untouched). Snapshots the current state first, so restores are themselves undoable: `{"restored","safetyId"}`. |
 
 ## Settings, profile & admin
 

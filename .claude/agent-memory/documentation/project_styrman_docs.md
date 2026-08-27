@@ -39,4 +39,17 @@ Its living docs:
   `.agents/docs/architecture/DECISIONS.md` — keep referencing them when a
   feature ties to an existing decision; don't invent new ADR numbers.
 
+**R13 / ADR-022 (git substrate, added 2026-08-27):** every project workspace
+is guaranteed to be a git repo (`internal/gitrepo` package, host-side, works
+while the microVM is stopped). Covered in `api.md` (Projects POST row +
+new "## Checkpoints (ADR-022)" section) and `guide.md` (load-bearing idea
+#5, "Operating it" bullets, dev package list). The create-project API also
+grew a `github` field (`"private"`/`"public"`, creates+pushes via `gh`)
+mutually exclusive with `cloneUrl` — not just the clone option — check
+`internal/httpapi/server.go`'s `createProjectRequest` before describing
+project-creation fields, code has grown past what any single feature
+request describes. Side panel tab renamed Diff → Git (`web/src/components/
+SidePanel.tsx`), holds working-tree diff/branch on top + checkpoints list
+below.
+
 See [[feedback-styrman-doc-edits]] for edit-process lessons.

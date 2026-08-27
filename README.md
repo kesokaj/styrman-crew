@@ -16,8 +16,11 @@ forever; containers disposable always.
 
 - **The agent CLI is the interface.** No custom chat UI to maintain — the
   terminal is the surface, organized like a conversation app: projects →
-  terminals in the sidebar, project context (files, ports, history, diff)
+  terminals in the sidebar, project context (files, ports, history, git)
   in the side panel.
+- **Every project is a git repo, always.** Initialized (or cloned) at
+  creation, no exceptions. Automatic checkpoints snapshot the whole working
+  tree on key events and are restorable with one click from the Git tab.
 - **Hard isolation.** 1 project = 1 microVM (own kernel, own dockerd, own
   network — projects can never reach each other). 1 user = 1 home disk —
   users never see each other's worlds.

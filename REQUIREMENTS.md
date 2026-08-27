@@ -59,6 +59,14 @@
     adversarially (a project with NET_ADMIN adding a manual route through the
     server stays blocked). See ADR-015.
 
+13. **R13 — Git is the substrate** (operator directive 2026-08-27): every
+    project workspace IS a git repository, without exception — initialized
+    (or cloned) at creation, re-initialized by a boot-time sweep if ever
+    missing. Git powers the diff view and checkpoints: automatic whole-tree
+    snapshots stored under `refs/styrman/checkpoints/*` — never on the
+    user's branches, never pushed, restorable from the UI (and every restore
+    first checkpoints the current state, so it is itself undoable).
+
 ## Constraints
 
 - Go stdlib-first server; approved deps: `coder/websocket`, `creack/pty`, `docker/docker`
