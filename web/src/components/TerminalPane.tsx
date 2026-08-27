@@ -185,6 +185,7 @@ export function TerminalPane({
       clearTimeout(reconnectTimer);
       clearTimeout(scanTimer);
       clearTimeout(resizeTimer);
+      clearTimeout(toastTimer.current); // no toast after unmount (N2)
       dataSub.dispose();
       resizeObserver.disconnect();
       if (ws) {

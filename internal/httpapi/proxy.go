@@ -101,6 +101,24 @@ func (s *Server) proxyFor(ip string, port int, prefix string) *httputil.ReverseP
 				pr.Out.URL.Path = "/"
 			}
 			pr.SetXForwarded()
+			// N22: never hand the user's styrman session/identity to a
+			// project's app — code in a VM could capture the caddy-security
+			// cookie or replay the ingress token.
+			for _, h := range []string{
+				"Cookie", "Authorization",
+				"X-Caddy-Email", "X-Caddy-User", "X-Caddy-Role",
+				"X-Caddy-Subject", "X-Caddy-Picture", "X-Styrman-Ingress",
+			} {
+				pr.Out.Header.Del(h)
+			}
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			// N22: sandbox the preview into a unique opaque origin so it is
+			// NOT same-origin with the SPA — a malicious app cannot
+			// fetch('/api/...') as the user or read styrman's cookies.
+			resp.Header.Set("Content-Security-Policy",
+				"sandbox allow-scripts allow-forms allow-popups allow-modals allow-downloads")
+			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 			writeErr(w, http.StatusBadGateway, fmt.Errorf("upstream: %w", err))

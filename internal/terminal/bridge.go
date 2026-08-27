@@ -327,11 +327,35 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 	// exec bookkeeping lags stream EOF by a few ms, and misreading it would
 	// send a normal close where 4000 belongs (review finding).
 	if code, done := ex.ExitCodeWait(context.Background(), time.Second); done {
-		b.logger.Info("session exited", "session", s.key, "exitCode", code)
-		conn.Close(websocket.StatusCode(config.CloseShellExited), "shell exited")
+		// The attach exec ended — but `tmux detach` (or `tmux attach -d` from
+		// another pane) also ends it cleanly while the SESSION lives on (N16).
+		// Sending 4000 there would strand a live session (the client won't
+		// reconnect). Disambiguate: if the tmux session still exists, treat it
+		// as a detach (normal close → client reconnects); only a truly gone
+		// session gets 4000.
+		if b.sessionAlive(s) {
+			b.logger.Info("client detached (session alive)", "session", s.key)
+			conn.Close(websocket.StatusNormalClosure, "detached")
+		} else {
+			b.logger.Info("session exited", "session", s.key, "exitCode", code)
+			conn.Close(websocket.StatusCode(config.CloseShellExited), "shell exited")
+		}
 	} else {
 		conn.Close(websocket.StatusNormalClosure, "detached")
 	}
 	hcancel()
 	wg.Wait()
+}
+
+// sessionAlive reports whether the tmux session still exists in the guest —
+// used to tell a `tmux detach` (session lives) from a real shell exit.
+func (b *Bridge) sessionAlive(s session) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	code, _, err := b.orch.Exec(ctx, s.containerID, orchestrator.ExecSpec{
+		User: s.guest,
+		Cmd:  []string{"tmux", "has-session", "-t", s.tmuxName},
+		Env:  []string{"HOME=/home/" + s.guest, "USER=" + s.guest},
+	})
+	return err == nil && code == 0
 }

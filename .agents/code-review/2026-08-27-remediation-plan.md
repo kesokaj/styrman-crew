@@ -68,7 +68,7 @@
 - ☑ **B6a** Add root `.dockerignore` (`.git`, `**/.env`, `*.env`, `web/node_modules`, `**/node_modules`, `*.png`, `.agents`, `dist` caches as appropriate).
 - ☑ **B6b** `host-setup.sh` generates `STYRMAN_KEYRING_PW` (`openssl rand -base64 24`); drop the `:-styrman` compose default (`${STYRMAN_KEYRING_PW:?}`).
 - ☐ **B6c** Deliver the keyring pw to the guest via a mounted tmpfs file/stdin, not `Env`; drop the misleading `unset`.
-- ☐ **N22** In `proxy.go` `Rewrite`: strip `Cookie`/`Authorization`/`X-Caddy-*` from `pr.Out`; add a restrictive `Content-Security-Policy`; plan previews on a distinct origin or sandboxed iframe (follow-up if origin split is large).
+- ☑ **N22** In `proxy.go` `Rewrite`: strip `Cookie`/`Authorization`/`X-Caddy-*` from `pr.Out`; add a restrictive `Content-Security-Policy`; plan previews on a distinct origin or sandboxed iframe (follow-up if origin split is large).
 - **Verify:** re-run security reviewer; from inside a project VM, confirm `:8081` is unreachable and a symlinked project dir 403s; suites green.
 
 ### Batch B — reliability core (P1, Go) 🟠

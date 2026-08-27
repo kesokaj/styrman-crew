@@ -134,22 +134,31 @@ func GitDiff(workspace string) (*Diff, error) {
 	if _, err := os.Stat(filepath.Join(workspace, ".git")); err != nil {
 		return &Diff{Repo: false}, nil
 	}
-	run := func(args ...string) string {
+	run := func(args ...string) (string, error) {
 		cmd := exec.Command("git", append([]string{"-C", workspace}, args...)...)
 		// Containers see a foreign uid on some mounts; git refuses those
 		// without this. The path is ours by construction.
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_COUNT=1",
 			"GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=*")
-		out, _ := cmd.Output()
-		return string(out)
+		out, err := cmd.Output()
+		return string(out), err
 	}
+	// `git status` works even on an unborn HEAD (a fresh R13 repo), so it's the
+	// reliable repo-health check — a failure here is a genuinely broken repo,
+	// not an empty one, and must not silently render as a clean diff (N26).
+	status, err := run("status", "--short", "--branch")
+	if err != nil {
+		return nil, fmt.Errorf("git status failed (broken repo?): %w", err)
+	}
+	branch, _ := run("rev-parse", "--abbrev-ref", "HEAD") // fails on unborn HEAD; fine
+	stat, _ := run("diff", "--stat", "HEAD")
 	d := &Diff{
 		Repo:   true,
-		Branch: strings.TrimSpace(run("rev-parse", "--abbrev-ref", "HEAD")),
-		Status: run("status", "--short", "--branch"),
-		Diff:   run("diff", "--stat", "HEAD"),
+		Branch: strings.TrimSpace(branch),
+		Status: status,
+		Diff:   stat,
 	}
-	if full := run("diff", "HEAD"); full != "" {
+	if full, _ := run("diff", "HEAD"); full != "" {
 		if len(full) > 256<<10 {
 			full = full[:256<<10] + "\n… (truncated)"
 		}

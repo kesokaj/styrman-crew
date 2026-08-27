@@ -248,6 +248,9 @@ export function createTerminal(
     extractUrls,
     addKeyHandler,
     sniffChunk,
-    dispose: () => term.dispose(),
+    dispose: () => {
+      clearTimeout(selTimer); // don't fire copy-on-select after teardown (N2)
+      term.dispose();
+    },
   };
 }
