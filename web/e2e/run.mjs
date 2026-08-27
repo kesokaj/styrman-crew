@@ -158,6 +158,18 @@ try {
     await panel().getByText("Project", { exact: true }).click();
     await page.waitForSelector("aside >> text=.git");
   });
+  // Drill into a subdirectory — guards the double-prefix regression where a
+  // scoped entry's path was re-prefixed and 400'd on the second level.
+  await check("files drill-in into a subdir works", async () => {
+    await page.locator(".xterm textarea").first().focus();
+    await page.keyboard.type("mkdir -p subdir && echo hi > subdir/nested.txt");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(800);
+    await panel().getByText("Files", { exact: true }).click();
+    await page.waitForTimeout(500);
+    await panel().getByText("subdir", { exact: true }).click();
+    await page.waitForSelector("aside >> text=nested.txt");
+  });
   await shot("04-files");
 
   // ── Side panel: Ports (start a server in the terminal first) ────────────

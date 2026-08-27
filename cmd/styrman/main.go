@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kesokaj/styrman/internal/config"
+	"github.com/kesokaj/styrman/internal/files"
 	"github.com/kesokaj/styrman/internal/gitrepo"
 	"github.com/kesokaj/styrman/internal/httpapi"
 	"github.com/kesokaj/styrman/internal/orchestrator"
@@ -181,7 +182,13 @@ func ensureRepos(cfg *config.Config, logger *slog.Logger) {
 			continue
 		}
 		for _, p := range store.List() {
-			ws := filepath.Join(cfg.UserHome(user), "projects", p.Dir)
+			// Confined: refuse if ~/projects (or the workspace) is a symlink
+			// escaping the home — never git-init inside another tenant's tree.
+			ws, err := files.ContainedPath(cfg.UserHome(user), "projects/"+p.Dir)
+			if err != nil {
+				logger.Warn("R13 sweep: workspace path rejected", "user", user, "project", p.ID, "error", err)
+				continue
+			}
 			if _, err := os.Stat(ws); err != nil {
 				continue // workspace missing — nothing to init
 			}

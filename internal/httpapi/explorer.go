@@ -56,6 +56,13 @@ func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("cannot list path"))
 		return
 	}
+	// Report paths relative to the SCOPE (what the SPA sends back as ?path=),
+	// not the home root — else the project prefix is applied twice on drill-in.
+	if prefix != "" {
+		for i := range entries {
+			entries[i].Path = strings.TrimPrefix(entries[i].Path, prefix+"/")
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
 

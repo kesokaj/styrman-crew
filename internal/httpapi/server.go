@@ -25,6 +25,7 @@ import (
 
 	"github.com/kesokaj/styrman/internal/config"
 	"github.com/kesokaj/styrman/internal/conversation"
+	"github.com/kesokaj/styrman/internal/files"
 	"github.com/kesokaj/styrman/internal/gitrepo"
 	"github.com/kesokaj/styrman/internal/identity"
 	"github.com/kesokaj/styrman/internal/orchestrator"
@@ -404,10 +405,17 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err)
 		return
 	}
-	workdir := filepath.Join(s.cfg.UserHome(u.Username), "projects", p.Dir)
-	if err := os.MkdirAll(workdir, 0o755); err != nil {
+	// Confined create: refuses a symlinked ~/projects escaping the home.
+	home := s.cfg.UserHome(u.Username)
+	if err := files.MkdirAll(home, "projects/"+p.Dir); err != nil {
 		_ = sp.projects.Remove(p.ID)
-		writeErr(w, http.StatusInternalServerError, err)
+		writeErr(w, http.StatusInternalServerError, errors.New("cannot create workspace"))
+		return
+	}
+	workdir, err := files.ContainedPath(home, "projects/"+p.Dir)
+	if err != nil {
+		_ = sp.projects.Remove(p.ID)
+		writeErr(w, http.StatusInternalServerError, errors.New("workspace unavailable"))
 		return
 	}
 	// R13: the workspace is a git repo from second zero. A clone fills the
@@ -519,14 +527,16 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	// — irreversible, so it is opt-in per request.
 	if r.URL.Query().Get("wipe") == "true" {
 		home := s.cfg.UserHome(u.Username)
-		for _, path := range []string{
-			filepath.Join(home, "projects", p.Dir),
-			filepath.Join(home, ".dockerd", p.ID+".img"),
-			filepath.Join(home, ".dockerd", p.ID),
-			filepath.Join(home, ".styrman", "logs", p.ID),
+		// Confined removal: a guest that symlinked ~/projects at another
+		// tenant's home must not make this RemoveAll recurse into it.
+		for _, rel := range []string{
+			"projects/" + p.Dir,
+			".dockerd/" + p.ID + ".img",
+			".dockerd/" + p.ID,
+			".styrman/logs/" + p.ID,
 		} {
-			if err := os.RemoveAll(path); err != nil {
-				s.logger.Warn("wipe failed", "project", p.Name, "path", path, "error", err)
+			if err := files.RemoveAll(home, rel); err != nil {
+				s.logger.Warn("wipe failed", "project", p.ID, "path", rel, "error", err)
 			}
 		}
 	}

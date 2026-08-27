@@ -3,7 +3,10 @@ package files
 import (
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // setup builds two sibling "home" roots and a victim file outside the
@@ -164,5 +167,88 @@ func TestContainedPath(t *testing.T) {
 		if rp, _ := filepath.Rel(real, got); rp == ".." || filepath.IsAbs(rp) || len(rp) > 2 && rp[:3] == ".."+string(filepath.Separator) {
 			t.Fatalf("ContainedPath %q escaped root: %q", rel, got)
 		}
+	}
+}
+
+func TestSaveStreamAndDownloadConfined(t *testing.T) {
+	root, victim := setup(t)
+	if err := SaveStream(root, "projects/p/up.txt", strings.NewReader("data")); err != nil {
+		t.Fatal(err)
+	}
+	f, st, err := OpenForDownload(root, "projects/p/up.txt")
+	if err != nil || st.Size() != 4 {
+		t.Fatalf("download: %v size=%d", err, st.Size())
+	}
+	f.Close()
+	// Escaping symlink refused on both.
+	link := filepath.Join(root, "projects", "p", "esc")
+	if err := os.Symlink(victim, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveStream(root, "projects/p/esc", strings.NewReader("x")); err == nil {
+		t.Fatal("SaveStream through symlink must fail")
+	}
+	if _, _, err := OpenForDownload(root, "projects/p/esc"); err == nil {
+		t.Fatal("download through symlink must fail")
+	}
+}
+
+func TestRejectNonRegular(t *testing.T) {
+	root, _ := setup(t)
+	fifo := filepath.Join(root, "projects", "p", "pipe")
+	if err := syscall.Mkfifo(fifo, 0o644); err != nil {
+		t.Skipf("mkfifo unsupported: %v", err)
+	}
+	// Must return promptly with an error, not block forever.
+	done := make(chan error, 1)
+	go func() { _, err := Read(root, "projects/p/pipe"); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("reading a FIFO must fail")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Read blocked on a FIFO (DoS)")
+	}
+	if IsRegular(root, "projects/p/pipe") {
+		t.Fatal("FIFO must not be a regular file")
+	}
+}
+
+func TestListNamesConfined(t *testing.T) {
+	root, victim := setup(t)
+	_ = Save(root, "projects/p/skills/a.md", []byte("x"), 0o644)
+	names := ListNames(root, "projects/p/skills")
+	if len(names) != 1 || names[0] != "a.md" {
+		t.Fatalf("ListNames: %v", names)
+	}
+	link := filepath.Join(root, "projects", "p", "esc")
+	if err := os.Symlink(filepath.Dir(victim), link); err != nil {
+		t.Fatal(err)
+	}
+	if ns := ListNames(root, "projects/p/esc"); ns != nil {
+		t.Fatalf("ListNames through escaping symlink must be nil, got %v", ns)
+	}
+}
+
+func TestListReportsScopeRelativePaths(t *testing.T) {
+	// Regression guard: entries under a subdir report the FULL root-relative
+	// path; the httpapi layer strips the scope prefix before returning. Here
+	// we assert List's own contract (root-relative), which the handler relies
+	// on to strip exactly `prefix+"/"`.
+	root, _ := setup(t)
+	_ = Save(root, "projects/p/sub/deep.txt", []byte("x"), 0o644)
+	entries, err := List(root, "projects/p/sub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	for _, e := range entries {
+		if e.Name == "deep.txt" {
+			got = e.Path
+		}
+	}
+	if got != "projects/p/sub/deep.txt" {
+		t.Fatalf("entry path = %q, want root-relative projects/p/sub/deep.txt", got)
 	}
 }

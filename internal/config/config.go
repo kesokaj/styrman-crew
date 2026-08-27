@@ -139,6 +139,11 @@ func Load() (*Config, error) {
 	if c.DevAddr != "" && !isLoopbackAddr(c.DevAddr) {
 		return nil, fmt.Errorf("STYRMAN_DEV_ADDR=%q must bind a loopback address (127.0.0.1/::1) — it bypasses auth", c.DevAddr)
 	}
+	// Same danger via a forgotten env var: auth=none on a non-loopback main
+	// listener is an open admin API. Behind the ingress the mode is "header".
+	if c.AuthMode == "none" && !isLoopbackAddr(c.Addr) {
+		return nil, fmt.Errorf("STYRMAN_AUTH=none requires STYRMAN_ADDR to be loopback (got %q) — it has no authentication", c.Addr)
+	}
 	// The shared home's owner is authoritative for the in-guest uid/gid.
 	if st, err := os.Stat(c.HomeDir); err == nil {
 		if sys, ok := st.Sys().(*syscall.Stat_t); ok {

@@ -162,8 +162,13 @@ func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
 	}
 	tools = append(tools, git)
 
-	// ssh
-	pub := strings.TrimSpace(read(".ssh/id_ed25519.pub"))
+	// ssh — a real pubkey is a regular file; refuse to echo it if it's a
+	// symlink (a user could point .pub at their own PRIVATE key and leak it
+	// into the UI + clipboard history).
+	pub := ""
+	if files.IsRegular(h, ".ssh/id_ed25519.pub") {
+		pub = strings.TrimSpace(read(".ssh/id_ed25519.pub"))
+	}
 	ssh := toolInfo{Name: "ssh", Ready: pub != ""}
 	if pub != "" {
 		ssh.Details = []string{pub}

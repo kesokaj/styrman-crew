@@ -20,6 +20,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"unicode/utf8"
 )
 
@@ -51,6 +52,27 @@ func cleanRel(rel string) string {
 // underneath is symlink-confined.
 func openRoot(root string) (*os.Root, error) {
 	return os.OpenRoot(root)
+}
+
+// openReg opens rel for reading and refuses anything that is not a regular
+// file. O_NONBLOCK means a guest-planted FIFO/device returns immediately
+// instead of wedging the goroutine forever (a cross-tenant DoS); the flag is
+// a no-op for regular-file reads. Caller closes the returned file.
+func openReg(rt *os.Root, rel string) (*os.File, os.FileInfo, error) {
+	f, err := rt.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, nil, err
+	}
+	if !st.Mode().IsRegular() {
+		f.Close()
+		return nil, nil, fmt.Errorf("not a regular file")
+	}
+	return f, st, nil
 }
 
 // ContainedPath resolves rel under root and returns the real (symlink-
@@ -162,21 +184,13 @@ func Read(root, rel string) (*FileContent, error) {
 		return nil, err
 	}
 	defer rt.Close()
-	crel := cleanRel(rel)
-	f, err := rt.Open(crel)
+	f, st, err := openReg(rt, cleanRel(rel))
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if st.IsDir() {
-		return nil, fmt.Errorf("path is a directory")
-	}
 	buf := make([]byte, MaxReadBytes)
-	n, _ := f.Read(buf)
+	n, _ := io.ReadFull(f, buf)
 	buf = buf[:n]
 	fc := &FileContent{
 		Path:      strings.TrimPrefix(rel, "/"),
@@ -237,20 +251,7 @@ func OpenForDownload(root, rel string) (*os.File, os.FileInfo, error) {
 	// The *os.File outlives rt; that's fine — the fd is already resolved and
 	// confined by the time Open returns.
 	defer rt.Close()
-	f, err := rt.Open(cleanRel(rel))
-	if err != nil {
-		return nil, nil, err
-	}
-	st, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, nil, err
-	}
-	if st.IsDir() {
-		f.Close()
-		return nil, nil, fmt.Errorf("path is a directory")
-	}
-	return f, st, nil
+	return openReg(rt, cleanRel(rel))
 }
 
 // ReadRaw returns up to max bytes of a file (0 = all up to MaxReadBytes),
@@ -261,7 +262,7 @@ func ReadRaw(root, rel string, max int64) ([]byte, error) {
 		return nil, err
 	}
 	defer rt.Close()
-	f, err := rt.Open(cleanRel(rel))
+	f, _, err := openReg(rt, cleanRel(rel))
 	if err != nil {
 		return nil, err
 	}
@@ -318,6 +319,41 @@ func Save(root, rel string, data []byte, perm os.FileMode) error {
 	defer f.Close()
 	_, err = f.Write(data)
 	return err
+}
+
+// MkdirAll creates rel and any missing parents under root, confined — a
+// symlinked component escaping the root is refused.
+func MkdirAll(root, rel string) error {
+	rt, err := openRoot(root)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+	return rt.MkdirAll(cleanRel(rel), 0o755)
+}
+
+// RemoveAll removes rel and its contents under root, confined — a symlinked
+// component escaping the root is refused, so a wipe cannot recurse into
+// another tenant's home.
+func RemoveAll(root, rel string) error {
+	rt, err := openRoot(root)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+	return rt.RemoveAll(cleanRel(rel))
+}
+
+// IsRegular reports whether rel is a regular file (not a FIFO/device/socket
+// that would block or misbehave on Open), following symlinks confined to root.
+func IsRegular(root, rel string) bool {
+	rt, err := openRoot(root)
+	if err != nil {
+		return false
+	}
+	defer rt.Close()
+	st, err := rt.Stat(cleanRel(rel))
+	return err == nil && st.Mode().IsRegular()
 }
 
 // Exists reports whether rel exists under root (confined). Symlinks that
