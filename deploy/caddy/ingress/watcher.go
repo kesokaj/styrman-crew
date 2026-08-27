@@ -21,15 +21,15 @@ import (
 // Watcher monitors Docker for container events and regenerates the
 // Caddyfile when containers are added or removed.
 type Watcher struct {
-	docker        *client.Client
-	cfg           GeneratorConfig
-	log           *slog.Logger
-	adminAddr     string // Caddy admin API address (e.g., "localhost:2019")
+	docker    *client.Client
+	cfg       GeneratorConfig
+	log       *slog.Logger
+	adminAddr string // Caddy admin API address (e.g., "localhost:2019")
 
-	caddyfileMu   sync.Mutex  // guards lastCaddyfile
+	caddyfileMu   sync.Mutex // guards lastCaddyfile
 	lastCaddyfile string
 
-	debounceMu    sync.Mutex  // guards debounceTimer
+	debounceMu    sync.Mutex // guards debounceTimer
 	debounceTimer *time.Timer
 }
 

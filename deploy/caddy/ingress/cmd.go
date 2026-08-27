@@ -123,6 +123,7 @@ func loadConfig(log *slog.Logger) (GeneratorConfig, error) {
 		AuthDomain:        getEnvOrDefault(EnvAuthDomain, "auth."+baseDomain),
 		ShellDomain:       getEnvOrDefault(EnvShellDomain, "shell."+baseDomain),
 		AppsDomain:        getEnvOrDefault(EnvAppsDomain, baseDomain),
+		IngressToken:      os.Getenv(EnvIngressToken),
 	}
 
 	if superAdmins := os.Getenv(EnvSuperAdmins); superAdmins != "" {

@@ -40,7 +40,6 @@ type App struct {
 	RPS int
 }
 
-
 // ParseLabels extracts an App from a Docker container's labels.
 // containerName is the container name (without leading slash).
 // exposedPorts is the list of EXPOSE ports from the image (used as fallback).

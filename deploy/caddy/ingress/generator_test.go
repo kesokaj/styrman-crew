@@ -144,7 +144,7 @@ func TestGenerateCaddyfile_AllThreeModes(t *testing.T) {
 		{
 			Name: "dashboard", Hostname: "dashboard",
 			ContainerIP: "172.18.0.4", Port: 8080,
-			Mode: ModeRoleGated,
+			Mode:   ModeRoleGated,
 			Admins: []string{"alice@gmail.com"}, Viewers: []string{"bob@gmail.com"},
 			RPS: 50,
 		},
@@ -283,5 +283,17 @@ func assertNotContains(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if strings.Contains(haystack, needle) {
 		t.Errorf("expected output NOT to contain %q, but it did.\nFull output:\n%s", needle, haystack)
+	}
+}
+
+func TestIngressTokenHeaderInjected(t *testing.T) {
+	apps := []App{{Hostname: "app", ContainerIP: "172.18.0.4", Port: 8080, Mode: ModeAuthenticated}}
+	cfg := GeneratorConfig{BaseDomain: "styrman.xyz", AdminEmail: "a@b.c", IngressToken: "s3cr3t-tok"}
+	result := GenerateCaddyfile(apps, cfg)
+	assertContains(t, result, `request_header X-Styrman-Ingress "s3cr3t-tok"`)
+	// Absent when unset.
+	cfg.IngressToken = ""
+	if strings.Contains(GenerateCaddyfile(apps, cfg), "X-Styrman-Ingress") {
+		t.Fatal("token header must not appear when IngressToken is empty")
 	}
 }

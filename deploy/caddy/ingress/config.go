@@ -27,6 +27,10 @@ const (
 	HeaderRole    = "X-Caddy-Role"
 	HeaderSubject = "X-Caddy-Subject"
 	HeaderPicture = "X-Caddy-Picture"
+	// HeaderIngress proves to the upstream that a request came through this
+	// ingress (not from a container on a shared bridge spoofing X-Caddy-Email
+	// directly). Set to the shared STYRMAN_INGRESS_TOKEN when present.
+	HeaderIngress = "X-Styrman-Ingress"
 )
 
 // caddy-security upstream headers (stripped before reaching apps).
@@ -65,10 +69,10 @@ const (
 
 // Required env vars — program exits with a clear error if unset.
 const (
-	EnvBaseDomain          = "BASE_DOMAIN"
-	EnvAdminEmail          = "ADMIN_EMAIL"
-	EnvGoogleClientID      = "GOOGLE_CLIENT_ID"
-	EnvGoogleClientSecret  = "GOOGLE_CLIENT_SECRET"
+	EnvBaseDomain         = "BASE_DOMAIN"
+	EnvAdminEmail         = "ADMIN_EMAIL"
+	EnvGoogleClientID     = "GOOGLE_CLIENT_ID"
+	EnvGoogleClientSecret = "GOOGLE_CLIENT_SECRET"
 )
 
 // Optional env vars — used if present, graceful if absent.
@@ -78,9 +82,10 @@ const (
 	EnvCaddyAdmin        = "CADDY_ADMIN"
 	EnvCaddyfileBasePath = "CADDYFILE_BASE_PATH"
 	EnvCloudflareToken   = "CLOUDFLARE_API_TOKEN"
-	EnvAuthDomain        = "AUTH_DOMAIN"  // Absolute FQDN for auth portal (default: auth.<BASE_DOMAIN>)
-	EnvShellDomain       = "SHELL_DOMAIN"   // Absolute FQDN for shell (default: shell.<BASE_DOMAIN>)
-	EnvAppsDomain        = "APPS_DOMAIN"    // Wildcard base for user apps (default: <BASE_DOMAIN>)
+	EnvAuthDomain        = "AUTH_DOMAIN"           // Absolute FQDN for auth portal (default: auth.<BASE_DOMAIN>)
+	EnvShellDomain       = "SHELL_DOMAIN"          // Absolute FQDN for shell (default: shell.<BASE_DOMAIN>)
+	EnvAppsDomain        = "APPS_DOMAIN"           // Wildcard base for user apps (default: <BASE_DOMAIN>)
+	EnvIngressToken      = "STYRMAN_INGRESS_TOKEN" // shared secret injected as X-Styrman-Ingress on authenticated routes
 )
 
 // IPDetectionURLs are the services used to detect the server's public IP.

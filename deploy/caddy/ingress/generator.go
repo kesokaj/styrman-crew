@@ -10,14 +10,15 @@ import (
 
 // GeneratorConfig holds the environment-level configuration for Caddyfile generation.
 type GeneratorConfig struct {
-	BaseDomain         string   // e.g., "example.com" or "lab.example.com" — used for cookie domain
-	AdminEmail         string   // ACME registration email
-	SuperAdmins        []string // Platform superadmin emails (get superadmin role on ALL apps)
-	DefaultRPS         int      // Default rate limit
-	CaddyfileBasePath  string   // Path to Caddyfile.base (optional)
-	AuthDomain         string   // Absolute FQDN for auth portal (e.g., "auth.a.styrman.io")
-	ShellDomain        string   // Absolute FQDN for shell (e.g., "shell.a.styrman.io")
-	AppsDomain         string   // Wildcard base for user apps (e.g., "apps.a.styrman.io")
+	BaseDomain        string   // e.g., "example.com" or "lab.example.com" — used for cookie domain
+	AdminEmail        string   // ACME registration email
+	SuperAdmins       []string // Platform superadmin emails (get superadmin role on ALL apps)
+	DefaultRPS        int      // Default rate limit
+	CaddyfileBasePath string   // Path to Caddyfile.base (optional)
+	AuthDomain        string   // Absolute FQDN for auth portal (e.g., "auth.a.styrman.io")
+	ShellDomain       string   // Absolute FQDN for shell (e.g., "shell.a.styrman.io")
+	AppsDomain        string   // Wildcard base for user apps (e.g., "apps.a.styrman.io")
+	IngressToken      string   // shared secret injected as X-Styrman-Ingress (proves ingress origin)
 }
 
 // GenerateCaddyfile produces a complete Caddyfile from a list of discovered apps
@@ -284,6 +285,13 @@ func writeAppBlock(b *strings.Builder, app App, cfg GeneratorConfig) {
 		fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderName)
 		fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderRoles)
 		fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderSub)
+
+		// Ingress origin proof: SET (overwrites any client-supplied value) the
+		// shared token so the upstream can reject requests that reach it
+		// directly (e.g. a container on a shared bridge spoofing X-Caddy-Email).
+		if cfg.IngressToken != "" {
+			fmt.Fprintf(b, "        request_header %s %q\n", HeaderIngress, cfg.IngressToken)
+		}
 
 		fmt.Fprintf(b, "        reverse_proxy %s:%d\n", app.ContainerIP, app.Port)
 		b.WriteString("    }\n")

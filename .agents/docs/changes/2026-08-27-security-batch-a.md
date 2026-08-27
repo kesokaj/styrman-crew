@@ -72,3 +72,27 @@ health OK via the container. Cross-tenant containment proven by unit tests
 (symlink escapes refused). Residual: the `:8080` `X-Caddy-Email` spoof from a
 project VM is closed only once the ingress token is enabled on both server
 and Caddy (part 2).
+
+## Part 2 — ingress token (B1d), closes the :8080 spoof
+
+The vendored Caddy ingress now injects `X-Styrman-Ingress: <STYRMAN_INGRESS_TOKEN>`
+on the authenticated app route (`deploy/caddy/ingress/{config,generator,cmd}.go`),
+and the server requires it in header-auth mode (opt-in from Batch A part 1, now
+enabled). `host-setup.sh` + `.env.example` generate/carry the token; compose
+passes it to both caddy (env_file) and server. A project VM on the shared
+bridge can no longer reach `:8080` and spoof `X-Caddy-Email` — it lacks the
+token.
+
+Verified live: from inside the server container, a direct request with a
+forged `X-Caddy-Email` but no token → **403**; the same with the token → 200;
+`/api/health` (exempt) → OK; Caddy's live admin config contains the header.
+Rollout was Caddy-first (inject) then server (enforce) to avoid a lockout
+window; the server fails **open** if the token is unset, so the rollback is
+`STYRMAN_INGRESS_TOKEN=` + redeploy server.
+
+Note: redeploying Caddy rotated caddy-security's session state, so existing
+browser sessions must sign in again (one-time re-login, not a lockout).
+
+This completes the P0 security items from the review. Remaining Batch A
+follow-ups (B1c server-off-bridges, B6c keyring-pw-via-file, N22 proxy CSP)
+are hardening, not open holes.
