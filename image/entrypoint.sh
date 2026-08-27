@@ -85,6 +85,11 @@ mkdir -p /etc/styrman
 cat > /etc/styrman/tmux-project.conf <<TEOF
 set-hook -g after-new-session 'pipe-pane -o "cat >> ${LOG_DIR}/#{session_name}.log"'
 set-hook -g after-new-window 'pipe-pane -o "cat >> ${LOG_DIR}/#{session_name}.log"'
+# Track terminal bells (agents ring BEL when waiting for input) so the UI
+# can badge unattended terminals; flags clear when the session is viewed.
+set -g monitor-bell on
+set -g bell-action any
+set -g visual-bell off
 TEOF
 # Ensure the shared tmux.conf sources it (idempotent; survives user edits).
 if ! grep -q 'styrman/tmux-project.conf' "${HOME_DIR}/.tmux.conf" 2>/dev/null; then

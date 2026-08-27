@@ -74,6 +74,12 @@ export function TerminalList({
           onClick={() => open(t.id)}
         >
           <span className="min-w-0 flex-1 truncate">{t.title}</span>
+          {t.bell && (
+            <span
+              className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-warn"
+              title="waiting for input"
+            />
+          )}
           {t.live ? (
             <button
               className="invisible text-text-dim hover:text-warn group-hover:visible"

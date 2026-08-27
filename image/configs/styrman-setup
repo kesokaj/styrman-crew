@@ -26,11 +26,24 @@ else
 fi
 
 step "2/5 SSH key (for git over ssh)"
+# The key is YOURS — comment it with your identity, not the platform's.
+KEY_COMMENT="$(git config --global user.email 2>/dev/null || true)"
+[ -n "${KEY_COMMENT}" ] || KEY_COMMENT="$(whoami)@styrman"
 if [ -f ~/.ssh/id_ed25519 ]; then
-    ok "key exists: ~/.ssh/id_ed25519"
+    CURRENT_COMMENT=$(ssh-keygen -l -f ~/.ssh/id_ed25519.pub 2>/dev/null | awk '{print $3}')
+    if [ "${CURRENT_COMMENT}" = "styrman" ]; then
+        # ssh-keygen -c rewrites both the private key and the .pub in place.
+        if ssh-keygen -c -C "${KEY_COMMENT}" -f ~/.ssh/id_ed25519 >/dev/null 2>&1; then
+            ok "key comment updated to ${KEY_COMMENT}"
+        else
+            todo "could not update key comment (passphrase-protected?) — key kept as-is"
+        fi
+    else
+        ok "key exists: ~/.ssh/id_ed25519 (${CURRENT_COMMENT})"
+    fi
 else
-    ssh-keygen -t ed25519 -N "" -C "styrman" -f ~/.ssh/id_ed25519 >/dev/null
-    ok "generated ~/.ssh/id_ed25519"
+    ssh-keygen -t ed25519 -N "" -C "${KEY_COMMENT}" -f ~/.ssh/id_ed25519 >/dev/null
+    ok "generated ~/.ssh/id_ed25519 (${KEY_COMMENT})"
 fi
 echo "  public key (add to https://github.com/settings/keys if not done):"
 echo "    $(cat ~/.ssh/id_ed25519.pub)"

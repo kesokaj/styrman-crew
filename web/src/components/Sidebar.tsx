@@ -4,6 +4,7 @@ import { api, tryUI, type Project } from "../lib/api";
 import { usePolled, useTheme } from "../lib/hooks";
 import { DeleteProjectDialog } from "./DeleteProjectDialog";
 import { NewProjectDialog } from "./NewProjectDialog";
+import { NotificationBell } from "./NotificationBell";
 import { SetupBanner } from "./SetupBanner";
 import { TerminalList } from "./TerminalList";
 
@@ -59,6 +60,7 @@ export function Sidebar() {
         >
           ⛵ styrman
         </Link>
+        <NotificationBell />
         <button
           onClick={() => setShowNew(true)}
           className="rounded-md bg-accent-soft px-2.5 py-1 text-xs font-medium text-accent hover:brightness-110"

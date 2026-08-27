@@ -1,13 +1,16 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"time"
 
 	"github.com/kesokaj/styrman/internal/files"
 	"github.com/kesokaj/styrman/internal/history"
@@ -201,20 +204,20 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		email = "(local operator)"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version":       Version,
-		"user":          email,
-		"username":      u.Username,
-		"isAdmin":       u.Admin,
-		"authMode":      s.cfg.AuthMode,
-		"allowedUsers":  s.users.List(),
-		"homeDir":       s.cfg.UserHome(u.Username),
-		"stateDir":      s.cfg.StateDir,
-		"image":         s.cfg.Image,
-		"runtime":       s.cfg.Runtime,
-		"dockerDiskGB":  s.cfg.DockerDisk,
-		"idleTimeout":   s.cfg.IdleTimeout.String(),
+		"version":          Version,
+		"user":             email,
+		"username":         u.Username,
+		"isAdmin":          u.Admin,
+		"authMode":         s.cfg.AuthMode,
+		"allowedUsers":     s.users.List(),
+		"homeDir":          s.cfg.UserHome(u.Username),
+		"stateDir":         s.cfg.StateDir,
+		"image":            s.cfg.Image,
+		"runtime":          s.cfg.Runtime,
+		"dockerDiskGB":     s.cfg.DockerDisk,
+		"idleTimeout":      s.cfg.IdleTimeout.String(),
 		"terminalUsername": s.guestUserFor(u.Username),
-		"setupComplete": s.userSetupStatus(r.Context(), u.Username).Done,
+		"setupComplete":    s.userSetupStatus(r.Context(), u.Username).Done,
 	})
 }
 
@@ -251,4 +254,63 @@ func (s *Server) removeUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"allowedUsers": s.users.List()})
+}
+
+// notification is one "a terminal wants you" entry.
+type notification struct {
+	ProjectID   string `json:"projectId"`
+	ProjectName string `json:"projectName"`
+	TerminalID  string `json:"terminalId"`
+	Title       string `json:"title"`
+}
+
+// listNotifications scans the user's running projects for terminals that
+// rang the bell while unattended (agents waiting for input). One tmux exec
+// per running project per poll — bounded so a wedged microVM can't stall
+// the endpoint past the UI's poll interval.
+func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
+	u, sp, err := s.who(r)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+	defer cancel()
+	guest := sp.profile.GuestUser()
+	out := []notification{}
+	for _, p := range sp.projects.List() {
+		st, err := s.orch.Status(ctx, u.Username, p.ID)
+		if err != nil {
+			s.logger.Warn("notifications: status failed", "project", p.ID, "error", err)
+			continue
+		}
+		if st.State != "running" {
+			continue
+		}
+		live, err := s.tmux.Live(ctx, u.Username, p.ID, guest)
+		if err != nil {
+			s.logger.Warn("notifications: tmux scan failed", "project", p.ID, "error", err)
+			continue
+		}
+		for id, l := range live {
+			if !l.Bell {
+				continue
+			}
+			title := "Terminal " + id
+			if rec, ok := sp.terms.Get(p.ID, id); ok {
+				title = rec.Title
+			}
+			out = append(out, notification{
+				ProjectID: p.ID, ProjectName: p.Name, TerminalID: id, Title: title,
+			})
+		}
+	}
+	// Map iteration order is random — keep the dropdown stable across polls.
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ProjectName != out[j].ProjectName {
+			return out[i].ProjectName < out[j].ProjectName
+		}
+		return out[i].TerminalID < out[j].TerminalID
+	})
+	writeJSON(w, http.StatusOK, map[string]any{"notifications": out})
 }

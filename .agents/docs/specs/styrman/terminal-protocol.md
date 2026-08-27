@@ -30,11 +30,15 @@ path — up to a few seconds; the HTTP upgrade completes only after readiness).
 
 There are no other text messages; unknown control types are ignored.
 
+The client intercepts Ctrl/Cmd+C only when a selection exists (copies it;
+otherwise the byte passes through as SIGINT), and Ctrl/Cmd+V / Ctrl+Shift+V
+paste via the clipboard API.
+
 ## Close codes
 
 | Code | Name | Client behavior |
 |---|---|---|
-| 4000 | shell exited | The tmux session genuinely ended (user typed `exit`, agent quit). Do NOT silently reconnect — show an "exited" state; reconnecting would create a fresh session. |
+| 4000 | shell exited | The tmux session genuinely ended (user typed `exit`, agent quit). Do NOT silently reconnect — the UI presents this state as **Paused** with a **Resume** action (the record and transcript persist; reconnecting starts a fresh shell). |
 | 4001 | replaced | A newer WebSocket attached to this conversation (another tab). NEVER auto-reconnect — doing so death-spirals: each reconnect replaces the other tab, which reconnects, forever. |
 | 1000/1001/1006 | normal/going away/abnormal | Transient. Silently reconnect; tmux reattaches with scrollback and running processes intact. |
 

@@ -1,0 +1,1 @@
+- [Changelog format used in super-devbox](changelog_format_super-devbox.md) — this repo's actual .agents/docs/changes/ style diverges from the generic template; follow the repo precedent.

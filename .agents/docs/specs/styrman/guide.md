@@ -27,12 +27,20 @@ Load-bearing ideas:
    other's worlds. Admins (env-provided) manage access in Settings.
 3. **Terminals** (ADR-016): durable records backed by tmux sessions — they
    survive tab closes and disconnects, can be renamed, paused (session ends,
-   record + transcript stay) and closed, singly or all at once. Everything
-   printed in them is transcribed to the home (ADR-017): the History tab.
+   record + transcript stay) and closed, singly or all at once. The shell
+   exiting is presented the same way: a **Paused** state with a **Resume**
+   action, not a dead terminal. Everything printed in them is transcribed to
+   the home (ADR-017): the History tab. Copy is Ctrl/Cmd+C when a selection
+   exists (otherwise it passes through as SIGINT); paste is Ctrl/Cmd+V or
+   Ctrl+Shift+V via the clipboard API. A sidebar notification bell (badge,
+   linking to the terminals waiting for input) surfaces terminals whose tmux
+   window rang its bell while unattended — tmux clears the flag once the
+   session is viewed.
 4. **The side panel is project context**: Files (workspace + home; view,
-   edit, upload by drag, download), Ports (what's listening, with process /
-   inner-docker image, shareable `/p/<id>/<t>/port/<port>/` links), History
-   (transcripts), Diff (git).
+   edit via a lazy-loaded CodeMirror 6 editor with syntax highlighting by
+   filename and Ctrl+S to save, upload by drag, download), Ports (what's
+   listening, with process / inner-docker image, shareable
+   `/p/<id>/<t>/port/<port>/` links), History (transcripts), Diff (git).
 
 ## 2. Architecture
 
@@ -94,9 +102,10 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 First use per user: the sidebar shows a **First-time setup** banner →
 "Open setup" boots a hidden minimal microVM running the guided
-`styrman-setup` (git identity → SSH key → gh → claude → agy). Everything
-lands in that user's home — once, forever. The same script works in any
-project terminal.
+`styrman-setup` (git identity → SSH key → gh → claude → agy). The generated
+SSH key's comment is the user's git email (fallback `user@styrman` if none
+is set), not "styrman". Everything lands in that user's home — once,
+forever. The same script works in any project terminal.
 
 ## 4. Operating it
 

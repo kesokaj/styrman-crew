@@ -43,7 +43,11 @@ Steps, in order:
    (starts session dbus + unlocked gnome-keyring on first login shell; keyring
    files persist at `~/.local/share/keyrings` on the shared home).
 7. Default `~/.tmux.conf` if the user has none (status off, login shells).
-7b. tmux transcript hook: pipe-pane every session to `~/.styrman/logs/<uuid>/` (ADR-017).
+7b. tmux transcript hook: pipe-pane every session to `~/.styrman/logs/<uuid>/`
+    (ADR-017). The generated `/etc/styrman/tmux-project.conf` also sets
+    `monitor-bell on`, `bell-action any`, `visual-bell off`, so an unattended
+    bell (e.g. an agent asking a question) flags the session for the UI's
+    notification panel.
 8. DinD (ADR-008): create sparse ext4 `~/.dockerd/<uuid>.img` if absent,
    loop-mount at `/var/lib/docker-project`, start dockerd with **overlay2**;
    fall back to **vfs** directly on the home if the loop mount fails.

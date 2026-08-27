@@ -217,6 +217,7 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("GET /api/projects/{project}/history/{id}", s.readHistory)
 	mux.HandleFunc("GET /api/projects/{project}/diff", s.projectDiff)
 	// Settings + admin.
+	mux.HandleFunc("GET /api/notifications", s.listNotifications)
 	mux.HandleFunc("GET /api/settings", s.settings)
 	mux.HandleFunc("POST /api/settings/profile", s.updateProfile)
 	mux.HandleFunc("PATCH /api/projects/{project}", s.renameProject)
@@ -424,7 +425,7 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	st, err := s.orch.Status(r.Context(), u.Username, p.Name)
+	st, err := s.orch.Status(r.Context(), u.Username, p.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -514,6 +515,7 @@ type terminalView struct {
 	conversation.Record
 	Live     bool `json:"live"`
 	Attached bool `json:"attached"`
+	Bell     bool `json:"bell"`
 }
 
 func (s *Server) listTerminals(w http.ResponseWriter, r *http.Request) {
@@ -533,6 +535,7 @@ func (s *Server) listTerminals(w http.ResponseWriter, r *http.Request) {
 		if l, ok := live[rec.ID]; ok {
 			v.Live = true
 			v.Attached = l.Attached
+			v.Bell = l.Bell
 		}
 		out = append(out, v)
 	}

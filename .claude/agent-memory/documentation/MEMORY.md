@@ -1,0 +1,2 @@
+- [styrman doc structure & style](project_styrman_docs.md) — spec/guide file map + conventions (angle-bracket placeholders, ADR citations, terse tone) for the styrman app in super-devbox
+- [styrman doc edit process lesson](feedback_styrman_doc_edits.md) — re-read exact text before Edit; placeholder brace style varies by file, don't assume from memory

@@ -48,7 +48,9 @@ chmod 600 "${HOME_DIR}/.bash_secrets"
 
 # SSH key: generate once so R3 ("sign in once, ever") includes git-over-ssh.
 if [[ ! -f "${HOME_DIR}/.ssh/id_ed25519" ]]; then
-    ssh-keygen -t ed25519 -N "" -C "styrman" -f "${HOME_DIR}/.ssh/id_ed25519" >/dev/null
+    KEY_COMMENT="$(git config --global user.email 2>/dev/null || true)"
+    [[ -n "${KEY_COMMENT}" ]] || KEY_COMMENT="${USER:-$(id -un)}@styrman"
+    ssh-keygen -t ed25519 -N "" -C "${KEY_COMMENT}" -f "${HOME_DIR}/.ssh/id_ed25519" >/dev/null
     log "generated ~/.ssh/id_ed25519 — add the public key to GitHub:"
     cat "${HOME_DIR}/.ssh/id_ed25519.pub"
 fi

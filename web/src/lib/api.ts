@@ -18,6 +18,16 @@ export interface Terminal {
   lastOpened: string;
   live: boolean;
   attached: boolean;
+  /** Rang the bell while unattended — an agent is likely waiting for input. */
+  bell: boolean;
+}
+
+/** A terminal waiting for attention (bell rung while unattended). */
+export interface AppNotification {
+  projectId: string;
+  projectName: string;
+  terminalId: string;
+  title: string;
 }
 
 export interface FileEntry {
@@ -173,6 +183,9 @@ export const api = {
     request<void>(`/api/projects/${project}/terminals/${id}/pause`, {
       method: "POST",
     }),
+
+  notifications: () =>
+    request<{ notifications: AppNotification[] }>("/api/notifications"),
 
   listPorts: (project: string) =>
     request<{ ports: PortInfo[] }>(`/api/projects/${project}/ports`),

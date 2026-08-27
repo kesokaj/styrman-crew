@@ -41,3 +41,6 @@ Deferred work items. Not blocking current work, but should be addressed later.
 
 - [ ] Artifacts / files-changed right-rail panes (Antigravity-style) fed by git diff (added 2026-08-26)
 - [ ] Mobile-friendly layout for quick check-ins from a phone (added 2026-08-26)
+
+- **Notifications scan efficiency** (2026-08-27, reviewer): `GET /api/notifications` runs one sequential tmux exec per running project per poll and `Live()` re-fetches container status the caller already has. Fine at current scale; if project counts grow, add a `LiveIn(ctx, containerID, guest)` variant, scan projects concurrently (bounded errgroup), and cache per-user results for a few seconds.
+- **profile.go GuestUser race** (2026-08-27, reviewer, pre-existing): `GuestUser()` reads `p.GuestName` without a mutex while `setGuestUser` writes it; add a `sync.RWMutex`.

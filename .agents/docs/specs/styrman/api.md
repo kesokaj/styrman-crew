@@ -27,7 +27,7 @@ A terminal is a persisted record whose live view is a tmux session
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/projects/{id}/terminals` | Records merged with live tmux state: `{id, title, createdAt, lastOpened, live, attached}`. Listed even when the project is stopped. |
+| `GET /api/projects/{id}/terminals` | Records merged with live tmux state: `{id, title, createdAt, lastOpened, live, attached, bell}`. `bell` (bool): rang the terminal bell while unattended — agent likely waiting for input; cleared by tmux when the session is viewed. Listed even when the project is stopped. |
 | `POST /api/projects/{id}/terminals` | Create: `{"title"}` optional (default "Terminal N"). Session created lazily on WS attach. |
 | `PATCH .../terminals/{t}` | Rename: `{"title"}`. |
 | `POST .../terminals/{t}/pause` | Kill the session, keep the record + transcript ("paused"; reopening starts a fresh shell). |
@@ -36,6 +36,12 @@ A terminal is a persisted record whose live view is a tmux session
 
 `GET /ws/term/{id}/{t}` — the terminal WebSocket (see terminal-protocol.md).
 `GET /ws/setup` — the user's hidden onboarding VM terminal.
+
+### Notifications
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/notifications` | `{"notifications":[{"projectId","projectName","terminalId","title"}]}` — terminals across the user's *running* projects whose tmux window bell flag is set. One docker exec per running project per call; the UI polls this every 8 s. |
 
 ## Ports & preview
 

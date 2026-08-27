@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
   api,
   tryUI,
@@ -6,6 +6,10 @@ import {
   type FileEntry,
   type Scope,
 } from "../lib/api";
+import { useTheme } from "../lib/hooks";
+
+// CodeMirror is heavy — load it only when a file is actually opened.
+const CodeEditor = lazy(() => import("./CodeEditor"));
 
 const fmtSize = (n: number) =>
   n < 1024
@@ -229,10 +233,12 @@ function FileViewer({
 }) {
   const [text, setText] = useState(file.content);
   const [saving, setSaving] = useState(false);
+  const { theme } = useTheme();
   const dirty = text !== file.content;
 
-  const save = () =>
-    tryUI(async () => {
+  const save = () => {
+    if (saving || file.truncated) return; // truncated: saving would drop the tail
+    return tryUI(async () => {
       setSaving(true);
       try {
         await api.saveFile(scope, file.path, text);
@@ -242,6 +248,7 @@ function FileViewer({
         setSaving(false);
       }
     });
+  };
 
   return (
     <div
@@ -263,7 +270,7 @@ function FileViewer({
             >
               Download
             </a>
-            {!file.binary && (
+            {!file.binary && !file.truncated && (
               <button
                 onClick={save}
                 disabled={!dirty || saving}
@@ -282,12 +289,20 @@ function FileViewer({
             Binary file — use Download to fetch it.
           </p>
         ) : (
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            spellCheck={false}
-            className="min-h-0 flex-1 resize-none bg-transparent p-3 font-mono text-xs outline-none"
-          />
+          <Suspense
+            fallback={
+              <p className="p-4 text-xs text-text-dim">Loading editor…</p>
+            }
+          >
+            <CodeEditor
+              value={text}
+              filename={file.path}
+              dark={theme === "dark"}
+              readOnly={file.truncated}
+              onChange={setText}
+              onSave={save}
+            />
+          </Suspense>
         )}
       </div>
     </div>

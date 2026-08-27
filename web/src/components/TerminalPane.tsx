@@ -62,6 +62,37 @@ export function TerminalPane({ target, onExited }: { target: TermTarget; onExite
     term.open(host)
     fit.fit()
 
+    // Clipboard: Ctrl/Cmd+C copies when text is selected (otherwise it stays
+    // a SIGINT), Ctrl/Cmd+V and Ctrl+Shift+V paste. ev.preventDefault() is
+    // required — xterm discards this handler's return before its own
+    // preventDefault, so without it the native paste fires too (double
+    // paste). Falls back to the browser's native copy/paste path when the
+    // async clipboard API is unavailable. ev.code keeps this layout-stable.
+    term.attachCustomKeyEventHandler((ev) => {
+      if (ev.type !== 'keydown') return true
+      if (!(ev.ctrlKey || ev.metaKey)) return true
+      if (ev.code === 'KeyC') {
+        if (!term.hasSelection()) return true // SIGINT / browser default
+        if (typeof navigator.clipboard?.writeText !== 'function') return true
+        ev.preventDefault()
+        navigator.clipboard
+          .writeText(term.getSelection())
+          .then(() => term.clearSelection())
+          .catch(() => {})
+        return false
+      }
+      if (ev.code === 'KeyV') {
+        if (typeof navigator.clipboard?.readText !== 'function') return true
+        ev.preventDefault()
+        navigator.clipboard
+          .readText()
+          .then((t) => t && term.paste(t))
+          .catch(() => {})
+        return false
+      }
+      return true
+    })
+
     let ws: WebSocket | null = null
     let closedForGood = false
     let retries = 0
@@ -146,7 +177,7 @@ export function TerminalPane({ target, onExited }: { target: TermTarget; onExite
           <span className="rounded-full border border-border bg-bg-raised px-3 py-1 text-xs text-text-dim">
             {state === 'connecting' && 'Connecting…'}
             {state === 'reconnecting' && 'Reconnecting…'}
-            {state === 'exited' && 'Session ended'}
+            {state === 'exited' && 'Paused — the shell exited; the terminal and its transcript are kept'}
             {state === 'replaced' && 'Opened in another tab'}
             {state === 'disconnected' && 'Disconnected'}
           </span>
@@ -158,7 +189,7 @@ export function TerminalPane({ target, onExited }: { target: TermTarget; onExite
               }}
               className="rounded-full border border-accent bg-accent-soft px-3 py-1 text-xs text-accent hover:brightness-110"
             >
-              {state === 'exited' ? 'Start again' : 'Reconnect'}
+              {state === 'exited' ? 'Resume' : 'Reconnect'}
             </button>
           )}
         </div>

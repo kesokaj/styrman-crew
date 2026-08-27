@@ -34,6 +34,9 @@ func ValidateID(id string) error {
 type Live struct {
 	ID       string `json:"id"`
 	Attached bool   `json:"attached"`
+	// Bell: the session rang the terminal bell while unattended — an agent
+	// is likely waiting for input. Cleared by tmux when viewed.
+	Bell bool `json:"bell"`
 }
 
 // Manager talks tmux inside project microVMs via exec.
@@ -59,8 +62,13 @@ func (m *Manager) liveSessions(ctx context.Context, user, project, guest, prefix
 	}
 	code, out, err := m.orch.Exec(ctx, st.ContainerID, orchestrator.ExecSpec{
 		User: guest,
-		Cmd:  []string{"tmux", "list-sessions", "-F", "#{session_name}|#{session_attached}"},
-		Env:  []string{"HOME=/home/" + guest, "USER=" + guest},
+		// Trailing ':' pins exit 0 — a failing list-windows (e.g. the last
+		// session dying between the two commands) must not discard a good
+		// list-sessions result; the parser tolerates partial output.
+		Cmd: []string{"sh", "-c",
+			"tmux list-sessions -F '#{session_name}|#{session_attached}' 2>/dev/null; " +
+				"tmux list-windows -a -F 'BELL|#{session_name}|#{window_bell_flag}' 2>/dev/null; :"},
+		Env: []string{"HOME=/home/" + guest, "USER=" + guest},
 	})
 	if err != nil {
 		return nil, err
@@ -68,9 +76,23 @@ func (m *Manager) liveSessions(ctx context.Context, user, project, guest, prefix
 	if code != 0 { // "no server running" — no sessions
 		return []Live{}, nil
 	}
+	return parseSessions(out, prefix), nil
+}
+
+// parseSessions turns the combined list-sessions + list-windows output into
+// Live records. Session lines are "name|attached"; window lines are
+// "BELL|name|flag" and only mark bells on sessions that also listed.
+func parseSessions(out, prefix string) []Live {
+	bells := map[string]bool{}
 	var lives []Live
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		parts := strings.Split(line, "|")
+		if len(parts) == 3 && parts[0] == "BELL" {
+			if parts[2] != "0" {
+				bells[parts[1]] = true
+			}
+			continue
+		}
 		if len(parts) != 2 || !strings.HasPrefix(parts[0], prefix) {
 			continue
 		}
@@ -79,10 +101,13 @@ func (m *Manager) liveSessions(ctx context.Context, user, project, guest, prefix
 			Attached: parts[1] != "0",
 		})
 	}
+	for i := range lives {
+		lives[i].Bell = bells[prefix+lives[i].ID]
+	}
 	if lives == nil {
 		lives = []Live{}
 	}
-	return lives, nil
+	return lives
 }
 
 // Live returns live tmux state keyed by terminal id.
