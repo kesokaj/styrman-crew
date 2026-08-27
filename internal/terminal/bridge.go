@@ -41,6 +41,10 @@ type Bridge struct {
 	// activeConns maps a session key → the current *websocket.Conn. A new
 	// connection closes the previous one with CloseReplaced so only one client
 	// attaches to a tmux session at a time (duplicate attaches garble output).
+	// swapMu makes the load-old / store-new swap atomic — otherwise two
+	// near-simultaneous attaches could both see an empty slot, both attach,
+	// and the tmux -D kick spins the frontend into a reconnect loop.
+	swapMu      sync.Mutex
 	activeConns sync.Map
 }
 
@@ -173,15 +177,22 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 		return
 	}
 	defer conn.CloseNow()
-	conn.SetReadLimit(-1)
+	// Cap a single client frame at 16 MiB — enough for a large paste, but a
+	// buggy/hostile client can't OOM the server with an unbounded frame.
+	conn.SetReadLimit(16 << 20)
 
-	// Replace any previous connection for this session (close 4001; the
-	// frontend must not auto-reconnect on it, or two clients would fight over
-	// the tmux session in a reconnect death-spiral).
+	// Atomically replace any previous connection for this session (close 4001;
+	// the frontend must not auto-reconnect on it, or two clients would fight
+	// over the tmux session in a reconnect death-spiral). The old Close runs
+	// in a goroutine: a dead peer's close handshake can block ~5-10 s, which
+	// must not stall this new attach (it blew the "reopen < 5 s" SLA).
+	b.swapMu.Lock()
 	if old, loaded := b.activeConns.LoadAndDelete(s.key); loaded {
-		old.(*websocket.Conn).Close(websocket.StatusCode(config.CloseReplaced), "replaced by new connection")
+		oc := old.(*websocket.Conn)
+		go oc.Close(websocket.StatusCode(config.CloseReplaced), "replaced by new connection")
 	}
 	b.activeConns.Store(s.key, conn)
+	b.swapMu.Unlock()
 	defer b.activeConns.CompareAndDelete(s.key, conn)
 
 	home := "/home/" + s.guest

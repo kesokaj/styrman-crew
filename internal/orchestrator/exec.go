@@ -40,7 +40,22 @@ func (o *Orchestrator) Exec(ctx context.Context, containerID string, spec ExecSp
 
 	var buf bytes.Buffer
 	// Non-TTY exec streams are multiplexed; demux stdout+stderr together.
-	_, _ = stdcopy.StdCopy(&buf, &buf, att.Reader)
+	// The Docker hijack has no ctx watchdog, so a wedged guest command would
+	// block StdCopy (and leak this goroutine + the hijacked conn) forever.
+	// Run it in a goroutine and abandon on ctx cancel — att.Close() (deferred)
+	// then unblocks the reader.
+	copyDone := make(chan struct{})
+	go func() {
+		_, _ = stdcopy.StdCopy(&buf, &buf, att.Reader)
+		close(copyDone)
+	}()
+	select {
+	case <-copyDone:
+	case <-ctx.Done():
+		att.Close() // unblock the StdCopy read
+		<-copyDone  // wait for the goroutine to stop writing buf (no race)
+		return -1, buf.String(), ctx.Err()
+	}
 
 	// Exit code is only final once the process is gone; poll briefly.
 	for i := 0; i < 20; i++ {

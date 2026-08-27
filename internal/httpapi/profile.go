@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sync"
 
 	"github.com/kesokaj/styrman/internal/identity"
 )
@@ -13,9 +14,12 @@ import (
 // profileStore holds per-user preferences — today just the in-guest
 // ("terminal") username, chosen at first setup or in Settings. It defaults
 // to the identity slug and applies to microVMs started after a change.
+// GuestName is read on every terminal attach and written from Settings, so a
+// mutex guards it (a torn string is memory-unsafe, not merely stale).
 type profileStore struct {
 	path      string
 	def       string
+	mu        sync.RWMutex
 	GuestName string `json:"guestUser,omitempty"`
 }
 
@@ -41,23 +45,46 @@ func newProfileStore(path, defaultUser string) (*profileStore, error) {
 
 // GuestUser returns the effective in-guest username.
 func (p *profileStore) GuestUser() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 	if p.GuestName != "" {
 		return p.GuestName
 	}
 	return p.def
 }
 
+// HasGuestUser reports whether a username was explicitly chosen.
+func (p *profileStore) HasGuestUser() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.GuestName != ""
+}
+
 func (p *profileStore) setGuestUser(name string) error {
 	if name != "" && !guestNameRe.MatchString(name) {
 		return fmt.Errorf("invalid username %q: lowercase letters, digits, - and _, starting with a letter", name)
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.GuestName = name
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return err
 	}
 	tmp := p.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil { // durability, like the other stores (N24)
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, p.path)
@@ -117,5 +144,5 @@ func (s *Server) usernameChosen(user string) bool {
 	if err != nil {
 		return false
 	}
-	return sp.profile.GuestName != ""
+	return sp.profile.HasGuestUser()
 }

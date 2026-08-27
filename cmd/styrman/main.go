@@ -60,22 +60,27 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Adopt pre-existing containers so restarts are seamless (ADR-007), and
-	// join running projects' networks now (containerized server: does the
-	// network attach + guest ARP refresh at boot, not on first click).
-	// Non-blocking: force-removing a running Kata VM can take seconds and
-	// must not delay the listener.
+	// Boot recovery MUST NOT delay the listener: after a host reboot a slow
+	// dockerd (10 Kata VMs restarting) made /api/health hang for minutes,
+	// which the ingress reads as 502. Adopt (state recovery, ADR-007) and the
+	// self-attach loop (join running projects' bridges for port-preview) both
+	// run in the background now; only the sweep was already async.
 	go orch.CleanupLegacy(ctx)
-	if adopted, err := orch.Adopt(ctx); err != nil {
-		logger.Warn("initial adoption failed (docker down?)", "error", err)
-	} else {
+	go func() {
+		bctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+		adopted, err := orch.Adopt(bctx)
+		if err != nil {
+			logger.Warn("initial adoption failed (docker down?)", "error", err)
+			return
+		}
 		logger.Info("adopted state", "containers", len(adopted))
 		for _, st := range adopted {
 			if st.State == "running" {
-				orch.EnsureSelfAttached(ctx, st.User, st.Project)
+				orch.EnsureSelfAttached(bctx, st.User, st.Project)
 			}
 		}
-	}
+	}()
 
 	go orch.RunIdleReaper(ctx)
 

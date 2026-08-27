@@ -112,7 +112,16 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 		if insp.State == nil || !insp.State.Running {
 			o.logger.Info("starting stopped project container", "project", project)
 			if err := o.docker.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
-				return "", fmt.Errorf("start %s: %w", name, err)
+				// Defense in depth: if the project's network went missing
+				// (e.g. an older buggy sweep removed it), recreate it and
+				// reconnect the container rather than leaving it unstartable.
+				if o.recreateMissingNetwork(ctx, id, config.NetworkName(project)) {
+					if err2 := o.docker.ContainerStart(ctx, id, container.StartOptions{}); err2 != nil {
+						return "", fmt.Errorf("start %s after network recreate: %w", name, err2)
+					}
+				} else {
+					return "", fmt.Errorf("start %s: %w", name, err)
+				}
 			}
 		}
 	case errdefs.IsNotFound(err):
@@ -200,7 +209,11 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context, user, guestUser string) 
 	if exists && containerGuest(insp.Config.Env) != guestUser {
 		o.logger.Info("setup VM guest changed — recreating", "user", user,
 			"from", containerGuest(insp.Config.Env), "to", guestUser)
-		_ = o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true})
+		if err := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+			// Don't fall through to create — it would fail "name already in
+			// use" and surface a misleading 500 with no self-heal.
+			return "", fmt.Errorf("remove stale setup container: %w", err)
+		}
 		exists = false
 	}
 	if exists {
@@ -226,6 +239,7 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context, user, guestUser string) 
 				config.LabelSystem:  "setup",
 				config.LabelUser:    user,
 			},
+			noRestart: true, // ephemeral onboarding VM — reap, don't resurrect
 		})
 		if err != nil {
 			return "", err
@@ -285,24 +299,33 @@ func (o *Orchestrator) CleanupLegacy(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	// Networks that belong to a CURRENT-scheme container (running OR stopped)
+	// must be kept — removing a stopped project's network would make its next
+	// EnsureRunning fail "network not found" with no recreate path (R7).
+	keepNets := map[string]bool{}
 	for _, c := range list {
 		hasUser := c.Labels[config.LabelUser] != ""
 		hasName := c.Labels[config.LabelName] != ""
 		isSystem := c.Labels[config.LabelSystem] != ""
 		if hasUser && (hasName || isSystem) {
+			if isSystem {
+				keepNets[config.SetupNetwork(c.Labels[config.LabelUser])] = true
+			} else if proj := c.Labels[config.LabelProject]; proj != "" {
+				keepNets[config.NetworkName(proj)] = true
+			}
 			continue
 		}
 		o.logger.Info("removing previous-layout container", "id", c.ID[:12], "names", c.Names)
 		_ = o.docker.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true})
 	}
-	// Orphaned previous-scheme networks (best effort).
+	// Remove only sdb- networks NOT referenced by a current container.
 	nets, err := o.docker.NetworkList(ctx, network.ListOptions{})
 	if err != nil {
 		return
 	}
 	for _, n := range nets {
-		if strings.HasPrefix(n.Name, "sdb-") {
-			_ = o.docker.NetworkRemove(ctx, n.ID) // fails harmlessly if in use
+		if strings.HasPrefix(n.Name, "sdb-") && !keepNets[n.Name] {
+			_ = o.docker.NetworkRemove(ctx, n.ID) // truly orphaned; best effort
 		}
 	}
 }
@@ -316,6 +339,7 @@ type createSpec struct {
 	homePath  string // host path mounted as /home/<guestUser>
 	extraEnv  []string
 	labels    map[string]string
+	noRestart bool // ephemeral (setup VM): don't auto-restart after reboot
 }
 
 // create builds a network and container. Caller holds the relevant lock.
@@ -360,7 +384,7 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 			Binds: []string{
 				spec.homePath + ":/home/" + spec.guestUser,
 			},
-			RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
+			RestartPolicy: restartPolicy(spec.noRestart),
 		},
 		&network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{netName: {}},
@@ -405,6 +429,23 @@ func (o *Orchestrator) Stop(ctx context.Context, user, project string) error {
 		return nil
 	}
 	return err
+}
+
+// stopIfIdle stops the project only if it is STILL idle under the per-project
+// lock — the idle reaper's decision is based on a snapshot, and a user may
+// have attached (EnsureRunning Touches under the same lock) between the
+// snapshot and now. Without this, the reaper can kill a terminal that was
+// just opened, losing its tmux state (review finding I2).
+func (o *Orchestrator) stopIfIdle(ctx context.Context, user, project string) error {
+	l := o.lockProject(key(user, project))
+	l.Lock()
+	defer l.Unlock()
+	if v, ok := o.activity.Load(key(user, project)); ok {
+		if time.Since(v.(time.Time)) <= o.cfg.IdleTimeout {
+			return nil // touched since the reap decision — leave it running
+		}
+	}
+	return o.Stop(ctx, user, project)
 }
 
 // Destroy removes the project's container and network. The workspace and all
@@ -469,6 +510,9 @@ func (o *Orchestrator) RunIdleReaper(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			// Reap abandoned onboarding VMs too (no project label, so Adopt
+			// skips them) — they otherwise leak a Kata VM per abandoned setup.
+			o.ReapSetupVMs(ctx, o.cfg.IdleTimeout)
 			statuses, err := o.Adopt(ctx)
 			if err != nil {
 				o.logger.Warn("idle reaper list failed", "error", err)
@@ -491,11 +535,64 @@ func (o *Orchestrator) RunIdleReaper(ctx context.Context) {
 				}
 				if time.Since(last) > o.cfg.IdleTimeout {
 					o.logger.Info("stopping idle project", "user", st.User, "project", st.Project, "lastActivity", last)
-					if err := o.Stop(ctx, st.User, st.Project); err != nil {
+					if err := o.stopIfIdle(ctx, st.User, st.Project); err != nil {
 						o.logger.Warn("idle stop failed", "project", st.Project, "error", err)
 					}
 				}
 			}
 		}
+	}
+}
+
+// recreateMissingNetwork recreates a project's bridge network if it is absent
+// and reconnects the container to it. Returns true if it recreated (so the
+// caller should retry the start). Best effort — false on any failure.
+func (o *Orchestrator) recreateMissingNetwork(ctx context.Context, containerID, netName string) bool {
+	if _, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{}); err == nil {
+		return false // network exists; the start failure was something else
+	}
+	o.logger.Warn("project network missing — recreating", "network", netName)
+	if _, err := o.docker.NetworkCreate(ctx, netName, network.CreateOptions{Driver: "bridge"}); err != nil {
+		o.logger.Error("network recreate failed", "network", netName, "error", err)
+		return false
+	}
+	if err := o.docker.NetworkConnect(ctx, netName, containerID, nil); err != nil {
+		o.logger.Error("network reconnect failed", "network", netName, "error", err)
+		return false
+	}
+	return true
+}
+
+// restartPolicy picks the container restart policy. Project VMs restart with
+// the host (seamless recovery); the setup VM is ephemeral so it does not
+// come back after a reboot and can be reaped when onboarding is abandoned.
+func restartPolicy(noRestart bool) container.RestartPolicy {
+	if noRestart {
+		return container.RestartPolicy{Name: "no"}
+	}
+	return container.RestartPolicy{Name: "unless-stopped"}
+}
+
+// ReapSetupVMs stops+removes onboarding VMs that have been running longer
+// than maxAge (abandoned setup — the tab was closed without done/discard).
+func (o *Orchestrator) ReapSetupVMs(ctx context.Context, maxAge time.Duration) {
+	list, err := o.docker.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("label", config.LabelSystem+"=setup")),
+	})
+	if err != nil {
+		return
+	}
+	for _, c := range list {
+		insp, err := o.docker.ContainerInspect(ctx, c.ID)
+		if err != nil || insp.State == nil || !insp.State.Running {
+			continue
+		}
+		started, perr := time.Parse(time.RFC3339Nano, insp.State.StartedAt)
+		if perr != nil || time.Since(started) < maxAge {
+			continue
+		}
+		o.logger.Info("reaping abandoned setup VM", "id", c.ID[:12], "age", time.Since(started))
+		_ = o.docker.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true})
 	}
 }

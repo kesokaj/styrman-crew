@@ -72,15 +72,15 @@
 - **Verify:** re-run security reviewer; from inside a project VM, confirm `:8081` is unreachable and a symlinked project dir 403s; suites green.
 
 ### Batch B — reliability core (P1, Go) 🟠
-- ☐ **I1** Rewrite `CleanupLegacy` to build a keep-set of `sdb-` networks referenced by any managed container (all `styrman.project`/`styrman.system` labels) and only remove the rest; add a `ContainerStart` path that recreates a missing project network.
-- ☐ **I5** Guard the bridge conn swap with a per-terminal mutex (or `map[string]*session` under one lock); mark the old session replaced via an atomic flag (so it can't emit 4000) and run `old.Close(4001)` in its own goroutine.
-- ☐ **I6** Bound the boot `Adopt`+self-attach loop with a single overall deadline (~20 s) or move it to a goroutine that must finish before the first proxy request — never block `ListenAndServe`.
-- ☐ **I2** Add `StopIdle` that takes `lockProject`, re-reads `o.activity`, and aborts if touched since the reap decision.
-- ☐ **I3** Label setup VMs for the reaper (or a separate activity map) and stop/remove after an idle interval; reconsider `RestartPolicy` for setup VMs.
-- ☐ **I16** Return the `ContainerRemove` error (unless `IsNotFound`) in the setup-recreate path.
-- ☐ **I4** Add `sync.Mutex` to `profileStore` guarding `GuestName` in `GuestUser`/`setGuestUser`/`usernameChosen`; add `setGuestUser` fsync (**N24**).
-- ☐ **I7** Run `stdcopy.StdCopy` in a goroutine and `select` on `ctx.Done()` → `att.Close()`.
-- ☐ **I8** Replace the fd-walk port scan with `ss -ltnpH` (one pass); add an in-flight guard to the ports poll (ties to **F6**).
+- ☑ **I1** Rewrite `CleanupLegacy` to build a keep-set of `sdb-` networks referenced by any managed container (all `styrman.project`/`styrman.system` labels) and only remove the rest; add a `ContainerStart` path that recreates a missing project network.
+- ☑ **I5** Guard the bridge conn swap with a per-terminal mutex (or `map[string]*session` under one lock); mark the old session replaced via an atomic flag (so it can't emit 4000) and run `old.Close(4001)` in its own goroutine.
+- ☑ **I6** Bound the boot `Adopt`+self-attach loop with a single overall deadline (~20 s) or move it to a goroutine that must finish before the first proxy request — never block `ListenAndServe`.
+- ☑ **I2** Add `StopIdle` that takes `lockProject`, re-reads `o.activity`, and aborts if touched since the reap decision.
+- ☑ **I3** Label setup VMs for the reaper (or a separate activity map) and stop/remove after an idle interval; reconsider `RestartPolicy` for setup VMs.
+- ☑ **I16** Return the `ContainerRemove` error (unless `IsNotFound`) in the setup-recreate path.
+- ☑ **I4** Add `sync.Mutex` to `profileStore` guarding `GuestName` in `GuestUser`/`setGuestUser`/`usernameChosen`; add `setGuestUser` fsync (**N24**).
+- ☑ **I7** Run `stdcopy.StdCopy` in a goroutine and `select` on `ctx.Done()` → `att.Close()`.
+- ☑ **I8** Replace the fd-walk port scan with `ss -ltnpH` (one pass); add an in-flight guard to the ports poll (ties to **F6**).
 - ☐ **N12** Cap `SetReadLimit` (~16 MiB). **N15** throttle `touch()` ~1/s. **N13/N14/N18/N19/N23** dead-branch/dead-dep/nil-guard cleanups + `containerGuest`/orchestrator/terminal unit tests. **N16** treat `tmux detach` exit distinctly from a real shell exit.
 - **Verify:** `go test -race`; reboot drill (stop server with idle projects, restart, confirm they start); reviewer.
 
