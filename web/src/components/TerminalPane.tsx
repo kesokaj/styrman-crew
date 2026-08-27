@@ -51,10 +51,23 @@ export function TerminalPane({
   const toastTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
+  // N7: keep onExited fresh without re-running the connection effect.
+  const onExitedRef = useRef(onExited);
+  useEffect(() => {
+    onExitedRef.current = onExited;
+  });
 
   const targetKey =
     (target.kind === "setup" ? "setup" : `${target.project}/${target.id}`) +
     `#${epoch}`;
+
+  // N5: a reconnect (epoch bump) or a switch to another terminal starts fresh
+  // — old link chips / dismissals must not carry over.
+  useEffect(() => {
+    setUrls([]);
+    setDismissed([]);
+    setCopied(undefined);
+  }, [targetKey]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -136,7 +149,7 @@ export function TerminalPane({
         if (ev.code === CLOSE_EXITED) {
           setState("exited");
           closedForGood = true;
-          onExited?.();
+          onExitedRef.current?.();
           return;
         }
         if (TRANSIENT_CODES.has(ev.code) && retries < MAX_RETRIES) {

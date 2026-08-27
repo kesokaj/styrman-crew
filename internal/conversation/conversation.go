@@ -73,9 +73,7 @@ func (m *Manager) liveSessions(ctx context.Context, user, project, guest, prefix
 	if err != nil {
 		return nil, err
 	}
-	if code != 0 { // "no server running" — no sessions
-		return []Live{}, nil
-	}
+	_ = code // the script pins exit 0 (`; :`); parseSessions tolerates empty out
 	return parseSessions(out, prefix), nil
 }
 

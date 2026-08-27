@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { api, portUrl, tryUI } from "../lib/api";
 import { clearClips, getClips, subscribeClips, type Clip } from "../lib/clips";
 import { usePolled } from "../lib/hooks";
@@ -393,10 +393,9 @@ function GitTab({ project }: { project: string }) {
  * remembers what it put there. Stored per-browser, never uploaded.
  */
 function ClipsTab() {
-  const [, force] = useState(0);
   const [copiedAt, setCopiedAt] = useState<number>();
-  useEffect(() => subscribeClips(() => force((n) => n + 1)), []);
-  const clips = getClips();
+  // N8: subscribe via useSyncExternalStore (tear-free under React 19).
+  const clips = useSyncExternalStore(subscribeClips, getClips);
 
   const recopy = (c: Clip) =>
     navigator.clipboard?.writeText(c.text).then(() => {

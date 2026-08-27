@@ -554,16 +554,17 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) startProject(w http.ResponseWriter, r *http.Request) {
-	u, _, p, err := s.getProjectFor(r)
+	u, sp, p, err := s.getProjectFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()
-	sp2, _ := s.space(u.Username)
+	// Reuse sp from getProjectFor (N23: the old sp2, _ := s.space(...) ignored
+	// the error and could nil-deref).
 	if _, err := s.orch.EnsureRunning(ctx, u.Username, p.ID,
-		orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: sp2.profile.GuestUser()}); err != nil {
+		orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: sp.profile.GuestUser()}); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -636,7 +637,7 @@ func (s *Server) createTerminal(w http.ResponseWriter, r *http.Request) {
 		Title string `json:"title"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body) // empty body = default title
-	rec, err := sp.terms.Create(p.ID, body.Title)
+	rec, err := sp.terms.Create(p.ID, clampTitle(body.Title))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -657,7 +658,7 @@ func (s *Server) renameTerminal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("title required"))
 		return
 	}
-	if err := sp.terms.Rename(p.ID, r.PathValue("term"), body.Title); err != nil {
+	if err := sp.terms.Rename(p.ID, r.PathValue("term"), clampTitle(body.Title)); err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
@@ -744,4 +745,19 @@ func writeErr(w http.ResponseWriter, status int, err error) {
 		status = http.StatusNotFound
 	}
 	writeJSON(w, status, map[string]any{"error": map[string]string{"message": err.Error()}})
+}
+
+// clampTitle bounds a terminal title (N25): titles land in conversations.json
+// and every list response, so cap the length and strip control characters.
+func clampTitle(t string) string {
+	t = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, t)
+	if len(t) > 120 {
+		t = t[:120]
+	}
+	return t
 }
