@@ -47,7 +47,17 @@ func (s *Server) authGuard(mode string, next http.Handler) http.Handler {
 				return
 			}
 			if !s.users.IsAuthorized(email) {
-				writeErr(w, http.StatusForbidden, fmt.Errorf("%s is not authorized for styrman", email))
+				// A Google user who isn't a styrman user may still reach a
+				// project's port PREVIEW if its owner shared it with them
+				// (proxyPort enforces the per-project share list). Every other
+				// route is refused — they never see the dashboard, terminals,
+				// or files.
+				if !isPreviewPath(r.URL.Path) {
+					writeErr(w, http.StatusForbidden, fmt.Errorf("%s is not authorized for styrman", email))
+					return
+				}
+				u = identity.User{Email: email, Username: identity.DeriveUsername(email)}
+				next.ServeHTTP(w, identity.WithUser(r, u))
 				return
 			}
 			u = identity.User{

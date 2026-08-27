@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kesokaj/styrman/internal/identity"
 )
 
 // listPorts reports the project's in-guest listening ports (≥1024).
@@ -32,11 +34,20 @@ func (s *Server) listPorts(w http.ResponseWriter, r *http.Request) {
 // WebSocket upgrades through, so dev servers with HMR work too. The proxy
 // sits behind authGuard like every other route.
 func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request) {
-	u, _, p, err := s.getProjectFor(r)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, err)
+	u := identity.FromContext(r.Context())
+	// Resolve the project across owners (a shared guest doesn't own it) and
+	// enforce the per-project share list: the owner always has access, a
+	// shared Google email has preview-only access, everyone else is refused.
+	owner, p, allowed, found := s.previewAccess(r.PathValue("project"), u)
+	if !found {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("no such project"))
 		return
 	}
+	if !allowed {
+		writeErr(w, http.StatusForbidden, fmt.Errorf("you don't have access to this project's ports"))
+		return
+	}
+	u.Username = owner // attach/IP lookups run in the owner's namespace
 	name := p.ID
 	port, err := strconv.Atoi(r.PathValue("port"))
 	if err != nil || port < 1024 || port > 65535 {

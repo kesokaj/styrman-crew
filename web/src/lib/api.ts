@@ -209,6 +209,14 @@ export const api = {
   listPorts: (project: string) =>
     request<{ ports: PortInfo[] }>(`/api/projects/${project}/ports`),
 
+  getShares: (project: string) =>
+    request<{ emails: string[] }>(`/api/projects/${project}/shares`),
+  setShares: (project: string, emails: string[]) =>
+    request<{ emails: string[] }>(`/api/projects/${project}/shares`, {
+      method: "PUT",
+      body: JSON.stringify({ emails }),
+    }),
+
   listFiles: (scope: Scope, path: string) =>
     request<{ entries: FileEntry[] }>(
       `${scopeBase(scope)}/files?path=${encodeURIComponent(path)}`,

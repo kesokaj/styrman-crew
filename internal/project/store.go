@@ -28,6 +28,10 @@ type Project struct {
 	CreatedAt time.Time `json:"createdAt"`
 	GitInit   bool      `json:"gitInit"`
 	Archived  bool      `json:"archived"`
+	// SharedEmails may access this project's port previews (read-only, only
+	// the previews — never the terminal, files, or the dashboard). Empty =
+	// owner-only. Emails are authenticated by the Google OAuth ingress.
+	SharedEmails []string `json:"sharedEmails,omitempty"`
 }
 
 // nameRe accepts short kebab-case slugs. First char a letter so names are
@@ -137,6 +141,20 @@ func (s *Store) Rename(id, name string) error {
 		return ErrNotFound
 	}
 	p.Name = name
+	s.projects[id] = p
+	return s.save()
+}
+
+// SetShares replaces the project's shared-email list (already validated +
+// normalized by the caller).
+func (s *Store) SetShares(id string, emails []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.projects[id]
+	if !ok {
+		return ErrNotFound
+	}
+	p.SharedEmails = emails
 	s.projects[id] = p
 	return s.save()
 }

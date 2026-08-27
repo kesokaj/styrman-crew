@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, portUrl } from "../lib/api";
+import { api, portUrl, tryUI } from "../lib/api";
 import { clearClips, getClips, subscribeClips, type Clip } from "../lib/clips";
 import { usePolled } from "../lib/hooks";
 import { FileExplorer } from "./FileExplorer";
@@ -82,46 +82,127 @@ function PortsTab({ project, term }: { project: string; term: string }) {
   const { data } = usePolled(() => api.listPorts(project), 7000);
   const ports = data?.ports ?? [];
   return (
-    <div className="h-full overflow-y-auto p-2">
-      <p className="px-1 pb-2 text-[11px] text-text-dim">
-        Ports listening inside this project's microVM. Links open the app
-        through styrman — shareable with anyone who can sign in.
-      </p>
-      {ports.length === 0 && (
-        <p className="px-1 text-xs text-text-dim">
-          Nothing listening. Start a dev server in a terminal and it appears
-          here.
+    <div className="flex h-full flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        <p className="px-1 pb-2 text-[11px] text-text-dim">
+          Ports listening inside this project's microVM. Links open the app
+          through styrman.
         </p>
-      )}
-      {ports.map((p) => (
+        {ports.length === 0 && (
+          <p className="px-1 text-xs text-text-dim">
+            Nothing listening. Start a dev server in a terminal and it appears
+            here.
+          </p>
+        )}
+        {ports.map((p) => (
+          <div
+            key={p.port}
+            className="flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-bg-hover"
+          >
+            <a
+              href={portUrl(project, term, p.port)}
+              target="_blank"
+              rel="noreferrer"
+              className="rounded bg-accent-soft px-2 py-0.5 text-accent hover:brightness-110"
+            >
+              :{p.port}
+            </a>
+            <span className="min-w-0 flex-1 truncate text-[11px] text-text-dim">
+              {p.image ? `🐳 ${p.image}` : p.process || ""}
+            </span>
+            <button
+              className="shrink-0 text-[11px] text-text-dim hover:text-text"
+              onClick={() =>
+                navigator.clipboard?.writeText(
+                  location.origin + portUrl(project, term, p.port),
+                )
+              }
+              title="Copy link"
+            >
+              copy link
+            </button>
+          </div>
+        ))}
+      </div>
+      <ShareBox project={project} />
+    </div>
+  );
+}
+
+/**
+ * Who can open this project's port previews. Owner-only by default; add Google
+ * emails to grant preview-only access (they never see the terminal, files, or
+ * dashboard — only the port links you send them).
+ */
+function ShareBox({ project }: { project: string }) {
+  const { data, refresh } = usePolled(() => api.getShares(project), 30000);
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const emails = data?.emails ?? [];
+  const valid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
+
+  const save = (next: string[]) =>
+    tryUI(async () => {
+      setBusy(true);
+      try {
+        await api.setShares(project, next);
+        refresh();
+      } finally {
+        setBusy(false);
+      }
+    });
+
+  const add = () => {
+    const e = email.trim().toLowerCase();
+    if (!valid || emails.includes(e)) return;
+    setEmail("");
+    save([...emails, e]);
+  };
+
+  return (
+    <div className="shrink-0 border-t border-border p-2">
+      <div className="px-1 pb-1 text-[11px] font-medium uppercase tracking-wider text-text-dim">
+        Share port previews
+      </div>
+      <p className="px-1 pb-1.5 text-[11px] text-text-dim">
+        Owner-only by default. Add a Google email to let that person open this
+        project's port links (previews only — nothing else).
+      </p>
+      {emails.map((e) => (
         <div
-          key={p.port}
-          className="flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-bg-hover"
+          key={e}
+          className="group flex items-center gap-2 rounded px-1 py-0.5 text-[11px] hover:bg-bg-hover"
         >
-          <a
-            href={portUrl(project, term, p.port)}
-            target="_blank"
-            rel="noreferrer"
-            className="rounded bg-accent-soft px-2 py-0.5 text-accent hover:brightness-110"
-          >
-            :{p.port}
-          </a>
-          <span className="min-w-0 flex-1 truncate text-[11px] text-text-dim">
-            {p.image ? `🐳 ${p.image}` : p.process || ""}
-          </span>
+          <span className="min-w-0 flex-1 truncate">{e}</span>
           <button
-            className="shrink-0 text-[11px] text-text-dim hover:text-text"
-            onClick={() =>
-              navigator.clipboard?.writeText(
-                location.origin + portUrl(project, term, p.port),
-              )
-            }
-            title="Copy link"
+            disabled={busy}
+            onClick={() => save(emails.filter((x) => x !== e))}
+            className="invisible text-text-dim hover:text-danger group-hover:visible"
+            aria-label={`Remove ${e}`}
           >
-            copy link
+            remove
           </button>
         </div>
       ))}
+      <div className="mt-1 flex gap-1">
+        <input
+          value={email}
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+          placeholder="name@gmail.com"
+          className="min-w-0 flex-1 rounded border border-border bg-bg px-2 py-1 text-[11px] outline-none focus:border-accent"
+        />
+        <button
+          onClick={add}
+          disabled={!valid || busy}
+          className="rounded bg-accent-soft px-2 py-1 text-[11px] text-accent hover:brightness-110 disabled:opacity-40"
+        >
+          add
+        </button>
+      </div>
     </div>
   );
 }
