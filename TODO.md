@@ -52,3 +52,15 @@ Deferred work items. Not blocking current work, but should be addressed later.
   server/client divergence. e2e filters it as a known-benign warning. Track
   the source (likely a prerendered dynamic value) and make the initial render
   deterministic.
+
+- **Deferred deploy hardening (Batch D, 2026-08-27):**
+  - **I14** docker.sock read-only proxy for Caddy (Caddy has host-root Docker
+    access; `:ro` bind doesn't restrict socket connect). Needs a
+    `docker-socket-proxy` sidecar + careful live-ingress test — do in a
+    dedicated session like the JWT-key change.
+  - **I13 (partial)** OpenTofu `--skip-verify` + unpinned Go/claude/node/yq in
+    image/Dockerfile — pin versions + drop skip-verify, validating the image
+    still builds. (Kata tarball checksum: DONE in host-setup.sh.)
+  - **I15** make host-setup.sh the single convergent fresh-install entry point
+    (build runtime image, run home-init, print compose command) + per-user
+    harness in ensureHome; align deploy.md. (R11/R5.)

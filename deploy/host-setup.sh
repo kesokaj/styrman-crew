@@ -51,8 +51,25 @@ usermod -aG docker "${OPERATOR}"
 # ─── 2. Kata Containers → /opt/kata, runtime 'mvm' ──────────────────────────
 if [[ ! -x /opt/kata/bin/kata-runtime ]]; then
     log "installing Kata ${KATA_VERSION}"
-    curl -fsSL "https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/kata-static-${KATA_VERSION}-amd64.tar.xz" \
-        | tar -xJ -C /
+    KATA_URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/kata-static-${KATA_VERSION}-amd64.tar.xz"
+    KATA_TMP="$(mktemp)"
+    curl -fsSL "${KATA_URL}" -o "${KATA_TMP}"
+    # Verify against the release's published SHA256 before extracting into / as
+    # root — a tampered/MITM'd asset would otherwise write arbitrary files.
+    # Pin via KATA_SHA256 env; otherwise fetch the sums file from the release.
+    EXPECT="${KATA_SHA256:-}"
+    if [[ -z "${EXPECT}" ]]; then
+        EXPECT=$(curl -fsSL "https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/kata-static-${KATA_VERSION}-amd64.tar.xz.sha256sum" 2>/dev/null | awk '{print $1}')
+    fi
+    if [[ -n "${EXPECT}" ]]; then
+        ACTUAL=$(sha256sum "${KATA_TMP}" | awk '{print $1}')
+        [[ "${ACTUAL}" == "${EXPECT}" ]] || { echo "FATAL: Kata tarball checksum mismatch (expected ${EXPECT}, got ${ACTUAL})"; rm -f "${KATA_TMP}"; exit 1; }
+        log "Kata tarball checksum verified"
+    else
+        log "WARNING: could not obtain Kata SHA256 — extracting UNVERIFIED (set KATA_SHA256 to enforce)"
+    fi
+    tar -xJf "${KATA_TMP}" -C /
+    rm -f "${KATA_TMP}"
 else
     log "Kata present: $(/opt/kata/bin/kata-runtime version | head -1)"
 fi
