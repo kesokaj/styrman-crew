@@ -210,6 +210,24 @@ try {
     if (!body.includes("e2e-app"))
       throw new Error("proxy did not serve the app");
   });
+  // Per-port sharing: add an email then remove it (the remove button must be
+  // visible + working — it was hover-hidden and undeletable before).
+  await check("share add + remove on a port", async () => {
+    await page
+      .locator('aside button:has-text("share")')
+      .first()
+      .click();
+    await page.fill('aside input[placeholder*="@"]', "e2e-guest@gmail.com");
+    await panel().getByRole("button", { name: "add", exact: true }).click();
+    await page.waitForSelector("aside >> text=e2e-guest@gmail.com");
+    await panel()
+      .getByRole("button", { name: "Remove e2e-guest@gmail.com" })
+      .click();
+    await page.waitForSelector("aside >> text=e2e-guest@gmail.com", {
+      state: "detached",
+      timeout: 5000,
+    });
+  });
   await shot("05-ports");
 
   // ── Side panel: History (transcript of what we typed) ───────────────────

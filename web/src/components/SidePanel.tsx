@@ -205,13 +205,13 @@ function PortShare({ project, port }: { project: string; port: number }) {
       {(emails ?? []).map((e) => (
         <div
           key={e}
-          className="group flex items-center gap-2 rounded px-1 py-0.5 text-[11px] hover:bg-bg-hover"
+          className="flex items-center gap-2 rounded px-1 py-0.5 text-[11px] hover:bg-bg-hover"
         >
           <span className="min-w-0 flex-1 truncate">{e}</span>
           <button
             disabled={busy}
             onClick={() => save((emails ?? []).filter((x) => x !== e))}
-            className="text-text-dim opacity-0 hover:text-danger focus:opacity-100 group-hover:opacity-100"
+            className="shrink-0 rounded border border-border px-1.5 py-0.5 text-text-dim hover:border-danger hover:text-danger disabled:opacity-40"
             aria-label={`Remove ${e}`}
           >
             remove
