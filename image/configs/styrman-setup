@@ -52,15 +52,19 @@ step "3/5 GitHub CLI"
 if gh auth status >/dev/null 2>&1; then
     ok "gh: logged in as $(gh api user --jq .login 2>/dev/null || echo '?')"
 else
-    todo "running: gh auth login (choose SSH; use the one-time code in your browser)"
-    gh auth login || todo "gh login skipped/failed — rerun styrman-setup anytime"
+    todo "A one-time code and a URL will appear below."
+    echo "     → CLICK the URL (it opens github.com/login/device), enter the code, authorize."
+    # --web = device flow; the terminal makes the printed URL clickable, so no
+    # local browser is needed. --git-protocol ssh skips the protocol prompt.
+    gh auth login --hostname github.com --git-protocol ssh --web \
+        || todo "gh login skipped/failed — rerun styrman-setup anytime"
 fi
 
 step "4/5 Claude Code"
 if [ -f ~/.claude/.credentials.json ] || claude auth status 2>/dev/null | grep -qi 'logged in'; then
     ok "claude: credentials present (~/.claude)"
 else
-    todo "launching claude for first-run sign-in — finish the wizard, then /exit"
+    todo "claude will print a sign-in URL — CLICK it, approve, then paste the code back here; /exit when done."
     claude || true
 fi
 
@@ -68,7 +72,7 @@ step "5/5 Antigravity CLI (agy)"
 if secret-tool search --all service antigravity 2>/dev/null | grep -q .; then
     ok "agy: keyring credentials present"
 else
-    todo "launching agy for Google sign-in (copy the URL to your browser, paste the code back), then quit agy"
+    todo "agy will print a Google sign-in URL — CLICK it, approve, paste the code back, then quit agy."
     agy || true
 fi
 

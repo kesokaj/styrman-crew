@@ -108,3 +108,14 @@ func (s *Server) renameProject(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// usernameChosen reports whether the user explicitly picked a terminal
+// username (as opposed to the email-derived default) — a durable checkpoint
+// so first-run setup never re-asks.
+func (s *Server) usernameChosen(user string) bool {
+	sp, err := s.space(user)
+	if err != nil {
+		return false
+	}
+	return sp.profile.GuestName != ""
+}

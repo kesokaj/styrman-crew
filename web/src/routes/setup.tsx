@@ -5,15 +5,54 @@ import { TerminalPane } from "../components/TerminalPane";
 
 export const Route = createFileRoute("/setup")({ component: SetupPage });
 
+type Phase = "loading" | "username" | "booting" | "ready" | "error";
+
 function SetupPage() {
-  const [ready, setReady] = useState(false);
+  const [phase, setPhase] = useState<Phase>("loading");
+  const [username, setUsername] = useState("");
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string>();
+
+  // Prefill with the current (email-derived) terminal username so the user
+  // can accept or change it before anything is created. If a name was
+  // already chosen in an earlier run, skip the picker — each setup step is
+  // a durable checkpoint, never re-asked.
   useEffect(() => {
     api
-      .setupStart()
-      .then(() => setReady(true))
-      .catch((e: Error) => setError(e.message));
+      .settings()
+      .then((s) => {
+        setUsername(s.terminalUsername);
+        if (s.terminalUsernameChosen) {
+          setPhase("booting");
+          return api.setupStart().then(() => setPhase("ready"));
+        }
+        setPhase("username");
+      })
+      .catch((e: Error) => {
+        setError(e.message);
+        setPhase("error");
+      })
+      .finally(() => setLoaded(true));
   }, []);
+
+  // Matches the server's guest-name rule (useradd-safe).
+  const valid = /^[a-z][a-z0-9_-]{0,30}$/.test(username);
+
+  const start = async () => {
+    setPhase("booting");
+    setError(undefined);
+    try {
+      // Save first: the setup VM (and every project VM) is created with this
+      // name; the server recreates the setup VM if the name changed.
+      await api.setTerminalUsername(username.trim());
+      await api.setupStart();
+      setPhase("ready");
+    } catch (e) {
+      setError((e as Error).message);
+      setPhase("error");
+    }
+  };
+
   return (
     <div className="flex min-w-0 flex-1 flex-col">
       <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border bg-bg-raised px-3 text-xs">
@@ -24,13 +63,59 @@ function SetupPage() {
         </span>
       </header>
       <div className="min-h-0 flex-1">
-        {error && <p className="p-4 text-xs text-danger">{error}</p>}
-        {!error && !ready && (
+        {phase === "username" && (
+          <div className="max-w-md p-4">
+            <label
+              htmlFor="setup-username"
+              className="mb-1 block text-xs font-medium"
+            >
+              Choose your terminal username
+            </label>
+            <p className="mb-2 text-[11px] text-text-dim">
+              This is your account name inside every project terminal — your
+              shell prompt and home directory (<code>/home/{username || "…"}</code>
+              ). Pick it now; it's used for all your projects. You can accept the
+              default or change it.
+            </p>
+            <input
+              id="setup-username"
+              autoFocus
+              autoCapitalize="none"
+              autoCorrect="off"
+              autoComplete="off"
+              spellCheck={false}
+              value={username}
+              onChange={(e) => setUsername(e.target.value.toLowerCase())}
+              onKeyDown={(e) => e.key === "Enter" && valid && loaded && start()}
+              placeholder="e.g. simon"
+              className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm outline-none focus:border-accent"
+            />
+            <p className="mb-3 mt-1 min-h-4 text-[11px] text-warn">
+              {username && !valid
+                ? "Lowercase letters, digits, - and _, starting with a letter."
+                : " "}
+            </p>
+            <button
+              onClick={start}
+              disabled={!valid || !loaded}
+              className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white disabled:opacity-40"
+            >
+              Start setup
+            </button>
+          </div>
+        )}
+        {phase === "loading" && (
+          <p className="p-4 text-xs text-text-dim">Loading…</p>
+        )}
+        {phase === "booting" && (
           <p className="p-4 text-xs text-text-dim">
-            Booting the hidden setup VM…
+            Booting the setup VM as {username}…
           </p>
         )}
-        {ready && <TerminalPane target={{ kind: "setup" }} />}
+        {phase === "error" && (
+          <p className="p-4 text-xs text-danger">{error}</p>
+        )}
+        {phase === "ready" && <TerminalPane target={{ kind: "setup" }} />}
       </div>
     </div>
   );

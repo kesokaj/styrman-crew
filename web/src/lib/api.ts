@@ -97,6 +97,8 @@ export interface Settings {
   dockerDiskGB: number;
   idleTimeout: string;
   terminalUsername: string;
+  /** True once the user explicitly picked a name (setup won't re-ask). */
+  terminalUsernameChosen: boolean;
   setupComplete: boolean;
 }
 

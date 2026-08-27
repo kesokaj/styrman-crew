@@ -189,16 +189,28 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context, user, guestUser string) 
 	defer l.Unlock()
 
 	insp, err := o.docker.ContainerInspect(ctx, config.SetupContainer(user))
+	if err != nil && !errdefs.IsNotFound(err) {
+		return "", fmt.Errorf("inspect setup container: %w", err)
+	}
 	id := ""
-	switch {
-	case err == nil:
+	exists := err == nil
+	// If a setup VM exists but was built for a different guest username (the
+	// user changed it during first-run), remove it so it is recreated with
+	// the chosen name.
+	if exists && containerGuest(insp.Config.Env) != guestUser {
+		o.logger.Info("setup VM guest changed — recreating", "user", user,
+			"from", containerGuest(insp.Config.Env), "to", guestUser)
+		_ = o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true})
+		exists = false
+	}
+	if exists {
 		id = insp.ID
 		if insp.State == nil || !insp.State.Running {
 			if err := o.docker.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
 				return "", fmt.Errorf("start setup container: %w", err)
 			}
 		}
-	case errdefs.IsNotFound(err):
+	} else {
 		id, err = o.create(ctx, createSpec{
 			name:      config.SetupContainer(user),
 			netName:   config.SetupNetwork(user),
@@ -218,13 +230,23 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context, user, guestUser string) 
 		if err != nil {
 			return "", err
 		}
-	default:
-		return "", fmt.Errorf("inspect setup container: %w", err)
 	}
 	if err := o.waitReady(ctx, id, 90*time.Second); err != nil {
 		return "", fmt.Errorf("setup container did not become ready: %w", err)
 	}
 	return id, nil
+}
+
+// containerGuest extracts the in-guest username (STYRMAN_USER) from a
+// container's env, or "" if absent.
+func containerGuest(env []string) string {
+	prefix := config.EnvUser + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return strings.TrimPrefix(e, prefix)
+		}
+	}
+	return ""
 }
 
 // SetupStatus reports whether the hidden onboarding microVM is running.

@@ -49,6 +49,12 @@ echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/${USERNAME}"
 chmod 440 "/etc/sudoers.d/${USERNAME}"
 usermod -aG docker "${USERNAME}" 2>/dev/null || true
 
+# Self-heal home ownership: if the shared home was ever missing at mount time,
+# Docker auto-creates the bind source owned by root, which makes every write
+# by the guest fail (git config, ssh-keygen, gh). Claim the mount point for
+# the guest uid. Non-recursive so existing user files keep their ownership.
+chown "${UID_}:${GID_}" "${HOME_DIR}" 2>/dev/null || true
+
 # Minimal mode (system VMs, e.g. the hidden onboarding container): no
 # workspace, no DinD — just the user, keyring, and a shell.
 MINIMAL="${STYRMAN_MINIMAL:-}"
@@ -90,10 +96,21 @@ set-hook -g after-new-window 'pipe-pane -o "cat >> ${LOG_DIR}/#{session_name}.lo
 set -g monitor-bell on
 set -g bell-action any
 set -g visual-bell off
+# OSC 52: let tmux (and TUIs under it) write the system clipboard — the
+# browser terminal's clipboard addon picks it up.
+set -g set-clipboard on
+set -as terminal-features ',xterm-256color:clipboard'
 TEOF
 # Ensure the shared tmux.conf sources it (idempotent; survives user edits).
 if ! grep -q 'styrman/tmux-project.conf' "${HOME_DIR}/.tmux.conf" 2>/dev/null; then
     echo 'source-file -q /etc/styrman/tmux-project.conf' >> "${HOME_DIR}/.tmux.conf"
+fi
+# Migration: earlier styrman defaults shipped 'mouse on', which steals mouse
+# selection from the browser terminal (see configs/tmux.conf). Only touch
+# files that are still ours (styrman marker in the header) — user-authored
+# configs win.
+if head -1 "${HOME_DIR}/.tmux.conf" 2>/dev/null | grep -q '^# styrman default tmux config'; then
+    sed -i 's/^set -g mouse on$/set -g mouse off/' "${HOME_DIR}/.tmux.conf" 2>/dev/null || true
 fi
 
 # ─── Per-project Docker daemon (ADR-004 + ADR-008) ──────────────────────────

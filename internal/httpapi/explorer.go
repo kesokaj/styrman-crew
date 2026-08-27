@@ -225,7 +225,10 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		"dockerDiskGB":     s.cfg.DockerDisk,
 		"idleTimeout":      s.cfg.IdleTimeout.String(),
 		"terminalUsername": s.guestUserFor(u.Username),
-		"setupComplete":    s.userSetupStatus(r.Context(), u.Username).Done,
+		// Whether the user explicitly picked a terminal username (vs. the
+		// email-derived default) — the setup flow skips the picker if so.
+		"terminalUsernameChosen": s.usernameChosen(u.Username),
+		"setupComplete":          s.userSetupStatus(r.Context(), u.Username).Done,
 	})
 }
 

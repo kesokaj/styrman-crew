@@ -256,10 +256,21 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		if p != "" {
 			if st, err := fs.Stat(dist, p); err == nil && !st.IsDir() {
+				// Vite content-hashes /assets/* filenames — safe to cache
+				// forever; a new build references new names.
+				if strings.HasPrefix(p, "assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				} else {
+					w.Header().Set("Cache-Control", "no-cache")
+				}
 				fileServer.ServeHTTP(w, r)
 				return
 			}
 		}
+		// The shell must never be cached: without this, browsers
+		// heuristically cache it and keep loading a stale app after
+		// deploys — invisible, maddening "my fix didn't deploy" bugs.
+		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFileFS(w, r, dist, "_shell.html")
 	})
 	// Auth outermost: identity/permission first, then CSRF, then routing.
