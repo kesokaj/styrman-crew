@@ -86,6 +86,7 @@ const (
 	EnvShellDomain       = "SHELL_DOMAIN"          // Absolute FQDN for shell (default: shell.<BASE_DOMAIN>)
 	EnvAppsDomain        = "APPS_DOMAIN"           // Wildcard base for user apps (default: <BASE_DOMAIN>)
 	EnvIngressToken      = "STYRMAN_INGRESS_TOKEN" // shared secret injected as X-Styrman-Ingress on authenticated routes
+	EnvJWTKey            = "STYRMAN_JWT_KEY"       // stable HMAC key for caddy-security JWTs (survives restarts)
 )
 
 // IPDetectionURLs are the services used to detect the server's public IP.

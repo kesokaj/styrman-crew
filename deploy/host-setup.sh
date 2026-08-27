@@ -129,12 +129,14 @@ if [[ ! -f "${SCRIPT_DIR}/.env" && -f "${SCRIPT_DIR}/.env.example" ]]; then
     KEYRING_PW=$(openssl rand -base64 24 2>/dev/null || head -c18 /dev/urandom | base64)
     # Ingress origin secret (URL-safe: no +/= that need shell/sed escaping).
     INGRESS_TOKEN=$(openssl rand -hex 32 2>/dev/null || head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    JWT_KEY=$(openssl rand -hex 32 2>/dev/null || head -c32 /dev/urandom | od -An -tx1 | tr -d " \n")
     sed -e "s/^STYRMAN_UID=.*/STYRMAN_UID=${OP_UID}/" \
         -e "s/^STYRMAN_GID=.*/STYRMAN_GID=${OP_GID}/" \
         -e "s/^DOCKER_GID=.*/DOCKER_GID=${DOCKER_GID}/" \
         -e "s/^STYRMAN_USER=.*/STYRMAN_USER=${OPERATOR}/" \
         -e "s#^STYRMAN_KEYRING_PW=.*#STYRMAN_KEYRING_PW=${KEYRING_PW}#" \
         -e "s/^STYRMAN_INGRESS_TOKEN=.*/STYRMAN_INGRESS_TOKEN=${INGRESS_TOKEN}/" \
+        -e "s/^STYRMAN_JWT_KEY=.*/STYRMAN_JWT_KEY=${JWT_KEY}/" \
         "${SCRIPT_DIR}/.env.example" > "${SCRIPT_DIR}/.env"
     chown "${OPERATOR}:${OPERATOR}" "${SCRIPT_DIR}/.env"
     chmod 600 "${SCRIPT_DIR}/.env"

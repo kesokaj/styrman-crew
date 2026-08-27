@@ -19,6 +19,7 @@ type GeneratorConfig struct {
 	ShellDomain       string   // Absolute FQDN for shell (e.g., "shell.a.styrman.io")
 	AppsDomain        string   // Wildcard base for user apps (e.g., "apps.a.styrman.io")
 	IngressToken      string   // shared secret injected as X-Styrman-Ingress (proves ingress origin)
+	JWTKey            string   // stable HMAC key so caddy-security JWTs survive restarts (else sessions break on redeploy)
 }
 
 // GenerateCaddyfile produces a complete Caddyfile from a list of discovered apps
@@ -127,6 +128,11 @@ func writeSecurityBlock(b *strings.Builder, apps []App, cfg GeneratorConfig) {
 	b.WriteString("            enable identity provider google\n")
 	fmt.Fprintf(b, "            cookie domain %s\n", cfg.BaseDomain)
 	fmt.Fprintf(b, "            trust login redirect uri domain suffix %s path prefix /\n", cfg.BaseDomain)
+	if cfg.JWTKey != "" {
+		// Pin the token signing key so sessions survive a Caddy restart and
+		// the portal + authorizers always agree (auto-generated keys reset).
+		b.WriteString("            crypto key sign-verify {env.STYRMAN_JWT_KEY}\n")
+	}
 
 	// Write user transforms for role-gated apps
 	for _, app := range apps {
@@ -191,6 +197,9 @@ func writeAuthzPolicy(b *strings.Builder, app App, cfg GeneratorConfig) {
 	fmt.Fprintf(b, "        authorization policy %s_policy {\n", policyName)
 	// Point directly to Google OAuth to skip the portal login page
 	fmt.Fprintf(b, "            set auth url https://%s/oauth2/google/\n", cfg.AuthDomain)
+	if cfg.JWTKey != "" {
+		b.WriteString("            crypto key verify {env.STYRMAN_JWT_KEY}\n")
+	}
 
 	switch app.Mode {
 	case ModeAuthenticated:

@@ -124,6 +124,7 @@ func loadConfig(log *slog.Logger) (GeneratorConfig, error) {
 		ShellDomain:       getEnvOrDefault(EnvShellDomain, "shell."+baseDomain),
 		AppsDomain:        getEnvOrDefault(EnvAppsDomain, baseDomain),
 		IngressToken:      os.Getenv(EnvIngressToken),
+		JWTKey:            os.Getenv(EnvJWTKey),
 	}
 
 	if superAdmins := os.Getenv(EnvSuperAdmins); superAdmins != "" {
