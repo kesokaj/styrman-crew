@@ -51,10 +51,10 @@ stores — a restart or reboot recovers everything by adoption.
 
 Beta, deployed: https://app.styrman.xyz (Google sign-in, admin-managed
 access). All four build phases landed — microVM runtime, UI, OAuth ingress,
-multi-tenancy — verified by 3 suites (unit, 49 integration checks against
-real Kata, 29 Playwright browser checks). The living documentation is
-`.agents/docs/specs/styrman/guide.md`; the phase plans under
-`.agents/docs/plans/` are historical.
+multi-tenancy — verified by 3 suites (unit, 56 integration checks against
+real Kata, 33 self-hosted Playwright browser checks). The living
+documentation is `.agents/docs/specs/styrman/guide.md`; the phase plans
+under `.agents/docs/plans/` are historical.
 
 ## Requirements
 

@@ -4,14 +4,17 @@
 // only wires the WebSocket protocol and React lifecycle around it.
 //
 // Equipment:
-// - GPU renderer (WebGL, with automatic DOM fallback)
+// - DOM renderer (deliberately not WebGL — see createTerminal)
 // - clickable URLs (web-links addon)
 // - OSC 52 clipboard (TUIs and tmux can write the system clipboard)
 // - search API (Ctrl+Shift+F overlay in TerminalPane)
 // - unicode 11 widths (emoji don't break box-drawing)
-// - Ctrl/Cmd+C copy-when-selected (else SIGINT), Ctrl/Cmd+V paste
-// - URL extraction from the buffer, reassembling soft-wrapped lines — the
-//   reliable escape hatch for auth URLs that TUIs wrap and redraw.
+// - Ctrl/Cmd+C copy-when-selected (else SIGINT), Ctrl/Cmd+V paste, plus
+//   copy-on-select (clipboard writes the instant a selection is highlighted)
+// - URL extraction from both the buffer (reassembling soft-wrapped lines) and
+//   the raw output stream (collapsing hard-wrapped lines) — the reliable
+//   escape hatch for auth URLs that TUIs wrap and redraw, surfaced as
+//   Open/Copy chips in TerminalPane's link bar.
 
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";

@@ -35,13 +35,28 @@ Load-bearing ideas:
    Ctrl+Shift+V via the clipboard API. A sidebar notification bell (badge,
    linking to the terminals waiting for input) surfaces terminals whose tmux
    window rang its bell while unattended — tmux clears the flag once the
-   session is viewed.
+   session is viewed. The terminal (`web/src/lib/terminal.ts`) copies on
+   select: the clipboard is written the instant a selection is highlighted,
+   not on an explicit Ctrl+C, because TUIs (claude, agy) redraw and wipe
+   selections before a keypress can land — the runtime image's tmux
+   `mouse off` default is what lets native browser selection work at all. A
+   link-rescue bar above the terminal surfaces URLs as Open/Copy chips,
+   reassembled from both the buffer (soft-wrapped lines rejoined) and the
+   raw output stream (hard-wrapped lines collapsed) — auth flows print long
+   URLs that terminals mangle either way. Ctrl+Shift+F opens a scrollback
+   search overlay; OSC 52 lets tmux/TUIs write the system clipboard
+   directly. It renders via xterm's DOM renderer, not WebGL, so terminal
+   text stays real, selectable, assertable DOM. Anything that lands on the
+   clipboard is recorded in the Clips side-panel tab — session-scoped
+   (sessionStorage, 1h TTL, never persisted or synced) since copy-on-select
+   could capture a secret typed during setup (ADR-023).
 4. **The side panel is project context**: Files (workspace + home; view,
    edit via a lazy-loaded CodeMirror 6 editor with syntax highlighting by
    filename and Ctrl+S to save, upload by drag, download), Ports (what's
    listening, with process / inner-docker image, shareable
    `/p/<id>/<t>/port/<port>/` links), History (transcripts), Git
-   (working-tree diff + branch, and checkpoints — see below).
+   (working-tree diff + branch, and checkpoints — see below), Clips
+   (clipboard history, session-scoped — see above).
 5. **Git is the substrate** (R13, ADR-022): every project workspace IS a git
    repository, no exceptions — `git init -b main` runs synchronously at
    creation, or a clone runs in-guest instead (new project dialog's "Clone a
@@ -62,9 +77,9 @@ Load-bearing ideas:
 ```
 Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudflare DNS,
                    label discovery (vendored ingress, deploy/caddy)
-                      │ X-Caddy-Email
+                      │ X-Caddy-Email + X-Styrman-Ingress
                       ▼
-   styrman-server (container; loopback dev door 127.0.0.1:8080, no auth)
+   styrman-server (container; header-auth; no auth-bypass listener in prod)
      ├── embedded TanStack Start SPA (ADR-013)
      ├── identity → per-user space: homes/<user>, users/<user>/{projects,
      │   conversations,profile}.json  (ADR-019; no database, ADR-007)
@@ -94,6 +109,22 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   proxy 307s once instead when it must join on demand).
 - **Idle lifecycle**: terminal traffic timestamps the project; idle ones
   stop after `STYRMAN_IDLE_TIMEOUT` (24h); reopening boots on connect.
+- **Auth is two-layer** (R8): the ingress proves identity via Google OAuth
+  (`X-Caddy-Email`) and a shared, constant-time-compared `X-Styrman-Ingress`
+  token proves the request actually came through Caddy — a project VM on
+  the server's shared bridge can't reach `:8080` and spoof either header;
+  the server then re-checks the email against its own userstore. Production
+  runs no auth-bypass dev listener (`STYRMAN_DEV_ADDR` is opt-in, must bind
+  loopback, and is unset in the compose deploy — 2026-08-27 security
+  review).
+- **File ops are confined** (`internal/files`, `os.Root`): every
+  home-relative read/write is rooted at the user's home and refuses any
+  symlink that would leave it, atomically at every path component — the
+  tenancy boundary for guests that can otherwise symlink freely inside
+  their own home.
+- **Sessions survive redeploys**: caddy-security's JWT signing key is
+  pinned via `STYRMAN_JWT_KEY` (`host-setup.sh` generates it) instead of
+  rotating per boot, so restarting Caddy doesn't log everyone out.
 
 ## 3. Install from scratch (R11)
 
@@ -170,8 +201,8 @@ forever. The same script works in any project terminal.
 
 ```bash
 go test ./...                                        # unit (stores, guards, routing)
-bash .agents/docs/testing/styrman/integration.sh     # 49 checks vs real Kata
-node web/e2e/run.mjs                                 # 29 browser checks (Playwright)
+bash .agents/docs/testing/styrman/integration.sh     # 56 checks vs real Kata
+bash web/e2e/run.sh                                  # 33 browser checks (Playwright, self-hosted)
 cd web && npm run build                              # UI → dist/client (committed)
 ```
 

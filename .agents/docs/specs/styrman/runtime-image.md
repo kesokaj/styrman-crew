@@ -37,22 +37,34 @@ Steps, in order:
 2. cgroup-v2 nesting: remount `/sys/fs/cgroup` rw, create `init` group, enable
    subtree controllers (without this dockerd dies — spike S3).
 3. mknod loop devices 0–7.
-4. Create the user (matching uid/gid), passwordless sudo, docker group.
+4. Create the user (matching uid/gid), passwordless sudo, docker group. A
+   reserved name (root, daemon, …) that already exists at a different uid is
+   rejected — the boot fails loudly instead of every `docker exec` silently
+   running as the wrong uid on a home it doesn't own (I11).
 5. `~/projects/<dir>` and `~/.dockerd` (as the user; skipped in minimal mode).
 6. Keyring plumbing: password file + `/etc/profile.d/styrman-keyring.sh`
    (starts session dbus + unlocked gnome-keyring on first login shell; keyring
    files persist at `~/.local/share/keyrings` on the shared home).
-7. Default `~/.tmux.conf` if the user has none (status off, login shells).
+7. Default `~/.tmux.conf` if the user has none (status off, login shells,
+   `mouse off` — mouse mode steals selection from the browser terminal, so
+   it's off so xterm.js can select natively and copy-on-select works).
 7b. tmux transcript hook: pipe-pane every session to `~/.styrman/logs/<uuid>/`
     (ADR-017). The generated `/etc/styrman/tmux-project.conf` also sets
-    `monitor-bell on`, `bell-action any`, `visual-bell off`, so an unattended
-    bell (e.g. an agent asking a question) flags the session for the UI's
-    notification panel.
+    `monitor-bell on`, `bell-action any`, `visual-bell off` (unattended-bell
+    notifications) and `set-clipboard on` (OSC 52, so tmux/TUIs can write the
+    browser's clipboard through the terminal's OSC 52 handler).
 8. DinD (ADR-008): create sparse ext4 `~/.dockerd/<uuid>.img` if absent,
    loop-mount at `/var/lib/docker-project`, start dockerd with **overlay2**;
    fall back to **vfs** directly on the home if the loop mount fails.
 9. `touch /run/styrman/ready` — the orchestrator's readiness probe target.
-10. `exec sleep infinity` under tini (PID 1 reaps exec'd session zombies).
+10. Install a SIGTERM trap, then `sleep infinity &` and `wait` (not `exec`,
+    so the shell stays alive to run the trap; tini stays PID 1 and still
+    reaps exec'd session zombies). The trap stops dockerd cleanly and
+    unmounts the loop-mounted ext4, so its journal is clean on the next boot
+    (I9). Kata's `docker stop` powers the guest off without delivering
+    SIGTERM to init, so the orchestrator's `Stop` triggers this itself first
+    — `docker exec kill -TERM 1` — and waits briefly before falling through
+    to `ContainerStop`.
 
 ## Invariants
 

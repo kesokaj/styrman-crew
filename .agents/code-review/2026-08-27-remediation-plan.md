@@ -111,7 +111,7 @@
 - **Verify:** `tsc`, e2e, manual copy/link/resize checks.
 
 ### Batch F — docs & remaining nits (P4) 🟢
-- ☐ **F9** Document clips, link bar, copy-on-select, search overlay in `.agents/docs/specs/`; write the `changes/2026-08-27-*` changelog for the whole terminal/setup/git session; fix `AGENTS.md` check count; ADR for the terminal architecture (`lib/terminal.ts`) and mouse-off decision.
+- ☑ **F9** Document clips, link bar, copy-on-select, search overlay in `.agents/docs/specs/`; write the `changes/2026-08-27-*` changelog for the whole terminal/setup/git session; fix `AGENTS.md` check count; ADR for the terminal architecture (`lib/terminal.ts`) and mouse-off decision.
 - ☐ **N17/N20/N21/N25/N26/N27/N28** remaining server-side nits (waitReady cost, Content-Disposition escaping, proxy prefix/RawPath, title length cap, git error surfacing, Chmod returns, `Lstat` in `List`).
 - **Verify:** docs-in-same-commit; final full reviewer pass.
 

@@ -117,6 +117,7 @@ Git tab's "Checkpoint now" button or the POST below.
 | `STYRMAN_ADDR` | `127.0.0.1:8080` | Main listener |
 | `STYRMAN_DEV_ADDR` | unset | Auth-bypassed second listener — publish on host loopback ONLY |
 | `STYRMAN_AUTH` | `none` | `header` behind the ingress |
+| `STYRMAN_INGRESS_TOKEN` | unset (disabled) | Shared secret the ingress injects as `X-Styrman-Ingress`; header mode rejects requests without it when set — blocks a project VM from spoofing `X-Caddy-Email` directly against the server |
 | `STYRMAN_ALLOWED_EMAILS` | — | Admin accounts (comma-sep); first one is the dev-listener identity |
 | `STYRMAN_STATE_DIR` | `/var/lib/styrman` | Root: `homes/<user>`, `users/<user>/*.json`, `users.json` |
 | `STYRMAN_IMAGE` / `STYRMAN_RUNTIME` | `styrman-runtime:latest` / `mvm` | Project microVM image + runtime |

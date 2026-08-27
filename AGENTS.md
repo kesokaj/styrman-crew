@@ -34,15 +34,18 @@ STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/
 docker compose -f deploy/docker-compose.yml up -d --build
 
 # Test suites
-bash .agents/docs/testing/styrman/integration.sh   # 49 checks vs real Kata
-node web/e2e/run.mjs                               # 29 Playwright checks
+bash .agents/docs/testing/styrman/integration.sh   # 56 checks vs real Kata
+bash web/e2e/run.sh                                # 33 Playwright checks (self-hosted)
 ```
 
 ## Architecture
 
 - Single Go binary (`cmd/styrman`): embedded TanStack Start SPA + REST/WS
   API + Docker orchestrator. Deployed containerized (compose) behind the
-  vendored Caddy ingress; a loopback-only dev listener bypasses auth.
+  vendored Caddy ingress, which injects a shared `X-Styrman-Ingress` token
+  the server requires alongside `X-Caddy-Email`; production runs no
+  auth-bypass listener (the opt-in loopback-only dev listener is for local
+  testing only and is unset in the compose deploy).
 - Per-project Kata microVMs (runtime `mvm`), containers `styrman-<uuid>`;
   state from labels + per-user JSON stores (`/var/lib/styrman/users/<u>/`)
   — no database. Project creation is async (instant 201, background boot).
@@ -69,7 +72,10 @@ node web/e2e/run.mjs                               # 29 Playwright checks
 
 - Local-first on this machine (Kata runtime `mvm` required — already configured).
 - Integration scripts + guides in `.agents/docs/testing/styrman/`.
-- Browser e2e: `node web/e2e/run.mjs` (Playwright; prereq `npx playwright install chromium`).
+- Browser e2e: `bash web/e2e/run.sh` (self-hosts its own server on host
+  loopback with an isolated state dir, then runs `web/e2e/run.mjs`'s 33
+  Playwright checks against it — production has no auth-bypass listener to
+  test against instead; prereq `npx playwright install chromium`).
 - Spike results (Phase 0) in `.agents/docs/testing/spikes/`.
 
 ## Key Files
