@@ -1,0 +1,16 @@
+{
+  "harness-format": {
+    "PostToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content|edit_file|create_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.gemini/format-hook.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

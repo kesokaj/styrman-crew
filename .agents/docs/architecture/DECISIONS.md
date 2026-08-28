@@ -729,3 +729,44 @@ already neutralized at L7 (defense-in-depth, not a new hole). Blocking it
 too would need fragile ebtables/physdev L2 filtering for no real gain —
 declined. Note the wildcard `sdb-+` covers all present and future project
 bridges with one rule.
+
+---
+
+## ADR-030: Per-project homes + credential broker (share only credentials)
+
+**Date:** 2026-08-28 · **Status:** accepted (operator approval, "plan then
+do → Approve. Build."). Full design:
+`.agents/docs/plans/2026-08-28-credential-service.md`.
+
+**Context:** ADR-003's single shared home made credentials trivial but also
+shared every tool's `$HOME` state (Go/npm/pip caches, global installs,
+history) across a user's projects — "separate but not separate." The
+operator wants projects TRULY individual, with ONLY credentials shared and
+kept current (no re-auth), via a credential SERVICE, not a shared mount.
+
+**Decision:** Three layers.
+1. **Base image carries identical config + harness** for every project
+   (seeded into each home from an image skeleton), replacing the
+   shared-home/host-side harness deploy (**supersedes R5's mechanism**).
+2. **Per-project home** volume — individual by construction; nothing shared
+   at the FS layer (**supersedes R3's "one shared home"**).
+3. **Credential broker** owns the single live copy of each credential and
+   delivers it per-tool, refresh propagating to all. Research (plan §4): 7/8
+   tools (ssh agent-socket; git/docker/gcloud credential helpers; gh/npm env
+   tokens; claude apiKeyHelper) keep the secret OUT of the project; agy is
+   keyring-seeded (gnome-keyring, no working env path — issue #632).
+   Broker shape: a credential-only endpoint on each project's OWN bridge
+   (identity = network position; composes with ADR-029), plus push-by-exec
+   for bootstrap + agy keyring seeding.
+
+**Phasing:** P1 = image config/harness + per-project homes + broker
+delivering current credentials (the operator's ask: individual + shared +
+no re-auth). P2 = harden to short-lived/dynamic tokens (secret never
+readable in the VM). Build order (safe→risky): (Inc1) harness into image;
+(Inc2) broker + adapters; (Inc3) per-project homes + the guarded, backed-up
+migration of the existing home (highest care — credentials must never be
+lost).
+
+**Consequences:** True per-project isolation; auth once, current everywhere.
+Costs: no cache sharing (accepted); a real credential subsystem; a one-time
+home migration. agy remains the weakest link until upstream adds an env path.

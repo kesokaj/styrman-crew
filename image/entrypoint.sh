@@ -89,6 +89,33 @@ if [ ! -f "${HOME_DIR}/.tmux.conf" ]; then
         || log "WARN: could not seed ~/.tmux.conf (home not writable?)"
 fi
 
+# ─── Agent harness from the base image (R5/ADR-030) ─────────────────────────
+# The image carries the harness so every project gets IDENTICAL defaults —
+# fixing the old gap where only the operator's shared home got it. Seeded
+# write-once, keyed on the image's harness version, as the user (deploys into
+# ~/.claude and ~/.gemini — the skills/subagents/commands, NOT credentials).
+# Non-fatal: a harness hiccup must never block the project from booting.
+if [ -z "${MINIMAL}" ] && [ -x /styrman/harness/setup.sh ]; then
+    HARNESS_VER="$(cat /styrman/VERSION 2>/dev/null || echo dev)"
+    HARNESS_STAMP="${HOME_DIR}/.styrman/.harness-version"
+    if [ "$(cat "${HARNESS_STAMP}" 2>/dev/null || true)" != "${HARNESS_VER}" ]; then
+        runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/.styrman" 2>/dev/null || true
+        # setup.sh also refreshes files INSIDE its own tree (e.g. GEMINI.md
+        # from shared/AGENTS.md), so it needs a writable copy — the image
+        # path is root-owned. Run from a user-owned throwaway; the HOME
+        # deploy (~/.claude, ~/.gemini) still lands.
+        HSRC="$(runuser -u "${USERNAME}" -- mktemp -d 2>/dev/null || true)"
+        if [ -n "${HSRC}" ] && runuser -u "${USERNAME}" -- cp -r /styrman/harness/. "${HSRC}/" 2>/dev/null \
+            && runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" bash "${HSRC}/setup.sh" >/dev/null 2>&1; then
+            runuser -u "${USERNAME}" -- sh -c "printf '%s' '${HARNESS_VER}' > '${HARNESS_STAMP}'" 2>/dev/null || true
+            log "agent harness deployed (version ${HARNESS_VER})"
+        else
+            log "WARN: agent harness deploy reported errors (continuing)"
+        fi
+        [ -n "${HSRC}" ] && rm -rf "${HSRC}" 2>/dev/null || true
+    fi
+fi
+
 # ─── Terminal transcripts (history) ─────────────────────────────────────────
 # Every tmux session pipes its output to a log in the shared home, so the
 # record of what the agents and the operator did outlives the container.

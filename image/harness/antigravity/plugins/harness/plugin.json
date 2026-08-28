@@ -1,0 +1,5 @@
+{
+  "name": "harness",
+  "version": "1.0.0",
+  "description": "Agent harness global plugin providing custom subagents"
+}

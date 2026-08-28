@@ -1,0 +1,59 @@
+{
+  "effortLevel": "high",
+  "theme": "auto",
+  "verbose": false,
+  "fileCheckpointingEnabled": true,
+  "cleanupPeriodDays": 90,
+  "statusLine": {
+    "type": "command",
+    "command": "~/.claude/statusline.sh"
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/format-hook.sh",
+            "timeout": 30,
+            "statusMessage": "Formatting…"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/feedback-capture.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "permissions": {
+    "defaultMode": "auto",
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Edit",
+      "Write"
+    ],
+    "ask": [
+      "Bash(rm:*)",
+      "Bash(rmdir:*)",
+      "Bash(unlink:*)",
+      "Bash(shred:*)",
+      "Bash(trash:*)",
+      "Bash(git clean:*)"
+    ]
+  }
+}

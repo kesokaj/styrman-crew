@@ -60,6 +60,10 @@ RUN printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > /etc/resolv.conf.styrman
 
 COPY entrypoint.sh /styrman/entrypoint.sh
 COPY configs/ /styrman/configs/
+# Agent harness (claude + agy), vendored snapshot of devshell_prompt/harness
+# (R5/ADR-030): the base image carries identical defaults for every project;
+# the entrypoint seeds it into each home write-once. See harness/VENDORED.md.
+COPY harness/ /styrman/harness/
 ARG STYRMAN_VERSION=0.0.0
 RUN echo "${STYRMAN_VERSION}" > /styrman/VERSION && chmod +x /styrman/entrypoint.sh && \
     install -m 755 /styrman/configs/styrman-setup /usr/local/bin/styrman-setup
