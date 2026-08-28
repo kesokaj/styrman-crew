@@ -38,6 +38,9 @@ func (s *Server) credentialsList(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, errors.New("cannot list credentials"))
 		return
 	}
+	if items == nil {
+		items = []credstore.Item{} // "items": [] in JSON, never null
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "brokerEnabled": true})
 }
 
