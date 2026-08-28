@@ -26,8 +26,6 @@ import (
 	"github.com/kesokaj/styrman-crew/internal/config"
 	"github.com/kesokaj/styrman-crew/internal/conversation"
 	"github.com/kesokaj/styrman-crew/internal/credstore"
-	"github.com/kesokaj/styrman-crew/internal/dotfiles"
-	"github.com/kesokaj/styrman-crew/internal/files"
 	"github.com/kesokaj/styrman-crew/internal/gitrepo"
 	"github.com/kesokaj/styrman-crew/internal/identity"
 	"github.com/kesokaj/styrman-crew/internal/links"
@@ -152,9 +150,8 @@ func (s *Server) space(user string) (*userSpace, error) {
 	if sp, ok := s.spaces[user]; ok {
 		return sp, nil
 	}
-	if err := s.ensureHome(user); err != nil {
-		return nil, err
-	}
+	// Homes are per-project now (ADR-031) and seeded by the image entrypoint,
+	// so space() no longer creates a home — only the user's metadata dir.
 	dir := s.cfg.UserStateDir(user)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
@@ -183,43 +180,6 @@ func (s *Server) termStoreFor(user string) (terminal.TermStore, error) {
 		return nil, err
 	}
 	return sp.terms, nil
-}
-
-// ensureHome creates a user's home skeleton and deploys the shell dotfiles.
-// Deliberately NOT gated on the home existing: it is per-file idempotent, and
-// the old whole-home early-return meant a migrated or externally-created home
-// never got a .bashrc at all. SSH keys and agent credentials come from
-// styrman-setup inside the guest, not here.
-func (s *Server) ensureHome(user string) error {
-	home := s.cfg.UserHome(user)
-	if _, err := os.Stat(home); err != nil {
-		s.logger.Info("creating home for new user", "user", user, "home", home)
-	}
-	// The home path itself is server-controlled; everything underneath is
-	// guest-writable, so all nested operations go through os.Root — a
-	// guest-planted symlink must not redirect them outside the home.
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		return err
-	}
-	os.Chmod(home, 0o700) // MkdirAll applies the mode only on create
-	rt, err := os.OpenRoot(home)
-	if err != nil {
-		return err
-	}
-	defer rt.Close()
-	for _, d := range []string{
-		"projects", ".ssh", ".styrman", ".config", ".cache",
-		".local/bin", ".local/share/keyrings",
-	} {
-		if err := rt.MkdirAll(d, 0o755); err != nil {
-			return err
-		}
-	}
-	rt.Chmod(".ssh", 0o700)
-	if err := dotfiles.Deploy(home); err != nil {
-		s.logger.Warn("dotfiles deploy incomplete", "user", user, "error", err)
-	}
-	return nil
 }
 
 // Routes returns the root handler with the configured auth mode.
@@ -284,14 +244,16 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("POST /api/projects/{project}/mkdir", s.makeDir)
 	mux.HandleFunc("POST /api/projects/{project}/upload", s.uploadFile)
 	mux.HandleFunc("GET /api/projects/{project}/download", s.downloadFile)
-	mux.HandleFunc("GET /api/home/files", s.listFiles)
-	mux.HandleFunc("GET /api/home/file", s.readFile)
-	mux.HandleFunc("PUT /api/home/file", s.writeFile)
-	mux.HandleFunc("DELETE /api/home/file", s.deleteFile)
-	mux.HandleFunc("POST /api/home/file/rename", s.renameFile)
-	mux.HandleFunc("POST /api/home/mkdir", s.makeDir)
-	mux.HandleFunc("POST /api/home/upload", s.uploadFile)
-	mux.HandleFunc("GET /api/home/download", s.downloadFile)
+	// The project's OWN home (ADR-031: homes are per-project). Pattern
+	// carries "/home/" so scopeFor roots at ProjectHome.
+	mux.HandleFunc("GET /api/projects/{project}/home/files", s.listFiles)
+	mux.HandleFunc("GET /api/projects/{project}/home/file", s.readFile)
+	mux.HandleFunc("PUT /api/projects/{project}/home/file", s.writeFile)
+	mux.HandleFunc("DELETE /api/projects/{project}/home/file", s.deleteFile)
+	mux.HandleFunc("POST /api/projects/{project}/home/file/rename", s.renameFile)
+	mux.HandleFunc("POST /api/projects/{project}/home/mkdir", s.makeDir)
+	mux.HandleFunc("POST /api/projects/{project}/home/upload", s.uploadFile)
+	mux.HandleFunc("GET /api/projects/{project}/home/download", s.downloadFile)
 	// What happened: terminal transcripts + working-tree diff.
 	mux.HandleFunc("GET /api/projects/{project}/history", s.listHistory)
 	mux.HandleFunc("GET /api/projects/{project}/history/search", s.searchHistory)
@@ -580,6 +542,13 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, errors.New("cannot create workspace"))
 		return
 	}
+	// The per-project home (ADR-031) — created here too so the Files "Home"
+	// scope works before the first boot; the entrypoint seeds it on boot.
+	if err := os.MkdirAll(s.cfg.ProjectHome(u.Username, p.ID), 0o700); err != nil {
+		_ = sp.projects.Remove(p.ID)
+		writeErr(w, http.StatusInternalServerError, errors.New("cannot create project home"))
+		return
+	}
 	// R13: the workspace is a git repo from second zero. A clone fills the
 	// (still empty) directory in the background boot instead.
 	if req.CloneURL == "" {
@@ -741,24 +710,16 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		// wipe=true also removes the workspace, docker storage, transcripts,
 		// and apt manifest — irreversible, so it is opt-in per request.
 		if wipe {
-			// The workspace dir is server-controlled (ADR-027, outside the
-			// home); os.RemoveAll removes symlinks without following them.
-			if err := os.RemoveAll(s.cfg.ProjectWorkspace(u.Username, p.ID)); err != nil {
-				s.logger.Warn("wipe failed", "project", p.ID, "path", "workspace", "error", err)
-			}
-			home := s.cfg.UserHome(u.Username)
-			// Confined removal: a guest that symlinked these home paths at
-			// another tenant's home must not make RemoveAll recurse into it.
-			for _, rel := range []string{
-				"projects/" + p.Dir, // pre-ADR-027 leftovers (or the empty mount point)
-				".dockerd/" + p.ID + ".img",
-				".dockerd/" + p.ID,
-				".styrman/logs/" + p.ID,
-				".styrman/apt/" + p.ID + ".list",
-				".styrman/apt/" + p.ID + ".log",
+			// Per-project storage (ADR-031/027) is server-controlled — the
+			// whole per-project home (docker disk, transcripts, apt manifest,
+			// dotfiles, any creds) AND the workspace. os.RemoveAll doesn't
+			// follow symlinks out.
+			for _, dir := range []string{
+				s.cfg.ProjectHome(u.Username, p.ID),
+				s.cfg.ProjectWorkspace(u.Username, p.ID),
 			} {
-				if err := files.RemoveAll(home, rel); err != nil {
-					s.logger.Warn("wipe failed", "project", p.ID, "path", rel, "error", err)
+				if err := os.RemoveAll(dir); err != nil {
+					s.logger.Warn("wipe failed", "project", p.ID, "path", dir, "error", err)
 				}
 			}
 		}

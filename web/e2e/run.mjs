@@ -165,8 +165,8 @@ try {
   });
   await check("home scope switches root", async () => {
     await panel().getByText("Home", { exact: true }).click();
-    // .bashrc is always in the fresh home skeleton (ensureHome); .claude only
-    // exists after a real sign-in, so don't depend on it.
+    // Per-project home (ADR-031), seeded by the image entrypoint on boot:
+    // .bashrc is always there; .claude only after a real sign-in.
     await page.waitForSelector("aside >> text=.bashrc");
   });
   await check("project scope returns", async () => {

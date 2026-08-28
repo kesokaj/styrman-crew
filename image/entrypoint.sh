@@ -66,10 +66,29 @@ chown "${UID_}:${GID_}" "${HOME_DIR}" 2>/dev/null || true
 # workspace, no DinD — just the user, keyring, and a shell.
 MINIMAL="${STYRMAN_MINIMAL:-}"
 
-# ~/projects/<dir> is the workspace BIND MOUNT since ADR-027 (mkdir -p is a
-# no-op on it, kept for the pre-migration edge); ~/.dockerd stays in the home.
+# Standard home dirs — the home is now PER-PROJECT and starts empty
+# (ADR-031), so the image seeds the skeleton. ~/projects/<dir> is the
+# workspace bind mount (mkdir is a no-op on it); ~/.dockerd stays in the home.
 if [ -z "${MINIMAL}" ]; then
-    runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/projects/${PROJECT_DIR}" "${HOME_DIR}/.dockerd" 2>/dev/null || true
+    runuser -u "${USERNAME}" -- mkdir -p \
+        "${HOME_DIR}/projects/${PROJECT_DIR}" "${HOME_DIR}/.dockerd" \
+        "${HOME_DIR}/.config" "${HOME_DIR}/.cache" "${HOME_DIR}/.local/bin" \
+        "${HOME_DIR}/.local/share/keyrings" 2>/dev/null || true
+fi
+runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/.ssh" 2>/dev/null || true
+chmod 700 "${HOME_DIR}/.ssh" 2>/dev/null || true
+
+# Default shell dotfiles from the image (ADR-031), seeded write-once as the
+# user. A per-project home starts empty, so this is what makes it a usable
+# shell. bash_secrets is 0600 (R10). Never clobbers a file the user edited.
+if [ -d /styrman/skel ]; then
+    for f in bashrc profile bash_aliases bash_exports bash_secrets; do
+        dst="${HOME_DIR}/.${f}"
+        if [ ! -e "${dst}" ]; then
+            runuser -u "${USERNAME}" -- cp "/styrman/skel/${f}" "${dst}" 2>/dev/null || true
+            [ "${f}" = "bash_secrets" ] && chmod 600 "${dst}" 2>/dev/null || true
+        fi
+    done
 fi
 
 # ─── Keyring plumbing for agy (spike S4) ────────────────────────────────────

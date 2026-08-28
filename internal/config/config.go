@@ -279,7 +279,19 @@ func (c *Config) SetOperator(diskGB int, idle time.Duration) error {
 func (c *Config) ProjectsFile() string { return filepath.Join(c.StateDir, "projects.json") }
 
 // UserHome returns a user's home directory on the host.
+//
+// NOTE (ADR-031): homes are PER-PROJECT now. UserHome remains the per-user
+// BASE (HomesDir/<user>) — used for the setup VM and as the parent of the
+// per-project homes. Project microVMs mount ProjectHome instead.
 func (c *Config) UserHome(user string) string { return filepath.Join(c.HomesDir, user) }
+
+// ProjectHome is a project's OWN home directory (ADR-031): each project gets
+// a fresh, individual home so no tool state leaks between projects. The only
+// thing shared across a user's projects is credentials (via the broker,
+// ADR-030). Keyed by UUID; the parent is never mounted into any guest.
+func (c *Config) ProjectHome(user, project string) string {
+	return filepath.Join(c.HomesDir, user, "p", project)
+}
 
 // LegacyWorkspaceExists reports whether a project's PRE-ADR-027 workspace is
 // still sitting in the shared home — the signal that migration hasn't

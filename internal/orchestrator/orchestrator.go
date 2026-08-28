@@ -202,12 +202,19 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 		if err := os.MkdirAll(ws, 0o700); err != nil {
 			return "", fmt.Errorf("create workspace dir: %w", err)
 		}
+		// Per-project home (ADR-031): a fresh, individual home the entrypoint
+		// seeds from the image (dotfiles + harness). Created before the mount
+		// so Docker doesn't auto-create it root-owned.
+		phome := o.cfg.ProjectHome(user, project)
+		if err := os.MkdirAll(phome, 0o700); err != nil {
+			return "", fmt.Errorf("create project home: %w", err)
+		}
 		id, err = o.create(ctx, createSpec{
 			name:          name,
 			netName:       config.NetworkName(project),
 			hostname:      "styrman-" + opts.Name,
 			guestUser:     opts.GuestUser,
-			homePath:      o.cfg.UserHome(user),
+			homePath:      phome,
 			workspacePath: ws,
 			workspaceDst:  "/home/" + opts.GuestUser + "/projects/" + opts.Dir,
 			extraEnv: []string{
@@ -440,6 +447,11 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context, user, guestUser string) 
 			}
 		}
 	} else {
+		// The setup VM uses the per-user BASE home (onboarding lives here);
+		// create it before the mount so Docker doesn't make it root-owned.
+		if err := os.MkdirAll(o.cfg.UserHome(user), 0o700); err != nil {
+			return "", fmt.Errorf("create setup home: %w", err)
+		}
 		id, err = o.create(ctx, createSpec{
 			name:      config.SetupContainer(user),
 			netName:   config.SetupNetwork(user),

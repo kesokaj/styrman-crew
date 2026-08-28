@@ -170,10 +170,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** File-explorer scope: a project's workspace, or the shared home. */
-export type Scope = { kind: "project"; project: string } | { kind: "home" };
+// Homes are per-project (ADR-031), so the home scope carries its project too.
+export type Scope =
+  | { kind: "project"; project: string }
+  | { kind: "home"; project: string };
 
 const scopeBase = (s: Scope) =>
-  s.kind === "home" ? "/api/home" : `/api/projects/${s.project}`;
+  s.kind === "home"
+    ? `/api/projects/${s.project}/home`
+    : `/api/projects/${s.project}`;
 
 export const api = {
   listProjects: () => request<{ projects: Project[] }>("/api/projects"),

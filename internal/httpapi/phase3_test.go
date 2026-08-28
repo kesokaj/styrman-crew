@@ -135,7 +135,8 @@ func TestHistorySearchRoute(t *testing.T) {
 	json.Unmarshal(w.Body.Bytes(), &proj)
 
 	// Plant a transcript the way tmux pipe-pane would.
-	logs := filepath.Join(dir, "homes", "tester", ".styrman", "logs", proj.ID)
+	// Transcripts live in the PER-PROJECT home (ADR-031).
+	logs := filepath.Join(dir, "homes", "tester", "p", proj.ID, ".styrman", "logs", proj.ID)
 	os.MkdirAll(logs, 0o755)
 	os.WriteFile(filepath.Join(logs, "conv-9.log"), []byte("hello grep-target world\n"), 0o644)
 

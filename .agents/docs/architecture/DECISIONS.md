@@ -770,3 +770,34 @@ lost).
 **Consequences:** True per-project isolation; auth once, current everywhere.
 Costs: no cache sharing (accepted); a real credential subsystem; a one-time
 home migration. agy remains the weakest link until upstream adds an env path.
+
+---
+
+## ADR-031: Per-project homes (clean cut from the shared home)
+
+**Date:** 2026-08-28 · **Status:** accepted (operator: "prototype... don't
+need to save old data, I can reregister creds").
+
+**Context:** ADR-003's single shared home (revised by ADR-030) meant every
+tool's $HOME state (Go/npm caches, global installs, history, agent auth)
+was shared across a user's projects — "separate but not separate." The goal:
+TRULY individual projects.
+
+**Decision:** Each project gets its OWN home at
+`HomesDir/<user>/p/<uuid>`, mounted as `$HOME` in its microVM. Homes start
+empty and the base image's entrypoint seeds them (dotfiles from
+`image/skel/`, harness from `image/harness/` — R5/ADR-030), so every project
+gets identical defaults with nothing shared at the FS layer. The per-user
+`HomesDir/<user>` becomes just the setup VM's home + the parent of the
+per-project homes. The workspace stays separate (ADR-027). The ONLY thing
+shared across projects is credentials, via the broker (ADR-030). The server
+no longer creates or seeds homes (dropped `ensureHome` + the `dotfiles`
+package); it creates the empty per-project home dir at project creation, the
+image seeds it. Files "Home" scope and transcripts are now per-project
+(`/api/projects/{id}/home/*`, `ProjectHome/.styrman/logs`). Clean cut — no
+migration; the operator re-registers credentials (prototype).
+
+**Consequences:** Projects are genuinely individual; no cache/state/auth
+leak between them. Cost: re-auth per tool until the broker adapters cover it
+(git done; ssh/gcloud/docker/gh/npm/claude/agy pending), and no cache
+sharing (accepted). Revises R3 further (per-project home, not shared).

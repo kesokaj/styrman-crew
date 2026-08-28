@@ -149,7 +149,7 @@ export function FileExplorer({
             key={k}
             onClick={() => {
               setScope(
-                k === "home" ? { kind: "home" } : { kind: "project", project },
+                k === "home" ? { kind: "home", project } : { kind: "project", project },
               );
               setPath("");
             }}

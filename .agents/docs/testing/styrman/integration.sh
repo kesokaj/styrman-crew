@@ -111,7 +111,7 @@ check "invalid transcript id refused" \
 
 say "file explorer"
 check "project listing works" "curl -fsS '${API}/api/projects/${ID}/files' | grep -q entries"
-check "home listing works" "curl -fsS '${API}/api/home/files' | grep -q entries"
+check "home listing works (per-project)" "curl -fsS '${API}/api/projects/${ID}/home/files' | grep -q entries"
 check "path traversal refused" \
     "[ \$(curl -s -o /dev/null -w '%{http_code}' '${API}/api/projects/${ID}/files?path=../../etc') = 400 ]"
 curl -fsS -X PUT "${API}/api/projects/${ID}/file?path=note.txt" \
@@ -182,7 +182,8 @@ curl -fsS -X POST "${API}/api/projects/${ID}/start" >/dev/null
 OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/1" \
     -send "cat ~/projects/itest/proof.txt\r" -wait 4s || true)
 check "file survives container recreate" "echo '${OUT}' | grep -q persisted"
-check "docker.img persisted" "[ -f '${STATE}/homes/${ME}/.dockerd/${ID}.img' ]"
+# ADR-031: the docker disk lives in the PER-PROJECT home now
+check "docker.img persisted" "[ -f '${STATE}/homes/${ME}/p/${ID}/.dockerd/${ID}.img' ]"
 check "transcript survives recreate" \
     "curl -fsS ${API}/api/projects/${ID}/history/conv-1 | grep -q '${MARK}'"
 
@@ -213,9 +214,11 @@ check "container stopped" "! docker ps --format '{{.Names}}' | grep -q ${CN}"
 check "terminals still listed while stopped" \
     "curl -fsS ${API}/api/projects/${ID}/terminals | grep -q '\"title\"'"
 curl -fsS -X DELETE "${API}/api/projects/${ID}?wipe=true" -o /dev/null
-# Delete is ASYNC since v1.3 (202 + background destroy) — wait for it.
+# Delete is ASYNC since v1.3 (202 + background: destroy container, THEN wipe,
+# THEN remove the record). Wait for the LAST step — the record leaving the
+# API list — so the wipe + record-removal checks below don't race the tail.
 for i in $(seq 1 60); do
-    docker ps -a --format '{{.Names}}' | grep -q "${CN}" || break
+    curl -fsS "${API}/api/projects" | grep -q "${ID}" || break
     sleep 2
 done
 check "container gone (async delete)" "! docker ps -a --format '{{.Names}}' | grep -q ${CN}"

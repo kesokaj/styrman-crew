@@ -25,13 +25,14 @@
    project workloads; never a shared host `docker.sock` inside a project.
 2. **R2 — Per-project Docker-in-Docker**: each microVM runs its own `dockerd` with a
    project-scoped data-root. Projects must not share Docker state.
-3. **R3 — Per-project home; credentials shared via the broker** (ADR-030, revised
-   2026-08-28; was "one shared home", ADR-003). Each project gets its OWN home so
+3. **R3 — Per-project home; credentials shared via the broker** (ADR-030/031,
+   revised 2026-08-28; was "one shared home", ADR-003). Each project gets its OWN
+   home at `HomesDir/<user>/p/<uuid>`, seeded from the base image (ADR-031), so
    projects are truly individual — no tool state (`~/go`, `~/.npm`, caches, global
    installs, history) leaks between them. The ONLY thing shared across a user's
-   projects is credentials, delivered by the credential service (ssh/git/gh/gcloud/
+   projects is credentials, delivered by the credential broker (ssh/git/gh/gcloud/
    docker/npm/claude via agent-socket/helper/env; agy via keyring seeding). Sign in to
-   each **once ever**; a refresh in any project propagates to all; destroying and
+   each **once**; a refresh in any project propagates to all; destroying and
    recreating any container must lose nothing outside that container's runtime state.
 4. **R4 — Terminal-first, no embedded IDE**: the agent CLI is the primary interface.
    No code-server / VS Code embed. A lightweight file viewer is the ceiling.

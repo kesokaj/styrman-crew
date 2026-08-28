@@ -23,25 +23,29 @@ import (
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 )
 
-// scopeFor resolves the file-explorer scope. Both roots are real,
-// server-created directories, so os.Root confinement holds: home scope is
-// the user's home; project scope is the project's OWN workspace dir
-// (ADR-027) — a guest symlink inside the workspace can no longer even reach
-// the rest of the home, let alone another tenant's.
+// scopeFor resolves the file-explorer scope for a project route. Both roots
+// are real, server-created directories (os.Root confinement holds): the
+// "home" route family (pattern contains "/home/") resolves to the project's
+// OWN home (ADR-031); otherwise it's the project's workspace (ADR-027). Both
+// are per-project since v1.4, so a guest symlink can't reach another
+// project, let alone another tenant.
 func (s *Server) scopeFor(r *http.Request) (root string, err error) {
 	u, sp, err := s.who(r)
 	if err != nil {
 		return "", err
 	}
-	root = s.cfg.UserHome(u.Username)
-	if id := r.PathValue("project"); id != "" {
-		p, perr := sp.projects.Get(id)
-		if perr != nil {
-			return "", perr
-		}
-		root = s.cfg.ProjectWorkspace(u.Username, p.ID)
+	id := r.PathValue("project")
+	if id == "" {
+		return "", errors.New("project required")
 	}
-	return root, nil
+	p, perr := sp.projects.Get(id)
+	if perr != nil {
+		return "", perr
+	}
+	if strings.Contains(r.Pattern, "/home/") {
+		return s.cfg.ProjectHome(u.Username, p.ID), nil
+	}
+	return s.cfg.ProjectWorkspace(u.Username, p.ID), nil
 }
 
 func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +120,7 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if managedHomeTarget(r.PathValue("project") == "", rel) {
+	if managedHomeTarget(strings.Contains(r.Pattern, "/home/"), rel) {
 		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
 		return
 	}
@@ -151,7 +155,7 @@ func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	isHome := r.PathValue("project") == ""
+	isHome := strings.Contains(r.Pattern, "/home/")
 	if managedHomeTarget(isHome, from) || managedHomeTarget(isHome, to) {
 		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
 		return
@@ -289,7 +293,7 @@ func (s *Server) listHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	items, err := history.List(s.cfg.UserHome(u.Username), p.ID)
+	items, err := history.List(s.cfg.ProjectHome(u.Username, p.ID), p.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -315,7 +319,7 @@ func (s *Server) searchHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("query too long"))
 		return
 	}
-	matches, err := history.Search(r.Context(), s.cfg.UserHome(u.Username), p.ID, q)
+	matches, err := history.Search(r.Context(), s.cfg.ProjectHome(u.Username, p.ID), p.ID, q)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -347,7 +351,7 @@ func (s *Server) readHistory(w http.ResponseWriter, r *http.Request) {
 	} else if max > 4<<20 {
 		max = 4 << 20
 	}
-	text, err := history.Read(s.cfg.UserHome(u.Username), p.ID, r.PathValue("id"), max)
+	text, err := history.Read(s.cfg.ProjectHome(u.Username, p.ID), p.ID, r.PathValue("id"), max)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return

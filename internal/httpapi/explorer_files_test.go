@@ -116,41 +116,60 @@ func TestFileRoundTripProjectScope(t *testing.T) {
 	}
 }
 
+// makeProject creates a project and returns its id (its workspace + home
+// dirs exist after this — createProject makes both).
+func makeProject(t *testing.T, h http.Handler, name string) string {
+	t.Helper()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(`{"name":"`+name+`"}`)))
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create project %q = %d: %s", name, w.Code, w.Body.String())
+	}
+	var p struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil || p.ID == "" {
+		t.Fatalf("bad create response: %s", w.Body.String())
+	}
+	return p.ID
+}
+
 // TestFileEndpointsManagedAndTraversal covers the destructive endpoints'
 // guard rails: platform-managed home subtrees are refused, and traversal
-// attempts stay confined.
+// attempts stay confined. Home is per-project (ADR-031), so home scope is
+// /api/projects/{id}/home.
 func TestFileEndpointsManagedAndTraversal(t *testing.T) {
 	h := testRoutes(t)
+	pid := makeProject(t, h, "guarded")
+	home := "/api/projects/" + pid + "/home"
 	do := func(method, path, body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(method, path, strings.NewReader(body)))
 		return w
 	}
-	// Touch the home so it exists (any home-scope request creates it lazily).
-	do(http.MethodGet, "/api/home/files?path=", "")
 
 	// Managed home subtrees: delete and rename (either side) are refused.
 	for _, p := range []string{"projects", ".dockerd", ".styrman", ".ssh", "projects/x", ".dockerd/y.img"} {
-		if w := do(http.MethodDelete, "/api/home/file?path="+p, ""); w.Code != http.StatusBadRequest {
+		if w := do(http.MethodDelete, home+"/file?path="+p, ""); w.Code != http.StatusBadRequest {
 			t.Errorf("home delete %q = %d, want 400", p, w.Code)
 		}
-		if w := do(http.MethodPost, "/api/home/file/rename?path="+p, `{"to":"elsewhere"}`); w.Code != http.StatusBadRequest {
+		if w := do(http.MethodPost, home+"/file/rename?path="+p, `{"to":"elsewhere"}`); w.Code != http.StatusBadRequest {
 			t.Errorf("home rename from %q = %d, want 400", p, w.Code)
 		}
 	}
-	do(http.MethodPut, "/api/home/file?path=loose.txt", `{"content":"x"}`)
-	if w := do(http.MethodPost, "/api/home/file/rename?path=loose.txt", `{"to":".ssh/id_ed25519"}`); w.Code != http.StatusBadRequest {
+	do(http.MethodPut, home+"/file?path=loose.txt", `{"content":"x"}`)
+	if w := do(http.MethodPost, home+"/file/rename?path=loose.txt", `{"to":".ssh/id_ed25519"}`); w.Code != http.StatusBadRequest {
 		t.Errorf("home rename INTO managed path = %d, want 400", w.Code)
 	}
 	// A non-managed home file deletes fine.
-	if w := do(http.MethodDelete, "/api/home/file?path=loose.txt", ""); w.Code != http.StatusNoContent {
+	if w := do(http.MethodDelete, home+"/file?path=loose.txt", ""); w.Code != http.StatusNoContent {
 		t.Errorf("home delete of plain file = %d, want 204", w.Code)
 	}
 
 	// Dot-traversal is neutralized by path.Clean: these collapse to the scope
 	// root, which is refused outright.
 	for _, p := range []string{"../../..", "a/../../.."} {
-		if w := do(http.MethodDelete, "/api/home/file?path="+p, ""); w.Code != http.StatusBadRequest {
+		if w := do(http.MethodDelete, home+"/file?path="+p, ""); w.Code != http.StatusBadRequest {
 			t.Errorf("traversal delete %q = %d, want 400", p, w.Code)
 		}
 	}
@@ -161,13 +180,14 @@ func TestFileEndpointsManagedAndTraversal(t *testing.T) {
 // itself must remove only the link.
 func TestFileDeleteSymlinkEscape(t *testing.T) {
 	h, dir := testRoutesWithDir(t)
+	pid := makeProject(t, h, "symesc")
+	homeRoute := "/api/projects/" + pid + "/home"
 	do := func(method, path string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(method, path, strings.NewReader("")))
 		return w
 	}
-	do(http.MethodGet, "/api/home/files?path=") // create the home lazily
-	home := filepath.Join(dir, "homes", "tester")
+	home := filepath.Join(dir, "homes", "tester", "p", pid) // ProjectHome layout
 	outside := filepath.Join(dir, "outside")
 	if err := os.MkdirAll(outside, 0o755); err != nil {
 		t.Fatal(err)
@@ -180,14 +200,14 @@ func TestFileDeleteSymlinkEscape(t *testing.T) {
 	}
 
 	// Deleting THROUGH the symlink is refused by the confined root.
-	if w := do(http.MethodDelete, "/api/home/file?path=esc/secret.txt"); w.Code != http.StatusBadRequest {
+	if w := do(http.MethodDelete, homeRoute+"/file?path=esc/secret.txt"); w.Code != http.StatusBadRequest {
 		t.Errorf("delete through symlink = %d, want 400", w.Code)
 	}
 	if _, err := os.Stat(filepath.Join(outside, "secret.txt")); err != nil {
 		t.Fatal("outside file was deleted through a symlink")
 	}
 	// Deleting the symlink itself removes only the link.
-	if w := do(http.MethodDelete, "/api/home/file?path=esc"); w.Code != http.StatusNoContent {
+	if w := do(http.MethodDelete, homeRoute+"/file?path=esc"); w.Code != http.StatusNoContent {
 		t.Errorf("delete of symlink = %d, want 204", w.Code)
 	}
 	if _, err := os.Stat(filepath.Join(outside, "secret.txt")); err != nil {
