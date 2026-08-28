@@ -20,7 +20,14 @@ forever; containers disposable always.
   in the side panel.
 - **Every project is a git repo, always.** Initialized (or cloned) at
   creation, no exceptions. Automatic checkpoints snapshot the whole working
-  tree on key events and are restorable with one click from the Git tab.
+  tree on key events AND every 10 minutes while you work, restorable with
+  one click from the Git tab.
+- **Per-project everything.** Each project owns its workspace storage
+  (ADR-027), its Docker daemon and disk, its network — and its apt
+  packages: what you `apt install` is captured at shutdown and replayed
+  when the VM is ever recreated (ADR-028). Terminals get generated friendly
+  names and an optional autostart command (start your dev server or a
+  container the moment the session opens).
 - **Hard isolation.** 1 project = 1 microVM (own kernel, own dockerd, own
   network — projects can never reach each other). 1 user = 1 home disk —
   users never see each other's worlds.
@@ -53,7 +60,9 @@ Browser ──HTTPS──► Caddy (Google OAuth, TLS, Cloudflare DNS — vendor
                 └── Docker SDK ──► per-project Kata microVM  styrman-<uuid>
                                      ├── tmux session per terminal → transcripts
                                      ├── own dockerd (overlay2 on a per-project disk)
-                                     └── virtiofs: the user's home
+                                     ├── virtiofs: the user's home (credentials)
+                                     └── virtiofs: the project's own workspace
+                                         (StateDir/projects/<user>/<uuid>, ADR-027)
 ```
 
 No database: state lives in Docker labels, the filesystem, and per-user JSON
@@ -61,20 +70,24 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-Beta, deployed: https://crew.styrman.xyz (Google sign-in, admin-managed
-access). All four build phases landed — microVM runtime, UI, OAuth ingress,
-multi-tenancy — verified by 3 suites (unit, 56 integration checks against
-real Kata, 33 self-hosted Playwright browser checks). Since launch: per-port
-preview sharing (ADR-024) and public TTL preview links (ADR-025), both owner
-opt-in and scoped to one port at a time. The living
-documentation is `.agents/docs/specs/styrman/guide.md`; the phase plans
-under `.agents/docs/plans/` are historical.
+**v1.3.0**, deployed: https://crew.styrman.xyz (Google sign-in). Verified by
+3 suites (unit + race, 62 integration checks against real Kata, 35
+self-hosted Playwright browser checks) plus a live post-deploy battery.
+v1.3 brought the full UI redesign (Material 3 tokens, Google Sans Flex +
+Google Sans Code self-hosted, light/dark/system themes, crew branding, zero
+native browser popups), a dashboard with live terminal tails, full-text
+history search, markdown preview, dynamic runtime settings, per-project
+workspace storage (ADR-027), per-terminal autostart, and apt persistence
+(ADR-028). Earlier: per-port preview sharing (ADR-024), public TTL links
+(ADR-025), private email-gated links (ADR-026). The living documentation is
+`.agents/docs/specs/styrman/guide.md`; per-release notes live in
+`.agents/docs/changes/`.
 
 ## Requirements
 
 - Debian 13 host (baremetal, or a GCP VM with nested virtualization) — Docker,
   Kata, and everything else is installed by `deploy/host-setup.sh`
-- Go 1.24+ to build/run the server
+- Go 1.25+ to build/run the server
 
 ## Quick start
 
@@ -85,8 +98,8 @@ docker build -t styrman-runtime:dev image/    # runtime image (~10 min first bui
 # Dev (loopback, no auth):
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
 
-# Production (Google OAuth, HTTPS, reboot-safe):
-vi deploy/.env && docker compose -f deploy/docker-compose.yml up -d --build
+# Production (Google OAuth, HTTPS, reboot-safe; stamp the version you deploy):
+vi deploy/.env && STYRMAN_VERSION=1.3.0 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 Full walkthrough, operations, and troubleshooting:

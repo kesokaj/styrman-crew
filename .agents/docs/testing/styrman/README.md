@@ -6,7 +6,7 @@ No mocks in the orchestrator path.
 ## Tiers
 
 1. **Unit** — `go test ./...` (store, validation; fast, no Docker).
-2. **Integration (56 checks)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
+2. **Integration (62 checks)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
    (default `styrman-runtime:dev`). Isolated server (own state dir, port
    18080) through the full lifecycle: legacy-layout migration, async create
    → microVM boot, terminals (records, rename, pause, close-all),
@@ -39,7 +39,7 @@ go test ./... && bash .agents/docs/testing/styrman/integration.sh
 Image changes: rebuild the image first; the integration script always creates
 fresh containers so it picks the new image up automatically.
 
-## Tier 4 — Browser e2e (Playwright, 33 checks)
+## Tier 4 — Browser e2e (Playwright, 35 checks)
 
 `bash web/e2e/run.sh [image-tag]` — self-hosts: builds the server and starts
 its own instance on a host loopback port with an isolated state dir, then
@@ -50,8 +50,8 @@ from project microVMs either way.
 Drives the real UI in headless Chromium against that server: project
 creation (boots a microVM), agent + shell terminals (xterm's DOM renderer
 makes terminal text assertable, plus the link-rescue bar and copy-on-select),
-typing into the microVM, the Files/Ports/History/Git/Clips side-panel tabs,
-rename/delete, deep links, setup page, theme, and full cleanup — 33 checks +
+typing into the microVM, the Files/Ports/History/Git/Clipboard side-panel tabs,
+rename/delete, deep links, setup page, theme, and full cleanup — 35 checks +
 screenshots.
 Prereq: `cd web && npm i && npx playwright install chromium` (once).
 Self-cleaning: deletes any leftover `e2e-ui` project at start.

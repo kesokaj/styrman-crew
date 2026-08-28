@@ -278,8 +278,16 @@ func (c *Config) UserHome(user string) string { return filepath.Join(c.HomesDir,
 // completed and nothing may create (and thereby permanently shadow) the new
 // location with an empty dir.
 func (c *Config) LegacyWorkspaceExists(user, projectDir string) bool {
-	st, err := os.Lstat(filepath.Join(c.UserHome(user), "projects", projectDir))
-	return err == nil && st.IsDir()
+	p := filepath.Join(c.UserHome(user), "projects", projectDir)
+	st, err := os.Lstat(p)
+	if err != nil || !st.IsDir() {
+		return false
+	}
+	// An empty dir is only the bind's mount-point stub (Docker recreates it
+	// inside the home on every start) — not a real unmigrated tree.
+	// Unreadable counts as content: fail safe, never shadow real data.
+	entries, err := os.ReadDir(p)
+	return err != nil || len(entries) > 0
 }
 
 // ProjectWorkspace is the host-side working tree of one project (ADR-027):

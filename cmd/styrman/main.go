@@ -195,7 +195,13 @@ func migrateWorkspaces(cfg *config.Config, orch *orchestrator.Orchestrator, logg
 		}
 		newWS := cfg.ProjectWorkspace(user, p.ID)
 		if _, err := os.Stat(newWS); err == nil {
-			logger.Warn("workspace migration CONFLICT: both locations exist — leaving both untouched, resolve by hand",
+			// An EMPTY old dir is just the bind's mount-point stub that
+			// Docker recreates inside the home on every container start —
+			// expected post-migration, not a conflict.
+			if entries, rerr := os.ReadDir(oldWS); rerr == nil && len(entries) == 0 {
+				return
+			}
+			logger.Warn("workspace migration CONFLICT: both locations hold content — leaving both untouched, resolve by hand",
 				"user", user, "project", p.Name, "old", oldWS, "new", newWS)
 			return
 		}

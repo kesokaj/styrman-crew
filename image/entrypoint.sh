@@ -195,11 +195,15 @@ cat > /etc/docker/daemon.json <<EOF
   "log-opts": {"max-size": "10m", "max-file": "2"}
 }
 EOF
-rm -f /var/run/docker.pid
+# /run is NOT a tmpfs in this image (it survives stop/start), so an unclean
+# shutdown (SIGKILL) leaves stale docker/containerd sockets and pids that
+# make the next dockerd wait on a dead containerd until timeout — observed
+# as a "dockerd did not become ready" boot loop in prod. Clean slate.
+rm -rf /var/run/docker.pid /var/run/docker /var/run/containerd 2>/dev/null || true
 dockerd > /var/log/dockerd.log 2>&1 &
 DOCKERD_PID=$!
 DOCKER_UP=false
-for i in $(seq 1 30); do
+for i in $(seq 1 60); do
     if docker info &>/dev/null; then
         DOCKER_UP=true
         log "dockerd ready (${STORAGE_DRIVER} on ${DATA_ROOT})"

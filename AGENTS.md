@@ -31,10 +31,10 @@ docker build -t styrman-runtime:dev image/
 
 # Run locally (loopback, no auth) / deploy production
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/
-docker compose -f deploy/docker-compose.yml up -d --build
+STYRMAN_VERSION=<x.y.z> docker compose -f deploy/docker-compose.yml up -d --build
 
 # Test suites
-bash .agents/docs/testing/styrman/integration.sh   # 56 checks vs real Kata
+bash .agents/docs/testing/styrman/integration.sh   # 62 checks vs real Kata
 bash web/e2e/run.sh                                # 35 Playwright checks (self-hosted)
 ```
 
@@ -97,5 +97,5 @@ bash web/e2e/run.sh                                # 35 Playwright checks (self-
 | `image/` | Runtime microVM image: Dockerfile, entrypoint, styrman-setup |
 | `deploy/` | host-setup, compose, vendored caddy ingress, server Dockerfile |
 | `web/` | TanStack Start SPA (dist/client committed + embedded) |
-| `REQUIREMENTS.md` | Non-negotiable requirements (R1–R12) |
+| `REQUIREMENTS.md` | Non-negotiable requirements (R1–R13) |
 | `.agents/docs/specs/styrman/guide.md` | The living full guide |

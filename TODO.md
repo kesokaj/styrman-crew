@@ -9,8 +9,8 @@ Deferred work items. Not blocking current work, but should be addressed later.
 
 ## Medium Priority
 
-- [ ] UI: reduce poll amplification (Sidebar/ConversationList/ConversationPage each poll the same project; hoist to one shared source) (added 2026-08-26)
-- [ ] UI: replace two-stage delete confirm()s with a dialog + explicit wipe checkbox (added 2026-08-26)
+- [ ] UI: reduce poll amplification (Sidebar + dashboard each poll listProjects; hoist to one shared source). Partially mitigated in v1.3: usePolled pauses in hidden tabs; dashboard terminal polls calmed to 30s (added 2026-08-26)
+- [x] ~~UI: replace two-stage delete confirm()s with a dialog~~ — v1.3 phase 2 removed ALL native popups (2026-08-28)
 
 - [ ] Complete claude + agy first-run sign-in in the demo projects (operator's browser
       needed once; agy's remote-OAuth code flow works through the web terminal) (added 2026-08-26)
@@ -27,12 +27,12 @@ Deferred work items. Not blocking current work, but should be addressed later.
 - [ ] Keyring password visible via docker inspect (container env); move to one-shot exec injection (added 2026-08-26)
 - [ ] Phase 3 needs Google OAuth client ID/secret, Cloudflare API token, and BASE_DOMAIN
       from the operator — the old devbox `.env` is not on this machine (added 2026-08-26)
-- [ ] Decide backup story for `/var/lib/styrman/home` (restic/borg to GCS?) (added 2026-08-26)
+- [ ] Decide backup story for `/var/lib/styrman/{homes,projects,users}` (restic/borg to GCS?) — since ADR-027 source code lives under projects/, not the homes (added 2026-08-26, updated 2026-08-28)
 
 ## Low Priority
 
 - [ ] Transcript rotation for ~/.styrman/logs (unbounded today) (added 2026-08-26)
-- [ ] Ops panel: per-project disk/memory usage, container logs (added 2026-08-26)
+- [ ] Ops panel: per-project disk/memory usage, container logs. (v1.3 dashboard covers live terminal tails; resource stats still missing) (added 2026-08-26)
 - [ ] Git status badges in the sidebar (added 2026-08-26)
 
 - [ ] Makefile target for Artifact Registry push if styrman ever leaves this host (added 2026-08-26)
@@ -49,11 +49,11 @@ Deferred work items. Not blocking current work, but should be addressed later.
 ## Ideas / Nice-to-Have
 
 - [ ] Artifacts / files-changed right-rail panes (Antigravity-style) fed by git diff (added 2026-08-26)
-- [ ] Mobile-friendly layout for quick check-ins from a phone (added 2026-08-26)
+- [x] ~~Mobile-friendly layout~~ — v1.3 phase 2: sidebar drawer + top bar below md, side panel overlay below xl (2026-08-28)
 
 - **Notifications scan efficiency** (2026-08-27, reviewer): `GET /api/notifications` runs one sequential tmux exec per running project per poll and `Live()` re-fetches container status the caller already has. Fine at current scale; if project counts grow, add a `LiveIn(ctx, containerID, guest)` variant, scan projects concurrently (bounded errgroup), and cache per-user results for a few seconds.
 - **profile.go GuestUser race** (2026-08-27, reviewer, pre-existing): `GuestUser()` reads `p.GuestName` without a mutex while `setGuestUser` writes it; add a `sync.RWMutex`.
-- [ ] Idle-reaper auto-snapshot before reaping a project (ADR-022/R13 covers manual/stop/pause/close/close-all/pre-restore triggers, but not the idle reaper) — needs the project's workspace `Dir` plumbed into the reaper's orchestrator, or a callback hook it can invoke before stopping (added 2026-08-27)
+- [x] ~~Idle-reaper auto-snapshot~~ — covered by the v1.3 periodic checkpoint loop (10-min cadence for active projects; worst-case loss = one interval) (2026-08-28)
 
 - **SPA hydration mismatch (2026-08-27, Batch E e2e):** the prerendered
   `_shell.html` triggers React #418 (hydration text mismatch) on first client

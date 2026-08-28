@@ -21,13 +21,21 @@ Load-bearing ideas:
    and reusable. Projects cannot reach each other over the network, ever
    (R12, verified adversarially).
 2. **1 user = 1 home disk** (ADR-019, R3). Each account owns
-   `/var/lib/styrman/homes/<user>` — credentials, workspaces, transcripts —
-   mounted into each of *their* microVMs. Sign in to claude/agy/gh/ssh once
-   per user, forever; containers stay disposable. Users never see each
-   other's worlds. Admins (env-provided) manage access in Settings.
+   `/var/lib/styrman/homes/<user>` — credentials, dotfiles, transcripts —
+   mounted into each of *their* microVMs; since ADR-027 every project's
+   WORKSPACE additionally lives in its own storage dir
+   (`/var/lib/styrman/projects/<user>/<uuid>`), bind-mounted at
+   `~/projects/<dir>`. Sign in to claude/agy/gh/ssh once per user, forever;
+   containers stay disposable. Users never see each other's worlds. Access
+   is managed via `STYRMAN_ALLOWED_EMAILS` (+ admin-only API endpoints —
+   the runtime user-management UI was removed in v1.3, operator Q4).
 3. **Terminals** (ADR-016): durable records backed by tmux sessions — they
-   survive tab closes and disconnects, can be renamed, paused (session ends,
-   record + transcript stay) and closed, singly or all at once. The shell
+   survive tab closes and disconnects, get a GENERATED friendly name at
+   creation (rename any time: header click or the sidebar pencil), carry an
+   optional AUTOSTART command (runs when the session is created — first
+   open and re-opens after pause/VM restart, never on reconnect — then
+   drops to the shell; bolt badge in the sidebar), can be paused (session
+   ends, record + transcript stay) and closed, singly or all at once. The shell
    exiting is presented the same way: a **Paused** state with a **Resume**
    action, not a dead terminal. Everything printed in them is transcribed to
    the home (ADR-017): the History tab. Copy is Ctrl/Cmd+C when a selection
@@ -39,28 +47,31 @@ Load-bearing ideas:
    select: the clipboard is written the instant a selection is highlighted,
    not on an explicit Ctrl+C, because TUIs (claude, agy) redraw and wipe
    selections before a keypress can land — the runtime image's tmux
-   `mouse off` default is what lets native browser selection work at all. A
-   link-rescue bar above the terminal surfaces URLs as Open/Copy chips,
-   reassembled from both the buffer (soft-wrapped lines rejoined) and the
-   raw output stream (hard-wrapped lines collapsed) — auth flows print long
-   URLs that terminals mangle either way. Ctrl+Shift+F opens a scrollback
+   `mouse off` default is what lets native browser selection work at all. (The v1.2 link-rescue bar was removed in v1.3 — copy-on-select
+   superseded it.) Ctrl+Shift+F opens a scrollback
    search overlay; OSC 52 lets tmux/TUIs write the system clipboard
    directly. It renders via xterm's DOM renderer, not WebGL, so terminal
    text stays real, selectable, assertable DOM. Anything that lands on the
-   clipboard is recorded in the Clips side-panel tab — session-scoped
-   (sessionStorage, 1h TTL, never persisted or synced) since copy-on-select
-   could capture a secret typed during setup (ADR-023).
-4. **The side panel is project context**: Files (workspace + home; view,
-   edit via a lazy-loaded CodeMirror 6 editor with syntax highlighting by
-   filename and Ctrl+S to save, upload by drag, download), Ports (what's
+   clipboard is recorded in the Clipboard side-panel tab — session-scoped
+   (sessionStorage, 30 entries, 1h TTL, never persisted or synced) since
+   copy-on-select could capture a secret typed during setup (ADR-023).
+4. **The side panel is project context**: Files (workspace + home; create/
+   rename/delete files and folders; view + edit via a lazy-loaded
+   CodeMirror 6 editor with syntax highlighting and Ctrl+S to save;
+   markdown opens as a RENDERED preview with an Edit toggle; JSON gets a
+   Format button; upload by drag, download; destructive operations on
+   platform-managed home paths are refused), Ports (what's
    listening, with process / inner-docker image, shareable
    `/p/<id>/<t>/port/<port>/` links; per-port sharing — adding a Google
    email mints a stable **private link** `https://<token>.private.…/`
    requiring sign-in + membership in the share list, ADR-026 — and public
    TTL links on `https://<token>.public.…/`, ADR-025), History
-   (transcripts), Git
-   (working-tree diff + branch, and checkpoints — see below), Clips
-   (clipboard history, session-scoped — see above).
+   (transcripts under their terminal's friendly name + FULL-TEXT SEARCH
+   across all of them — everything you and the agents typed or saw), Git
+   (working-tree diff + branch, and checkpoints — see below), Clipboard
+   (session-scoped — see above). The HOME surface is a dashboard: project
+   cards with live transcript tails per running terminal (15s refresh,
+   click to jump in); polling pauses app-wide in hidden browser tabs.
 5. **Git is the substrate** (R13, ADR-022): every project workspace IS a git
    repository, no exceptions — `git init -b main` runs synchronously at
    creation, or a clone runs in-guest instead (new project dialog's "Clone a
@@ -92,6 +103,7 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
      └── Docker SDK ──► per-project Kata microVM  styrman-<uuid>  (mvm)
                           ├── tini → entrypoint → sleep; exec-based terminals
                           ├── dockerd: overlay2 on loop-mounted ~/.dockerd/<id>.img
+                          ├── virtiofs: projects/<user>/<uuid> → ~/projects/<dir> (ADR-027)
                           ├── tmux conv-<n> per terminal (bash -l), piped to
                           │   ~/.styrman/logs/<id>/  (transcripts)
                           └── virtiofs: /home/<guestname> = homes/<user>
@@ -165,16 +177,19 @@ forever. The same script works in any project terminal.
   creation, no exceptions (R13). Rename any time (⋯ → Rename); delete via
   the type-"delete" dialog (wipe checkbox controls files).
 - **Checkpoints**: the Git tab lists automatic snapshots (taken on stop,
-  terminal pause/close, and before restores) plus a "Checkpoint now"
-  button; Restore (confirmation required) rewrites the working tree to that
+  terminal pause/close, before restores, and every 10 minutes while a
+  project has terminal activity) plus a "Checkpoint now" button; Restore (confirmation required) rewrites the working tree to that
   point and always checkpoints the current state first, so it's undoable.
 - **Terminals**: sidebar, per project; generated friendly names; ⏸ pause /
   ✕ delete / close all; per-terminal autostart command (pencil → dialog;
   runs at session creation, then drops to the shell); transcripts land in
   History regardless.
 - **Settings**: account + terminal username, per-tool credential cards
-  (incl. claude/agy skills & subagents), theme, runtime/storage facts, and —
-  admins only — user access management.
+  (incl. claude/agy skills & subagents), theme (Light / Dark / System),
+  and — admins only — LIVE runtime tunables: idle-stop timeout (applies to
+  the reaper immediately) and docker disk size for new project VMs,
+  persisted in `StateDir/settings.json` over the env defaults. (The
+  user-access card was removed in v1.3 — access = env + admin API.)
 - **Where things live** on the host:
 
 | Path | What |
@@ -212,8 +227,8 @@ re-import it.
 
 ```bash
 go test ./...                                        # unit (stores, guards, routing)
-bash .agents/docs/testing/styrman/integration.sh     # 56 checks vs real Kata
-bash web/e2e/run.sh                                  # 33 browser checks (Playwright, self-hosted)
+bash .agents/docs/testing/styrman/integration.sh     # 62 checks vs real Kata
+bash web/e2e/run.sh                                  # 35 browser checks (Playwright, self-hosted)
 cd web && npm run build                              # UI → dist/client (committed)
 ```
 

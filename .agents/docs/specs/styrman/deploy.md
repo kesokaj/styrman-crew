@@ -26,6 +26,14 @@ project microVMs cannot reach.
 
 ## Production mode (Google OAuth, HTTPS, survives reboots)
 
+Deploy/upgrade: `STYRMAN_VERSION=<x.y.z> docker compose -f
+deploy/docker-compose.yml up -d --build` (the version stamps the binary and
+the Settings page — omitting it shows 0.0.0). Rebuild the runtime image
+first when `image/` changed. v1.3 upgrade note: the ADR-027 workspace
+migration runs on the server's first boot (gracefully stopping running
+project VMs it needs to move), and pre-ADR-027 containers are stop+recreated
+once on next open to gain the workspace bind.
+
 Composition (`deploy/docker-compose.yml`):
 - **styrman-caddy** — the ingress vendored from devbox (`deploy/caddy/`,
   see VENDORED.md): Caddy 2 + caddy-security (Google OAuth portal at

@@ -143,7 +143,15 @@ func (m *Manager) KillSession(ctx context.Context, user, project, guest, prefix,
 	if err != nil {
 		return err
 	}
-	if code != 0 && !strings.Contains(out, "can't find session") && !strings.Contains(out, "no server running") {
+	// Nothing-to-kill is success, in every phrasing tmux uses for it:
+	// "can't find session", "no server running" (older tmux), and "error
+	// connecting to <socket> (No such file or directory)" — the last one is
+	// what a fresh VM says before ANY terminal has attached, and it used to
+	// 500 the delete of a never-opened terminal (found in prod verification).
+	if code != 0 &&
+		!strings.Contains(out, "can't find session") &&
+		!strings.Contains(out, "no server running") &&
+		!strings.Contains(out, "error connecting to") {
 		return fmt.Errorf("tmux kill-session: %s", strings.TrimSpace(out))
 	}
 	return nil

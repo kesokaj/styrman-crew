@@ -87,6 +87,9 @@ func TestEnsureReposRefusesUnmigrated(t *testing.T) {
 	p, _ := store.Add(project.Project{Name: "stuck", CreatedAt: time.Now()})
 	oldWS := filepath.Join(cfg.UserHome("bob"), "projects", p.Dir)
 	os.MkdirAll(oldWS, 0o755)
+	// Non-empty: an EMPTY legacy dir is just the bind's mount-point stub and
+	// deliberately does not trigger the guard.
+	os.WriteFile(filepath.Join(oldWS, "real.go"), []byte("package real"), 0o644)
 
 	ensureRepos(cfg, logger) // migration did NOT run — the guard must hold
 	if _, err := os.Stat(cfg.ProjectWorkspace("bob", p.ID)); !os.IsNotExist(err) {
