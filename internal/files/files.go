@@ -332,6 +332,30 @@ func MkdirAll(root, rel string) error {
 	return rt.MkdirAll(cleanRel(rel), 0o755)
 }
 
+// Rename moves oldRel to newRel, both confined to root — neither side can
+// traverse a symlink that escapes it. Refuses to clobber an existing
+// destination so the explorer can't silently overwrite. The existence check
+// is best-effort, not atomic: a same-uid writer racing between Stat and
+// Rename can still be clobbered, and a failed rename can leave the created
+// parent directories behind.
+func Rename(root, oldRel, newRel string) error {
+	rt, err := openRoot(root)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+	dst := cleanRel(newRel)
+	if _, err := rt.Stat(dst); err == nil {
+		return fmt.Errorf("destination already exists")
+	}
+	if dir := path.Dir(dst); dir != "." {
+		if err := rt.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return rt.Rename(cleanRel(oldRel), dst)
+}
+
 // RemoveAll removes rel and its contents under root, confined — a symlinked
 // component escaping the root is refused, so a wipe cannot recurse into
 // another tenant's home.

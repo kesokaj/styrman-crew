@@ -85,16 +85,33 @@ export function Sidebar() {
             <div
               className={`group flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 hover:bg-bg-hover ${
                 params.project === p.id ? "bg-bg-hover" : ""
-              }`}
-              onClick={() => openProject(p)}
+              } ${p.state === "deleting" ? "pointer-events-none opacity-50" : ""}`}
+              onClick={() => p.state !== "deleting" && openProject(p)}
             >
               <span
                 className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                  p.state === "running" ? "bg-ok" : "bg-border"
+                  p.state === "running"
+                    ? "bg-ok"
+                    : p.state === "deleting"
+                      ? "animate-pulse bg-danger"
+                      : "bg-border"
                 }`}
                 title={p.state}
               />
               <span className="min-w-0 flex-1 truncate">{p.name}</span>
+              {p.state === "deleting" && (
+                <span className="shrink-0 text-[10px] text-text-dim">
+                  deleting…
+                </span>
+              )}
+              {p.deleteError && p.state !== "deleting" && (
+                <span
+                  className="shrink-0 text-[10px] text-danger"
+                  title={p.deleteError}
+                >
+                  delete failed
+                </span>
+              )}
               <button
                 className="invisible rounded px-1 text-text-dim hover:text-text group-hover:visible"
                 onClick={(e) => {
@@ -106,7 +123,7 @@ export function Sidebar() {
                 ⋯
               </button>
             </div>
-            {menuFor === p.id && (
+            {menuFor === p.id && p.state !== "deleting" && (
               <div className="mx-2 mb-1 flex gap-1 rounded-md border border-border bg-bg p-1 text-xs">
                 {p.state === "running" ? (
                   <button

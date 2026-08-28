@@ -1,0 +1,16 @@
+# styrman userprofile — environment (yours to edit).
+export EDITOR=vim
+export VISUAL=vim
+export PAGER=less
+export LESS='-R'
+
+export GOPATH="$HOME/go"
+export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+
+# No telemetry from CLI tools that honor it.
+export DO_NOT_TRACK=1
+
+# Colors
+command -v dircolors >/dev/null && eval "$(dircolors -b)"
+alias grep='grep --color=auto'
+export GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01:quote=01'

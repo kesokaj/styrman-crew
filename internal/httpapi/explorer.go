@@ -77,7 +77,122 @@ func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("cannot read file"))
 		return
 	}
+	// Report the path relative to the SCOPE, like listFiles — the SPA sends
+	// it back as ?path= on save, so a home-relative path here would get the
+	// project prefix applied twice and every save in project scope would fail.
+	if prefix != "" {
+		fc.Path = strings.TrimPrefix(fc.Path, prefix+"/")
+	}
 	writeJSON(w, http.StatusOK, fc)
+}
+
+// scopeRel normalizes a scope-relative ?path= and refuses the scope root
+// itself — delete/rename must never target the workspace or home root.
+func scopeRel(rel string) (string, error) {
+	rel = strings.TrimPrefix(path.Clean("/"+strings.TrimSpace(rel)), "/")
+	if rel == "" {
+		return "", errors.New("path required")
+	}
+	return rel, nil
+}
+
+// managedHomeTarget refuses destructive operations on platform-managed
+// subtrees in the HOME scope: ~/projects holds every workspace (deleting one
+// belongs to project delete + wipe), ~/.dockerd the loop-mounted docker
+// disks of possibly-RUNNING microVMs, ~/.styrman the transcripts, ~/.ssh the
+// set-up-once-ever identity (R3). Project scope is already confined to the
+// workspace, so prefix != "" passes.
+func managedHomeTarget(prefix, rel string) bool {
+	if prefix != "" {
+		return false
+	}
+	first, _, _ := strings.Cut(rel, "/")
+	switch first {
+	case "projects", ".dockerd", ".styrman", ".ssh":
+		return true
+	}
+	return false
+}
+
+func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
+	root, prefix, err := s.scopeFor(r)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	rel, err := scopeRel(r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if managedHomeTarget(prefix, rel) {
+		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman — delete it from its project instead"))
+		return
+	}
+	if err := files.RemoveAll(root, scopedPath(prefix, rel)); err != nil {
+		s.logger.Warn("file delete failed", "scope", prefix, "path", rel, "error", err)
+		writeErr(w, http.StatusBadRequest, errors.New("cannot delete path"))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
+	root, prefix, err := s.scopeFor(r)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	from, err := scopeRel(r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	var body struct {
+		To string `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	to, err := scopeRel(body.To)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if managedHomeTarget(prefix, from) || managedHomeTarget(prefix, to) {
+		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
+		return
+	}
+	if err := files.Rename(root, scopedPath(prefix, from), scopedPath(prefix, to)); err != nil {
+		s.logger.Warn("file rename failed", "scope", prefix, "from", from, "to", to, "error", err)
+		msg := "cannot rename path"
+		if strings.Contains(err.Error(), "destination already exists") {
+			msg = "destination already exists" // user-actionable, worth surfacing
+		}
+		writeErr(w, http.StatusBadRequest, errors.New(msg))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) makeDir(w http.ResponseWriter, r *http.Request) {
+	root, prefix, err := s.scopeFor(r)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	rel, err := scopeRel(r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := files.MkdirAll(root, scopedPath(prefix, rel)); err != nil {
+		s.logger.Warn("mkdir failed", "scope", prefix, "path", rel, "error", err)
+		writeErr(w, http.StatusBadRequest, errors.New("cannot create folder"))
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
@@ -179,6 +294,14 @@ func (s *Server) readHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	max, _ := strconv.ParseInt(r.URL.Query().Get("bytes"), 10, 64)
+	// Clamp: history.Read allocates maxBytes up front, so an unbounded
+	// ?bytes= would attempt an arbitrary-size allocation. Negative falls
+	// back to history.Read's 256 KiB default.
+	if max < 0 {
+		max = 0
+	} else if max > 4<<20 {
+		max = 4 << 20
+	}
 	text, err := history.Read(s.cfg.UserHome(u.Username), p.ID, r.PathValue("id"), max)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)

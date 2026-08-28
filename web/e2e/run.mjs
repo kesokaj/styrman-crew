@@ -113,9 +113,12 @@ try {
   );
 
   // ── The terminal is a shell; typing reaches the microVM ─────────────────
+  // The userprofile prompt ends in ❯ (internal/dotfiles); $ covers a home
+  // that predates it or a stock-bash fallback.
   await check("shell prompt appears", () =>
     page.waitForFunction(
-      () => /\$/.test(document.querySelector(".xterm-rows")?.textContent ?? ""),
+      () =>
+        /[$❯]/.test(document.querySelector(".xterm-rows")?.textContent ?? ""),
       { timeout: 45000 },
     ),
   );

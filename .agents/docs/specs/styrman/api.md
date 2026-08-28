@@ -10,14 +10,14 @@ names are display-only.
 
 ## Projects
 
-| Method & path | Purpose |
-|---|---|
-| `GET /api/projects` | The user's projects, newest first: `{id, name, dir, createdAt, gitInit, archived, state}`. |
-| `POST /api/projects` | Create: `{"name","cloneUrl","github","gitInit"}`. Every project is a git repo, no exceptions (R13, ADR-022): by default a synchronous `git init -b main` runs before the `201`; `cloneUrl` (mutually exclusive with `github`) clones that URL in-guest instead, using the user's ssh key/gh credentials, falling back to an empty repo on failure; `github` (`"private"` or `"public"`) also creates and pushes a GitHub repo via the user's `gh` login. `gitInit` is accepted for compatibility and ignored. Returns **201 immediately** with `state:"creating"`; the microVM boots in the background (terminal attach waits for readiness). Name must not collide with a *current* project; reuse after deletion is fine. |
-| `GET /api/projects/{id}` | One project + live state. |
-| `PATCH /api/projects/{id}` | Rename (friendly name only): `{"name"}`. The workspace dir (`dir`) never moves. |
-| `DELETE /api/projects/{id}[?wipe=true]` | Destroy the microVM + records. `wipe` also deletes workspace, `~/.dockerd/<id>.img`, and transcripts — the UI requires typing "delete". |
-| `POST /api/projects/{id}/start` · `/stop` | Boot / stop the microVM. |
+| Method & path                             | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/projects`                       | The user's projects, newest first: `{id, name, dir, createdAt, gitInit, archived, state}`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `POST /api/projects`                      | Create: `{"name","cloneUrl","github","gitInit"}`. Every project is a git repo, no exceptions (R13, ADR-022): by default a synchronous `git init -b main` runs before the `201`; `cloneUrl` (mutually exclusive with `github`) clones that URL in-guest instead, using the user's ssh key/gh credentials, falling back to an empty repo on failure; `github` (`"private"` or `"public"`) also creates and pushes a GitHub repo via the user's `gh` login. `gitInit` is accepted for compatibility and ignored. Returns **201 immediately** with `state:"creating"`; the microVM boots in the background (terminal attach waits for readiness). Name must not collide with a _current_ project; reuse after deletion is fine. |
+| `GET /api/projects/{id}`                  | One project + live state.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `PATCH /api/projects/{id}`                | Rename (friendly name only): `{"name"}`. The workspace dir (`dir`) never moves.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `DELETE /api/projects/{id}[?wipe=true]`   | Destroy the microVM + records. Returns **202 immediately**; the destroy runs detached (a Kata teardown can take minutes) and the project reports `state:"deleting"` until its record disappears from the list. Repeated DELETEs while in flight are idempotent 202s; boot paths (start, terminal attach) refuse while a destroy is in flight so a reconnecting terminal can't resurrect the container. On failure the record stays, `deleteError` carries the message in the list/get views, and the delete can be retried. `wipe` also deletes workspace, `~/.dockerd/<id>.img`, and transcripts — the UI requires typing "delete".                                                                                        |
+| `POST /api/projects/{id}/start` · `/stop` | Boot / stop the microVM.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ## Terminals (durable, ADR-016)
 
@@ -25,38 +25,38 @@ A terminal is a persisted record whose live view is a tmux session
 (`conv-<n>`) in the project microVM. Every terminal is a login shell — run
 `claude`, `agy`, or anything; several at once to drive several agents.
 
-| Method & path | Purpose |
-|---|---|
-| `GET /api/projects/{id}/terminals` | Records merged with live tmux state: `{id, title, createdAt, lastOpened, live, attached, bell}`. `bell` (bool): rang the terminal bell while unattended — agent likely waiting for input; cleared by tmux when the session is viewed. Listed even when the project is stopped. |
-| `POST /api/projects/{id}/terminals` | Create: `{"title"}` optional (default "Terminal N"). Session created lazily on WS attach. |
-| `PATCH .../terminals/{t}` | Rename: `{"title"}`. |
-| `POST .../terminals/{t}/pause` | Kill the session, keep the record + transcript ("paused"; reopening starts a fresh shell). |
-| `DELETE .../terminals/{t}` | Kill session + remove record (transcript stays in History). |
-| `DELETE .../terminals` | Close all terminals in the project. |
+| Method & path                       | Purpose                                                                                                                                                                                                                                                                        |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/projects/{id}/terminals`  | Records merged with live tmux state: `{id, title, createdAt, lastOpened, live, attached, bell}`. `bell` (bool): rang the terminal bell while unattended — agent likely waiting for input; cleared by tmux when the session is viewed. Listed even when the project is stopped. |
+| `POST /api/projects/{id}/terminals` | Create: `{"title"}` optional (default "Terminal N"). Session created lazily on WS attach.                                                                                                                                                                                      |
+| `PATCH .../terminals/{t}`           | Rename: `{"title"}`.                                                                                                                                                                                                                                                           |
+| `POST .../terminals/{t}/pause`      | Kill the session, keep the record + transcript ("paused"; reopening starts a fresh shell).                                                                                                                                                                                     |
+| `DELETE .../terminals/{t}`          | Kill session + remove record (transcript stays in History).                                                                                                                                                                                                                    |
+| `DELETE .../terminals`              | Close all terminals in the project.                                                                                                                                                                                                                                            |
 
 `GET /ws/term/{id}/{t}` — the terminal WebSocket (see terminal-protocol.md).
 `GET /ws/setup` — the user's hidden onboarding VM terminal.
 
 ### Notifications
 
-| Method & path | Purpose |
-|---|---|
-| `GET /api/notifications` | `{"notifications":[{"projectId","projectName","terminalId","title"}]}` — terminals across the user's *running* projects whose tmux window bell flag is set. One docker exec per running project per call; the UI polls this every 8 s. |
+| Method & path            | Purpose                                                                                                                                                                                                                                |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/notifications` | `{"notifications":[{"projectId","projectName","terminalId","title"}]}` — terminals across the user's _running_ projects whose tmux window bell flag is set. One docker exec per running project per call; the UI polls this every 8 s. |
 
 ## Ports & preview
 
-| Method & path | Purpose |
-|---|---|
-| `GET /api/projects/{id}/ports` | Listening TCP ports ≥1024 inside the microVM: `{port, process?, image?}` — process from /proc, image when the port belongs to the project's inner docker. |
-| `/p/{id}/{t}/port/{port}/...` | Shareable link proxying to the app inside the microVM (WS pass-through). Bare form 301s to the trailing slash; a first-ever preview may 307 once while the server joins the project network. Reachable by the owner, or by a Google email the owner shared that port with (ADR-024) — `previewAllowed` in `internal/httpapi/shares.go` is the gate. |
-| `/proxy/{id}/{port}/...` | Terminal-independent form; same access rule. |
-| `GET .../ports/{port}/shares` | Emails allowed to reach this port's preview (owner only): `{"emails":[...],"url":"…"}`. `url` is the port's stable **private share link** (empty until someone is shared). |
-| `PUT .../ports/{port}/shares` | Replace the list (owner only): body `{"emails":[...]}` → normalized (lowercased, trimmed, deduped) and validated; capped at 50 entries, 254 bytes each. Returns the stored list + `url`. A non-empty list mints the port's private link (idempotent — the URL is stable across edits); emptying the list deletes it. |
-| `POST .../ports/{port}/links` | Mint a public TTL link for this port (owner only): body `{"ttl":"1h"\|"24h"\|"7d"}` → `{"token","port","url","expires"}`. |
-| `GET /api/projects/{id}/links` | The project's live public links (owner only): `{"links":[{token,port,url,expires}]}`. |
-| `DELETE /api/projects/{id}/links/{token}` | Revoke a link — **204**. Owner only; 404s if the token doesn't belong to this project. |
-| `GET /link/{token}/...` | **Public, unauthenticated** (ADR-025) — the token is the capability; `authGuard` exempts this route entirely. Proxies to exactly the linked port of the owning project; unknown/expired/revoked token → 404 either way (no oracle). A PRIVATE token is refused here (kind lock) — the no-login route must never honor an email-gated link. Also reachable as `https://{token}.<STYRMAN_PREVIEW_BASE>/...` via a Host-header rewrite when that env is set — each token gets its own origin. |
-| `GET /shared/{token}/...` | **Email-gated share route** (ADR-026). Requires an ingress-verified identity (`authGuard` lets non-styrman Google users through to this route only); `serveShared` then requires owner or membership in the port's CURRENT share list — removing an email cuts access immediately. Public tokens are refused (kind lock). Reachable as `https://{token}.<STYRMAN_PRIVATE_BASE>/...` — the OAuth-gated private wildcard — giving each share its own origin (no CSP sandbox needed, unlike `/p/`). |
+| Method & path                             | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/projects/{id}/ports`            | Listening TCP ports ≥1024 inside the microVM: `{port, process?, image?}` — process from /proc, image when the port belongs to the project's inner docker.                                                                                                                                                                                                                                                                                                                                        |
+| `/p/{id}/{t}/port/{port}/...`             | Shareable link proxying to the app inside the microVM (WS pass-through). Bare form 301s to the trailing slash; a first-ever preview may 307 once while the server joins the project network. Reachable by the owner, or by a Google email the owner shared that port with (ADR-024) — `previewAllowed` in `internal/httpapi/shares.go` is the gate.                                                                                                                                              |
+| `/proxy/{id}/{port}/...`                  | Terminal-independent form; same access rule.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `GET .../ports/{port}/shares`             | Emails allowed to reach this port's preview (owner only): `{"emails":[...],"url":"…"}`. `url` is the port's stable **private share link** (empty until someone is shared).                                                                                                                                                                                                                                                                                                                       |
+| `PUT .../ports/{port}/shares`             | Replace the list (owner only): body `{"emails":[...]}` → normalized (lowercased, trimmed, deduped) and validated; capped at 50 entries, 254 bytes each. Returns the stored list + `url`. A non-empty list mints the port's private link (idempotent — the URL is stable across edits); emptying the list deletes it.                                                                                                                                                                             |
+| `POST .../ports/{port}/links`             | Mint a public TTL link for this port (owner only): body `{"ttl":"1h"\|"24h"\|"7d"}` → `{"token","port","url","expires"}`.                                                                                                                                                                                                                                                                                                                                                                        |
+| `GET /api/projects/{id}/links`            | The project's live public links (owner only): `{"links":[{token,port,url,expires}]}`.                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `DELETE /api/projects/{id}/links/{token}` | Revoke a link — **204**. Owner only; 404s if the token doesn't belong to this project.                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `GET /link/{token}/...`                   | **Public, unauthenticated** (ADR-025) — the token is the capability; `authGuard` exempts this route entirely. Proxies to exactly the linked port of the owning project; unknown/expired/revoked token → 404 either way (no oracle). A PRIVATE token is refused here (kind lock) — the no-login route must never honor an email-gated link. Also reachable as `https://{token}.<STYRMAN_PREVIEW_BASE>/...` via a Host-header rewrite when that env is set — each token gets its own origin.       |
+| `GET /shared/{token}/...`                 | **Email-gated share route** (ADR-026). Requires an ingress-verified identity (`authGuard` lets non-styrman Google users through to this route only); `serveShared` then requires owner or membership in the port's CURRENT share list — removing an email cuts access immediately. Public tokens are refused (kind lock). Reachable as `https://{token}.<STYRMAN_PRIVATE_BASE>/...` — the OAuth-gated private wildcard — giving each share its own origin (no CSP sandbox needed, unlike `/p/`). |
 
 Sharing and public links are both least-privilege: scoped to ONE exposed
 port, never the terminal, files, dashboard, or other ports. Per-port shares
@@ -71,21 +71,24 @@ Scopes: the project workspace (`/api/projects/{id}/...`) or the user's home
 (`/api/home/...`). Served from the host mount — works while stopped.
 Traversal and symlink escapes refused.
 
-| Method & path | Purpose |
-|---|---|
-| `GET .../files?path=` | Directory listing (dirs first, dotfiles included). |
-| `GET .../file?path=` | Contents (2 MiB cap, binary-flagged). |
-| `PUT .../file?path=` | Save/create: `{"content"}`. |
-| `POST .../upload?path=` | Multipart upload into a directory (drag & drop; ≤512 MB). |
-| `GET .../download?path=` | Raw download. |
+| Method & path                | Purpose                                                                                                                                                  |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET .../files?path=`        | Directory listing (dirs first, dotfiles included). Paths in and out are scope-relative.                                                                  |
+| `GET .../file?path=`         | Contents (2 MiB cap, binary-flagged). The returned `path` is scope-relative, round-trippable straight into `PUT`.                                        |
+| `PUT .../file?path=`         | Save/create: `{"content"}` (body cap 8 MB — must exceed the 2 MiB read cap plus JSON escaping).                                                          |
+| `DELETE .../file?path=`      | Delete a file or directory (recursive). The scope root is refused; in home scope so are the managed subtrees `projects`, `.dockerd`, `.styrman`, `.ssh`. |
+| `POST .../file/rename?path=` | Move/rename: `{"to"}` (scope-relative). Refuses to clobber an existing destination; same managed-subtree guard as delete (either side).                  |
+| `POST .../mkdir?path=`       | Create a directory (with parents).                                                                                                                       |
+| `POST .../upload?path=`      | Multipart upload into a directory (drag & drop; ≤512 MB).                                                                                                |
+| `GET .../download?path=`     | Raw download.                                                                                                                                            |
 
 ## History & diff (ADR-017)
 
-| Method & path | Purpose |
-|---|---|
-| `GET /api/projects/{id}/history` | Terminal transcripts (`~/.styrman/logs/<id>/`): `{id, size, modified}`. |
-| `GET .../history/{session}` | Transcript text, ANSI-stripped, tail-capped (`?bytes=`). |
-| `GET /api/projects/{id}/diff` | `{repo, branch, status, diff}` from git in the workspace. Every workspace is a git repo (R13), so this never 404s for a missing repo. |
+| Method & path                    | Purpose                                                                                                                               |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/projects/{id}/history` | Terminal transcripts (`~/.styrman/logs/<id>/`): `{id, size, modified}`.                                                               |
+| `GET .../history/{session}`      | Transcript text, ANSI-stripped, tail-capped (`?bytes=`, clamped to 4 MiB).                                                            |
+| `GET /api/projects/{id}/diff`    | `{repo, branch, status, diff}` from git in the workspace. Every workspace is a git repo (R13), so this never 404s for a missing repo. |
 
 ## Checkpoints (ADR-022)
 
@@ -96,29 +99,29 @@ a private index — never on the user's branches, never pushed, invisible to
 terminal pause/close/close-all, and before every restore; manual via the
 Git tab's "Checkpoint now" button or the POST below.
 
-| Method & path | Purpose |
-|---|---|
-| `GET /api/projects/{id}/checkpoints` | Newest first: `{"checkpoints":[{id,time,subject}]}`. |
-| `POST /api/projects/{id}/checkpoints` | Create: `{"label"}` optional (default `"manual"`). **201** `{"id","created":true}`; **200** `{"created":false}` when the tree is unchanged since the newest checkpoint (dedup). |
-| `POST .../checkpoints/{id}/restore` | Rewrite the working tree to that checkpoint exactly (later files deleted; ignored files survive; the user's branches/commits untouched). Snapshots the current state first, so restores are themselves undoable: `{"restored","safetyId"}`. |
+| Method & path                         | Purpose                                                                                                                                                                                                                                     |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/projects/{id}/checkpoints`  | Newest first: `{"checkpoints":[{id,time,subject}]}`.                                                                                                                                                                                        |
+| `POST /api/projects/{id}/checkpoints` | Create: `{"label"}` optional (default `"manual"`). **201** `{"id","created":true}`; **200** `{"created":false}` when the tree is unchanged since the newest checkpoint (dedup).                                                             |
+| `POST .../checkpoints/{id}/restore`   | Rewrite the working tree to that checkpoint exactly (later files deleted; ignored files survive; the user's branches/commits untouched). Snapshots the current state first, so restores are themselves undoable: `{"restored","safetyId"}`. |
 
 ## Settings, profile & admin
 
-| Method & path | Purpose |
-|---|---|
-| `GET /api/settings` | Version, identity (`user`, `username`, `isAdmin`), auth mode, allowed accounts, per-user home, runtime/storage facts, `terminalUsername`, setup status. |
-| `POST /api/settings/profile` | Set `{"terminalUsername"}` — the in-guest username; applies to microVMs started afterwards. Empty resets to the identity slug. |
-| `GET /api/settings/tools` | Per-tool cards from the user's home: git/ssh/github/claude/agy — ready state, details, and claude/agy skills, subagents, commands. |
-| `POST /api/settings/users` · `DELETE /api/settings/users/{email}` | **Admin only** (env-provided accounts). Manage who may sign in; each user gets their own isolated space. |
+| Method & path                                                     | Purpose                                                                                                                                                 |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/settings`                                               | Version, identity (`user`, `username`, `isAdmin`), auth mode, allowed accounts, per-user home, runtime/storage facts, `terminalUsername`, setup status. |
+| `POST /api/settings/profile`                                      | Set `{"terminalUsername"}` — the in-guest username; applies to microVMs started afterwards. Empty resets to the identity slug.                          |
+| `GET /api/settings/tools`                                         | Per-tool cards from the user's home: git/ssh/github/claude/agy — ready state, details, and claude/agy skills, subagents, commands.                      |
+| `POST /api/settings/users` · `DELETE /api/settings/users/{email}` | **Admin only** (env-provided accounts). Manage who may sign in; each user gets their own isolated space.                                                |
 
 ## Setup (first-time onboarding, per user)
 
-| Method & path | Purpose |
-|---|---|
+| Method & path           | Purpose                                                                     |
+| ----------------------- | --------------------------------------------------------------------------- |
 | `GET /api/setup/status` | Probe of the user's home: git/ssh/github/claude/keyring + done + vmRunning. |
-| `POST /api/setup/start` | Boot the user's hidden minimal VM (~1 s). |
-| `POST /api/setup/done` | Write `~/.styrman/setup-done`, destroy the VM. |
-| `DELETE /api/setup` | Destroy the VM without marking done. |
+| `POST /api/setup/start` | Boot the user's hidden minimal VM (~1 s).                                   |
+| `POST /api/setup/done`  | Write `~/.styrman/setup-done`, destroy the VM.                              |
+| `DELETE /api/setup`     | Destroy the VM without marking done.                                        |
 
 ## Misc
 
@@ -126,17 +129,17 @@ Git tab's "Checkpoint now" button or the POST below.
 
 ## Server environment
 
-| Var | Default | Meaning |
-|---|---|---|
-| `STYRMAN_ADDR` | `127.0.0.1:8080` | Main listener |
-| `STYRMAN_DEV_ADDR` | unset | Auth-bypassed second listener — publish on host loopback ONLY |
-| `STYRMAN_AUTH` | `none` | `header` behind the ingress |
-| `STYRMAN_INGRESS_TOKEN` | unset (disabled) | Shared secret the ingress injects as `X-Styrman-Ingress`; header mode rejects requests without it when set — blocks a project VM from spoofing `X-Caddy-Email` directly against the server |
-| `STYRMAN_PREVIEW_BASE` | unset (off) | Public preview host base (ADR-025), e.g. `public.crew.styrman.xyz`; when set, `/link/{token}` is also reachable as `https://{token}.<base>/` and minted link URLs use that form. Fed by `STYRMAN_PUBLIC_DOMAIN` in `deploy/.env` — see deploy.md |
-| `STYRMAN_PRIVATE_BASE` | unset (off) | Private share host base (ADR-026), e.g. `private.crew.styrman.xyz`; when set, `/shared/{token}` is also reachable as `https://{token}.<base>/` and share URLs use that form. Fed by `STYRMAN_PRIVATE_DOMAIN` in `deploy/.env` — see deploy.md |
-| `STYRMAN_ALLOWED_EMAILS` | — | Admin accounts (comma-sep); first one is the dev-listener identity |
-| `STYRMAN_STATE_DIR` | `/var/lib/styrman` | Root: `homes/<user>`, `users/<user>/*.json`, `users.json` |
-| `STYRMAN_IMAGE` / `STYRMAN_RUNTIME` | `styrman-runtime:latest` / `mvm` | Project microVM image + runtime |
-| `STYRMAN_SELF_CONTAINER` | unset | The server's own container name (containerized deploys) |
-| `STYRMAN_USER` | OS user | Dev-mode default identity when no allowed emails |
-| `STYRMAN_DOCKER_DISK_GB` / `STYRMAN_KEYRING_PW` / `STYRMAN_IDLE_TIMEOUT` | 20 / styrman / 24h | Per-project disk, guest keyring, idle stop |
+| Var                                                                      | Default                          | Meaning                                                                                                                                                                                                                                          |
+| ------------------------------------------------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `STYRMAN_ADDR`                                                           | `127.0.0.1:8080`                 | Main listener                                                                                                                                                                                                                                    |
+| `STYRMAN_DEV_ADDR`                                                       | unset                            | Auth-bypassed second listener — publish on host loopback ONLY                                                                                                                                                                                    |
+| `STYRMAN_AUTH`                                                           | `none`                           | `header` behind the ingress                                                                                                                                                                                                                      |
+| `STYRMAN_INGRESS_TOKEN`                                                  | unset (disabled)                 | Shared secret the ingress injects as `X-Styrman-Ingress`; header mode rejects requests without it when set — blocks a project VM from spoofing `X-Caddy-Email` directly against the server                                                       |
+| `STYRMAN_PREVIEW_BASE`                                                   | unset (off)                      | Public preview host base (ADR-025), e.g. `public.crew.styrman.xyz`; when set, `/link/{token}` is also reachable as `https://{token}.<base>/` and minted link URLs use that form. Fed by `STYRMAN_PUBLIC_DOMAIN` in `deploy/.env` — see deploy.md |
+| `STYRMAN_PRIVATE_BASE`                                                   | unset (off)                      | Private share host base (ADR-026), e.g. `private.crew.styrman.xyz`; when set, `/shared/{token}` is also reachable as `https://{token}.<base>/` and share URLs use that form. Fed by `STYRMAN_PRIVATE_DOMAIN` in `deploy/.env` — see deploy.md    |
+| `STYRMAN_ALLOWED_EMAILS`                                                 | —                                | Admin accounts (comma-sep); first one is the dev-listener identity                                                                                                                                                                               |
+| `STYRMAN_STATE_DIR`                                                      | `/var/lib/styrman`               | Root: `homes/<user>`, `users/<user>/*.json`, `users.json`                                                                                                                                                                                        |
+| `STYRMAN_IMAGE` / `STYRMAN_RUNTIME`                                      | `styrman-runtime:latest` / `mvm` | Project microVM image + runtime                                                                                                                                                                                                                  |
+| `STYRMAN_SELF_CONTAINER`                                                 | unset                            | The server's own container name (containerized deploys)                                                                                                                                                                                          |
+| `STYRMAN_USER`                                                           | OS user                          | Dev-mode default identity when no allowed emails                                                                                                                                                                                                 |
+| `STYRMAN_DOCKER_DISK_GB` / `STYRMAN_KEYRING_PW` / `STYRMAN_IDLE_TIMEOUT` | 20 / styrman / 24h               | Per-project disk, guest keyring, idle stop                                                                                                                                                                                                       |

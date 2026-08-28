@@ -37,6 +37,15 @@ Deferred work items. Not blocking current work, but should be addressed later.
 
 - [ ] Makefile target for Artifact Registry push if styrman ever leaves this host (added 2026-08-26)
 
+## Post-v1.3 roadmap (operator-approved 2026-08-28, from competitor research)
+
+- [ ] Checkpoints that include `~/.claude` (and agy state) so a restore also
+      rolls back the agent's memory (Replit/Sprites pattern)
+- [ ] Platform API as an MCP server — agents manage their own ports/snapshots/
+      restarts (Fly Sprites pattern)
+- [ ] Warm VM pool of 1 — pre-booted generic microVM claimed on new-project
+      (Daytona/Coder prebuild pattern)
+
 ## Ideas / Nice-to-Have
 
 - [ ] Artifacts / files-changed right-rail panes (Antigravity-style) fed by git diff (added 2026-08-26)

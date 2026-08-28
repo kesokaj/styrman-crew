@@ -55,6 +55,58 @@ export function FileExplorer({ project }: { project: string }) {
 
   const crumbs = path ? path.split("/") : [];
 
+  // A file/dir name typed by the user; rejects separators and dot-navigation.
+  const validName = (name: string | null): name is string => {
+    const n = name?.trim() ?? "";
+    return n !== "" && n !== "." && n !== ".." && !n.includes("/");
+  };
+
+  // The open editor must not survive its file being renamed/deleted — Save
+  // on the stale path would recreate what the user just removed.
+  const closeIfOpen = (entryPath: string) => {
+    setOpen((o) =>
+      o && (o.path === entryPath || o.path.startsWith(entryPath + "/"))
+        ? null
+        : o,
+    );
+  };
+
+  const newFolder = () => {
+    const name = prompt("New folder name (in the current directory):");
+    if (!validName(name)) return;
+    tryUI(async () => {
+      await api.makeDir(scope, path ? `${path}/${name.trim()}` : name.trim());
+      load();
+    });
+  };
+
+  const renameEntry = (e: FileEntry) => {
+    const name = prompt("Rename to:", e.name);
+    if (!validName(name) || name.trim() === e.name) return;
+    const dir = e.path.includes("/")
+      ? e.path.slice(0, e.path.lastIndexOf("/"))
+      : "";
+    tryUI(async () => {
+      await api.renameFile(
+        scope,
+        e.path,
+        dir ? `${dir}/${name.trim()}` : name.trim(),
+      );
+      closeIfOpen(e.path);
+      load();
+    });
+  };
+
+  const deleteEntry = (e: FileEntry) => {
+    const what = e.dir ? `"${e.name}" and everything inside it` : `"${e.name}"`;
+    if (!confirm(`Delete ${what}?`)) return;
+    tryUI(async () => {
+      await api.deleteFile(scope, e.path);
+      closeIfOpen(e.path);
+      load();
+    });
+  };
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-1 border-b border-border px-2 py-1.5 text-xs">
@@ -96,6 +148,13 @@ export function FileExplorer({ project }: { project: string }) {
           title="New file"
         >
           ＋
+        </button>
+        <button
+          onClick={newFolder}
+          className="px-1 text-text-dim hover:text-accent"
+          title="New folder"
+        >
+          ⊞
         </button>
         <label className="cursor-pointer px-1 text-text-dim hover:text-accent" title="Upload files">
           ↥
@@ -204,6 +263,26 @@ export function FileExplorer({ project }: { project: string }) {
                 ↓
               </a>
             )}
+            <button
+              onClick={(ev) => {
+                ev.stopPropagation();
+                renameEntry(e);
+              }}
+              className="invisible shrink-0 text-text-dim hover:text-accent group-hover:visible"
+              title="Rename"
+            >
+              ✎
+            </button>
+            <button
+              onClick={(ev) => {
+                ev.stopPropagation();
+                deleteEntry(e);
+              }}
+              className="invisible shrink-0 text-text-dim hover:text-danger group-hover:visible"
+              title="Delete"
+            >
+              ⨯
+            </button>
           </div>
         ))}
       </div>

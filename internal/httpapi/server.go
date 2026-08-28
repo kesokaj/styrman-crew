@@ -25,6 +25,7 @@ import (
 
 	"github.com/kesokaj/styrman-crew/internal/config"
 	"github.com/kesokaj/styrman-crew/internal/conversation"
+	"github.com/kesokaj/styrman-crew/internal/dotfiles"
 	"github.com/kesokaj/styrman-crew/internal/files"
 	"github.com/kesokaj/styrman-crew/internal/gitrepo"
 	"github.com/kesokaj/styrman-crew/internal/identity"
@@ -67,17 +68,28 @@ type Server struct {
 	// concurrent PUTs can't interleave into "shares without a link" (or the
 	// reverse). Consistency only — authz re-checks the list on every request.
 	sharesMu sync.Mutex
+
+	// deletingMu guards both maps (key user+"/"+projectID): deleting tracks
+	// in-flight background destroys so the UI can show a "deleting" state, a
+	// repeated DELETE is idempotent, and boot paths refuse to resurrect the
+	// container mid-destroy; deleteErrs keeps the last failed destroy's
+	// message so a 202'd delete that later fails is not silently invisible.
+	deletingMu sync.Mutex
+	deleting   map[string]bool
+	deleteErrs map[string]string
 }
 
 // New creates the Server.
 func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestrator, logger *slog.Logger) *Server {
 	s := &Server{
-		cfg:    cfg,
-		orch:   orch,
-		tmux:   conversation.NewManager(orch, cfg),
-		users:  users,
-		logger: logger,
-		spaces: map[string]*userSpace{},
+		cfg:        cfg,
+		orch:       orch,
+		tmux:       conversation.NewManager(orch, cfg),
+		users:      users,
+		logger:     logger,
+		spaces:     map[string]*userSpace{},
+		deleting:   map[string]bool{},
+		deleteErrs: map[string]string{},
 	}
 	// Public preview-link store (best-effort: a load failure degrades to
 	// no-links, never blocks server start).
@@ -92,6 +104,12 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 
 // ensureFor lets the WS bridge boot a project it only knows by user+UUID.
 func (s *Server) ensureFor(ctx context.Context, user, projectID string) (containerID, guestUser, dir string, err error) {
+	// A terminal WS auto-reconnects when its container is force-removed —
+	// without this guard it would resurrect the container mid-destroy and
+	// leave an orphan microVM with no project record.
+	if inFlight, _ := s.deletingState(user, projectID); inFlight {
+		return "", "", "", fmt.Errorf("project is being deleted")
+	}
 	sp, err := s.space(user)
 	if err != nil {
 		return "", "", "", err
@@ -154,35 +172,40 @@ func (s *Server) termStoreFor(user string) (terminal.TermStore, error) {
 	return sp.terms, nil
 }
 
-// ensureHome creates a user's home skeleton on first sight. SSH keys and
-// agent credentials come from styrman-setup inside the guest, not here.
+// ensureHome creates a user's home skeleton and deploys the shell dotfiles.
+// Deliberately NOT gated on the home existing: it is per-file idempotent, and
+// the old whole-home early-return meant a migrated or externally-created home
+// never got a .bashrc at all. SSH keys and agent credentials come from
+// styrman-setup inside the guest, not here.
 func (s *Server) ensureHome(user string) error {
 	home := s.cfg.UserHome(user)
-	if _, err := os.Stat(home); err == nil {
-		return nil
+	if _, err := os.Stat(home); err != nil {
+		s.logger.Info("creating home for new user", "user", user, "home", home)
 	}
-	s.logger.Info("creating home for new user", "user", user, "home", home)
+	// The home path itself is server-controlled; everything underneath is
+	// guest-writable, so all nested operations go through os.Root — a
+	// guest-planted symlink must not redirect them outside the home.
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return err
+	}
+	os.Chmod(home, 0o700) // MkdirAll applies the mode only on create
+	rt, err := os.OpenRoot(home)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
 	for _, d := range []string{
 		"projects", ".ssh", ".styrman", ".config", ".cache",
-		filepath.Join(".local", "bin"), filepath.Join(".local", "share", "keyrings"),
+		".local/bin", ".local/share/keyrings",
 	} {
-		if err := os.MkdirAll(filepath.Join(home, d), 0o755); err != nil {
+		if err := rt.MkdirAll(d, 0o755); err != nil {
 			return err
 		}
 	}
-	os.Chmod(home, 0o700)
-	os.Chmod(filepath.Join(home, ".ssh"), 0o700)
-	writeOnce := func(name, content string, mode os.FileMode) {
-		p := filepath.Join(home, name)
-		if _, err := os.Stat(p); os.IsNotExist(err) {
-			_ = os.WriteFile(p, []byte(content), mode)
-		}
+	rt.Chmod(".ssh", 0o700)
+	if err := dotfiles.Deploy(home); err != nil {
+		s.logger.Warn("dotfiles deploy incomplete", "user", user, "error", err)
 	}
-	writeOnce(".bashrc", "# styrman home\ncase $- in *i*) ;; *) return ;; esac\n[ -f ~/.bash_aliases ] && . ~/.bash_aliases\n[ -f ~/.bash_exports ] && . ~/.bash_exports\n[ -f ~/.bash_secrets ] && . ~/.bash_secrets\nexport PATH=\"$HOME/.local/bin:$HOME/go/bin:$PATH\"\nPS1=\"\\[\\e[36m\\]\\u@\\h\\[\\e[0m\\]:\\[\\e[34m\\]\\w\\[\\e[0m\\]\\$ \"\n", 0o644)
-	writeOnce(".profile", "[ -n \"$BASH_VERSION\" ] && [ -f \"$HOME/.bashrc\" ] && . \"$HOME/.bashrc\"\n", 0o644)
-	writeOnce(".bash_aliases", "alias ll=\"ls -la\"\n", 0o644)
-	writeOnce(".bash_exports", "export EDITOR=vim\n", 0o644)
-	writeOnce(".bash_secrets", "# per-user secrets (never overwritten)\n", 0o600)
 	return nil
 }
 
@@ -243,11 +266,17 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("GET /api/projects/{project}/files", s.listFiles)
 	mux.HandleFunc("GET /api/projects/{project}/file", s.readFile)
 	mux.HandleFunc("PUT /api/projects/{project}/file", s.writeFile)
+	mux.HandleFunc("DELETE /api/projects/{project}/file", s.deleteFile)
+	mux.HandleFunc("POST /api/projects/{project}/file/rename", s.renameFile)
+	mux.HandleFunc("POST /api/projects/{project}/mkdir", s.makeDir)
 	mux.HandleFunc("POST /api/projects/{project}/upload", s.uploadFile)
 	mux.HandleFunc("GET /api/projects/{project}/download", s.downloadFile)
 	mux.HandleFunc("GET /api/home/files", s.listFiles)
 	mux.HandleFunc("GET /api/home/file", s.readFile)
 	mux.HandleFunc("PUT /api/home/file", s.writeFile)
+	mux.HandleFunc("DELETE /api/home/file", s.deleteFile)
+	mux.HandleFunc("POST /api/home/file/rename", s.renameFile)
+	mux.HandleFunc("POST /api/home/mkdir", s.makeDir)
 	mux.HandleFunc("POST /api/home/upload", s.uploadFile)
 	mux.HandleFunc("GET /api/home/download", s.downloadFile)
 	// What happened: terminal transcripts + working-tree diff.
@@ -405,10 +434,16 @@ func csrfGuard(next http.Handler) http.Handler {
 					return
 				}
 			}
-			// Uploads carry real payloads; everything else is small JSON.
+			// Uploads carry real payloads; editor saves carry file content
+			// (2 MiB read cap × JSON escaping overhead — without the higher
+			// cap a 1–2 MiB file opens editable but can never save);
+			// everything else is small JSON.
 			limit := int64(1 << 20)
-			if strings.HasSuffix(r.URL.Path, "/upload") {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/upload"):
 				limit = 512 << 20
+			case strings.HasSuffix(r.URL.Path, "/file"):
+				limit = 8 << 20
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}
@@ -436,6 +471,10 @@ func (s *Server) getProjectFor(r *http.Request) (identity.User, *userSpace, proj
 type projectView struct {
 	project.Project
 	State string `json:"state"`
+	// DeleteError carries the last failed background destroy's message —
+	// the DELETE already answered 202, so this is the only way the user
+	// learns the delete didn't stick.
+	DeleteError string `json:"deleteError,omitempty"`
 }
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
@@ -455,7 +494,11 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 		if st, ok := statuses[u.Username+"/"+p.ID]; ok {
 			state = st.State
 		}
-		out = append(out, projectView{Project: p, State: state})
+		inFlight, delErr := s.deletingState(u.Username, p.ID)
+		if inFlight {
+			state = "deleting"
+		}
+		out = append(out, projectView{Project: p, State: state, DeleteError: delErr})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": out})
 }
@@ -542,6 +585,11 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	// readiness anyway (per-project lock serializes with this boot).
 	guest := sp.profile.GuestUser()
 	go func() {
+		defer func() { // outlives the request — net/http's recover doesn't cover it
+			if rec := recover(); rec != nil {
+				s.logger.Error("background project boot panicked", "project", p.Name, "panic", rec)
+			}
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
 		containerID, err := s.orch.EnsureRunning(ctx, u.Username, p.ID,
@@ -614,60 +662,116 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, projectView{Project: p, State: st.State})
+	state := st.State
+	inFlight, delErr := s.deletingState(u.Username, p.ID)
+	if inFlight {
+		state = "deleting"
+	}
+	writeJSON(w, http.StatusOK, projectView{Project: p, State: state, DeleteError: delErr})
 }
 
+// deleteProject responds 202 and destroys in the background: a Kata VM
+// teardown can legitimately take minutes, far past any sane fetch timeout,
+// and a dropped connection used to surface as "Failed to fetch" for a delete
+// that then completed anyway. The UI polls the project list; the project
+// shows state "deleting" until the record disappears.
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	u, sp, p, err := s.getProjectFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	// Detached context: a client that gives up must not cancel a half-done
-	// destroy and strand container-gone/record-present state.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	if err := s.orch.Destroy(ctx, u.Username, p.ID); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
+	key := u.Username + "/" + p.ID
+	s.deletingMu.Lock()
+	if s.deleting[key] {
+		s.deletingMu.Unlock()
+		w.WriteHeader(http.StatusAccepted) // already in flight — idempotent
 		return
 	}
-	// wipe=true also removes the workspace, docker storage, and transcripts
-	// — irreversible, so it is opt-in per request.
-	if r.URL.Query().Get("wipe") == "true" {
-		home := s.cfg.UserHome(u.Username)
-		// Confined removal: a guest that symlinked ~/projects at another
-		// tenant's home must not make this RemoveAll recurse into it.
-		for _, rel := range []string{
-			"projects/" + p.Dir,
-			".dockerd/" + p.ID + ".img",
-			".dockerd/" + p.ID,
-			".styrman/logs/" + p.ID,
-		} {
-			if err := files.RemoveAll(home, rel); err != nil {
-				s.logger.Warn("wipe failed", "project", p.ID, "path", rel, "error", err)
+	s.deleting[key] = true
+	delete(s.deleteErrs, key) // a fresh attempt clears the previous failure
+	s.deletingMu.Unlock()
+	wipe := r.URL.Query().Get("wipe") == "true"
+	go func() {
+		defer func() {
+			// This goroutine outlives the request and net/http's per-request
+			// recover — a panic here would take down the whole server.
+			if rec := recover(); rec != nil {
+				s.logger.Error("project delete panicked", "project", p.Name, "panic", rec)
+				s.deletingMu.Lock()
+				s.deleteErrs[key] = "internal error during delete"
+				s.deletingMu.Unlock()
+			}
+			s.deletingMu.Lock()
+			delete(s.deleting, key)
+			s.deletingMu.Unlock()
+		}()
+		// Detached context: nothing client-side can cancel a half-done
+		// destroy and strand container-gone/record-present state.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if err := s.orch.Destroy(ctx, u.Username, p.ID); err != nil {
+			// Record stays; the project reappears in the list (flagged with
+			// deleteError) and the user can retry.
+			s.logger.Error("project destroy failed", "project", p.Name, "error", err)
+			s.deletingMu.Lock()
+			s.deleteErrs[key] = err.Error()
+			s.deletingMu.Unlock()
+			return
+		}
+		// wipe=true also removes the workspace, docker storage, and
+		// transcripts — irreversible, so it is opt-in per request.
+		if wipe {
+			home := s.cfg.UserHome(u.Username)
+			// Confined removal: a guest that symlinked ~/projects at another
+			// tenant's home must not make this RemoveAll recurse into it.
+			for _, rel := range []string{
+				"projects/" + p.Dir,
+				".dockerd/" + p.ID + ".img",
+				".dockerd/" + p.ID,
+				".styrman/logs/" + p.ID,
+			} {
+				if err := files.RemoveAll(home, rel); err != nil {
+					s.logger.Warn("wipe failed", "project", p.ID, "path", rel, "error", err)
+				}
 			}
 		}
-	}
-	if err := sp.projects.Remove(p.ID); err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	if err := sp.terms.DeleteProject(p.ID); err != nil {
-		s.logger.Warn("terminal records cleanup failed", "project", p.Name, "error", err)
-	}
-	// S8: public links must not outlive the project they point at.
-	if s.links != nil {
-		if err := s.links.DeleteProject(p.ID); err != nil {
-			s.logger.Warn("public-link cleanup failed", "project", p.Name, "error", err)
+		if err := sp.projects.Remove(p.ID); err != nil {
+			s.logger.Error("project record removal failed", "project", p.Name, "error", err)
+			return
 		}
-	}
-	w.WriteHeader(http.StatusNoContent)
+		if err := sp.terms.DeleteProject(p.ID); err != nil {
+			s.logger.Warn("terminal records cleanup failed", "project", p.Name, "error", err)
+		}
+		// S8: public links must not outlive the project they point at.
+		if s.links != nil {
+			if err := s.links.DeleteProject(p.ID); err != nil {
+				s.logger.Warn("public-link cleanup failed", "project", p.Name, "error", err)
+			}
+		}
+	}()
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// deletingState reports whether a background destroy is in flight for the
+// project, plus the last destroy failure (empty if none), for the list/get
+// views and the boot-path guards.
+func (s *Server) deletingState(user, projectID string) (inFlight bool, lastErr string) {
+	s.deletingMu.Lock()
+	defer s.deletingMu.Unlock()
+	key := user + "/" + projectID
+	return s.deleting[key], s.deleteErrs[key]
 }
 
 func (s *Server) startProject(w http.ResponseWriter, r *http.Request) {
 	u, sp, p, err := s.getProjectFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	// Same resurrection guard as ensureFor.
+	if inFlight, _ := s.deletingState(u.Username, p.ID); inFlight {
+		writeErr(w, http.StatusConflict, errors.New("project is being deleted"))
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)

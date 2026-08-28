@@ -22,29 +22,12 @@ done
 [[ -w "${HOME_DIR}" ]] || { echo "FATAL: ${HOME_DIR} not writable — run host-setup.sh first"; exit 1; }
 
 log() { echo "==> $*"; }
-put_once() { # $1=dest $2=content — write only if absent
-    if [[ ! -e "${HOME_DIR}/$1" ]]; then
-        printf '%s\n' "$2" > "${HOME_DIR}/$1"
-        log "created ~/$1"
-    fi
-}
-
 mkdir -p "${HOME_DIR}"/{projects,.ssh,.dockerd,.config,.cache,.local/bin,.local/share/keyrings}
 chmod 700 "${HOME_DIR}" "${HOME_DIR}/.ssh"   # the home holds credentials (R3/R10)
 
-put_once .bashrc '# styrman shared home
-case $- in *i*) ;; *) return ;; esac
-[ -f ~/.bash_aliases ] && . ~/.bash_aliases
-[ -f ~/.bash_exports ] && . ~/.bash_exports
-[ -f ~/.bash_secrets ] && . ~/.bash_secrets
-export PATH="$HOME/.local/bin:$HOME/go/bin:$PATH"
-PS1="\[\e[36m\]\u@\h\[\e[0m\]:\[\e[34m\]\w\[\e[0m\]\$ "'
-put_once .profile '[ -n "$BASH_VERSION" ] && [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"'
-put_once .bash_aliases 'alias ll="ls -la"'
-put_once .bash_exports 'export EDITOR=vim'
-put_once .bash_secrets '# per-user secrets (never overwritten by provisioning; R10)
-# export GEMINI_API_KEY=...   # agy fallback if keyring auth is unavailable'
-chmod 600 "${HOME_DIR}/.bash_secrets"
+# Shell dotfiles (.bashrc/.profile/.bash_aliases/.bash_exports/.bash_secrets)
+# are seeded by the SERVER on start — single source of truth in
+# internal/dotfiles (write-once; recognized old minimal seeds are upgraded).
 
 # SSH key: generate once so R3 ("sign in once, ever") includes git-over-ssh.
 if [[ ! -f "${HOME_DIR}/.ssh/id_ed25519" ]]; then

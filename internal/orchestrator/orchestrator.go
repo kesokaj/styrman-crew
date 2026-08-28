@@ -475,8 +475,13 @@ func (o *Orchestrator) stopIfIdle(ctx context.Context, user, project string) err
 }
 
 // Destroy removes the project's container and network. The workspace and all
-// home-dir state persist; only runtime state is lost.
+// home-dir state persist; only runtime state is lost. Holds the per-project
+// lock: without it, a terminal WS reconnect's EnsureRunning could recreate
+// the container/network mid-removal and leave an orphan behind.
 func (o *Orchestrator) Destroy(ctx context.Context, user, project string) error {
+	l := o.lockProject(key(user, project))
+	l.Lock()
+	defer l.Unlock()
 	err := o.docker.ContainerRemove(ctx, config.ContainerName(project), container.RemoveOptions{Force: true})
 	if err != nil && !errdefs.IsNotFound(err) {
 		return err

@@ -1,0 +1,47 @@
+# styrman userprofile — ported from devbox shell-launcher (trimmed).
+# Seeded write-once by the server (internal/dotfiles); edit freely, it is
+# yours after first creation. Machine-specific bits live in ~/.bash_exports,
+# aliases in ~/.bash_aliases, secrets in ~/.bash_secrets (never overwritten).
+
+# Interactive shells only.
+case $- in *i*) ;; *) return ;; esac
+
+# ─── History ────────────────────────────────────────────────────────────────
+HISTCONTROL=ignoreboth:erasedups
+shopt -s histappend
+HISTSIZE=100000
+HISTFILESIZE=200000
+export HISTTIMEFORMAT="%F %T "
+
+# ─── Shell options + readline ───────────────────────────────────────────────
+shopt -s checkwinsize globstar cdspell autocd histverify 2>/dev/null
+bind "set completion-ignore-case on" 2>/dev/null
+bind '"\e[A": history-search-backward' 2>/dev/null
+bind '"\e[B": history-search-forward' 2>/dev/null
+
+# ─── PATH ───────────────────────────────────────────────────────────────────
+[[ -d "$HOME/.local/bin" ]] && PATH="$HOME/.local/bin:$PATH"
+[[ -d "$HOME/go/bin" ]] && PATH="$HOME/go/bin:$PATH"
+[[ -d "$HOME/.npm-global/bin" ]] && PATH="$HOME/.npm-global/bin:$PATH"
+# Dedup while preserving order.
+export PATH=$(awk -v RS=: -v ORS=: '!seen[$0]++' <<< "$PATH" | sed 's/:$//')
+
+export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+
+[[ -f /usr/share/bash-completion/bash_completion ]] && . /usr/share/bash-completion/bash_completion
+
+# ─── Modular config ─────────────────────────────────────────────────────────
+[[ -f "$HOME/.bash_exports" ]] && . "$HOME/.bash_exports"
+[[ -f "$HOME/.bash_aliases" ]] && . "$HOME/.bash_aliases"
+[[ -f "$HOME/.bash_secrets" ]] && . "$HOME/.bash_secrets"
+
+# ─── Prompt: user@host dir (git-branch), then ❯ on its own line ─────────────
+__git_branch() {
+    local branch
+    branch=$(git symbolic-ref --short HEAD 2>/dev/null || git describe --tags --exact-match 2>/dev/null)
+    [[ -n "$branch" ]] && echo " ($branch)"
+}
+PS1='\[\033[1;36m\]\u\[\033[0;90m\]@\[\033[1;33m\]\h\[\033[0m\] \[\033[1;34m\]\w\[\033[0;32m\]$(__git_branch)\[\033[0m\]\n\[\033[1;35m\]❯\[\033[0m\] '
+
+# Flush history after every command so parallel terminals share it.
+export PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND; }history -a"

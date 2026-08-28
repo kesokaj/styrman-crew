@@ -1,0 +1,4 @@
+# styrman userprofile — login shells hand off to ~/.bashrc.
+if [ -n "$BASH_VERSION" ]; then
+    [ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"
+fi

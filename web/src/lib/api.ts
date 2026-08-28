@@ -7,7 +7,10 @@ export interface Project {
   createdAt: string;
   gitInit: boolean;
   archived: boolean;
-  state: "running" | "stopped" | "absent";
+  state: "running" | "stopped" | "absent" | "creating" | "deleting";
+  /** Last failed background destroy — the DELETE answered 202, so this is
+   * how the user learns the delete didn't stick. */
+  deleteError?: string;
 }
 
 /** A terminal: a durable record whose live view is a tmux session. */
@@ -183,10 +186,19 @@ export const api = {
     request<void>(`/api/projects/${id}${wipe ? "?wipe=true" : ""}`, {
       method: "DELETE",
     }),
+  // Start/stop legitimately take minutes on a slow Kata boot/teardown — the
+  // default 20 s abort made the UI report failures for operations that then
+  // completed server-side.
   startProject: (id: string) =>
-    request<void>(`/api/projects/${id}/start`, { method: "POST" }),
+    request<void>(`/api/projects/${id}/start`, {
+      method: "POST",
+      signal: AbortSignal.timeout(150000),
+    }),
   stopProject: (id: string) =>
-    request<void>(`/api/projects/${id}/stop`, { method: "POST" }),
+    request<void>(`/api/projects/${id}/stop`, {
+      method: "POST",
+      signal: AbortSignal.timeout(150000),
+    }),
 
   listTerminals: (project: string) =>
     request<{ terminals: Terminal[] }>(`/api/projects/${project}/terminals`),
@@ -252,18 +264,35 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ content }),
     }),
+  deleteFile: (scope: Scope, path: string) =>
+    request<void>(`${scopeBase(scope)}/file?path=${encodeURIComponent(path)}`, {
+      method: "DELETE",
+    }),
+  renameFile: (scope: Scope, path: string, to: string) =>
+    request<void>(
+      `${scopeBase(scope)}/file/rename?path=${encodeURIComponent(path)}`,
+      { method: "POST", body: JSON.stringify({ to }) },
+    ),
+  makeDir: (scope: Scope, path: string) =>
+    request<void>(
+      `${scopeBase(scope)}/mkdir?path=${encodeURIComponent(path)}`,
+      { method: "POST" },
+    ),
   downloadUrl: (scope: Scope, path: string) =>
     `${scopeBase(scope)}/download?path=${encodeURIComponent(path)}`,
   uploadFiles: async (scope: Scope, dir: string, fileList: File[]) => {
-    const form = new FormData()
-    for (const f of fileList) form.append('files', f, f.name)
-    const res = await fetch(`${scopeBase(scope)}/upload?path=${encodeURIComponent(dir)}`, {
-      method: 'POST',
-      body: form,
-    })
+    const form = new FormData();
+    for (const f of fileList) form.append("files", f, f.name);
+    const res = await fetch(
+      `${scopeBase(scope)}/upload?path=${encodeURIComponent(dir)}`,
+      {
+        method: "POST",
+        body: form,
+      },
+    );
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}))
-      throw new ApiError(body?.error?.message ?? res.statusText, res.status)
+      const body = await res.json().catch(() => ({}));
+      throw new ApiError(body?.error?.message ?? res.statusText, res.status);
     }
   },
 
