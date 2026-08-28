@@ -281,6 +281,7 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("GET /api/home/download", s.downloadFile)
 	// What happened: terminal transcripts + working-tree diff.
 	mux.HandleFunc("GET /api/projects/{project}/history", s.listHistory)
+	mux.HandleFunc("GET /api/projects/{project}/history/search", s.searchHistory)
 	mux.HandleFunc("GET /api/projects/{project}/history/{id}", s.readHistory)
 	mux.HandleFunc("GET /api/projects/{project}/diff", s.projectDiff)
 	// Checkpoints: whole-tree snapshots under refs/styrman/* (R13).
@@ -293,6 +294,7 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("POST /api/settings/profile", s.updateProfile)
 	mux.HandleFunc("PATCH /api/projects/{project}", s.renameProject)
 	mux.HandleFunc("GET /api/settings/tools", s.toolDetails)
+	mux.HandleFunc("PATCH /api/settings/runtime", s.updateRuntime)
 	mux.HandleFunc("POST /api/settings/users", s.addUser)
 	mux.HandleFunc("DELETE /api/settings/users/{email}", s.removeUser)
 	mux.HandleFunc("GET /api/setup/status", s.getSetupStatus)

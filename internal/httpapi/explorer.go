@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kesokaj/styrman-crew/internal/conversation"
 	"github.com/kesokaj/styrman-crew/internal/files"
 	"github.com/kesokaj/styrman-crew/internal/history"
 	"github.com/kesokaj/styrman-crew/internal/identity"
@@ -272,9 +273,27 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, path.Base(rel), st.ModTime(), f)
 }
 
+// transcriptView joins a transcript file with its terminal's friendly title
+// (the file is named after the tmux session, conv-<terminal id>).
+type transcriptView struct {
+	history.Transcript
+	Title string `json:"title,omitempty"`
+}
+
+// transcriptTitles maps transcript id (conv-<n>) → the terminal's friendly
+// title, for terminals whose record still exists (deleted ones keep only
+// the raw id — the transcript deliberately outlives the record).
+func (s *Server) transcriptTitles(sp *userSpace, projectID string) map[string]string {
+	titles := map[string]string{}
+	for _, rec := range sp.terms.List(projectID) {
+		titles[conversation.Prefix+rec.ID] = rec.Title
+	}
+	return titles
+}
+
 // listHistory returns the project's terminal transcripts.
 func (s *Server) listHistory(w http.ResponseWriter, r *http.Request) {
-	u, _, p, err := s.getProjectFor(r)
+	u, sp, p, err := s.getProjectFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
@@ -284,7 +303,42 @@ func (s *Server) listHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"transcripts": items})
+	titles := s.transcriptTitles(sp, p.ID)
+	out := make([]transcriptView, 0, len(items))
+	for _, t := range items {
+		out = append(out, transcriptView{Transcript: t, Title: titles[t.ID]})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"transcripts": out})
+}
+
+// searchHistory greps all of the project's transcripts (agent sessions
+// included — they're raw PTY captures) for ?q=, case-insensitive.
+func (s *Server) searchHistory(w http.ResponseWriter, r *http.Request) {
+	u, sp, p, err := s.getProjectFor(r)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	q := r.URL.Query().Get("q")
+	if len(q) > 256 {
+		writeErr(w, http.StatusBadRequest, errors.New("query too long"))
+		return
+	}
+	matches, err := history.Search(r.Context(), s.cfg.UserHome(u.Username), p.ID, q)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	titles := s.transcriptTitles(sp, p.ID)
+	type matchView struct {
+		history.Match
+		Title string `json:"title,omitempty"`
+	}
+	out := make([]matchView, 0, len(matches))
+	for _, m := range matches {
+		out = append(out, matchView{Match: m, Title: titles[m.Transcript]})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"matches": out})
 }
 
 func (s *Server) readHistory(w http.ResponseWriter, r *http.Request) {
@@ -342,24 +396,72 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	if email == "" {
 		email = "(local operator)"
 	}
+	// allowedUsers is deliberately NOT in this payload anymore: the runtime
+	// user-management UI was removed (operator Q4, 2026-08-28) — access is
+	// managed via STYRMAN_ALLOWED_EMAILS plus the admin-only /settings/users
+	// endpoints, and the list shouldn't leak to non-admin sessions.
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":          Version,
 		"user":             email,
 		"username":         u.Username,
 		"isAdmin":          u.Admin,
 		"authMode":         s.cfg.AuthMode,
-		"allowedUsers":     s.users.List(),
 		"homeDir":          s.cfg.UserHome(u.Username),
 		"stateDir":         s.cfg.StateDir,
 		"image":            s.cfg.Image,
 		"runtime":          s.cfg.Runtime,
-		"dockerDiskGB":     s.cfg.DockerDisk,
-		"idleTimeout":      s.cfg.IdleTimeout.String(),
+		"dockerDiskGB":     s.cfg.DockerDiskGB(),
+		"idleTimeout":      s.cfg.IdleTimeoutD().String(),
 		"terminalUsername": s.guestUserFor(u.Username),
 		// Whether the user explicitly picked a terminal username (vs. the
 		// email-derived default) — the setup flow skips the picker if so.
 		"terminalUsernameChosen": s.usernameChosen(u.Username),
 		"setupComplete":          s.userSetupStatus(r.Context(), u.Username).Done,
+	})
+}
+
+// updateRuntime changes the operator-tunable settings (admin only): idle
+// timeout applies to the reaper immediately; docker disk applies to newly
+// created project VMs. Persisted in StateDir/settings.json.
+func (s *Server) updateRuntime(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	var body struct {
+		DockerDiskGB int    `json:"dockerDiskGB"`
+		IdleTimeout  string `json:"idleTimeout"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	// Validation → 400 here; anything SetOperator returns after this is a
+	// persistence failure → 500 (disk full is not the client's fault).
+	if body.DockerDiskGB != 0 && (body.DockerDiskGB < 5 || body.DockerDiskGB > 500) {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("docker disk must be 5-500 GB"))
+		return
+	}
+	idle := time.Duration(-1) // keep
+	if body.IdleTimeout != "" {
+		d, err := time.ParseDuration(body.IdleTimeout)
+		if err != nil || d < 0 || (d > 0 && d < 10*time.Minute) {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("idle timeout must be 0 (never) or at least 10m"))
+			return
+		}
+		idle = d
+	}
+	if err := s.cfg.SetOperator(body.DockerDiskGB, idle); err != nil {
+		s.logger.Error("runtime settings persist failed", "error", err)
+		writeErr(w, http.StatusInternalServerError, errors.New("cannot persist settings"))
+		return
+	}
+	s.logger.Info("runtime settings changed",
+		"by", identity.FromContext(r.Context()).Email,
+		"dockerDiskGB", s.cfg.DockerDiskGB(),
+		"idleTimeout", s.cfg.IdleTimeoutD().String())
+	writeJSON(w, http.StatusOK, map[string]any{
+		"dockerDiskGB": s.cfg.DockerDiskGB(),
+		"idleTimeout":  s.cfg.IdleTimeoutD().String(),
 	})
 }
 

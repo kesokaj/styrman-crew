@@ -2,7 +2,7 @@ import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { api, tryUI, type ToolInfo } from "../lib/api";
 import { usePolled, useTheme, type ThemePref } from "../lib/hooks";
-import { ConfirmDialog } from "../components/ui";
+import { toast } from "../lib/toast";
 
 export const Route = createFileRoute("/settings")({ component: SettingsPage });
 
@@ -156,21 +156,6 @@ function SettingsPage() {
   const { data, refresh } = usePolled(() => api.settings(), 15000);
   const { data: toolData } = usePolled(() => api.tools(), 20000);
   const { pref, setPref } = useTheme();
-  const [newUser, setNewUser] = useState("");
-  const [revoking, setRevoking] = useState<string | null>(null);
-
-  const addUser = () =>
-    tryUI(async () => {
-      await api.addUser(newUser.trim());
-      setNewUser("");
-      refresh();
-    });
-
-  const removeUser = (email: string) =>
-    tryUI(async () => {
-      await api.removeUser(email);
-      refresh();
-    });
 
   if (!data)
     return <div className="p-6 text-xs text-text-dim">Loading settings…</div>;
@@ -224,50 +209,6 @@ function SettingsPage() {
           <ToolCard key={t.name} tool={t} />
         ))}
 
-        {data.isAdmin && (
-          <Section title="Admin — user access">
-            <Row label="Allowed accounts">
-              <div className="space-y-1 py-1">
-                {data.allowedUsers.map((u) => (
-                  <div key={u} className="flex items-center gap-2">
-                    <span>{u}</span>
-                    <button
-                      onClick={() => setRevoking(u)}
-                      className="text-text-dim hover:text-danger"
-                      title="Revoke"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-                <div className="flex gap-1 pt-1">
-                  <input
-                    value={newUser}
-                    onChange={(e) => setNewUser(e.target.value)}
-                    onKeyDown={(e) =>
-                      e.key === "Enter" && newUser.includes("@") && addUser()
-                    }
-                    placeholder="person@gmail.com"
-                    className="flex-1 rounded border border-border bg-bg px-2 py-1 outline-none focus:border-accent"
-                  />
-                  <button
-                    onClick={addUser}
-                    disabled={!newUser.includes("@")}
-                    className="rounded bg-accent px-2 py-1 font-medium text-on-accent disabled:opacity-40"
-                  >
-                    Add
-                  </button>
-                </div>
-                <p className="pt-1 text-[11px] text-text-dim">
-                  Each account gets its own home, projects, and setup — they
-                  never see yours. Your admin account comes from the
-                  deployment's env and cannot be revoked here.
-                </p>
-              </div>
-            </Row>
-          </Section>
-        )}
-
         <Section title="Appearance">
           <Row label="Theme">
             <div
@@ -306,8 +247,18 @@ function SettingsPage() {
           <Row label="Container runtime">
             {data.runtime} {data.runtime === "mvm" && "(Kata microVM)"}
           </Row>
-          <Row label="Docker disk / project">{data.dockerDiskGB} GB</Row>
-          <Row label="Idle stop after">{data.idleTimeout}</Row>
+          {data.isAdmin ? (
+            <RuntimeEditor
+              dockerDiskGB={data.dockerDiskGB}
+              idleTimeout={data.idleTimeout}
+              onSaved={refresh}
+            />
+          ) : (
+            <>
+              <Row label="Docker disk / project">{data.dockerDiskGB} GB</Row>
+              <Row label="Idle stop after">{data.idleTimeout}</Row>
+            </>
+          )}
         </Section>
 
         <Section title="Storage">
@@ -318,16 +269,88 @@ function SettingsPage() {
           </Row>
         </Section>
       </div>
-      {revoking && (
-        <ConfirmDialog
-          title={`Revoke access for ${revoking}?`}
-          body="Their home and projects stay on disk; they just can't sign in anymore."
-          confirmLabel="Revoke"
-          danger
-          onConfirm={() => removeUser(revoking)}
-          onClose={() => setRevoking(null)}
-        />
-      )}
     </div>
+  );
+}
+
+/** Admin-editable runtime tunables. Disk applies to newly created project
+ *  VMs; idle timeout applies to the reaper immediately. */
+function RuntimeEditor({
+  dockerDiskGB,
+  idleTimeout,
+  onSaved,
+}: {
+  dockerDiskGB: number;
+  idleTimeout: string;
+  onSaved: () => void;
+}) {
+  const [disk, setDisk] = useState(String(dockerDiskGB));
+  const [idle, setIdle] = useState(idleTimeout);
+  const [busy, setBusy] = useState(false);
+  const dirty = disk !== String(dockerDiskGB) || idle !== idleTimeout;
+  // A typed 0 (or cleared field) must be a visible error, not a silent
+  // "keep" — the API treats 0 as keep-current (review finding).
+  const diskValid = Number(disk) >= 5 && Number(disk) <= 500;
+
+  const save = () =>
+    tryUI(async () => {
+      setBusy(true);
+      try {
+        const r = await api.updateRuntime({
+          dockerDiskGB: Number(disk),
+          idleTimeout: idle.trim(),
+        });
+        setDisk(String(r.dockerDiskGB));
+        setIdle(r.idleTimeout);
+        toast("success", "Runtime settings saved");
+        onSaved();
+      } finally {
+        setBusy(false);
+      }
+    });
+
+  return (
+    <>
+      <Row label="Docker disk / project">
+        <span className="flex items-center gap-2">
+          <input
+            value={disk}
+            onChange={(e) => setDisk(e.target.value.replace(/\D/g, ""))}
+            className="w-16 rounded border border-border bg-bg px-2 py-1 text-right outline-none focus:border-accent"
+            aria-label="Docker disk in GB"
+          />
+          <span className="text-text-dim">GB — applies to new project VMs</span>
+        </span>
+      </Row>
+      <Row label="Idle stop after">
+        <span className="flex items-center gap-2">
+          <input
+            value={idle}
+            onChange={(e) => setIdle(e.target.value)}
+            className="w-24 rounded border border-border bg-bg px-2 py-1 outline-none focus:border-accent"
+            aria-label="Idle timeout (Go duration, 0s = never)"
+          />
+          <span className="text-text-dim">
+            e.g. 24h, 90m — 0s never stops; applies immediately
+          </span>
+        </span>
+      </Row>
+      {dirty && (
+        <Row label="">
+          <span className="flex items-center gap-2">
+            <button
+              onClick={save}
+              disabled={busy || !diskValid}
+              className="my-1 rounded bg-accent px-2.5 py-1 font-medium text-on-accent disabled:opacity-40"
+            >
+              {busy ? "Saving…" : "Save runtime settings"}
+            </button>
+            {!diskValid && (
+              <span className="text-danger">disk must be 5–500 GB</span>
+            )}
+          </span>
+        </Row>
+      )}
+    </>
   );
 }

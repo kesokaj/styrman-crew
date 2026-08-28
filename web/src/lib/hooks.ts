@@ -56,8 +56,21 @@ export function usePolled<T>(
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, intervalMs);
-    return () => clearInterval(t);
+    // A hidden tab keeps its data but stops generating load (the dashboard
+    // alone would otherwise sustain N×M polls forever in a background tab);
+    // refresh immediately on return so the view is fresh when seen.
+    const t = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      refresh();
+    }, intervalMs);
+    const onVisible = () => {
+      if (!document.hidden) refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [refresh, intervalMs]);
 
   return { data, refresh, error };

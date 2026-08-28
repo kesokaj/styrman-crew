@@ -134,7 +134,7 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 			extraEnv: []string{
 				config.EnvProject + "=" + project,
 				config.EnvProjectDir + "=" + opts.Dir,
-				config.EnvDockerDisk + "=" + strconv.Itoa(o.cfg.DockerDisk),
+				config.EnvDockerDisk + "=" + strconv.Itoa(o.cfg.DockerDiskGB()),
 			},
 			labels: map[string]string{
 				config.LabelManaged: "true",
@@ -461,13 +461,18 @@ func (o *Orchestrator) waitStopped(ctx context.Context, name string, max time.Du
 // lock — the idle reaper's decision is based on a snapshot, and a user may
 // have attached (EnsureRunning Touches under the same lock) between the
 // snapshot and now. Without this, the reaper can kill a terminal that was
-// just opened, losing its tmux state (review finding I2).
-func (o *Orchestrator) stopIfIdle(ctx context.Context, user, project string) error {
+// just opened, losing its tmux state (review finding I2). idle is the tick's
+// timeout value — re-reading it here could see a concurrent change to 0
+// ("never"), which as a comparison bound would mean "stop everything".
+func (o *Orchestrator) stopIfIdle(ctx context.Context, user, project string, idle time.Duration) error {
 	l := o.lockProject(key(user, project))
 	l.Lock()
 	defer l.Unlock()
+	if idle <= 0 {
+		return nil // timeout flipped to "never" mid-tick
+	}
 	if v, ok := o.activity.Load(key(user, project)); ok {
-		if time.Since(v.(time.Time)) <= o.cfg.IdleTimeout {
+		if time.Since(v.(time.Time)) <= idle {
 			return nil // touched since the reap decision — leave it running
 		}
 	}
@@ -534,24 +539,29 @@ func (o *Orchestrator) Adopt(ctx context.Context) (map[string]Status, error) {
 
 // RunIdleReaper stops containers whose last terminal activity is older than
 // the configured idle timeout. Blocks until ctx is done.
+//
+// The timeout is operator-tunable at runtime (PATCH /api/settings/runtime),
+// so the loop ALWAYS runs on a fixed short tick and re-reads the value once
+// per tick: starting disabled must not preclude enabling later, a shortened
+// timeout must apply on the next tick (not the old timeout/4 cadence), and —
+// critically — a tick must use ONE consistent value throughout. Reading the
+// value per comparison meant a flip to 0 ("never") mid-run made every
+// `time.Since(last) > 0` true and reaped EVERYTHING (review finding).
 func (o *Orchestrator) RunIdleReaper(ctx context.Context) {
-	if o.cfg.IdleTimeout <= 0 {
-		return
-	}
-	interval := o.cfg.IdleTimeout / 4
-	if interval < 5*time.Minute {
-		interval = 5 * time.Minute
-	}
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			idle := o.cfg.IdleTimeoutD()
+			if idle <= 0 {
+				continue // "never" — but keep ticking in case it changes
+			}
 			// Reap abandoned onboarding VMs too (no project label, so Adopt
 			// skips them) — they otherwise leak a Kata VM per abandoned setup.
-			o.ReapSetupVMs(ctx, o.cfg.IdleTimeout)
+			o.ReapSetupVMs(ctx, idle)
 			statuses, err := o.Adopt(ctx)
 			if err != nil {
 				o.logger.Warn("idle reaper list failed", "error", err)
@@ -572,9 +582,9 @@ func (o *Orchestrator) RunIdleReaper(ctx context.Context) {
 					o.Touch(st.User, st.Project)
 					continue
 				}
-				if time.Since(last) > o.cfg.IdleTimeout {
+				if time.Since(last) > idle {
 					o.logger.Info("stopping idle project", "user", st.User, "project", st.Project, "lastActivity", last)
-					if err := o.stopIfIdle(ctx, st.User, st.Project); err != nil {
+					if err := o.stopIfIdle(ctx, st.User, st.Project, idle); err != nil {
 						o.logger.Warn("idle stop failed", "project", st.Project, "error", err)
 					}
 				}

@@ -5,7 +5,9 @@
 package history
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path"
@@ -74,6 +76,107 @@ func List(homeDir, project string) ([]Transcript, error) {
 		out = []Transcript{}
 	}
 	return out, nil
+}
+
+// Match is one search hit inside a transcript.
+type Match struct {
+	Transcript string `json:"transcript"` // e.g. "conv-1"
+	Line       string `json:"line"`       // the matching line, ANSI-stripped, trimmed
+}
+
+// searchCaps bound the work: transcripts are unbounded raw PTY captures and
+// the logs dir is guest-writable, so both file size AND file count are
+// attacker-influenced from inside the microVM.
+const (
+	searchTailBytes    = 4 << 20 // scan at most the last 4 MiB per transcript
+	searchMaxFiles     = 50      // newest-first; older transcripts are skipped
+	searchMaxPerFile   = 20
+	searchMaxTotal     = 200
+	searchMaxLineRunes = 240
+)
+
+// Search scans the project's transcripts (newest first, capped) for the
+// query, case-insensitive, and returns matching lines. Everything the agents
+// and the operator typed or saw is in these logs, so this is full history
+// search. ctx is checked between files so a disconnected client stops the
+// scan.
+func Search(ctx context.Context, homeDir, project, query string) ([]Match, error) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return []Match{}, nil
+	}
+	transcripts, err := List(homeDir, project)
+	if err != nil {
+		return []Match{}, nil
+	}
+	if len(transcripts) > searchMaxFiles {
+		transcripts = transcripts[:searchMaxFiles]
+	}
+	rt, err := os.OpenRoot(homeDir)
+	if err != nil {
+		return []Match{}, nil
+	}
+	defer rt.Close()
+	out := []Match{}
+	for _, t := range transcripts {
+		if len(out) >= searchMaxTotal || ctx.Err() != nil {
+			break
+		}
+		matches := searchOne(rt, path.Join(logsRel(project), t.ID+".log"), t.ID, q, searchMaxTotal-len(out))
+		out = append(out, matches...)
+	}
+	return out, nil
+}
+
+// searchOne scans the tail of one transcript for q (already lowercased).
+func searchOne(rt *os.Root, rel, id, q string, budget int) []Match {
+	f, err := rt.Open(rel)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() {
+		return nil
+	}
+	size := st.Size()
+	if size > searchTailBytes {
+		if _, err := f.Seek(size-searchTailBytes, 0); err != nil {
+			return nil
+		}
+	}
+	buf, err := io.ReadAll(io.LimitReader(f, searchTailBytes))
+	if err != nil {
+		return nil
+	}
+	text := ansiRe.ReplaceAllString(string(buf), "")
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	// One whole-file Contains check first: the common case is a transcript
+	// with no hits, and per-line ToLower over every file was the dominant
+	// cost (~144 ms per 4 MiB measured in review).
+	if !strings.Contains(strings.ToLower(text), q) {
+		return nil
+	}
+	max := min(budget, searchMaxPerFile)
+	var out []Match
+	for line := range strings.Lines(text) {
+		if len(out) >= max {
+			break
+		}
+		if !strings.Contains(strings.ToLower(line), q) {
+			continue
+		}
+		clean := strings.TrimSpace(line)
+		if r := []rune(clean); len(r) > searchMaxLineRunes {
+			clean = string(r[:searchMaxLineRunes]) + "…"
+		}
+		if clean == "" {
+			continue
+		}
+		out = append(out, Match{Transcript: id, Line: clean})
+	}
+	return out
 }
 
 // ansiRe strips CSI/OSC escape sequences so a raw PTY capture reads as text.

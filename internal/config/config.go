@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -64,19 +66,25 @@ var Agents = map[string]string{
 
 // Config holds runtime configuration resolved from the environment.
 type Config struct {
-	Addr        string        // HTTP listen address
-	PreviewBase string        // public preview host base, e.g. "public.crew.styrman.xyz" (empty = path-form links only, 1.1)
-	PrivateBase string        // private (email-gated) preview host base, e.g. "private.crew.styrman.xyz" (empty = path-form only)
-	StateDir    string        // root state dir (default /var/lib/styrman)
-	HomesDir    string        // per-user homes root (StateDir/homes)
-	HomeDir     string        // LEGACY single-user home; migrated to HomesDir on boot
-	Image       string        // runtime image for project containers
-	Runtime     string        // docker runtime (mvm = Kata)
-	Username    string        // in-guest username; owns the shared home
-	UID, GID    int           // host uid/gid the guest user must match
-	DockerDisk  int           // per-project docker.img size in GB
-	KeyringPW   string        // password for the in-guest gnome-keyring
-	IdleTimeout time.Duration // stop project containers idle this long (0 = never)
+	Addr        string // HTTP listen address
+	PreviewBase string // public preview host base, e.g. "public.crew.styrman.xyz" (empty = path-form links only, 1.1)
+	PrivateBase string // private (email-gated) preview host base, e.g. "private.crew.styrman.xyz" (empty = path-form only)
+	StateDir    string // root state dir (default /var/lib/styrman)
+	HomesDir    string // per-user homes root (StateDir/homes)
+	HomeDir     string // LEGACY single-user home; migrated to HomesDir on boot
+	Image       string // runtime image for project containers
+	Runtime     string // docker runtime (mvm = Kata)
+	Username    string // in-guest username; owns the shared home
+	UID, GID    int    // host uid/gid the guest user must match
+	KeyringPW   string // password for the in-guest gnome-keyring
+
+	// Operator-tunable settings (Settings → Runtime). Env supplies the
+	// defaults; StateDir/settings.json overrides them and PATCH
+	// /api/settings/runtime updates both live — hence the mutex: the idle
+	// reaper goroutine reads while a request writes.
+	opMu        sync.RWMutex
+	dockerDisk  int           // per-project docker.img size in GB (new VMs)
+	idleTimeout time.Duration // stop project containers idle this long (0 = never)
 
 	// AuthMode "none" (localhost dev) or "header" (behind the Caddy ingress,
 	// which injects X-Caddy-Email after Google OAuth). AllowedEmails seeds
@@ -110,8 +118,8 @@ func Load() (*Config, error) {
 		Image:         envOr("STYRMAN_IMAGE", "styrman-runtime:latest"),
 		Runtime:       envOr("STYRMAN_RUNTIME", "mvm"),
 		KeyringPW:     envOr("STYRMAN_KEYRING_PW", "styrman"),
-		DockerDisk:    envIntOr("STYRMAN_DOCKER_DISK_GB", 20),
-		IdleTimeout:   envDurationOr("STYRMAN_IDLE_TIMEOUT", 24*time.Hour),
+		dockerDisk:    envIntOr("STYRMAN_DOCKER_DISK_GB", 20),
+		idleTimeout:   envDurationOr("STYRMAN_IDLE_TIMEOUT", 24*time.Hour),
 		AuthMode:      envOr("STYRMAN_AUTH", "none"),
 		DevAddr:       os.Getenv("STYRMAN_DEV_ADDR"),
 		SelfContainer: os.Getenv("STYRMAN_SELF_CONTAINER"),
@@ -155,7 +163,108 @@ func Load() (*Config, error) {
 			c.GID = int(sys.Gid)
 		}
 	}
+	c.loadOverrides()
 	return c, nil
+}
+
+// ─── Operator-tunable settings ──────────────────────────────────────────────
+
+// operatorOverrides is the persisted shape of StateDir/settings.json.
+type operatorOverrides struct {
+	DockerDiskGB int    `json:"dockerDiskGB,omitempty"`
+	IdleTimeout  string `json:"idleTimeout,omitempty"`
+}
+
+func (c *Config) overridesPath() string {
+	return filepath.Join(c.StateDir, "settings.json")
+}
+
+// loadOverrides applies persisted operator settings over the env defaults.
+// A missing file is normal; an unparseable one is loudly ignored (silently
+// reverting to env defaults would look like lost settings). The same bounds
+// as the API apply — a hand-edited file doesn't get to bypass them.
+func (c *Config) loadOverrides() {
+	data, err := os.ReadFile(c.overridesPath())
+	if err != nil {
+		return
+	}
+	var o operatorOverrides
+	if err := json.Unmarshal(data, &o); err != nil {
+		fmt.Fprintf(os.Stderr, "WARN: ignoring unparseable %s: %v\n", c.overridesPath(), err)
+		return
+	}
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+	if o.DockerDiskGB >= 5 && o.DockerDiskGB <= 500 {
+		c.dockerDisk = o.DockerDiskGB
+	}
+	if o.IdleTimeout != "" {
+		if d, err := time.ParseDuration(o.IdleTimeout); err == nil && d >= 0 {
+			c.idleTimeout = d
+		}
+	}
+}
+
+// DockerDiskGB is the docker.img size for NEWLY created project VMs.
+func (c *Config) DockerDiskGB() int {
+	c.opMu.RLock()
+	defer c.opMu.RUnlock()
+	return c.dockerDisk
+}
+
+// IdleTimeoutD is the current idle-stop threshold (0 = never). The reaper
+// reads this on every tick, so a change applies without a restart.
+func (c *Config) IdleTimeoutD() time.Duration {
+	c.opMu.RLock()
+	defer c.opMu.RUnlock()
+	return c.idleTimeout
+}
+
+// SetOperator validates, persists, then applies the tunable settings —
+// persist FIRST, so a write failure never leaves live state diverged from
+// what the next restart will load. diskGB 0 / idle < 0 mean "keep".
+func (c *Config) SetOperator(diskGB int, idle time.Duration) error {
+	if diskGB != 0 && (diskGB < 5 || diskGB > 500) {
+		return fmt.Errorf("docker disk must be 5-500 GB")
+	}
+	c.opMu.Lock()
+	defer c.opMu.Unlock()
+	next := operatorOverrides{
+		DockerDiskGB: c.dockerDisk,
+		IdleTimeout:  c.idleTimeout.String(),
+	}
+	if diskGB != 0 {
+		next.DockerDiskGB = diskGB
+	}
+	if idle >= 0 {
+		next.IdleTimeout = idle.String()
+	}
+	data, _ := json.MarshalIndent(next, "", "  ")
+	// Atomic temp+fsync+rename, like every other store: a crash mid-write
+	// must never leave a truncated settings.json to be silently discarded.
+	tmp := c.overridesPath() + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return fmt.Errorf("persist settings: %w", err)
+	}
+	if _, err = f.Write(append(data, '\n')); err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, c.overridesPath())
+	}
+	if err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("persist settings: %w", err)
+	}
+	c.dockerDisk = next.DockerDiskGB
+	if idle >= 0 {
+		c.idleTimeout = idle
+	}
+	return nil
 }
 
 // ProjectsFile is the metadata store path.

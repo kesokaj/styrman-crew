@@ -77,7 +77,7 @@ function TerminalPage() {
           />
         </div>
       </div>
-      <SidePanel project={project} term={term} />
+      <SidePanel project={project} term={term} projectName={proj?.name} />
     </>
   );
 }

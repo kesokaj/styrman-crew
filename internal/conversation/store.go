@@ -75,8 +75,10 @@ func (s *Store) Create(project, title string) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	used := map[string]bool{}
+	titles := map[string]bool{}
 	for _, r := range s.byProject[project] {
 		used[r.ID] = true
+		titles[r.Title] = true
 	}
 	id := ""
 	for n := 1; ; n++ {
@@ -86,7 +88,7 @@ func (s *Store) Create(project, title string) (Record, error) {
 		}
 	}
 	if title == "" {
-		title = "Terminal " + id
+		title = friendlyName(titles, id)
 	}
 	rec := Record{
 		ID:           id,

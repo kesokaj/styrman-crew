@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { api, tryUI } from "../lib/api";
+import { api, tryUI, type Terminal } from "../lib/api";
 import { usePolled } from "../lib/hooks";
-import { ConfirmDialog } from "./ui";
-import { PauseIcon, PlusIcon, XIcon } from "./icons";
+import { ConfirmDialog, PromptDialog } from "./ui";
+import { PauseIcon, PencilIcon, PlusIcon, XIcon } from "./icons";
 
 /**
  * The project's terminals. Each is a durable record backed by a tmux session
@@ -26,6 +26,7 @@ export function TerminalList({
   const [confirming, setConfirming] = useState<
     { kind: "one"; id: string; title: string } | { kind: "all" } | null
   >(null);
+  const [renaming, setRenaming] = useState<Terminal | null>(null);
 
   const open = (id: string) => {
     onNavigate?.();
@@ -97,6 +98,17 @@ export function TerminalList({
             <span className="h-1 w-1 rounded-full bg-ok" title="live session" />
           )}
           <button
+            className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-text-dim hover:text-text group-hover:visible"
+            onClick={(e) => {
+              e.stopPropagation();
+              setRenaming(t);
+            }}
+            aria-label={`Rename ${t.title}`}
+            title="Rename"
+          >
+            <PencilIcon className="h-3 w-3" />
+          </button>
+          <button
             className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-text-dim hover:text-danger group-hover:visible"
             onClick={(e) => {
               e.stopPropagation();
@@ -127,6 +139,21 @@ export function TerminalList({
         )}
       </div>
 
+      {renaming && (
+        <PromptDialog
+          title={`Rename “${renaming.title}”`}
+          initial={renaming.title}
+          submitLabel="Rename"
+          onSubmit={(name) =>
+            tryUI(async () => {
+              if (name !== renaming.title)
+                await api.renameTerminal(project, renaming.id, name);
+              refresh();
+            })
+          }
+          onClose={() => setRenaming(null)}
+        />
+      )}
       {confirming?.kind === "one" && (
         <ConfirmDialog
           title={`Delete “${confirming.title}”?`}

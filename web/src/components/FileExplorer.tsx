@@ -7,6 +7,7 @@ import {
   type Scope,
 } from "../lib/api";
 import { useTheme } from "../lib/hooks";
+import { toast } from "../lib/toast";
 import { Button, ConfirmDialog, IconButton, PromptDialog } from "./ui";
 import {
   ChevronRightIcon,
@@ -43,7 +44,14 @@ type ExplorerDialog =
  * reads these paths directly (the home is mounted into it), so browsing
  * works even while the project's microVM is stopped.
  */
-export function FileExplorer({ project }: { project: string }) {
+export function FileExplorer({
+  project,
+  projectName,
+}: {
+  project: string;
+  /** Friendly name shown as the crumb root (falls back to the UUID). */
+  projectName?: string;
+}) {
   const [scope, setScope] = useState<Scope>({ kind: "project", project });
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<FileEntry[]>([]);
@@ -195,8 +203,12 @@ export function FileExplorer({ project }: { project: string }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-0.5 px-2 py-1 text-[11px] text-text-dim">
-        <button className="hover:text-text" onClick={() => setPath("")}>
-          {scope.kind === "home" ? "~" : project}
+        <button
+          className="hover:text-text"
+          onClick={() => setPath("")}
+          title={scope.kind === "home" ? "Home" : `Project ID ${project}`}
+        >
+          {scope.kind === "home" ? "~" : (projectName ?? project)}
         </button>
         {crumbs.map((c, i) => (
           <span key={i} className="flex items-center gap-0.5">
@@ -381,6 +393,39 @@ function FileViewer({
   const { resolved } = useTheme();
   const dirty = text !== file.content;
 
+  const isMarkdown = /\.(md|markdown)$/i.test(file.path);
+  const isJSON = /\.json$/i.test(file.path);
+  // Markdown opens in rendered preview (the common intent is READING a doc);
+  // one click flips to the editor. micromark escapes raw HTML by default, so
+  // the rendered output is safe without a sanitizer.
+  const [previewing, setPreviewing] = useState(isMarkdown);
+  const [previewHtml, setPreviewHtml] = useState<string>();
+  useEffect(() => {
+    if (!previewing || !isMarkdown) return;
+    let stale = false;
+    import("micromark").then(({ micromark }) => {
+      if (stale) return;
+      // micromark escapes raw HTML and sanitizes javascript: hrefs; the
+      // target/rel rewrite just keeps README links from navigating the SPA.
+      const html = micromark(text, { allowDangerousHtml: false }).replaceAll(
+        "<a href=",
+        '<a target="_blank" rel="noopener noreferrer" href=',
+      );
+      setPreviewHtml(html);
+    });
+    return () => {
+      stale = true;
+    };
+  }, [previewing, isMarkdown, text]);
+
+  const formatJSON = () => {
+    try {
+      setText(JSON.stringify(JSON.parse(text), null, 2) + "\n");
+    } catch (e) {
+      toast("error", `Not valid JSON: ${(e as Error).message}`);
+    }
+  };
+
   const save = () => {
     if (saving || file.truncated) return; // truncated: saving would drop the tail
     return tryUI(async () => {
@@ -415,6 +460,37 @@ function FileViewer({
           <span className="text-text-dim">{fmtSize(file.size)}</span>
           {file.truncated && <span className="text-warn">truncated</span>}
           <div className="ml-auto flex items-center gap-1">
+            {isMarkdown && !file.binary && (
+              <div className="mr-1 inline-flex rounded-full bg-bg p-0.5">
+                {(
+                  [
+                    [true, "Preview"],
+                    [false, "Edit"],
+                  ] as Array<[boolean, string]>
+                ).map(([mode, label]) => (
+                  <button
+                    key={label}
+                    onClick={() => setPreviewing(mode)}
+                    className={`rounded-full px-2.5 py-0.5 ${
+                      previewing === mode
+                        ? "bg-accent-soft font-medium text-on-accent-soft"
+                        : "text-text-dim hover:text-text"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {isJSON && !file.binary && !file.truncated && (
+              <button
+                onClick={formatJSON}
+                className="inline-flex h-7 items-center rounded-lg px-2 text-text-dim hover:bg-bg-hover hover:text-accent"
+                title="Pretty-print (2-space indent); Save to keep it"
+              >
+                Format
+              </button>
+            )}
             <a
               href={api.downloadUrl(scope, file.path)}
               className="inline-flex h-7 items-center rounded-lg px-2 text-text-dim hover:bg-bg-hover hover:text-accent"
@@ -439,6 +515,14 @@ function FileViewer({
           <p className="p-4 text-xs text-text-dim">
             Binary file — use Download to fetch it.
           </p>
+        ) : isMarkdown && previewing ? (
+          <div
+            className="prose-md min-h-0 flex-1 overflow-y-auto px-6 py-4"
+            // Safe: micromark escapes raw HTML (allowDangerousHtml: false).
+            dangerouslySetInnerHTML={{
+              __html: previewHtml ?? "<p>Rendering…</p>",
+            }}
+          />
         ) : (
           <Suspense
             fallback={

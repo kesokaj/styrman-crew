@@ -56,6 +56,15 @@ export interface Transcript {
   id: string;
   size: number;
   modified: string;
+  /** The terminal's friendly title, when its record still exists. */
+  title?: string;
+}
+
+/** One full-text search hit across the project's transcripts. */
+export interface HistoryMatch {
+  transcript: string;
+  line: string;
+  title?: string;
 }
 
 export interface Diff {
@@ -102,7 +111,6 @@ export interface Settings {
   username: string;
   isAdmin: boolean;
   authMode: string;
-  allowedUsers: string[];
   homeDir: string;
   stateDir: string;
   image: string;
@@ -300,9 +308,13 @@ export const api = {
 
   listHistory: (project: string) =>
     request<{ transcripts: Transcript[] }>(`/api/projects/${project}/history`),
-  readHistory: (project: string, id: string) =>
+  searchHistory: (project: string, q: string) =>
+    request<{ matches: HistoryMatch[] }>(
+      `/api/projects/${project}/history/search?q=${encodeURIComponent(q)}`,
+    ),
+  readHistory: (project: string, id: string, bytes?: number) =>
     request<{ id: string; text: string }>(
-      `/api/projects/${project}/history/${id}`,
+      `/api/projects/${project}/history/${id}${bytes ? `?bytes=${bytes}` : ""}`,
     ),
   diff: (project: string) => request<Diff>(`/api/projects/${project}/diff`),
 
@@ -323,24 +335,18 @@ export const api = {
 
   settings: () => request<Settings>("/api/settings"),
   tools: () => request<{ tools: ToolInfo[] }>("/api/settings/tools"),
+  updateRuntime: (patch: { dockerDiskGB?: number; idleTimeout?: string }) =>
+    request<{ dockerDiskGB: number; idleTimeout: string }>(
+      "/api/settings/runtime",
+      { method: "PATCH", body: JSON.stringify(patch) },
+    ),
   setTerminalUsername: (name: string) =>
     request<{ terminalUsername: string }>("/api/settings/profile", {
       method: "POST",
       body: JSON.stringify({ terminalUsername: name }),
     }),
-  addUser: (email: string) =>
-    request<{ allowedUsers: string[] }>("/api/settings/users", {
-      method: "POST",
-      body: JSON.stringify({ email }),
-    }),
-  removeUser: (email: string) =>
-    request<{ allowedUsers: string[] }>(
-      `/api/settings/users/${encodeURIComponent(email)}`,
-      {
-        method: "DELETE",
-      },
-    ),
-
+  // User-access management is API-only since v1.3 (operator Q4): the
+  // /api/settings/users endpoints exist for curl, but the UI card is gone.
   setupStatus: () => request<SetupStatus>("/api/setup/status"),
   setupStart: () => request<void>("/api/setup/start", { method: "POST" }),
   setupDone: () => request<void>("/api/setup/done", { method: "POST" }),

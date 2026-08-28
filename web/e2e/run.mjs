@@ -101,11 +101,17 @@ try {
     if (!page.url().includes(`/p/${PID}/`))
       throw new Error(`url=${page.url()} pid=${PID}`);
   });
-  await check("terminal header shows title", () =>
-    page.waitForSelector(
-      'header button:has-text("Terminal 1"), header button:has-text("Conversation 1")',
-    ),
-  );
+  // Terminals get GENERATED friendly names since v1.3 — assert a non-empty
+  // title via the rename affordance instead of a fixed string.
+  await check("terminal header shows a generated title", async () => {
+    await page.waitForSelector('main header button[title="Rename terminal"]');
+    const title = (
+      await page
+        .locator('main header button[title="Rename terminal"]')
+        .textContent()
+    )?.trim();
+    if (!title) throw new Error("empty terminal title");
+  });
   await check("project listed running (green dot)", () =>
     page.waitForSelector(
       `aside div:has-text("${PROJECT}") span[title="running"]`,
@@ -309,7 +315,7 @@ try {
   await page.click("aside >> text=Settings");
   await check("settings page renders sections", async () => {
     await page.waitForURL("**/settings");
-    await page.waitForSelector("text=Allowed accounts");
+    await page.waitForSelector("text=Terminal username");
     await page.waitForSelector("text=State dir");
   });
   await check("settings shows runtime info", () =>
@@ -355,17 +361,27 @@ try {
     bad("native browser dialog appeared", `${d.type()}: ${d.message().slice(0, 80)}`);
     d.dismiss();
   });
-  const termRow = page
-    .locator("aside .group", { hasText: "Terminal 2" })
-    .last();
+  // Terminal 2's title is generated — read it from the header first (wait
+  // for the record poll to fill it in; the placeholder is "Terminal 2").
+  await page.waitForFunction(() => {
+    const b = document.querySelector('main header button[title="Rename terminal"]');
+    const t = b?.textContent?.trim() ?? "";
+    return t !== "" && t !== "Terminal 2";
+  });
+  const term2Title = (
+    await page
+      .locator('main header button[title="Rename terminal"]')
+      .textContent()
+  )?.trim();
+  const termRow = page.locator("aside .group", { hasText: term2Title }).last();
   await termRow.hover();
   await termRow.locator('button[aria-label^="Delete"]').click({ force: true });
   // Styled confirm dialog (no native popups since v1.3).
   await page.locator('div[role="dialog"] button:has-text("Delete")').click();
   await check("terminal deleted from sidebar", () =>
     page.waitForFunction(
-      () =>
-        !document.querySelector("aside")?.textContent?.includes("Terminal 2"),
+      (t) => !document.querySelector("aside")?.textContent?.includes(t),
+      term2Title,
     ),
   );
   const projRow = page.locator("aside .group", { hasText: PROJECT }).first();

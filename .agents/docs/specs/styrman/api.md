@@ -28,7 +28,7 @@ A terminal is a persisted record whose live view is a tmux session
 | Method & path                       | Purpose                                                                                                                                                                                                                                                                        |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `GET /api/projects/{id}/terminals`  | Records merged with live tmux state: `{id, title, createdAt, lastOpened, live, attached, bell}`. `bell` (bool): rang the terminal bell while unattended — agent likely waiting for input; cleared by tmux when the session is viewed. Listed even when the project is stopped. |
-| `POST /api/projects/{id}/terminals` | Create: `{"title"}` optional (default "Terminal N"). Session created lazily on WS attach.                                                                                                                                                                                      |
+| `POST /api/projects/{id}/terminals` | Create: `{"title"}` optional — empty gets a GENERATED friendly name (adjective-noun, collision-avoiding; rename any time). Session created lazily on WS attach.                                                                                                                                                                                      |
 | `PATCH .../terminals/{t}`           | Rename: `{"title"}`.                                                                                                                                                                                                                                                           |
 | `POST .../terminals/{t}/pause`      | Kill the session, keep the record + transcript ("paused"; reopening starts a fresh shell).                                                                                                                                                                                     |
 | `DELETE .../terminals/{t}`          | Kill session + remove record (transcript stays in History).                                                                                                                                                                                                                    |
@@ -86,7 +86,8 @@ Traversal and symlink escapes refused.
 
 | Method & path                    | Purpose                                                                                                                               |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/projects/{id}/history` | Terminal transcripts (`~/.styrman/logs/<id>/`): `{id, size, modified}`.                                                               |
+| `GET /api/projects/{id}/history` | Terminal transcripts (`~/.styrman/logs/<id>/`): `{id, size, modified, title}` — `title` is the terminal's friendly name while its record exists (transcripts deliberately outlive records). |
+| `GET .../history/search?q=` | Full-text search across ALL of the project's transcripts (agent sessions included — they're raw PTY captures), case-insensitive, ANSI-stripped: `{matches:[{transcript, line, title}]}`. Bounded: last 4 MiB per transcript, ≤20 hits/file, ≤200 total. |
 | `GET .../history/{session}`      | Transcript text, ANSI-stripped, tail-capped (`?bytes=`, clamped to 4 MiB).                                                            |
 | `GET /api/projects/{id}/diff`    | `{repo, branch, status, diff}` from git in the workspace. Every workspace is a git repo (R13), so this never 404s for a missing repo. |
 
@@ -109,10 +110,11 @@ Git tab's "Checkpoint now" button or the POST below.
 
 | Method & path                                                     | Purpose                                                                                                                                                 |
 | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /api/settings`                                               | Version, identity (`user`, `username`, `isAdmin`), auth mode, allowed accounts, per-user home, runtime/storage facts, `terminalUsername`, setup status. |
+| `GET /api/settings`                                               | Version, identity (`user`, `username`, `isAdmin`), auth mode, per-user home, runtime/storage facts, `terminalUsername`, setup status. |
 | `POST /api/settings/profile`                                      | Set `{"terminalUsername"}` — the in-guest username; applies to microVMs started afterwards. Empty resets to the identity slug.                          |
 | `GET /api/settings/tools`                                         | Per-tool cards from the user's home: git/ssh/github/claude/agy — ready state, details, and claude/agy skills, subagents, commands.                      |
-| `POST /api/settings/users` · `DELETE /api/settings/users/{email}` | **Admin only** (env-provided accounts). Manage who may sign in; each user gets their own isolated space.                                                |
+| `PATCH /api/settings/runtime` | **Admin only.** Operator tunables `{"dockerDiskGB","idleTimeout"}` — disk 5-500 GB (new project VMs only), idle a Go duration ≥10m or `0s` = never (applies to the reaper immediately). Persisted in `StateDir/settings.json`, overriding the env defaults across restarts. |
+| `POST /api/settings/users` · `DELETE /api/settings/users/{email}` | **Admin only** (env-provided accounts). Manage who may sign in; each user gets their own isolated space. API-only since v1.3 (operator Q4): the Settings UI card was removed and `allowedUsers` no longer appears in `GET /api/settings`. |
 
 ## Setup (first-time onboarding, per user)
 
