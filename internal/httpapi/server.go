@@ -25,6 +25,7 @@ import (
 
 	"github.com/kesokaj/styrman-crew/internal/config"
 	"github.com/kesokaj/styrman-crew/internal/conversation"
+	"github.com/kesokaj/styrman-crew/internal/credstore"
 	"github.com/kesokaj/styrman-crew/internal/dotfiles"
 	"github.com/kesokaj/styrman-crew/internal/files"
 	"github.com/kesokaj/styrman-crew/internal/gitrepo"
@@ -69,6 +70,10 @@ type Server struct {
 	// reverse). Consistency only — authz re-checks the list on every request.
 	sharesMu sync.Mutex
 
+	// creds is the credential broker's store (ADR-030); nil disables the
+	// onboarding endpoints. Set by main after construction.
+	creds *credstore.Store
+
 	// deletingMu guards both maps (key user+"/"+projectID): deleting tracks
 	// in-flight background destroys so the UI can show a "deleting" state, a
 	// repeated DELETE is idempotent, and boot paths refuse to resurrect the
@@ -101,6 +106,14 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 	s.bridge = terminal.NewBridge(orch, cfg, logger, s.termStoreFor, s.ensureFor, s.guestUserFor)
 	return s
 }
+
+// SetCredStore wires the credential broker's store so onboarding endpoints
+// can write to it (ADR-030). Called by main after New.
+//
+// The broker's ADDRESS is delivered to each project as the STYRMAN_CRED_BROKER
+// container env (a fixed per-bridge IP the server also binds on attach), so
+// there is no per-project hint file — see orchestrator.brokerIPOnBridge.
+func (s *Server) SetCredStore(cs *credstore.Store) { s.creds = cs }
 
 // ensureFor lets the WS bridge boot a project it only knows by user+UUID.
 func (s *Server) ensureFor(ctx context.Context, user, projectID string) (containerID, guestUser, dir string, err error) {
@@ -295,6 +308,7 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("PATCH /api/projects/{project}", s.renameProject)
 	mux.HandleFunc("GET /api/settings/tools", s.toolDetails)
 	mux.HandleFunc("PATCH /api/settings/runtime", s.updateRuntime)
+	mux.HandleFunc("POST /api/settings/credentials/git", s.importGitCredential)
 	mux.HandleFunc("POST /api/settings/users", s.addUser)
 	mux.HandleFunc("DELETE /api/settings/users/{email}", s.removeUser)
 	mux.HandleFunc("GET /api/setup/status", s.getSetupStatus)

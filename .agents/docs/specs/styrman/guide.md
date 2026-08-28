@@ -128,6 +128,13 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   installs `styrman-firewall.service`, an `iptables -I INPUT -i sdb-+ -j
   DROP` that blocks every project bridge from the host's own ports (SSH,
   Caddy, …) while leaving NAT egress untouched (ADR-029).
+- **Credential broker** (ADR-030, in progress): a credential-only listener
+  (`:8091`, bridge-only, never published to the host) hands each project the
+  current credential for a tool, identified by its bridge source IP. Slice 1
+  = git/GitHub: the base image wires a system git credential helper that
+  pulls the token from the broker per operation, so no token is stored in
+  the project and a refresh in the one broker store propagates everywhere.
+  Onboard via `POST /api/settings/credentials/git`.
 - **Idle lifecycle**: terminal traffic timestamps the project; idle ones
   stop after `STYRMAN_IDLE_TIMEOUT` (24h); reopening boots on connect.
 - **Auth is two-layer** (R8): the ingress proves identity via Google OAuth

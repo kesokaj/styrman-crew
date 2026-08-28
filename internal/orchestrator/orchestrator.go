@@ -6,8 +6,10 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -32,6 +34,38 @@ type Orchestrator struct {
 	mu        sync.Mutex             // guards projLocks
 	projLocks map[string]*sync.Mutex // per-project create/start serialization
 	activity  sync.Map               // project name → time.Time of last terminal activity
+
+	// ipCache memoizes broker source-IP → (user,project) resolution for a
+	// short TTL, so a project calling the broker per git op can't drive
+	// unbounded Docker API calls (review finding).
+	ipCacheMu sync.Mutex
+	ipCache   map[string]ipCacheEntry
+}
+
+type ipCacheEntry struct {
+	user, project string
+	at            time.Time
+}
+
+const ipCacheTTL = 30 * time.Second
+
+func (o *Orchestrator) ipCacheGet(ip string) (user, project string, ok bool) {
+	o.ipCacheMu.Lock()
+	defer o.ipCacheMu.Unlock()
+	e, found := o.ipCache[ip]
+	if !found || time.Since(e.at) > ipCacheTTL {
+		return "", "", false
+	}
+	return e.user, e.project, true
+}
+
+func (o *Orchestrator) ipCachePut(ip, user, project string) {
+	o.ipCacheMu.Lock()
+	defer o.ipCacheMu.Unlock()
+	if o.ipCache == nil {
+		o.ipCache = map[string]ipCacheEntry{}
+	}
+	o.ipCache[ip] = ipCacheEntry{user: user, project: project, at: time.Now()}
 }
 
 // lockProject returns the mutex for one project, creating it on first use.
@@ -206,6 +240,109 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 	return id, nil
 }
 
+// brokerIPForSubnet returns the fixed broker host address for a bridge:
+// broadcast-1 (e.g. 172.19.255.254 for 172.19.0.0/16) — high in the subnet,
+// clear of Docker's low-end dynamic allocations.
+func brokerIPForSubnet(n *net.IPNet) net.IP {
+	ip4 := n.IP.To4()
+	if ip4 == nil {
+		return nil
+	}
+	bcast := make(net.IP, 4)
+	for i := 0; i < 4; i++ {
+		bcast[i] = ip4[i] | ^n.Mask[i]
+	}
+	v := binary.BigEndian.Uint32(bcast) - 1
+	out := make(net.IP, 4)
+	binary.BigEndian.PutUint32(out, v)
+	return out
+}
+
+// bridgeSubnet returns the first IPv4 subnet of a project bridge.
+func (o *Orchestrator) bridgeSubnet(ctx context.Context, netName string) *net.IPNet {
+	insp, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{})
+	if err != nil {
+		return nil
+	}
+	for _, cfg := range insp.IPAM.Config {
+		if _, subnet, perr := net.ParseCIDR(cfg.Subnet); perr == nil && subnet.IP.To4() != nil {
+			return subnet
+		}
+	}
+	return nil
+}
+
+// brokerIPOnBridge is the broker's fixed address on a bridge, or "" when the
+// broker/self-container is disabled (host-mode) — callers then skip the env
+// and the static attach.
+func (o *Orchestrator) brokerIPOnBridge(ctx context.Context, netName string) string {
+	if o.cfg.SelfContainer == "" || o.cfg.BrokerAddr == "" {
+		return ""
+	}
+	subnet := o.bridgeSubnet(ctx, netName)
+	if subnet == nil {
+		return ""
+	}
+	ip := brokerIPForSubnet(subnet)
+	if ip == nil {
+		return ""
+	}
+	return ip.String()
+}
+
+// ResolveProjectByIP maps a source IP on a project bridge to (user,
+// project) by network position (ADR-030 credential broker): the server owns
+// each sdb-<uuid> bridge, so the subnet the IP falls in identifies the
+// project; the container's styrman.user label gives the owner. Since all a
+// user's projects share the same credentials in P1, this is identity/audit,
+// not a security boundary.
+func (o *Orchestrator) ResolveProjectByIP(ctx context.Context, ip string) (user, project string, err error) {
+	addr := net.ParseIP(ip)
+	if addr == nil {
+		return "", "", fmt.Errorf("bad ip %q", ip)
+	}
+	// Short-TTL cache: a project can call the broker per git operation, and
+	// resolution is a NetworkList + N×Inspect — cache to bound Docker load.
+	if u, p, ok := o.ipCacheGet(ip); ok {
+		return u, p, nil
+	}
+	nets, err := o.docker.NetworkList(ctx, network.ListOptions{
+		Filters: filters.NewArgs(filters.Arg("name", "sdb-")),
+	})
+	if err != nil {
+		return "", "", err
+	}
+	for _, n := range nets {
+		// PROJECT bridges only: the "sdb-" name filter is a substring match
+		// and also catches sdb-sys-setup-<user>; skip those.
+		if !strings.HasPrefix(n.Name, "sdb-") || strings.HasPrefix(n.Name, "sdb-sys-") {
+			continue
+		}
+		insp, err := o.docker.NetworkInspect(ctx, n.ID, network.InspectOptions{})
+		if err != nil {
+			continue
+		}
+		for _, cfg := range insp.IPAM.Config {
+			_, subnet, perr := net.ParseCIDR(cfg.Subnet)
+			if perr != nil || !subnet.Contains(addr) {
+				continue
+			}
+			projectID := strings.TrimPrefix(n.Name, "sdb-")
+			cinsp, cerr := o.docker.ContainerInspect(ctx, config.ContainerName(projectID))
+			if cerr != nil {
+				return "", "", fmt.Errorf("project %s network found but container gone", projectID)
+			}
+			owner := cinsp.Config.Labels[config.LabelUser]
+			if owner == "" {
+				return "", "", fmt.Errorf("project %s has no user label", projectID)
+			}
+			o.ipCachePut(ip, owner, projectID)
+			return owner, projectID, nil
+		}
+	}
+	return "", "", fmt.Errorf("no project bridge owns %s", ip)
+}
+
 // hasWorkspaceBind reports whether the container already mounts the
 // project's workspace dir (ADR-027).
 func hasWorkspaceBind(hc *container.HostConfig, workspace string) bool {
@@ -236,7 +373,27 @@ func (o *Orchestrator) EnsureSelfAttached(_ context.Context, user, project strin
 	// next request too — same failure class as the delete-handler bug).
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	err := o.docker.NetworkConnect(ctx, config.NetworkName(project), o.cfg.SelfContainer, nil)
+	netName := config.NetworkName(project)
+	// Bind the FIXED broker IP (subnet broadcast-1) on this bridge so the
+	// broker answers at the same URL from every project (ADR-030). Falls
+	// back to a dynamic IP if the static one is somehow taken — the
+	// port-preview proxy works either way; only the broker needs the fixed
+	// address, and a project created after this attach gets the matching URL
+	// in its env.
+	var endpoint *network.EndpointSettings
+	if ip := o.brokerIPOnBridge(ctx, netName); ip != "" {
+		endpoint = &network.EndpointSettings{
+			IPAMConfig: &network.EndpointIPAMConfig{IPv4Address: ip},
+		}
+	}
+	err := o.docker.NetworkConnect(ctx, netName, o.cfg.SelfContainer, endpoint)
+	if err != nil && endpoint != nil && !strings.Contains(err.Error(), "already exists") {
+		// Static IP rejected (e.g. in use) — retry dynamic so port-preview
+		// still works; the broker URL for existing projects may then miss,
+		// but new projects re-derive on create.
+		o.logger.Warn("broker static IP attach failed — retrying dynamic", "project", project, "error", err)
+		err = o.docker.NetworkConnect(ctx, netName, o.cfg.SelfContainer, nil)
+	}
 	if err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
 			o.logger.Warn("self-attach to project network failed", "project", project, "error", err)
@@ -426,6 +583,13 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 		config.EnvUID + "=" + strconv.Itoa(o.cfg.UID),
 		config.EnvGID + "=" + strconv.Itoa(o.cfg.GID),
 		config.EnvKeyringPW + "=" + o.cfg.KeyringPW,
+	}
+	// Credential broker address (ADR-030): a FIXED per-bridge IP (subnet
+	// broadcast-1) the server also binds on attach — identical URL from every
+	// project, so the git helper needs no per-project hint file. Empty when
+	// the broker or the server-container is disabled (host-mode dev).
+	if brokerIP := o.brokerIPOnBridge(ctx, netName); brokerIP != "" {
+		env = append(env, config.EnvCredBroker+"=http://"+brokerIP+o.cfg.BrokerAddr)
 	}
 	env = append(env, spec.extraEnv...)
 

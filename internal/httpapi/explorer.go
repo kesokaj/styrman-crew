@@ -9,15 +9,18 @@ import (
 	"net/http"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kesokaj/styrman-crew/internal/conversation"
+	"github.com/kesokaj/styrman-crew/internal/credstore"
 	"github.com/kesokaj/styrman-crew/internal/files"
 	"github.com/kesokaj/styrman-crew/internal/history"
 	"github.com/kesokaj/styrman-crew/internal/identity"
+	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 )
 
 // scopeFor resolves the file-explorer scope. Both roots are real,
@@ -450,6 +453,76 @@ func (s *Server) updateRuntime(w http.ResponseWriter, r *http.Request) {
 		"dockerDiskGB": s.cfg.DockerDiskGB(),
 		"idleTimeout":  s.cfg.IdleTimeoutD().String(),
 	})
+}
+
+// hostnameRe bounds an onboarding host to safe characters (it reaches a
+// login-shell command). Letters, digits, dot, hyphen only.
+var hostnameRe = regexp.MustCompile(`^[A-Za-z0-9.-]+$`)
+
+// importGitCredential onboards the caller's CURRENT GitHub token into the
+// credential broker store (ADR-030). gh keeps its token in the guest keyring
+// (not a file), so we extract it by running `gh auth token` inside one of the
+// user's RUNNING projects (where the keyring is unlocked) and store it once.
+// Thereafter the broker serves it to every project. Body: {"project": "<id>"}
+// names the running project to extract from; "host" optional (default
+// github.com).
+func (s *Server) importGitCredential(w http.ResponseWriter, r *http.Request) {
+	u, sp, err := s.who(r)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if s.creds == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("credential broker disabled"))
+		return
+	}
+	var body struct {
+		Project string `json:"project"`
+		Host    string `json:"host"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Project == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("project required"))
+		return
+	}
+	if body.Host == "" {
+		body.Host = "github.com"
+	}
+	// The host is interpolated into a login-shell command below (gh needs the
+	// login shell to reach the keyring), so validate it strictly.
+	if !hostnameRe.MatchString(body.Host) {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid host"))
+		return
+	}
+	p, err := sp.projects.Get(body.Project)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	st, err := s.orch.Status(r.Context(), u.Username, p.ID)
+	if err != nil || st.State != "running" {
+		writeErr(w, http.StatusConflict, errors.New("name a RUNNING project to import from"))
+		return
+	}
+	guest := s.guestUserFor(u.Username)
+	// Login shell so /etc/profile.d unlocks the keyring gh reads from.
+	code, out, err := s.orch.Exec(r.Context(), st.ContainerID, orchestrator.ExecSpec{
+		User: guest,
+		Env:  []string{"HOME=/home/" + guest, "USER=" + guest},
+		Cmd:  []string{"bash", "-lc", "gh auth token --hostname " + body.Host + " 2>/dev/null"},
+	})
+	token := strings.TrimSpace(out)
+	if err != nil || code != 0 || token == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("could not read a gh token in that project — is gh signed in?"))
+		return
+	}
+	// gh HTTPS auth uses any username with the token as the password;
+	// "x-access-token" is the conventional placeholder.
+	if err := s.creds.PutGit(u.Username, credstore.GitCred{Host: body.Host, Username: "x-access-token", Token: token}); err != nil {
+		writeErr(w, http.StatusInternalServerError, errors.New("could not store credential"))
+		return
+	}
+	s.logger.Info("git credential imported to broker store", "user", u.Username, "host", body.Host)
+	writeJSON(w, http.StatusOK, map[string]string{"host": body.Host, "status": "stored"})
 }
 
 // addUser authorizes another Google account (admin only). The new user gets

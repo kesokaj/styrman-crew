@@ -114,6 +114,7 @@ Git tab's "Checkpoint now" button or the POST below.
 | `POST /api/settings/profile`                                      | Set `{"terminalUsername"}` — the in-guest username; applies to microVMs started afterwards. Empty resets to the identity slug.                          |
 | `GET /api/settings/tools`                                         | Per-tool cards from the user's home: git/ssh/github/claude/agy — ready state, details, and claude/agy skills, subagents, commands.                      |
 | `PATCH /api/settings/runtime` | **Admin only.** Operator tunables `{"dockerDiskGB","idleTimeout"}` — disk 5-500 GB (new project VMs only), idle a Go duration ≥10m or `0s` = never (applies to the reaper immediately). Persisted in `StateDir/settings.json`, overriding the env defaults across restarts. |
+| `POST /api/settings/credentials/git` | Onboard a GitHub credential into the credential broker (ADR-030): `{"project":"<running project id>","host"?}`. Extracts the current `gh` token from that project's keyring (`gh auth token`) and stores it broker-side; thereafter every project pulls it via the in-guest git helper. |
 | `POST /api/settings/users` · `DELETE /api/settings/users/{email}` | **Admin only** (env-provided accounts). Manage who may sign in; each user gets their own isolated space. API-only since v1.3 (operator Q4): the Settings UI card was removed and `allowedUsers` no longer appears in `GET /api/settings`. |
 
 ## Setup (first-time onboarding, per user)

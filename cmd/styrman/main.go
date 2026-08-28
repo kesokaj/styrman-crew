@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/kesokaj/styrman-crew/internal/config"
+	"github.com/kesokaj/styrman-crew/internal/credbroker"
+	"github.com/kesokaj/styrman-crew/internal/credstore"
 	"github.com/kesokaj/styrman-crew/internal/files"
 	"github.com/kesokaj/styrman-crew/internal/gitrepo"
 	"github.com/kesokaj/styrman-crew/internal/httpapi"
@@ -94,6 +96,31 @@ func main() {
 	// Periodic whole-tree checkpoints of running projects (operator Q6);
 	// also covers the idle-reaper's missing pre-stop snapshot.
 	go api.RunCheckpointLoop(ctx)
+
+	// Credential broker (ADR-030): a bridge-only, credential-only listener,
+	// separate from the ingress-gated main API. Never published to the host.
+	// Only meaningful for a containerized server on project bridges — skip in
+	// host-mode dev (SelfContainer empty), where it couldn't function and
+	// would just open a port on all host interfaces.
+	if cfg.BrokerAddr != "" && cfg.SelfContainer != "" {
+		if cstore, cerr := credstore.New(filepath.Join(cfg.StateDir, "credentials")); cerr != nil {
+			logger.Error("credential store unavailable — broker disabled", "error", cerr)
+		} else {
+			api.SetCredStore(cstore) // onboarding endpoints write here
+			broker := credbroker.New(cstore, orch, logger)
+			brokerSrv := &http.Server{
+				Addr:              cfg.BrokerAddr,
+				Handler:           broker.Handler(),
+				ReadHeaderTimeout: 10 * time.Second,
+			}
+			go func() {
+				logger.Info("credential broker up (bridge-only)", "addr", cfg.BrokerAddr)
+				if err := brokerSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					logger.Error("credential broker failed", "error", err)
+				}
+			}()
+		}
+	}
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           api.Routes(),

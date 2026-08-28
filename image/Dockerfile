@@ -66,6 +66,13 @@ COPY configs/ /styrman/configs/
 COPY harness/ /styrman/harness/
 ARG STYRMAN_VERSION=0.0.0
 RUN echo "${STYRMAN_VERSION}" > /styrman/VERSION && chmod +x /styrman/entrypoint.sh && \
-    install -m 755 /styrman/configs/styrman-setup /usr/local/bin/styrman-setup
+    install -m 755 /styrman/configs/styrman-setup /usr/local/bin/styrman-setup && \
+    install -m 755 /styrman/configs/styrman-git-credential /usr/local/bin/styrman-git-credential
+
+# Credential broker git helper (ADR-030): a SYSTEM gitconfig makes every
+# project use the broker for HTTPS credentials — no per-home setup, no stored
+# token. useHttpPath=false so one credential covers a whole host.
+RUN git config --system credential.helper /usr/local/bin/styrman-git-credential && \
+    git config --system credential.useHttpPath false
 
 ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/styrman/entrypoint.sh"]

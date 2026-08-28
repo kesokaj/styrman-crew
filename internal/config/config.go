@@ -44,6 +44,7 @@ const (
 	EnvProjectDir = "STYRMAN_PROJECT_DIR" // workspace dir name under ~/projects
 	EnvDockerDisk = "STYRMAN_DOCKER_DISK_GB"
 	EnvKeyringPW  = "STYRMAN_KEYRING_PW"
+	EnvCredBroker = "STYRMAN_CRED_BROKER" // credential broker URL on this bridge (ADR-030)
 )
 
 // WebSocket close codes, ported verbatim from devbox's terminal protocol.
@@ -86,6 +87,12 @@ type Config struct {
 	dockerDisk  int           // per-project docker.img size in GB (new VMs)
 	idleTimeout time.Duration // stop project containers idle this long (0 = never)
 
+	// BrokerAddr: the credential broker's listener (ADR-030). Bound on all
+	// interfaces so projects reach it on their own bridge; NOT published to
+	// the host, so it is a bridge-only, credential-only surface separate
+	// from the ingress-gated main API. Empty disables the broker.
+	BrokerAddr string
+
 	// AuthMode "none" (localhost dev) or "header" (behind the Caddy ingress,
 	// which injects X-Caddy-Email after Google OAuth). AllowedEmails seeds
 	// the userstore from the environment.
@@ -120,6 +127,7 @@ func Load() (*Config, error) {
 		KeyringPW:     envOr("STYRMAN_KEYRING_PW", "styrman"),
 		dockerDisk:    envIntOr("STYRMAN_DOCKER_DISK_GB", 20),
 		idleTimeout:   envDurationOr("STYRMAN_IDLE_TIMEOUT", 24*time.Hour),
+		BrokerAddr:    envOr("STYRMAN_BROKER_ADDR", ":8091"),
 		AuthMode:      envOr("STYRMAN_AUTH", "none"),
 		DevAddr:       os.Getenv("STYRMAN_DEV_ADDR"),
 		SelfContainer: os.Getenv("STYRMAN_SELF_CONTAINER"),
