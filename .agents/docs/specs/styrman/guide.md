@@ -128,13 +128,20 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   installs `styrman-firewall.service`, an `iptables -I INPUT -i sdb-+ -j
   DROP` that blocks every project bridge from the host's own ports (SSH,
   Caddy, …) while leaving NAT egress untouched (ADR-029).
-- **Credential broker** (ADR-030, in progress): a credential-only listener
-  (`:8091`, bridge-only, never published to the host) hands each project the
-  current credential for a tool, identified by its bridge source IP. Slice 1
-  = git/GitHub: the base image wires a system git credential helper that
-  pulls the token from the broker per operation, so no token is stored in
-  the project and a refresh in the one broker store propagates everywhere.
-  Onboard via `POST /api/settings/credentials/git`.
+- **Credential broker** (ADR-030/032): a credential-only listener (`:8091`,
+  bridge-only, never published to the host) hands each project the CURRENT
+  credential for a tool, identified by its bridge source IP — so a refresh in
+  the one broker store propagates to every project. Three tiers: `GET /git`
+  (a system git helper pulls per-op, nothing stored in the project);
+  `GET /env` (shell vars — `GH_TOKEN`, `NPM_TOKEN`, `CLAUDE_*` — exported by a
+  login-shell snippet, `/etc/profile.d/zz-styrman-credentials.sh`); and
+  `GET /files` (files — gcloud ADC, ssh key — written into the home by the
+  same snippet). Sign in once in any project, then
+  `POST /api/settings/credentials/import {project}` pulls gh/claude/gcloud/
+  ssh/npm into the store in one pass; every project (new ones included) is
+  then current with no re-auth. Manage from the Settings **Credentials**
+  panel. Only `agy` still needs per-project sign-in (its OAuth lives in the
+  gnome-keyring with no broker-able mapping — issue #632).
 - **Idle lifecycle**: terminal traffic timestamps the project; idle ones
   stop after `STYRMAN_IDLE_TIMEOUT` (24h); reopening boots on connect.
 - **Auth is two-layer** (R8): the ingress proves identity via Google OAuth

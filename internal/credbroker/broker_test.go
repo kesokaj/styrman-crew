@@ -2,6 +2,7 @@ package credbroker
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -64,6 +65,68 @@ func TestBrokerGit(t *testing.T) {
 		t.Errorf("unknown host = %d, want 404", resp.StatusCode)
 	}
 	resp.Body.Close()
+}
+
+func TestBrokerEnv(t *testing.T) {
+	b, cs := newBroker(t, fakeResolver{user: "alice", project: "p1"})
+	cs.PutEnv("alice", "GH_TOKEN", "ghs_1")
+	cs.PutEnv("alice", "NPM_TOKEN", "npm_2")
+	srv := httptest.NewServer(b.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("env = %d, want 200", resp.StatusCode)
+	}
+	var got map[string]string
+	json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	if got["GH_TOKEN"] != "ghs_1" || got["NPM_TOKEN"] != "npm_2" {
+		t.Fatalf("env payload = %+v", got)
+	}
+}
+
+func TestBrokerFiles(t *testing.T) {
+	b, cs := newBroker(t, fakeResolver{user: "alice", project: "p1"})
+	cs.PutFile("alice", credstore.FileCred{ID: "ssh-id_ed25519", Path: "~/.ssh/id_ed25519", Mode: "0600", Data: []byte("KEYBYTES")})
+	srv := httptest.NewServer(b.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("files = %d, want 200", resp.StatusCode)
+	}
+	var got []struct{ Path, Mode, Data string }
+	json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	if len(got) != 1 || got[0].Path != "~/.ssh/id_ed25519" || got[0].Mode != "0600" {
+		t.Fatalf("files payload = %+v", got)
+	}
+	// Data is base64 of the raw bytes.
+	raw, err := base64.StdEncoding.DecodeString(got[0].Data)
+	if err != nil || string(raw) != "KEYBYTES" {
+		t.Fatalf("files data = %q (%v)", got[0].Data, err)
+	}
+}
+
+// An unresolved caller gets 403 on every credential endpoint, not just /git.
+func TestBrokerEnvFilesForbidden(t *testing.T) {
+	b, _ := newBroker(t, fakeResolver{err: errors.New("no bridge")})
+	srv := httptest.NewServer(b.Handler())
+	defer srv.Close()
+	for _, path := range []string{"/env", "/files"} {
+		resp, _ := http.Get(srv.URL + path)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("%s unresolved = %d, want 403", path, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
 }
 
 func TestBrokerUnknownCaller(t *testing.T) {

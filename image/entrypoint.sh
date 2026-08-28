@@ -82,7 +82,7 @@ chmod 700 "${HOME_DIR}/.ssh" 2>/dev/null || true
 # user. A per-project home starts empty, so this is what makes it a usable
 # shell. bash_secrets is 0600 (R10). Never clobbers a file the user edited.
 if [ -d /styrman/skel ]; then
-    for f in bashrc profile bash_aliases bash_exports bash_secrets; do
+    for f in bashrc profile bash_aliases bash_exports bash_secrets npmrc; do
         dst="${HOME_DIR}/.${f}"
         if [ ! -e "${dst}" ]; then
             runuser -u "${USERNAME}" -- cp "/styrman/skel/${f}" "${dst}" 2>/dev/null || true
@@ -101,6 +101,10 @@ chmod 400 /run/styrman/keyring-pw
 unset STYRMAN_KEYRING_PW
 cp /styrman/configs/profile-keyring.sh /etc/profile.d/styrman-keyring.sh
 cp /styrman/configs/profile-motd.sh /etc/profile.d/styrman-motd.sh
+# Credential materialization (ADR-032): every login shell pulls the current
+# env/file credentials from the broker on this project's bridge. Named to sort
+# AFTER the keyring snippet so the Secret Service is up first.
+cp /styrman/configs/styrman-credentials.sh /etc/profile.d/zz-styrman-credentials.sh
 
 # tmux defaults (hidden status bar, login shells) unless the user has their own.
 if [ ! -f "${HOME_DIR}/.tmux.conf" ]; then

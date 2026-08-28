@@ -801,3 +801,66 @@ migration; the operator re-registers credentials (prototype).
 leak between them. Cost: re-auth per tool until the broker adapters cover it
 (git done; ssh/gcloud/docker/gh/npm/claude/agy pending), and no cache
 sharing (accepted). Revises R3 further (per-project home, not shared).
+
+---
+
+## ADR-032: Credential broker P1 complete — env + file tiers, pull-on-login
+
+**Date:** 2026-08-28 · **Status:** accepted (operator: "finish everything...
+test everything"). Completes the ADR-030 broker beyond the git slice.
+
+**Context:** ADR-031 made homes per-project, so nothing is shared at the FS
+layer — the ONE thing that must still be shared and current across a user's
+projects is credentials. ADR-030 shipped the git tier (a credential helper
+that pulls per-op from the broker on the project's bridge). The remaining
+tools (gh, npm, claude, gcloud, ssh, agy) needed delivery too.
+
+**Decision:** One unified *pull-on-login* mechanism, three tiers, all served
+by the same bridge-only broker (caller identified by network position, ADR-030):
+
+- **git** (helper tier, ADR-030): `GET /git?host=` → git credential helper.
+  The secret is never stored in the project.
+- **env-token tier**: `GET /env` returns a `{KEY: value}` map (GH_TOKEN,
+  NPM_TOKEN, CLAUDE_*, any). A login-shell snippet
+  (`/etc/profile.d/zz-styrman-credentials.sh`) exports each into every shell.
+- **file-injection tier**: `GET /files` returns `[{path, mode, data}]`
+  (gcloud ADC, ssh private key). The same snippet writes each into the home
+  at its mode. Paths are validated home-relative (no absolute, no `..`), both
+  in the store and in the snippet.
+
+The store (`credstore`) generalizes from git-only to three kinds
+(`git-<host>.json`, `env-<KEY>.json`, `file-<id>.json`, all 0600, atomic
+write). The broker (`credbroker`) serves the CURRENT copy, so a refresh in
+the store propagates to every project on its next login shell — sign in
+once, no re-auth, new projects included. Onboarding:
+`POST /api/settings/credentials/import {project}` extracts every credential
+it can from a reference RUNNING project in one pass (gh token from the
+keyring; claude `~/.claude/.credentials.json`; gcloud ADC; the first ssh
+private key; an npm authToken from `~/.npmrc`), each best-effort and reported
+per tool. `POST .../token {key,value}` stores a pasted env token;
+`GET .../credentials` lists value-free; `DELETE .../{kind}/{name}` removes one.
+A Settings "Credentials" panel drives all of it.
+
+**Tiers, honestly:** git/docker→registry never store the secret in the VM.
+gh/npm/claude/gcloud/ssh materialize a token or file inside the VM — accepted
+for P1 (the operator's ask is "shared + current + no re-auth", which all
+tiers meet; "secret never readable in the VM" is the P2 goal). ssh cannot use
+the agent-socket tier because Kata blocks unix-socket forwarding across the
+microVM boundary (the reason the broker is network-based at all), so the key
+is file-injected — P2 could add a network ssh-agent proxy. agy stores its
+OAuth only in the gnome-keyring with no verified service/account mapping
+(issue #632); it is reported "unsupported" rather than half-wired — the one
+tool still needing per-project sign-in.
+
+**Consequences:** Every tool except agy is shared and kept current across a
+user's projects via one mechanism; onboarding is one import from a project
+you signed into. Cost: the env/file tiers place a live token/file in the VM
+(P2 hardens this); a login shell makes two fast broker calls (bridge-local,
+5 s timeout, quiet on failure). Proven live: a synthetic env cred exported
+and a file cred materialized (content + mode) in a fresh login shell of a
+real Kata project, authed purely by bridge position; import returns an
+honest per-tool report; store round-trips and value-free listing verified by
+unit tests + the live server. An adversarial review fixed one cross-tenant
+leak (the IP→owner cache now re-verifies the container holds the source IP on
+every hit, so a reused subnet/IP after a destroy can't serve another user's
+credentials) and hardened env values against control-character injection.

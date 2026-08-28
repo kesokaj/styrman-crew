@@ -68,6 +68,30 @@ func (o *Orchestrator) ipCachePut(ip, user, project string) {
 	o.ipCache[ip] = ipCacheEntry{user: user, project: project, at: time.Now()}
 }
 
+func (o *Orchestrator) ipCacheDelete(ip string) {
+	o.ipCacheMu.Lock()
+	defer o.ipCacheMu.Unlock()
+	delete(o.ipCache, ip)
+}
+
+// containerHoldsIP reports whether the container currently has ip on any of
+// its attached networks. The source IP of a broker request is the project
+// container's bridge IP (its DinD sub-containers NAT out behind it), so this
+// confirms a cached IP→project mapping still points at the SAME live
+// container — the guard against a freed subnet/IP being reused by another
+// project (possibly another user) after a destroy.
+func containerHoldsIP(cinsp container.InspectResponse, ip string) bool {
+	if cinsp.NetworkSettings == nil {
+		return false
+	}
+	for _, ep := range cinsp.NetworkSettings.Networks {
+		if ep != nil && ep.IPAddress == ip {
+			return true
+		}
+	}
+	return false
+}
+
 // lockProject returns the mutex for one project, creating it on first use.
 // Locking per project keeps a slow cold start (up to 90 s waitReady) from
 // stalling attaches to every other project (review finding).
@@ -308,10 +332,21 @@ func (o *Orchestrator) ResolveProjectByIP(ctx context.Context, ip string) (user,
 	if addr == nil {
 		return "", "", fmt.Errorf("bad ip %q", ip)
 	}
-	// Short-TTL cache: a project can call the broker per git operation, and
-	// resolution is a NetworkList + N×Inspect — cache to bound Docker load.
+	// Short-TTL cache: a project can call the broker per git operation, and a
+	// full resolution is a NetworkList + N×Inspect — cache to bound Docker
+	// load. A cache HIT is re-verified with ONE inspect (not the full scan):
+	// the cached container must still exist, still be owned by the cached
+	// user, and still hold this source IP. Without that re-check a freed
+	// subnet/IP reused by a DIFFERENT user's project within the TTL would be
+	// served the first user's credentials — a cross-tenant leak (review
+	// finding). Verify-on-hit means the mapping can never outlive the
+	// container that earned it, so no destroy-path invalidation is needed.
 	if u, p, ok := o.ipCacheGet(ip); ok {
-		return u, p, nil
+		cinsp, cerr := o.docker.ContainerInspect(ctx, config.ContainerName(p))
+		if cerr == nil && cinsp.Config.Labels[config.LabelUser] == u && containerHoldsIP(cinsp, ip) {
+			return u, p, nil
+		}
+		o.ipCacheDelete(ip) // stale (container gone, re-owned, or IP reused) — rescan
 	}
 	nets, err := o.docker.NetworkList(ctx, network.ListOptions{
 		Filters: filters.NewArgs(filters.Arg("name", "sdb-")),
@@ -342,6 +377,12 @@ func (o *Orchestrator) ResolveProjectByIP(ctx context.Context, ip string) (user,
 			owner := cinsp.Config.Labels[config.LabelUser]
 			if owner == "" {
 				return "", "", fmt.Errorf("project %s has no user label", projectID)
+			}
+			// The caller must actually be THIS project's container, not just
+			// something in its subnet — only cache/serve an IP the container
+			// really holds, so the cache can never memoize a wrong mapping.
+			if !containerHoldsIP(cinsp, ip) {
+				return "", "", fmt.Errorf("ip %s in project %s subnet but not held by its container", ip, projectID)
 			}
 			o.ipCachePut(ip, owner, projectID)
 			return owner, projectID, nil

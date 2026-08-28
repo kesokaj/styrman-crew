@@ -1,29 +1,79 @@
-// Package credstore is the credential broker's source of truth (ADR-030):
+// Package credstore is the credential broker's source of truth (ADR-030/032):
 // one per-user store, server-owned, that projects never touch directly.
-// Onboarding writes credentials here (extracted once from the tool, e.g.
-// gh/agy keep theirs in the guest keyring); the broker reads and serves them
-// so every project uses the current copy and a refresh propagates to all.
+// Onboarding writes credentials here (extracted once from a reference project,
+// or entered by hand); the broker reads and serves them so every project uses
+// the current copy and a refresh propagates to all.
 //
-// Slice 1 covers git/GitHub tokens; the shape generalizes to the other
-// tools' adapters. Files are 0600 under StateDir/credentials/<user>/.
+// Three credential kinds, matching the broker's delivery tiers (ADR-032 §tiers):
+//   - git   — per-host {username, token}, served to git's credential helper.
+//   - env   — a shell variable (GH_TOKEN, NPM_TOKEN, CLAUDE_CODE_OAUTH_TOKEN…),
+//     exported into every login shell (env-token tier).
+//   - file  — a file materialized into the guest home (gcloud ADC, ssh key…),
+//     written at login (file-injection tier).
+//
+// Files are 0600 under StateDir/credentials/<user>/, one JSON file per item:
+// git-<host>.json, env-<KEY>.json, file-<id>.json.
 package credstore
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
 	"sync"
 )
 
 // ErrNotFound is returned when a credential has not been onboarded yet.
 var ErrNotFound = errors.New("credential not found")
 
+// envKeyRe bounds a shell variable name — the value is exported verbatim into a
+// login shell, so the KEY must be a plain identifier (never anything the login
+// snippet could misparse). Uppercase/lowercase letters, digits, underscore.
+var envKeyRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // GitCred is a git/GitHub credential for one host.
 type GitCred struct {
 	Host     string `json:"host"`     // e.g. "github.com"
 	Username string `json:"username"` // e.g. "x-access-token" or the login
 	Token    string `json:"token"`
+}
+
+// EnvCred is a single shell variable delivered to every login shell.
+type EnvCred struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// FileCred is a file materialized into the guest home at login. Path is
+// home-relative ("~/…" or a bare relative path); Mode is an octal string.
+type FileCred struct {
+	ID   string `json:"id"`   // stable identifier / store filename key
+	Path string `json:"path"` // e.g. "~/.ssh/id_ed25519" or ".config/gcloud/…"
+	Mode string `json:"mode"` // octal, e.g. "0600"
+	Data []byte `json:"-"`    // raw bytes; marshaled base64 in dataB64
+}
+
+// fileCredWire is the on-disk / on-wire shape (base64 data).
+type fileCredWire struct {
+	ID      string `json:"id"`
+	Path    string `json:"path"`
+	Mode    string `json:"mode"`
+	DataB64 string `json:"data"`
+}
+
+// Item is a value-free descriptor of one stored credential, for the Settings
+// status view (never carries the secret). ID is the delete key (host for git,
+// KEY for env, the store id for file); Name is the human label (Path for file).
+type Item struct {
+	Kind string `json:"kind"` // "git" | "env" | "file"
+	ID   string `json:"id"`   // delete key: host | KEY | file id
+	Name string `json:"name"` // display: host | KEY | path
 }
 
 // Store is the per-user credential store rooted at a base dir.
@@ -65,6 +115,8 @@ func atomicWrite(path string, data []byte) error {
 	return os.Rename(tmp, path)
 }
 
+// ─── git tier ───────────────────────────────────────────────────────────────
+
 // PutGit stores (or replaces) the git credential for a user+host.
 func (s *Store) PutGit(user string, c GitCred) error {
 	s.mu.Lock()
@@ -92,6 +144,224 @@ func (s *Store) GetGit(user, host string) (GitCred, error) {
 		return GitCred{}, err
 	}
 	return c, nil
+}
+
+// ─── env tier ───────────────────────────────────────────────────────────────
+
+// PutEnv stores (or replaces) a shell-variable credential. The value must be a
+// single line with no control characters: the in-guest snippet delivers env
+// creds line-by-line (KEY\tVALUE), so a newline or tab in the value would
+// inject an extra exported variable into every login shell (ADR-032 review).
+func (s *Store) PutEnv(user, key, value string) error {
+	if !envKeyRe.MatchString(key) {
+		return fmt.Errorf("invalid env key %q", key)
+	}
+	if hasCtrl(value) {
+		return fmt.Errorf("env value for %q contains a control character", key)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := json.MarshalIndent(EnvCred{Key: key, Value: value}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Join(s.userDir(user), "env-"+key+".json"), append(data, '\n'))
+}
+
+// AllEnv returns every env credential for a user as a key→value map (empty when
+// none are onboarded).
+func (s *Store) AllEnv(user string) (map[string]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]string{}
+	entries, err := os.ReadDir(s.userDir(user))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), "env-") || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.userDir(user), e.Name()))
+		if err != nil {
+			continue
+		}
+		var c EnvCred
+		if err := json.Unmarshal(data, &c); err != nil || !envKeyRe.MatchString(c.Key) || hasCtrl(c.Value) {
+			continue
+		}
+		out[c.Key] = c.Value
+	}
+	return out, nil
+}
+
+// ─── file tier ──────────────────────────────────────────────────────────────
+
+// PutFile stores (or replaces) a file credential. id is a stable key; path is
+// validated home-relative (no absolute, no "..").
+func (s *Store) PutFile(user string, c FileCred) error {
+	if c.ID == "" || !envKeyRe.MatchString(strings.ReplaceAll(c.ID, "-", "_")) {
+		return fmt.Errorf("invalid file id %q", c.ID)
+	}
+	if err := validRelPath(c.Path); err != nil {
+		return err
+	}
+	if c.Mode == "" {
+		c.Mode = "0600"
+	}
+	if _, err := strconv.ParseUint(c.Mode, 8, 32); err != nil {
+		return fmt.Errorf("invalid mode %q", c.Mode)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w := fileCredWire{ID: c.ID, Path: c.Path, Mode: c.Mode, DataB64: base64.StdEncoding.EncodeToString(c.Data)}
+	data, err := json.MarshalIndent(w, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Join(s.userDir(user), "file-"+c.ID+".json"), append(data, '\n'))
+}
+
+// AllFiles returns every file credential for a user (empty when none).
+func (s *Store) AllFiles(user string) ([]FileCred, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []FileCred
+	entries, err := os.ReadDir(s.userDir(user))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), "file-") || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.userDir(user), e.Name()))
+		if err != nil {
+			continue
+		}
+		var w fileCredWire
+		if err := json.Unmarshal(data, &w); err != nil || validRelPath(w.Path) != nil {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(w.DataB64)
+		if err != nil {
+			continue
+		}
+		out = append(out, FileCred{ID: w.ID, Path: w.Path, Mode: w.Mode, Data: raw})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// ─── management ─────────────────────────────────────────────────────────────
+
+// List returns value-free descriptors of everything stored for a user, for the
+// Settings status view.
+func (s *Store) List(user string) ([]Item, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []Item
+	entries, err := os.ReadDir(s.userDir(user))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return nil, err
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if e.IsDir() || !strings.HasSuffix(n, ".json") {
+			continue
+		}
+		data, _ := os.ReadFile(filepath.Join(s.userDir(user), n))
+		switch {
+		case strings.HasPrefix(n, "git-"):
+			var c GitCred
+			json.Unmarshal(data, &c)
+			out = append(out, Item{Kind: "git", ID: c.Host, Name: c.Host})
+		case strings.HasPrefix(n, "env-"):
+			var c EnvCred
+			json.Unmarshal(data, &c)
+			out = append(out, Item{Kind: "env", ID: c.Key, Name: c.Key})
+		case strings.HasPrefix(n, "file-"):
+			var w fileCredWire
+			json.Unmarshal(data, &w)
+			out = append(out, Item{Kind: "file", ID: w.ID, Name: w.Path})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
+// Delete removes one credential by kind+name. Kinds: "git" (name=host),
+// "env" (name=KEY), "file" (name=id).
+func (s *Store) Delete(user, kind, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var fn string
+	switch kind {
+	case "git":
+		fn = "git-" + safe(name) + ".json"
+	case "env":
+		if !envKeyRe.MatchString(name) {
+			return fmt.Errorf("invalid env key %q", name)
+		}
+		fn = "env-" + name + ".json"
+	case "file":
+		if name == "" || strings.ContainsAny(name, "/\\") {
+			return fmt.Errorf("invalid file id %q", name)
+		}
+		fn = "file-" + name + ".json"
+	default:
+		return fmt.Errorf("unknown kind %q", kind)
+	}
+	err := os.Remove(filepath.Join(s.userDir(user), fn))
+	if os.IsNotExist(err) {
+		return ErrNotFound
+	}
+	return err
+}
+
+// validRelPath rejects anything that could escape the guest home: absolute
+// paths and any ".." segment. A leading "~/" is allowed (the login snippet
+// strips it). The materialized target is always under $HOME.
+func validRelPath(p string) error {
+	if p == "" {
+		return errors.New("empty path")
+	}
+	rel := strings.TrimPrefix(p, "~/")
+	if strings.HasPrefix(rel, "/") {
+		return fmt.Errorf("path must be home-relative: %q", p)
+	}
+	for _, seg := range strings.Split(rel, "/") {
+		if seg == ".." {
+			return fmt.Errorf("path escapes home: %q", p)
+		}
+	}
+	return nil
+}
+
+// hasCtrl reports whether s contains any control character (incl. newline,
+// carriage return, tab, and DEL) — such a value must never reach the login
+// snippet's line-based env delivery.
+func hasCtrl(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // safe reduces a host to a filename-safe token (no path separators).

@@ -126,6 +126,17 @@ export interface Settings {
   setupComplete: boolean;
 }
 
+/** A stored credential, value-free. `id` is the delete key (host | KEY | file
+ *  id); `name` is the display label (host | KEY | path). */
+export interface CredItem {
+  kind: "git" | "env" | "file";
+  id: string;
+  name: string;
+}
+
+/** Per-tool result of an import-from-project pass. */
+export type CredImportReport = Record<string, string>;
+
 export interface SetupStatus {
   gitIdentity: boolean;
   sshKey: boolean;
@@ -359,6 +370,28 @@ export const api = {
     }),
   // User-access management is API-only since v1.3 (operator Q4): the
   // /api/settings/users endpoints exist for curl, but the UI card is gone.
+
+  // Credential broker (ADR-032): the store holds one live copy of each
+  // credential; the broker serves the current copy to every project.
+  credentials: () =>
+    request<{ items: CredItem[]; brokerEnabled?: boolean }>(
+      "/api/settings/credentials",
+    ),
+  importCredentials: (project: string) =>
+    request<{ report: CredImportReport }>(
+      "/api/settings/credentials/import",
+      { method: "POST", body: JSON.stringify({ project }) },
+    ),
+  putCredentialToken: (key: string, value: string) =>
+    request<{ key: string; status: string }>(
+      "/api/settings/credentials/token",
+      { method: "POST", body: JSON.stringify({ key, value }) },
+    ),
+  deleteCredential: (kind: string, name: string) =>
+    request<void>(
+      `/api/settings/credentials/${kind}/${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    ),
   setupStatus: () => request<SetupStatus>("/api/setup/status"),
   setupStart: () => request<void>("/api/setup/start", { method: "POST" }),
   setupDone: () => request<void>("/api/setup/done", { method: "POST" }),

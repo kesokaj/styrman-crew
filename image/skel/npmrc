@@ -1,0 +1,5 @@
+; styrman default npm config (ADR-032). The registry auth token comes from the
+; credential broker as $NPM_TOKEN (exported into every login shell); npm expands
+; it at invocation time. Empty when npm isn't onboarded — that's just anonymous
+; access. Add your own npm settings below; this file is yours to edit.
+//registry.npmjs.org/:_authToken=${NPM_TOKEN}

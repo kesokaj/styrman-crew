@@ -151,6 +151,173 @@ function TerminalUsername({
   );
 }
 
+/** The credential broker (ADR-032): one live copy of each credential, served
+ *  to every project. Sign in once in any project, import here, and every
+ *  project — new ones included — is current with no re-auth. */
+function CredentialsSection() {
+  const { data, refresh } = usePolled(() => api.credentials(), 20000);
+  const { data: projData } = usePolled(() => api.listProjects(), 15000);
+  const running = (projData?.projects ?? []).filter((p) => p.state === "running");
+  const [importFrom, setImportFrom] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [key, setKey] = useState("");
+  const [value, setValue] = useState("");
+
+  const items = data?.items ?? [];
+  const brokerOff = data?.brokerEnabled === false;
+  const kindLabel: Record<string, string> = {
+    git: "git helper",
+    env: "shell var",
+    file: "file",
+  };
+
+  if (brokerOff) {
+    return (
+      <Section title="Credentials">
+        <Row label="Broker">
+          <span className="text-text-dim">
+            Not available in this deployment mode (the broker runs only on the
+            containerized server, on each project's bridge).
+          </span>
+        </Row>
+      </Section>
+    );
+  }
+
+  const runImport = async () => {
+    const pid = importFrom || running[0]?.id;
+    if (!pid) return;
+    setBusy(true);
+    try {
+      const { report } = await api.importCredentials(pid);
+      const stored = Object.entries(report).filter(([, v]) =>
+        v.startsWith("stored"),
+      );
+      toast(
+        stored.length ? "success" : "info",
+        stored.length
+          ? `Imported: ${stored.map(([k]) => k).join(", ")}`
+          : "Nothing signed in yet in that project",
+      );
+      refresh();
+    } catch (e) {
+      toast("error", (e as Error).message || "Import failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section title="Credentials">
+      <Row label="How it works">
+        <span className="text-text-dim">
+          The broker keeps one live copy of each credential and delivers the
+          current one to every project — sign in once, no re-auth. Removing one
+          stops sharing it with new sessions; restart a project to clear a
+          token or file already materialized in it.
+        </span>
+      </Row>
+      <Row label="Shared now">
+        {items.length === 0 ? (
+          <span className="text-text-dim">
+            None yet — import from a project you've signed into.
+          </span>
+        ) : (
+          <div className="flex flex-col gap-1 py-1">
+            {items.map((it) => (
+              <div
+                key={`${it.kind}:${it.name}`}
+                className="flex items-center gap-2"
+              >
+                <span className="h-2 w-2 rounded-full bg-ok" />
+                <span className="font-mono">{it.name}</span>
+                <span className="rounded bg-bg px-1.5 py-0.5 text-[10px] text-text-dim">
+                  {kindLabel[it.kind] ?? it.kind}
+                </span>
+                <button
+                  onClick={() =>
+                    tryUI(async () => {
+                      await api.deleteCredential(it.kind, it.id);
+                      refresh();
+                    })
+                  }
+                  className="ml-auto text-[10px] text-text-dim hover:text-danger"
+                >
+                  remove
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Row>
+      <Row label="Import from a project">
+        {running.length === 0 ? (
+          <span className="text-text-dim">
+            Start a project and sign in (gh, claude, gcloud, ssh, npm), then
+            import here.
+          </span>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2 py-1">
+            <select
+              value={importFrom || running[0]?.id}
+              onChange={(e) => setImportFrom(e.target.value)}
+              className="rounded border border-border bg-bg px-2 py-1"
+            >
+              {running.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={runImport}
+              disabled={busy}
+              className="rounded bg-accent-soft px-2 py-1 text-on-accent-soft hover:brightness-110 disabled:opacity-50"
+            >
+              {busy ? "Importing…" : "Import"}
+            </button>
+            <span className="text-[10px] text-text-dim">
+              reads gh · claude · gcloud · ssh · npm
+            </span>
+          </div>
+        )}
+      </Row>
+      <Row label="Add a token">
+        <div className="flex flex-wrap items-center gap-2 py-1">
+          <input
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="NPM_TOKEN"
+            className="w-36 rounded border border-border bg-bg px-2 py-1 font-mono"
+          />
+          <input
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="value"
+            type="password"
+            className="w-48 rounded border border-border bg-bg px-2 py-1 font-mono"
+          />
+          <button
+            onClick={() =>
+              tryUI(async () => {
+                if (!key.trim() || !value.trim()) return;
+                await api.putCredentialToken(key.trim(), value);
+                setKey("");
+                setValue("");
+                toast("success", "Token stored");
+                refresh();
+              })
+            }
+            className="rounded bg-accent-soft px-2 py-1 text-on-accent-soft hover:brightness-110"
+          >
+            Store
+          </button>
+        </div>
+      </Row>
+    </Section>
+  );
+}
+
 function SettingsPage() {
   const navigate = useNavigate();
   const { data, refresh } = usePolled(() => api.settings(), 15000);
@@ -208,6 +375,8 @@ function SettingsPage() {
         {(toolData?.tools ?? []).map((t) => (
           <ToolCard key={t.name} tool={t} />
         ))}
+
+        <CredentialsSection />
 
         <Section title="Appearance">
           <Row label="Theme">
