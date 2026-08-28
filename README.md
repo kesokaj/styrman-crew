@@ -25,10 +25,12 @@ forever; containers disposable always.
   network — projects can never reach each other). 1 user = 1 home disk —
   users never see each other's worlds.
 - **Share previews, not access.** A project owner can grant specific Google
-  emails access to ONE exposed port's preview (ADR-024) — never the
-  terminal, files, dashboard, or other ports — or mint a public, expiring
-  link to that port (`1h`/`24h`/`7d`, no login, revocable) served from its
-  own subdomain (ADR-025). Both are least-privilege by construction.
+  emails access to ONE exposed port's preview — never the terminal, files,
+  dashboard, or other ports. Sharing mints a stable **private link** on its
+  own `*.private` subdomain (Google sign-in + share-list check, ADR-024/026);
+  a public, expiring link (`1h`/`24h`/`7d`, no login, revocable) lives on
+  `*.public` (ADR-025). The hostname tells you the auth model. All
+  least-privilege by construction.
 - **Credentials once, forever.** Each user's home (`~/.ssh`, `~/.claude`,
   `~/.gemini`, gh) survives container rebuilds, project deletion, and host
   reboots. Terminal transcripts are captured there too.
@@ -45,7 +47,9 @@ Browser ──HTTPS──► Caddy (Google OAuth, TLS, Cloudflare DNS — vendor
                 ├── /p/{id}/{t}/port/{port}/ → apps inside the microVM
                 │     (owner, or a Google email the owner shared that port with)
                 ├── /link/{token}/ → public, expiring, no-login preview of one
-                │     port, also served at https://<token>.PREVIEW_DOMAIN/
+                │     port, served at https://<token>.<public domain>/
+                ├── /shared/{token}/ → email-gated share of one port, served at
+                │     https://<token>.<private domain>/ (Google sign-in required)
                 └── Docker SDK ──► per-project Kata microVM  styrman-<uuid>
                                      ├── tmux session per terminal → transcripts
                                      ├── own dockerd (overlay2 on a per-project disk)

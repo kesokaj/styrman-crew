@@ -54,7 +54,11 @@ Load-bearing ideas:
    edit via a lazy-loaded CodeMirror 6 editor with syntax highlighting by
    filename and Ctrl+S to save, upload by drag, download), Ports (what's
    listening, with process / inner-docker image, shareable
-   `/p/<id>/<t>/port/<port>/` links), History (transcripts), Git
+   `/p/<id>/<t>/port/<port>/` links; per-port sharing — adding a Google
+   email mints a stable **private link** `https://<token>.private.…/`
+   requiring sign-in + membership in the share list, ADR-026 — and public
+   TTL links on `https://<token>.public.…/`, ADR-025), History
+   (transcripts), Git
    (working-tree diff + branch, and checkpoints — see below), Clips
    (clipboard history, session-scoped — see above).
 5. **Git is the substrate** (R13, ADR-022): every project workspace IS a git

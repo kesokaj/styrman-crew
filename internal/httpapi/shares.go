@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,8 +10,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kesokaj/styrman-crew/internal/identity"
+	"github.com/kesokaj/styrman-crew/internal/links"
 	"github.com/kesokaj/styrman-crew/internal/project"
 )
 
@@ -113,7 +116,23 @@ func (s *Server) getShares(w http.ResponseWriter, r *http.Request) {
 	if emails == nil {
 		emails = []string{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"emails": emails})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"emails": emails,
+		"url":    s.sharedURL(p.ID, port),
+	})
+}
+
+// sharedURL returns the port's private share URL, or "" when the port has no
+// live share link (or the links store is unavailable).
+func (s *Server) sharedURL(project string, port int) string {
+	if s.links == nil {
+		return ""
+	}
+	l, ok := s.links.GetPrivate(project, port)
+	if !ok {
+		return ""
+	}
+	return s.linkURL(l)
 }
 
 // maxShares / maxEmailLen bound the per-project share list — it is rewritten
@@ -161,9 +180,34 @@ func (s *Server) setShares(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("too many shares (max %d)", maxShares))
 		return
 	}
+	s.sharesMu.Lock()
+	defer s.sharesMu.Unlock()
 	if err := sp.projects.SetPortShares(p.ID, port, clean); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
+	}
+	// The private share link lives and dies with the list: mint (idempotent —
+	// the URL stays stable across edits) while anyone is shared, drop it when
+	// the list empties so the token stops resolving at all. A failure here is
+	// surfaced, not swallowed: the emails ARE saved at this point, but the
+	// owner must know the link state didn't follow.
+	if s.links != nil {
+		if len(clean) > 0 {
+			if _, err := s.links.EnsurePrivate(p.ID, u.Username, port, u.Email, time.Now()); err != nil {
+				s.logger.Error("share link mint failed", "project", p.ID, "port", port, "error", err)
+				code := http.StatusInternalServerError
+				if errors.Is(err, links.ErrTooManyLinks) {
+					code = http.StatusConflict
+				}
+				writeErr(w, code, fmt.Errorf("emails saved, but the private link could not be created: %w", err))
+				return
+			}
+		} else if err := s.links.DeletePrivate(p.ID, port); err != nil {
+			s.logger.Error("share link revoke failed", "project", p.ID, "port", port, "error", err)
+			writeErr(w, http.StatusInternalServerError,
+				fmt.Errorf("emails cleared, but the private link could not be removed: %w", err))
+			return
+		}
 	}
 	// Audit: an access-control change is worth a durable log line.
 	s.logger.Info("port shares updated", "by", u.Email, "project", p.ID,
@@ -171,7 +215,10 @@ func (s *Server) setShares(w http.ResponseWriter, r *http.Request) {
 	if clean == nil {
 		clean = []string{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"emails": clean})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"emails": clean,
+		"url":    s.sharedURL(p.ID, port),
+	})
 }
 
 func errInvalidEmail(e string) error {

@@ -68,26 +68,50 @@ stack back via docker.service — no systemd units needed.
 
 ### Public preview links (optional, ADR-025)
 
-Set `STYRMAN_PREVIEW_DOMAIN` (e.g. `preview.${BASE_DOMAIN}`) in `deploy/.env`
-to turn on public, expiring preview links. One var drives both sides of the
-stack:
-- **Ingress** (`PREVIEW_DOMAIN=${STYRMAN_PREVIEW_DOMAIN}` env on the `caddy`
+Set `STYRMAN_PUBLIC_DOMAIN` (e.g. `public.crew.${BASE_DOMAIN}`) in
+`deploy/.env` to turn on public, expiring preview links. One var drives both
+sides of the stack:
+- **Ingress** (`PREVIEW_DOMAIN=${STYRMAN_PUBLIC_DOMAIN}` env on the `caddy`
   service, `deploy/docker-compose.yml`): adds a `*.PREVIEW_DOMAIN`
   `ModePublic` wildcard site block (no OAuth — the link token is the
   credential), a wildcard DNS A record (`EnsureDNS`), and an auto-issued
   wildcard TLS cert. The `styrman-server` container is the wildcard's target
   via its `caddy_preview_target: 'true'` label.
-- **Server** (`STYRMAN_PREVIEW_BASE=${STYRMAN_PREVIEW_DOMAIN}`): each minted
+- **Server** (`STYRMAN_PREVIEW_BASE=${STYRMAN_PUBLIC_DOMAIN}`): each minted
   link is served at its own origin, `https://<token>.<PREVIEW_DOMAIN>/`, via
   `previewHostRewrite` mapping the subdomain to `/link/{token}/…` before
   `authGuard` runs.
 
-Leave `STYRMAN_PREVIEW_DOMAIN` empty to keep the feature fully off — no
+Leave `STYRMAN_PUBLIC_DOMAIN` empty to keep the feature fully off — no
 wildcard block, no DNS record, no cert. Enabling it **creates a public,
 unauthenticated wildcard host** (`*.PREVIEW_DOMAIN`); every request there is
 gated only by an unguessable 128-bit token with a 1h/24h/7d TTL, not by
 Google auth. See `.agents/docs/specs/styrman/api.md` for the mint/list/revoke
 endpoints and `internal/links` for the token store.
+
+### Private share links (optional, ADR-026)
+
+Set `STYRMAN_PRIVATE_DOMAIN` (e.g. `private.crew.${BASE_DOMAIN}`) to serve
+per-port email shares on their own subdomains too. Same two-sided wiring:
+- **Ingress** (`PRIVATE_DOMAIN=${STYRMAN_PRIVATE_DOMAIN}`): adds a
+  `*.PRIVATE_DOMAIN` wildcard site block that **requires Google OAuth**
+  (`writePrivateWildcard` reuses the server app's authorization policy — the
+  JWT cookie is domain-scoped, so an existing session works), injects the
+  verified identity headers + the ingress token, preserves Host, plus the
+  wildcard DNS record and cert.
+- **Server** (`STYRMAN_PRIVATE_BASE=${STYRMAN_PRIVATE_DOMAIN}`): sharing a
+  port mints a stable private link served at
+  `https://<token>.<PRIVATE_DOMAIN>/` via the same host rewrite →
+  `/shared/{token}/…`; `serveShared` then checks the ingress-verified email
+  against the port's share list on EVERY request.
+
+Unlike the public wildcard this host is never anonymous: an unauthenticated
+visitor is 302'd to Google sign-in first, and an authenticated one sees the
+app only if the owner shared that port with their email. Because each share
+gets its own origin, the CSP sandbox that the same-origin `/p/` preview needs
+does not apply — stateful apps work for email guests exactly as they do on
+public links. The kinds are locked to their routes: a private token 404s on
+`/link` (no-login) and a public token 404s on `/shared`.
 
 ### Bring-up
 

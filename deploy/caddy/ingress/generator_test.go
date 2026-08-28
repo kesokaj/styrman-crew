@@ -291,11 +291,17 @@ func TestIngressTokenHeaderInjected(t *testing.T) {
 	cfg := GeneratorConfig{BaseDomain: "styrman.xyz", AdminEmail: "a@b.c", IngressToken: "s3cr3t-tok"}
 	result := GenerateCaddyfile(apps, cfg)
 	assertContains(t, result, `request_header X-Styrman-Ingress "s3cr3t-tok"`)
-	// Absent when unset.
+	// The client-supplied header is stripped even when a token IS set (the
+	// strip precedes the inject, so a forged value can never survive).
+	assertContains(t, result, "request_header -X-Styrman-Ingress")
+	// INJECTION absent when unset — but the defensive strip must remain, so a
+	// token-less deploy still can't relay a forged header upstream.
 	cfg.IngressToken = ""
-	if strings.Contains(GenerateCaddyfile(apps, cfg), "X-Styrman-Ingress") {
-		t.Fatal("token header must not appear when IngressToken is empty")
+	out := GenerateCaddyfile(apps, cfg)
+	if strings.Contains(out, `request_header X-Styrman-Ingress`) {
+		t.Fatal("token header must not be injected when IngressToken is empty")
 	}
+	assertContains(t, out, "request_header -X-Styrman-Ingress")
 }
 
 func TestPreviewWildcardBlock(t *testing.T) {
@@ -323,5 +329,47 @@ func TestPreviewWildcardBlock(t *testing.T) {
 	cfg.PreviewDomain = ""
 	if strings.Contains(GenerateCaddyfile(apps, cfg), "preview.styrman.xyz {") {
 		t.Error("preview block emitted with PreviewDomain empty")
+	}
+}
+
+func TestPrivateWildcardBlock(t *testing.T) {
+	apps := []App{
+		{Hostname: "styrman", ContainerIP: "10.0.0.5", Port: 8080, Mode: ModeAuthenticated, RPS: 100, PreviewTarget: true},
+	}
+	cfg := GeneratorConfig{
+		BaseDomain: "styrman.xyz", AdminEmail: "a@b.c", AppsDomain: "styrman.xyz",
+		AuthDomain: "auth.styrman.xyz", PrivateDomain: "private.crew.styrman.xyz",
+		IngressToken: "tok123", DefaultRPS: 100,
+	}
+	out := GenerateCaddyfile(apps, cfg)
+	for _, want := range []string{
+		"*.private.crew.styrman.xyz {",
+		"authorize with styrman_policy",
+		`request_header X-Caddy-Email "{http.request.header.X-Token-User-Email}"`,
+		"request_header X-Styrman-Ingress",
+		"header_up Host {host}",
+		"reverse_proxy 10.0.0.5:8080",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("private wildcard block missing %q\n%s", want, out)
+		}
+	}
+	// The block must strip client-supplied claim headers BEFORE authorize.
+	stripIdx := strings.Index(out, "*.private.crew.styrman.xyz {")
+	block := out[stripIdx:]
+	if s, a := strings.Index(block, "request_header -X-Token-User-Email"), strings.Index(block, "authorize with"); s < 0 || a < 0 || s > a {
+		t.Errorf("claim-header strip must precede authorize (strip=%d authorize=%d)", s, a)
+	}
+	// Disabled when PrivateDomain is empty.
+	cfg.PrivateDomain = ""
+	if strings.Contains(GenerateCaddyfile(apps, cfg), "private.crew.styrman.xyz {") {
+		t.Error("private block emitted with PrivateDomain empty")
+	}
+	// Never emitted for a PUBLIC target app: the block reuses the app's auth
+	// policy, which only exists for authenticated apps.
+	cfg.PrivateDomain = "private.crew.styrman.xyz"
+	apps[0].Mode = ModePublic
+	if strings.Contains(GenerateCaddyfile(apps, cfg), "*.private.crew.styrman.xyz {") {
+		t.Error("private block emitted for a public target app")
 	}
 }

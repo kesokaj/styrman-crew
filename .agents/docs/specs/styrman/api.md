@@ -50,12 +50,13 @@ A terminal is a persisted record whose live view is a tmux session
 | `GET /api/projects/{id}/ports` | Listening TCP ports ≥1024 inside the microVM: `{port, process?, image?}` — process from /proc, image when the port belongs to the project's inner docker. |
 | `/p/{id}/{t}/port/{port}/...` | Shareable link proxying to the app inside the microVM (WS pass-through). Bare form 301s to the trailing slash; a first-ever preview may 307 once while the server joins the project network. Reachable by the owner, or by a Google email the owner shared that port with (ADR-024) — `previewAllowed` in `internal/httpapi/shares.go` is the gate. |
 | `/proxy/{id}/{port}/...` | Terminal-independent form; same access rule. |
-| `GET .../ports/{port}/shares` | Emails allowed to reach this port's preview (owner only): `{"emails":[...]}`. |
-| `PUT .../ports/{port}/shares` | Replace the list (owner only): body `{"emails":[...]}` → normalized (lowercased, trimmed, deduped) and validated; capped at 50 entries, 254 bytes each. Returns the stored list. |
+| `GET .../ports/{port}/shares` | Emails allowed to reach this port's preview (owner only): `{"emails":[...],"url":"…"}`. `url` is the port's stable **private share link** (empty until someone is shared). |
+| `PUT .../ports/{port}/shares` | Replace the list (owner only): body `{"emails":[...]}` → normalized (lowercased, trimmed, deduped) and validated; capped at 50 entries, 254 bytes each. Returns the stored list + `url`. A non-empty list mints the port's private link (idempotent — the URL is stable across edits); emptying the list deletes it. |
 | `POST .../ports/{port}/links` | Mint a public TTL link for this port (owner only): body `{"ttl":"1h"\|"24h"\|"7d"}` → `{"token","port","url","expires"}`. |
 | `GET /api/projects/{id}/links` | The project's live public links (owner only): `{"links":[{token,port,url,expires}]}`. |
 | `DELETE /api/projects/{id}/links/{token}` | Revoke a link — **204**. Owner only; 404s if the token doesn't belong to this project. |
-| `GET /link/{token}/...` | **Public, unauthenticated** (ADR-025) — the token is the capability; `authGuard` exempts this route entirely. Proxies to exactly the linked port of the owning project; unknown/expired/revoked token → 404 either way (no oracle). Also reachable as `https://{token}.<STYRMAN_PREVIEW_BASE>/...` via a Host-header rewrite when that env is set — each token gets its own origin. |
+| `GET /link/{token}/...` | **Public, unauthenticated** (ADR-025) — the token is the capability; `authGuard` exempts this route entirely. Proxies to exactly the linked port of the owning project; unknown/expired/revoked token → 404 either way (no oracle). A PRIVATE token is refused here (kind lock) — the no-login route must never honor an email-gated link. Also reachable as `https://{token}.<STYRMAN_PREVIEW_BASE>/...` via a Host-header rewrite when that env is set — each token gets its own origin. |
+| `GET /shared/{token}/...` | **Email-gated share route** (ADR-026). Requires an ingress-verified identity (`authGuard` lets non-styrman Google users through to this route only); `serveShared` then requires owner or membership in the port's CURRENT share list — removing an email cuts access immediately. Public tokens are refused (kind lock). Reachable as `https://{token}.<STYRMAN_PRIVATE_BASE>/...` — the OAuth-gated private wildcard — giving each share its own origin (no CSP sandbox needed, unlike `/p/`). |
 
 Sharing and public links are both least-privilege: scoped to ONE exposed
 port, never the terminal, files, dashboard, or other ports. Per-port shares
@@ -131,7 +132,8 @@ Git tab's "Checkpoint now" button or the POST below.
 | `STYRMAN_DEV_ADDR` | unset | Auth-bypassed second listener — publish on host loopback ONLY |
 | `STYRMAN_AUTH` | `none` | `header` behind the ingress |
 | `STYRMAN_INGRESS_TOKEN` | unset (disabled) | Shared secret the ingress injects as `X-Styrman-Ingress`; header mode rejects requests without it when set — blocks a project VM from spoofing `X-Caddy-Email` directly against the server |
-| `STYRMAN_PREVIEW_BASE` | unset (off) | Public preview host base (ADR-025), e.g. `preview.crew.styrman.xyz`; when set, `/link/{token}` is also reachable as `https://{token}.<base>/` and minted link URLs use that form. Fed by `STYRMAN_PREVIEW_DOMAIN` in `deploy/.env` — see deploy.md |
+| `STYRMAN_PREVIEW_BASE` | unset (off) | Public preview host base (ADR-025), e.g. `public.crew.styrman.xyz`; when set, `/link/{token}` is also reachable as `https://{token}.<base>/` and minted link URLs use that form. Fed by `STYRMAN_PUBLIC_DOMAIN` in `deploy/.env` — see deploy.md |
+| `STYRMAN_PRIVATE_BASE` | unset (off) | Private share host base (ADR-026), e.g. `private.crew.styrman.xyz`; when set, `/shared/{token}` is also reachable as `https://{token}.<base>/` and share URLs use that form. Fed by `STYRMAN_PRIVATE_DOMAIN` in `deploy/.env` — see deploy.md |
 | `STYRMAN_ALLOWED_EMAILS` | — | Admin accounts (comma-sep); first one is the dev-listener identity |
 | `STYRMAN_STATE_DIR` | `/var/lib/styrman` | Root: `homes/<user>`, `users/<user>/*.json`, `users.json` |
 | `STYRMAN_IMAGE` / `STYRMAN_RUNTIME` | `styrman-runtime:latest` / `mvm` | Project microVM image + runtime |

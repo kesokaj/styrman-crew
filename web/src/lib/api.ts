@@ -218,11 +218,11 @@ export const api = {
     request<{ ports: PortInfo[] }>(`/api/projects/${project}/ports`),
 
   getPortShares: (project: string, port: number) =>
-    request<{ emails: string[] }>(
+    request<{ emails: string[]; url: string }>(
       `/api/projects/${project}/ports/${port}/shares`,
     ),
   setPortShares: (project: string, port: number, emails: string[]) =>
-    request<{ emails: string[] }>(
+    request<{ emails: string[]; url: string }>(
       `/api/projects/${project}/ports/${port}/shares`,
       { method: "PUT", body: JSON.stringify({ emails }) },
     ),

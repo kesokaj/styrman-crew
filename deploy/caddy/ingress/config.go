@@ -88,7 +88,8 @@ const (
 	EnvAuthDomain        = "AUTH_DOMAIN"           // Absolute FQDN for auth portal (default: auth.<BASE_DOMAIN>)
 	EnvShellDomain       = "SHELL_DOMAIN"          // Absolute FQDN for shell (default: shell.<BASE_DOMAIN>)
 	EnvAppsDomain        = "APPS_DOMAIN"           // Wildcard base for user apps (default: <BASE_DOMAIN>)
-	EnvPreviewDomain     = "PREVIEW_DOMAIN"        // Public preview wildcard base, e.g. preview.<BASE_DOMAIN> (empty = off)
+	EnvPreviewDomain     = "PREVIEW_DOMAIN"        // Public preview wildcard base, e.g. public.<app domain> (empty = off)
+	EnvPrivateDomain     = "PRIVATE_DOMAIN"        // Email-gated preview wildcard base, e.g. private.<app domain> (empty = off)
 	EnvIngressToken      = "STYRMAN_INGRESS_TOKEN" // shared secret injected as X-Styrman-Ingress on authenticated routes
 	EnvJWTKey            = "STYRMAN_JWT_KEY"       // stable HMAC key for caddy-security JWTs (survives restarts)
 )

@@ -44,7 +44,7 @@ func NewCloudflareClient(token, baseDomain string, logger *slog.Logger) (*Cloudf
 // EnsureDNS ensures the infrastructure A records and the apps wildcard A record
 // exist, pointing to the given server IP. Records are created if missing, updated
 // if the IP has changed, and left alone if already correct.
-func (c *CloudflareClient) EnsureDNS(serverIP, authDomain, _, appsDomain, previewDomain string) error {
+func (c *CloudflareClient) EnsureDNS(serverIP, authDomain, _, appsDomain, previewDomain, privateDomain string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -74,6 +74,16 @@ func (c *CloudflareClient) EnsureDNS(serverIP, authDomain, _, appsDomain, previe
 		}{
 			name:    fmt.Sprintf("*.%s", previewDomain),
 			comment: "styrman public preview links wildcard (auto-managed)",
+		})
+	}
+	// Private (email-gated) share links wildcard — same shape, OAuth in front.
+	if privateDomain != "" {
+		records = append(records, struct {
+			name    string
+			comment string
+		}{
+			name:    fmt.Sprintf("*.%s", privateDomain),
+			comment: "styrman private share links wildcard (auto-managed)",
 		})
 	}
 

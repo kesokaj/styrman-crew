@@ -16,9 +16,19 @@ import (
 	"time"
 )
 
-// Link is one public preview capability.
+// Link kinds. Public links are the anyone-with-the-URL capability (TTL is the
+// only gate); private links are served on an OAuth-gated host and additionally
+// checked against the port's shared-email list at serve time. An empty Kind is
+// public (records predating the field).
+const (
+	KindPublic  = "public"
+	KindPrivate = "private"
+)
+
+// Link is one preview capability (public TTL link or private share link).
 type Link struct {
 	Token     string    `json:"token"` // 32 hex chars; also a valid DNS label
+	Kind      string    `json:"kind,omitempty"`
 	Project   string    `json:"project"`
 	Owner     string    `json:"owner"` // owner username slug (namespace ops)
 	Port      int       `json:"port"`
@@ -27,8 +37,23 @@ type Link struct {
 	Expires   time.Time `json:"expires"`
 }
 
-// Expired reports whether the link is past its expiry at now.
-func (l Link) Expired(now time.Time) bool { return !now.Before(l.Expires) }
+// Private reports whether this is an email-gated share link.
+func (l Link) Private() bool { return l.Kind == KindPrivate }
+
+// Expired reports whether the link is past its expiry at now. The invariant
+// keys on Kind, not on the timestamp: private links never expire (they live
+// until the share is revoked), and a PUBLIC record without an expiry — a
+// hand-edited store, a bug that skipped the TTL — is treated as expired
+// rather than becoming an immortal public capability (fail-closed).
+func (l Link) Expired(now time.Time) bool {
+	if l.Private() {
+		return false
+	}
+	if l.Expires.IsZero() {
+		return true
+	}
+	return !now.Before(l.Expires)
+}
 
 // Store is a mutex-guarded JSON-file-backed link store, keyed by token.
 type Store struct {
@@ -76,22 +101,24 @@ const MaxLivePerProject = 20
 // ErrTooManyLinks is returned when a project is at MaxLivePerProject.
 var ErrTooManyLinks = fmt.Errorf("too many active links (max %d) — revoke one first", MaxLivePerProject)
 
-// Create mints a link for {project, owner, port} valid for ttl from now.
+// Create mints a public link for {project, owner, port} valid for ttl from now.
 func (s *Store) Create(project, owner string, port int, createdBy string, ttl time.Duration, now time.Time) (Link, error) {
 	token, err := newToken()
 	if err != nil {
 		return Link{}, err
 	}
 	l := Link{
-		Token: token, Project: project, Owner: owner, Port: port,
+		Token: token, Kind: KindPublic, Project: project, Owner: owner, Port: port,
 		CreatedBy: createdBy, CreatedAt: now, Expires: now.Add(ttl),
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(now)
+	// The cap is per kind: a project's private links (one per shared port,
+	// created implicitly by sharing) must not eat the public-link budget.
 	live := 0
 	for _, e := range s.links {
-		if e.Project == project {
+		if e.Project == project && !e.Private() {
 			live++
 		}
 	}
@@ -104,6 +131,93 @@ func (s *Store) Create(project, owner string, port int, createdBy string, ttl ti
 		return Link{}, err
 	}
 	return l, nil
+}
+
+// EnsurePrivate returns the project+port's private share link, minting it if
+// absent (idempotent — sharing a port twice must not rotate its URL). Private
+// links never expire; they are deleted when the port's share list empties.
+// An existing link keeps its stored Owner/CreatedBy: project IDs are global
+// UUIDs and ownership never moves, so a mismatch cannot occur in practice.
+func (s *Store) EnsurePrivate(project, owner string, port int, createdBy string, now time.Time) (Link, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	live := 0
+	for _, e := range s.links {
+		if e.Project != project || !e.Private() {
+			continue
+		}
+		if e.Port == port {
+			return e, nil
+		}
+		live++
+	}
+	if live >= MaxLivePerProject {
+		return Link{}, ErrTooManyLinks
+	}
+	token, err := newToken()
+	if err != nil {
+		return Link{}, err
+	}
+	l := Link{
+		Token: token, Kind: KindPrivate, Project: project, Owner: owner, Port: port,
+		CreatedBy: createdBy, CreatedAt: now,
+	}
+	s.links[token] = l
+	if err := s.saveLocked(); err != nil {
+		delete(s.links, token) // roll back so memory matches disk
+		return Link{}, err
+	}
+	return l, nil
+}
+
+// GetPrivate returns the live private link for project+port, if any.
+func (s *Store) GetPrivate(project string, port int) (Link, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.links {
+		if e.Project == project && e.Port == port && e.Private() {
+			return e, true
+		}
+	}
+	return Link{}, false
+}
+
+// DeletePrivate removes the private link for project+port (no-op if absent).
+func (s *Store) DeletePrivate(project string, port int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	removed := map[string]Link{}
+	for t, e := range s.links {
+		if e.Project == project && e.Port == port && e.Private() {
+			removed[t] = e
+			delete(s.links, t)
+		}
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	if err := s.saveLocked(); err != nil {
+		// B3/S5: restore so memory matches disk — otherwise the token would
+		// resurrect on restart while callers believe it's gone.
+		for t, e := range removed {
+			s.links[t] = e
+		}
+		return err
+	}
+	return nil
+}
+
+// ListPublicFor returns the project's live PUBLIC links, newest first —
+// private share links never belong in the public-links listing, and keeping
+// the filter here means no caller can forget it.
+func (s *Store) ListPublicFor(project string, now time.Time) []Link {
+	var out []Link
+	for _, l := range s.ListFor(project, now) {
+		if !l.Private() {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // Get returns a live (non-expired) link by token.

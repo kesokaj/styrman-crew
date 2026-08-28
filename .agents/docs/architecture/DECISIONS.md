@@ -600,3 +600,49 @@ entries). Shipped and verified live 2026-08-27 against
 Source: internal/links/store.go, internal/httpapi/links_api.go,
 internal/httpapi/server.go (previewHostRewrite), deploy/docker-compose.yml,
 deploy/caddy/ingress/generator.go, deploy/caddy/ingress/cloudflare.go.
+
+## ADR-026: Private share links on an OAuth-gated wildcard (2026-08-28)
+
+**Context.** Per-port email shares (ADR-024) were served same-origin with the
+SPA at `/p/…`, which forces a CSP sandbox (N22) that breaks stateful apps for
+guests — the exact limitation public links (ADR-025) don't have, since each
+public token gets its own subdomain origin. The operator wanted email shares
+to get the same own-origin treatment, with self-describing hostnames:
+`*.public.<app domain>` for anyone-with-the-URL links, `*.private.<app
+domain>` for email-gated ones.
+
+**Decision.** Two sibling wildcards, one per auth model — a single wildcard
+cannot serve both because the ingress decides authentication per host block,
+before the server can inspect the token. `*.PRIVATE_DOMAIN` is a second
+generated site block (`writePrivateWildcard`) that REQUIRES Google OAuth: it
+reuses the target app's authorization policy (the caddy-security JWT cookie
+is scoped to the base domain, so a session from any styrman host is valid on
+the wildcard — SSO for free) and injects the verified identity headers plus
+the ingress token, preserving Host.
+
+Sharing a port mints a stable, NON-EXPIRING `kind=private` token in the same
+`internal/links` store (idempotent — editing the email list never rotates the
+URL; emptying it deletes the link). `previewHostRewrite` maps
+`<token>.PRIVATE_BASE` → `/shared/{token}/…`, where `authGuard` resolves the
+ingress identity (non-styrman Google users are allowed through to this route
+only) and `serveShared` re-checks the email against the port's CURRENT share
+list on every request — revoking an email cuts access instantly, and the
+token itself never grants anything. Kinds are locked to their routes: a
+private token 404s on the no-login `/link` route (else sharing would mint a
+public capability) and a public token 404s on `/shared`. The per-project link
+cap counts each kind separately. No CSP sandbox on the private origin — same
+isolation rationale as ADR-025.
+
+**Consequences.** Email-share guests now get full-fidelity previews (cookies,
+localStorage, same-origin fetches) instead of the sandboxed `/p/` view, which
+remains for the owner's in-SPA preview. A second wildcard DNS record + cert
+exist when `STYRMAN_PRIVATE_DOMAIN` is set (empty = off). The share list
+stays the single source of authorization; the private link is only an
+address. Shipped and verified live 2026-08-28 against
+`private.crew.styrman.xyz`.
+
+Source: internal/links/store.go (kinds, EnsurePrivate), internal/httpapi/
+links_api.go (serveShared, kind locks), internal/httpapi/shares.go (mint/
+revoke lifecycle), internal/httpapi/server.go (previewHostRewrite),
+deploy/caddy/ingress/generator.go (writePrivateWildcard), deploy/
+docker-compose.yml, web/src/components/SidePanel.tsx.

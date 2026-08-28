@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kesokaj/styrman-crew/internal/identity"
 	"github.com/kesokaj/styrman-crew/internal/links"
 )
 
@@ -19,10 +20,17 @@ var ttlChoices = map[string]time.Duration{
 	"7d":  7 * 24 * time.Hour,
 }
 
-// linkURL renders the public URL for a link. With STYRMAN_PREVIEW_BASE set it's
-// the per-token subdomain (its own origin); otherwise the path form, which the
-// server serves directly (used in local/dev before the wildcard host exists).
+// linkURL renders the URL for a link on its kind's host base — public tokens
+// on STYRMAN_PREVIEW_BASE, private ones on STYRMAN_PRIVATE_BASE (each a
+// per-token subdomain, its own origin). Without a base it's the path form,
+// which the server serves directly (local/dev before the wildcard host exists).
 func (s *Server) linkURL(l links.Link) string {
+	if l.Private() {
+		if s.cfg.PrivateBase != "" {
+			return fmt.Sprintf("https://%s.%s/", l.Token, s.cfg.PrivateBase)
+		}
+		return "/shared/" + l.Token + "/"
+	}
 	if s.cfg.PreviewBase != "" {
 		return fmt.Sprintf("https://%s.%s/", l.Token, s.cfg.PreviewBase)
 	}
@@ -89,7 +97,7 @@ func (s *Server) listLinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := []map[string]any{}
-	for _, l := range s.links.ListFor(p.ID, time.Now()) {
+	for _, l := range s.links.ListPublicFor(p.ID, time.Now()) {
 		out = append(out, s.linkJSON(l))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"links": out})
@@ -108,7 +116,9 @@ func (s *Server) revokeLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := r.PathValue("token")
-	if l, ok := s.links.Get(token, time.Now()); !ok || l.Project != p.ID {
+	// Private tokens live and die with the port's share list (setShares) —
+	// deleting one here would strand shares with no URL.
+	if l, ok := s.links.Get(token, time.Now()); !ok || l.Project != p.ID || l.Private() {
 		writeErr(w, http.StatusNotFound, fmt.Errorf("no such link on this project"))
 		return
 	}
@@ -135,17 +145,78 @@ func (s *Server) serveLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	l, ok := s.links.Get(token, time.Now())
-	if !ok {
-		// Expired or unknown — same response, no oracle.
+	// A PRIVATE token must never be served on the no-login route: /link is
+	// authGuard-exempt, so honoring it here would strip the email gate off a
+	// share link. Same 404 as unknown — no oracle.
+	if !ok || l.Private() {
 		writeErr(w, http.StatusNotFound, fmt.Errorf("link not found or expired"))
 		return
 	}
-	// sandbox=false: the token subdomain is already its own origin, so the app
-	// runs normally there and is still isolated from the SPA.
+	// Sandbox only the path form: a request that arrived via a token host
+	// (previewHostRewrite stashed the original path) runs on its own origin
+	// and needs no sandbox; the /link/… path form is served on the MAIN
+	// origin, where an unsandboxed app could script the SPA's API (N22).
 	prefix := "/link/" + token
-	s.serveProxy(w, r, l.Owner, l.Project, l.Port, prefix, false)
+	_, viaTokenHost := r.Context().Value(origPathKey{}).(string)
+	s.serveProxy(w, r, l.Owner, l.Project, l.Port, prefix, !viaTokenHost)
+}
+
+// serveShared handles /shared/{token}/… — the email-gated share route, reached
+// via the OAuth-gated private preview host (or path-form on the main host).
+// authGuard has already resolved a verified identity; a private token grants
+// access only if that identity is the owner or on the port's CURRENT share
+// list — revoking an email cuts access immediately, the token never does.
+func (s *Server) serveShared(w http.ResponseWriter, r *http.Request) {
+	if s.links == nil {
+		http.NotFound(w, r)
+		return
+	}
+	token := r.PathValue("token")
+	if !links.ValidToken(token) {
+		http.NotFound(w, r)
+		return
+	}
+	l, ok := s.links.Get(token, time.Now())
+	// A public token on the gated route is refused too: kinds never cross.
+	if !ok || !l.Private() {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("link not found"))
+		return
+	}
+	u := identity.FromContext(r.Context())
+	sp, err := s.space(l.Owner)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("link not found"))
+		return
+	}
+	p, err := sp.projects.Get(l.Project)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("link not found"))
+		return
+	}
+	if !previewAllowed(u, l.Owner, p.SharedPorts[l.Port]) {
+		// Deliberate trade-off vs serveLink's no-oracle 404: the caller here is
+		// an AUTHENTICATED Google user holding a 128-bit token, and "ask the
+		// owner to share with your email" is the difference between a usable
+		// flow and a support ping. Confirming the token exists to them is
+		// accepted.
+		writeErr(w, http.StatusForbidden,
+			fmt.Errorf("this preview hasn't been shared with %s — ask the project owner", u.Email))
+		return
+	}
+	prefix := "/shared/" + token
+	// Same sandbox rule as serveLink: unsandboxed only on the token's own
+	// origin. The /shared/… path form runs on the MAIN origin — authGuard and
+	// csrfGuard both exempt it, so an unsandboxed app there could call
+	// /api/... with the viewer's session (the N22 escalation).
+	_, viaTokenHost := r.Context().Value(origPathKey{}).(string)
+	s.serveProxy(w, r, l.Owner, l.Project, l.Port, prefix, !viaTokenHost)
 }
 
 // isLinkPath reports whether a path is the public link route (authGuard exempts
 // it: the token is the capability, no login needed).
 func isLinkPath(p string) bool { return strings.HasPrefix(p, "/link/") }
+
+// isSharedPath reports whether a path is the email-gated share route (authGuard
+// resolves identity but lets non-styrman Google users through to it; serveShared
+// enforces the share list).
+func isSharedPath(p string) bool { return strings.HasPrefix(p, "/shared/") }

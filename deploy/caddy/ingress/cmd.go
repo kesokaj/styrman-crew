@@ -124,6 +124,7 @@ func loadConfig(log *slog.Logger) (GeneratorConfig, error) {
 		ShellDomain:       getEnvOrDefault(EnvShellDomain, "shell."+baseDomain),
 		AppsDomain:        getEnvOrDefault(EnvAppsDomain, baseDomain),
 		PreviewDomain:     os.Getenv(EnvPreviewDomain),
+		PrivateDomain:     os.Getenv(EnvPrivateDomain),
 		IngressToken:      os.Getenv(EnvIngressToken),
 		JWTKey:            os.Getenv(EnvJWTKey),
 	}
@@ -174,5 +175,5 @@ func syncDNS(token string, cfg GeneratorConfig, logger *slog.Logger) error {
 		return fmt.Errorf("creating cloudflare client: %w", err)
 	}
 
-	return cf.EnsureDNS(ip, cfg.AuthDomain, cfg.ShellDomain, cfg.AppsDomain, cfg.PreviewDomain)
+	return cf.EnsureDNS(ip, cfg.AuthDomain, cfg.ShellDomain, cfg.AppsDomain, cfg.PreviewDomain, cfg.PrivateDomain)
 }

@@ -18,7 +18,8 @@ type GeneratorConfig struct {
 	AuthDomain        string   // Absolute FQDN for auth portal (e.g., "auth.a.styrman.io")
 	ShellDomain       string   // Absolute FQDN for shell (e.g., "shell.a.styrman.io")
 	AppsDomain        string   // Wildcard base for user apps (e.g., "apps.a.styrman.io")
-	PreviewDomain     string   // Public preview wildcard base (e.g., "preview.styrman.xyz"); empty = off
+	PreviewDomain     string   // Public preview wildcard base (e.g., "public.crew.styrman.xyz"); empty = off
+	PrivateDomain     string   // Email-gated preview wildcard base (e.g., "private.crew.styrman.xyz"); empty = off
 	IngressToken      string   // shared secret injected as X-Styrman-Ingress (proves ingress origin)
 	JWTKey            string   // stable HMAC key so caddy-security JWTs survive restarts (else sessions break on redeploy)
 }
@@ -77,14 +78,36 @@ func GenerateCaddyfile(apps []App, cfg GeneratorConfig) string {
 		writeAppBlock(&b, app, cfg)
 	}
 
-	// Public preview wildcard (*.PREVIEW_DOMAIN → the styrman server, no auth).
-	// The server validates the per-link token itself and serves exactly one
-	// port; the token is carried in the subdomain (Host preserved).
-	if cfg.PreviewDomain != "" {
-		for _, app := range sorted {
-			if app.PreviewTarget {
-				writePreviewWildcard(&b, app, cfg)
+	// Preview wildcards (*.PREVIEW_DOMAIN public, *.PRIVATE_DOMAIN OAuth-gated)
+	// → the styrman server. ONE target backs both — picking independently
+	// could split them across two labeled containers. The server validates
+	// the per-link token itself; the token is carried in the subdomain (Host
+	// preserved). The private block additionally requires an authenticated
+	// app (it reuses the app's authorization policy, which only exists for
+	// non-public apps).
+	if cfg.PreviewDomain != "" || cfg.PrivateDomain != "" {
+		var target *App
+		for i := range sorted {
+			if sorted[i].PreviewTarget {
+				target = &sorted[i]
 				break
+			}
+		}
+		switch {
+		case target == nil:
+			slog.Warn("preview/private domain set but no container carries caddy_preview_target — wildcard blocks not emitted",
+				"preview", cfg.PreviewDomain, "private", cfg.PrivateDomain)
+		default:
+			if cfg.PreviewDomain != "" {
+				writePreviewWildcard(&b, *target, cfg)
+			}
+			if cfg.PrivateDomain != "" {
+				if target.Mode == ModePublic {
+					slog.Warn("PRIVATE_DOMAIN set but the preview target app is public (no auth policy) — private wildcard not emitted",
+						"private", cfg.PrivateDomain, "app", target.Hostname)
+				} else {
+					writePrivateWildcard(&b, *target, cfg)
+				}
 			}
 		}
 	}
@@ -107,7 +130,7 @@ func writePreviewWildcard(b *strings.Builder, app App, cfg GeneratorConfig) {
 	fmt.Fprintf(b, "        }\n")
 	fmt.Fprintf(b, "    }\n")
 	// Strip any client-supplied identity; the preview host must never carry one.
-	for _, h := range []string{HeaderEmail, HeaderUser, HeaderRole, HeaderSubject} {
+	for _, h := range []string{HeaderEmail, HeaderUser, HeaderRole, HeaderSubject, HeaderIngress} {
 		fmt.Fprintf(b, "    request_header -%s\n", h)
 	}
 	if cfg.IngressToken != "" {
@@ -118,6 +141,53 @@ func writePreviewWildcard(b *strings.Builder, app App, cfg GeneratorConfig) {
 	fmt.Fprintf(b, "        header_up Host {host}\n")
 	fmt.Fprintf(b, "    }\n")
 	b.WriteString("}\n\n")
+}
+
+// writePrivateWildcard emits the OAuth-gated *.PRIVATE_DOMAIN block fronting
+// the styrman server for email-gated share links. Reuses the target app's
+// authorization policy (the JWT cookie is domain-scoped, so a session from any
+// styrman host is valid here); injects the verified identity headers exactly
+// like an authenticated app block, and preserves Host so the server can read
+// the <token> subdomain.
+func writePrivateWildcard(b *strings.Builder, app App, cfg GeneratorConfig) {
+	policyName := sanitizePolicyName(app.Hostname)
+	fmt.Fprintf(b, "# private share links (*.%s → styrman server, Google OAuth)\n", cfg.PrivateDomain)
+	fmt.Fprintf(b, "*.%s {\n", cfg.PrivateDomain)
+	fmt.Fprintf(b, "    rate_limit {\n")
+	fmt.Fprintf(b, "        zone private_rl {\n")
+	fmt.Fprintf(b, "            key {remote_host}\n")
+	fmt.Fprintf(b, "            events %d\n", cfg.DefaultRPS)
+	fmt.Fprintf(b, "            window 1s\n")
+	fmt.Fprintf(b, "        }\n")
+	fmt.Fprintf(b, "    }\n")
+	b.WriteString("    route {\n")
+	// Strip CLIENT-supplied copies of the upstream claim headers before the
+	// authorizer injects the authentic ones (same defense as writeAppBlock).
+	fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderEmail)
+	fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderName)
+	fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderRoles)
+	fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderSub)
+	fmt.Fprintf(b, "        authorize with %s_policy\n", policyName)
+	// Clean identity headers from the injected claims.
+	fmt.Fprintf(b, "        request_header %s \"{http.request.header.%s}\"\n", HeaderEmail, UpstreamHeaderEmail)
+	fmt.Fprintf(b, "        request_header %s \"{http.request.header.%s}\"\n", HeaderUser, UpstreamHeaderName)
+	fmt.Fprintf(b, "        request_header %s \"{http.request.header.%s}\"\n", HeaderSubject, UpstreamHeaderSub)
+	fmt.Fprintf(b, "        request_header %s \"%s\"\n", HeaderRole, RoleUser)
+	fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderEmail)
+	fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderName)
+	fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderRoles)
+	fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderSub)
+	// Strip any client-supplied ingress token unconditionally, THEN inject the
+	// real one — safe even in a half-configured deploy with no token set.
+	fmt.Fprintf(b, "        request_header -%s\n", HeaderIngress)
+	if cfg.IngressToken != "" {
+		fmt.Fprintf(b, "        request_header %s %q\n", HeaderIngress, cfg.IngressToken)
+	}
+	// Preserve the incoming Host so the server can read the <token> subdomain.
+	fmt.Fprintf(b, "        reverse_proxy %s:%d {\n", app.ContainerIP, app.Port)
+	fmt.Fprintf(b, "            header_up Host {host}\n")
+	fmt.Fprintf(b, "        }\n")
+	b.WriteString("    }\n}\n\n")
 }
 
 // writeGlobalOptions writes the global options block including ACME, directive
@@ -344,9 +414,12 @@ func writeAppBlock(b *strings.Builder, app App, cfg GeneratorConfig) {
 		fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderRoles)
 		fmt.Fprintf(b, "        request_header -%s\n", UpstreamHeaderSub)
 
-		// Ingress origin proof: SET (overwrites any client-supplied value) the
-		// shared token so the upstream can reject requests that reach it
+		// Ingress origin proof: strip any client-supplied token, then set the
+		// shared one so the upstream can reject requests that reach it
 		// directly (e.g. a container on a shared bridge spoofing X-Caddy-Email).
+		// The strip is unconditional so a token-less deploy still can't relay
+		// a forged header.
+		fmt.Fprintf(b, "        request_header -%s\n", HeaderIngress)
 		if cfg.IngressToken != "" {
 			fmt.Fprintf(b, "        request_header %s %q\n", HeaderIngress, cfg.IngressToken)
 		}

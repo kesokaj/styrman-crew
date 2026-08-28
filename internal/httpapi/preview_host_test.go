@@ -59,3 +59,68 @@ func TestPreviewHostRewrite(t *testing.T) {
 		t.Errorf("disabled rewrite changed path to %q", got)
 	}
 }
+
+// TestPrivateHostRewrite: <token>.PRIVATE_BASE maps to /shared/{token}/…,
+// coexisting with the public base, with the same S6 404 for garbage subdomains.
+func TestPrivateHostRewrite(t *testing.T) {
+	tok := "0123456789abcdef0123456789abcdef"
+	s := &Server{cfg: &config.Config{
+		PreviewBase: "public.crew.styrman.xyz",
+		PrivateBase: "private.crew.styrman.xyz",
+	}}
+	cases := []struct{ host, path, want string }{
+		{tok + ".private.crew.styrman.xyz", "/", "/shared/" + tok + "/"},
+		{tok + ".private.crew.styrman.xyz", "/app.css", "/shared/" + tok + "/app.css"},
+		{tok + ".public.crew.styrman.xyz", "/", "/link/" + tok + "/"},
+		{"crew.styrman.xyz", "/api/projects", "/api/projects"},
+	}
+	for _, c := range cases {
+		var got string
+		h := s.previewHostRewrite(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = r.URL.Path }))
+		req := httptest.NewRequest("GET", "http://x"+c.path, nil)
+		req.Host = c.host
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		if got != c.want {
+			t.Errorf("host %q path %q → %q, want %q", c.host, c.path, got, c.want)
+		}
+	}
+	called := false
+	h := s.previewHostRewrite(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { called = true }))
+	req := httptest.NewRequest("GET", "http://x/", nil)
+	req.Host = "nothex.private.crew.styrman.xyz"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if called || rec.Code != http.StatusNotFound {
+		t.Errorf("garbage private subdomain: code=%d called=%v, want 404", rec.Code, called)
+	}
+}
+
+// TestSandboxDiscriminator: the origPathKey context value is the signal
+// serveLink/serveShared use to decide sandboxing (own token origin → no
+// sandbox; main-origin path form → sandboxed). It must be present exactly
+// when the request arrived via a token host.
+func TestSandboxDiscriminator(t *testing.T) {
+	tok := "0123456789abcdef0123456789abcdef"
+	s := &Server{cfg: &config.Config{
+		PreviewBase: "public.crew.styrman.xyz",
+		PrivateBase: "private.crew.styrman.xyz",
+	}}
+	probe := func(host, path string) (via bool) {
+		h := s.previewHostRewrite(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			_, via = r.Context().Value(origPathKey{}).(string)
+		}))
+		req := httptest.NewRequest("GET", "http://x"+path, nil)
+		req.Host = host
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		return via
+	}
+	if !probe(tok+".public.crew.styrman.xyz", "/") {
+		t.Error("public token host: discriminator missing (path form would be assumed → sandboxed)")
+	}
+	if !probe(tok+".private.crew.styrman.xyz", "/") {
+		t.Error("private token host: discriminator missing")
+	}
+	if probe("crew.styrman.xyz", "/shared/"+tok+"/") {
+		t.Error("main-origin path form: discriminator present (would serve UNSANDBOXED on the SPA origin)")
+	}
+}

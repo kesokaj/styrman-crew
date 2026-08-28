@@ -68,7 +68,7 @@ func (s *Server) authGuard(mode string, next http.Handler) http.Handler {
 				// route is refused — they never see the dashboard, terminals,
 				// or files. Authorized stays false and Username is left empty so
 				// a slug collision can never satisfy an ownership check.
-				if !isPreviewPath(r.URL.Path) {
+				if !isPreviewPath(r.URL.Path) && !isSharedPath(r.URL.Path) {
 					writeErr(w, http.StatusForbidden, fmt.Errorf("%s is not authorized for styrman", email))
 					return
 				}

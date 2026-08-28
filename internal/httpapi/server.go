@@ -62,6 +62,11 @@ type Server struct {
 	// proxyMu/proxies cache port-preview reverse proxies (see proxy.go).
 	proxyMu sync.Mutex
 	proxies map[string]*httputil.ReverseProxy
+
+	// sharesMu serializes setShares' store-write + link-mint/delete pair so
+	// concurrent PUTs can't interleave into "shares without a link" (or the
+	// reverse). Consistency only — authz re-checks the list on every request.
+	sharesMu sync.Mutex
 }
 
 // New creates the Server.
@@ -221,6 +226,13 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 		mux.HandleFunc(m+" /link/{token}/", s.serveLink)
 	}
 	mux.HandleFunc("GET /link/{token}", redirectSlash)
+	// Private share route: like /link but served on the OAuth-gated private
+	// host — authGuard resolves the visitor's identity, serveShared checks it
+	// against the port's shared-email list.
+	for _, m := range []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"} {
+		mux.HandleFunc(m+" /shared/{token}/", s.serveShared)
+	}
+	mux.HandleFunc("GET /shared/{token}", redirectSlash)
 	for _, m := range []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"} {
 		mux.HandleFunc(m+" /proxy/{project}/{port}/", s.proxyPort)
 		mux.HandleFunc(m+" /p/{project}/{term}/port/{port}/", s.proxyPort)
@@ -311,35 +323,52 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	return s.previewHostRewrite(s.authGuard(authMode, csrfGuard(mux)))
 }
 
-// previewHostRewrite maps a public preview subdomain
-// (<token>.STYRMAN_PREVIEW_BASE) to the internal /link/{token}/… route. The
-// token lives in the subdomain, so the previewed app gets its OWN origin and
-// root — its root-relative asset paths work unchanged. No-op when
-// STYRMAN_PREVIEW_BASE is unset or the host doesn't match.
+// previewHostRewrite maps a preview subdomain to its internal token route:
+// <token>.STYRMAN_PREVIEW_BASE → /link/{token}/… (public, no login) and
+// <token>.STYRMAN_PRIVATE_BASE → /shared/{token}/… (email-gated, OAuth at the
+// ingress). The token lives in the subdomain, so the previewed app gets its
+// OWN origin and root — its root-relative asset paths work unchanged. The two
+// routes are distinct on purpose: the serve handlers reject a token of the
+// wrong kind, so a private token pasted on the public host (or vice versa)
+// can never change its auth model. No-op when neither base matches.
 func (s *Server) previewHostRewrite(next http.Handler) http.Handler {
-	base := s.cfg.PreviewBase
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if base != "" {
-			host := r.Host
-			if i := strings.IndexByte(host, ':'); i >= 0 {
-				host = host[:i]
+		host := r.Host
+		if i := strings.IndexByte(host, ':'); i >= 0 {
+			host = host[:i]
+		}
+		host = strings.ToLower(strings.TrimSuffix(host, ".")) // normalize (nit)
+		bases := []struct{ base, route string }{
+			{s.cfg.PreviewBase, "/link/"},
+			{s.cfg.PrivateBase, "/shared/"},
+		}
+		// Longest base first: if one base is a suffix of the other (e.g.
+		// crew.x + private.crew.x), the shorter would otherwise shadow the
+		// longer and 404 every one of its links.
+		if len(bases[1].base) > len(bases[0].base) {
+			bases[0], bases[1] = bases[1], bases[0]
+		}
+		for _, m := range bases {
+			if m.base == "" {
+				continue
 			}
-			host = strings.ToLower(strings.TrimSuffix(host, ".")) // normalize (nit)
-			if suffix := "." + base; strings.HasSuffix(host, suffix) {
-				token := strings.TrimSuffix(host, suffix)
-				if links.ValidToken(token) {
-					// Stash the original path so serveProxy's cold-attach
-					// redirect bounces to the URL the visitor used, not the
-					// internal /link/<token> form (B1).
-					r = r.WithContext(context.WithValue(r.Context(), origPathKey{}, r.URL.Path))
-					r.URL.Path = "/link/" + token + r.URL.Path
-				} else {
-					// A preview host whose subdomain isn't a live token must
-					// serve NOTHING (not /api/health, not the SPA) — 404 (S6).
-					http.NotFound(w, r)
-					return
-				}
+			suffix := "." + m.base
+			if !strings.HasSuffix(host, suffix) {
+				continue
 			}
+			token := strings.TrimSuffix(host, suffix)
+			if !links.ValidToken(token) {
+				// A preview host whose subdomain isn't a live token must
+				// serve NOTHING (not /api/health, not the SPA) — 404 (S6).
+				http.NotFound(w, r)
+				return
+			}
+			// Stash the original path so serveProxy's cold-attach redirect
+			// bounces to the URL the visitor used, not the internal token
+			// form (B1).
+			r = r.WithContext(context.WithValue(r.Context(), origPathKey{}, r.URL.Path))
+			r.URL.Path = m.route + token + r.URL.Path
+			break
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -365,7 +394,7 @@ func csrfGuard(next http.Handler) http.Handler {
 		// CSRF concern (protecting its OWN API) doesn't apply, and the JSON body
 		// cap would truncate the app's uploads. A sandboxed preview also sends
 		// Origin: null, which would 403 every mutation the app makes (B2).
-		if isPreviewPath(r.URL.Path) || isLinkPath(r.URL.Path) {
+		if isPreviewPath(r.URL.Path) || isLinkPath(r.URL.Path) || isSharedPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

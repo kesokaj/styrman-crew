@@ -220,6 +220,23 @@ try {
     await page.fill('aside input[placeholder*="@"]', "e2e-guest@gmail.com");
     await panel().getByRole("button", { name: "add", exact: true }).click();
     await page.waitForSelector("aside >> text=e2e-guest@gmail.com");
+    // Sharing mints a stable private link, surfaced in the panel…
+    await page.waitForSelector("aside >> text=copy private link", {
+      timeout: 5000,
+    });
+    // …and it actually SERVES the app (not just renders a button). NOTE:
+    // auth mode is "none" here, so this exercises the OWNER branch of
+    // previewAllowed — the shared-guest branch is covered by the Go tests.
+    const shares = await (
+      await page.request.get(`${BASE}/api/projects/${PID}/ports/4321/shares`)
+    ).json();
+    if (!shares.url?.startsWith("/shared/"))
+      throw new Error(`share url missing: ${JSON.stringify(shares)}`);
+    const viaShared = await page.request.get(
+      `${BASE}${shares.url}index.html`,
+    );
+    if (!(await viaShared.text()).includes("e2e-app"))
+      throw new Error("private link did not serve the app");
     await panel()
       .getByRole("button", { name: "Remove e2e-guest@gmail.com" })
       .click();
@@ -227,6 +244,16 @@ try {
       state: "detached",
       timeout: 5000,
     });
+    // Unsharing the last email kills the link: UI row gone, route dead.
+    await page.waitForSelector("aside >> text=copy private link", {
+      state: "detached",
+      timeout: 5000,
+    });
+    const afterRevoke = await page.request.get(
+      `${BASE}${shares.url}index.html`,
+    );
+    if (afterRevoke.status() !== 404)
+      throw new Error(`revoked private link still serves: ${afterRevoke.status()}`);
   });
   await check("public link create + revoke", async () => {
     const revokeBtn = panel().getByRole("button", { name: "Revoke link" });

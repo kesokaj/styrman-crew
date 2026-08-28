@@ -198,8 +198,12 @@ function PortShare({
   // never based on a value that's up to 30 s stale (lost-update) and never on a
   // not-yet-loaded list (which would wipe it). Until the first load, emails is
   // undefined and editing is disabled.
-  const [override, setOverride] = useState<string[]>();
-  const emails = override ?? data?.emails;
+  const [override, setOverride] = useState<{ emails: string[]; url: string }>();
+  const emails = override?.emails ?? data?.emails;
+  // The stable private URL for this port's shares (empty until someone is
+  // shared). Served on its own *.private subdomain — recipients sign in with
+  // Google there and only listed emails get through.
+  const shareUrl = override ? override.url : (data?.url ?? "");
   const loaded = emails !== undefined;
   const valid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
 
@@ -207,7 +211,7 @@ function PortShare({
     setBusy(true);
     try {
       const res = await api.setPortShares(project, port, next);
-      setOverride(res.emails); // trust the server's normalized list
+      setOverride(res); // trust the server's normalized list + link URL
       return true;
     } catch (e) {
       alert((e as Error).message || "Request failed");
@@ -251,6 +255,23 @@ function PortShare({
           </button>
         </div>
       ))}
+      {shareUrl && (
+        <div className="flex items-center gap-2 rounded px-1 py-0.5 text-[11px]">
+          <button
+            onClick={() =>
+              navigator.clipboard?.writeText(
+                shareUrl.startsWith("http")
+                  ? shareUrl
+                  : location.origin + shareUrl,
+              )
+            }
+            className="min-w-0 flex-1 truncate text-left text-accent hover:brightness-110"
+            title={shareUrl}
+          >
+            copy private link · Google sign-in required
+          </button>
+        </div>
+      )}
       <div className="mt-1 flex gap-1">
         <input
           value={email}
