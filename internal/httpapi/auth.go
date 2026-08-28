@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/kesokaj/styrman/internal/identity"
+	"github.com/kesokaj/styrman-crew/internal/identity"
 )
 
 // HeaderEmail is the identity header the Caddy ingress injects after Google

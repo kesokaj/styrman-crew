@@ -10,8 +10,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/kesokaj/styrman/internal/config"
-	"github.com/kesokaj/styrman/internal/orchestrator"
+	"github.com/kesokaj/styrman-crew/internal/config"
+	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 )
 
 // Prefix namespaces styrman's tmux sessions; anything else in tmux belongs

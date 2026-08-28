@@ -3,7 +3,7 @@ package httpapi
 import (
 	"testing"
 
-	"github.com/kesokaj/styrman/internal/identity"
+	"github.com/kesokaj/styrman-crew/internal/identity"
 )
 
 func TestEmailIn(t *testing.T) {

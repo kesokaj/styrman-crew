@@ -1,4 +1,4 @@
-# styrman
+# styrman-crew
 
 Self-hosted, multi-user platform for running AI coding agents in isolated
 projects. Sign in with Google, create a project, and get browser terminals
@@ -10,7 +10,7 @@ Both [Claude Code](https://claude.ai/code) (`claude`) and
 Every user gets their own persistent home disk: credentials configured once,
 forever; containers disposable always.
 
-*Styrman* (Swedish): helmsman / first mate.
+*Styrman* (Swedish): helmsman / first mate — commanding a crew of agents.
 
 ## Why
 

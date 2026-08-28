@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kesokaj/styrman/internal/identity"
+	"github.com/kesokaj/styrman-crew/internal/identity"
 )
 
 // listPorts reports the project's in-guest listening ports (≥1024).

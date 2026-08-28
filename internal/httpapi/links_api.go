@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kesokaj/styrman/internal/links"
+	"github.com/kesokaj/styrman-crew/internal/links"
 )
 
 // ttlChoices bounds how long a public link may live. Keep the set small and

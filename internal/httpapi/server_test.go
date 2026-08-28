@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kesokaj/styrman/internal/config"
-	"github.com/kesokaj/styrman/internal/orchestrator"
-	"github.com/kesokaj/styrman/internal/userstore"
+	"github.com/kesokaj/styrman-crew/internal/config"
+	"github.com/kesokaj/styrman-crew/internal/orchestrator"
+	"github.com/kesokaj/styrman-crew/internal/userstore"
 )
 
 // testRoutes builds the handler with real stores in a temp dir; the docker

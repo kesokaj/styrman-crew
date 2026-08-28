@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**styrman** — a self-hosted, multi-user web platform for running AI coding
+**styrman-crew** (repo name; the platform itself is *styrman*) — a self-hosted, multi-user web platform for running AI coding
 agents in isolated projects. Sign in with Google, create a project (UUID
 identity, friendly renamable name), and get browser terminals inside a
 dedicated Kata microVM with both `claude` and `agy` preinstalled. One

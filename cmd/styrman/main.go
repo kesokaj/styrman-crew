@@ -12,13 +12,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kesokaj/styrman/internal/config"
-	"github.com/kesokaj/styrman/internal/files"
-	"github.com/kesokaj/styrman/internal/gitrepo"
-	"github.com/kesokaj/styrman/internal/httpapi"
-	"github.com/kesokaj/styrman/internal/orchestrator"
-	"github.com/kesokaj/styrman/internal/project"
-	"github.com/kesokaj/styrman/internal/userstore"
+	"github.com/kesokaj/styrman-crew/internal/config"
+	"github.com/kesokaj/styrman-crew/internal/files"
+	"github.com/kesokaj/styrman-crew/internal/gitrepo"
+	"github.com/kesokaj/styrman-crew/internal/httpapi"
+	"github.com/kesokaj/styrman-crew/internal/orchestrator"
+	"github.com/kesokaj/styrman-crew/internal/project"
+	"github.com/kesokaj/styrman-crew/internal/userstore"
 )
 
 func main() {

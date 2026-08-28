@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/coder/websocket"
-	"github.com/kesokaj/styrman/internal/config"
+	"github.com/kesokaj/styrman-crew/internal/config"
 )
 
 func TestCloseDecision(t *testing.T) {

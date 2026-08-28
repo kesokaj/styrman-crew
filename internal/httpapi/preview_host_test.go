@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/kesokaj/styrman/internal/config"
+	"github.com/kesokaj/styrman-crew/internal/config"
 )
 
 func TestPreviewHostRewrite(t *testing.T) {

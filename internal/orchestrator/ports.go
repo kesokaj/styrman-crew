@@ -8,7 +8,7 @@ import (
 
 	"github.com/docker/docker/errdefs"
 
-	"github.com/kesokaj/styrman/internal/config"
+	"github.com/kesokaj/styrman-crew/internal/config"
 )
 
 // IPAddress returns the project container's IP on its bridge network, or ""

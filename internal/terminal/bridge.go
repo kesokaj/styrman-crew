@@ -18,10 +18,10 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/kesokaj/styrman/internal/config"
-	"github.com/kesokaj/styrman/internal/conversation"
-	"github.com/kesokaj/styrman/internal/identity"
-	"github.com/kesokaj/styrman/internal/orchestrator"
+	"github.com/kesokaj/styrman-crew/internal/config"
+	"github.com/kesokaj/styrman-crew/internal/conversation"
+	"github.com/kesokaj/styrman-crew/internal/identity"
+	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 )
 
 // TermStore is the slice of the per-user terminal store the bridge needs.

@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kesokaj/styrman/internal/identity"
-	"github.com/kesokaj/styrman/internal/project"
+	"github.com/kesokaj/styrman-crew/internal/identity"
+	"github.com/kesokaj/styrman-crew/internal/project"
 )
 
 // emailRe is a pragmatic e-mail check for the share list. The Google OAuth

@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kesokaj/styrman/internal/files"
-	"github.com/kesokaj/styrman/internal/history"
-	"github.com/kesokaj/styrman/internal/identity"
+	"github.com/kesokaj/styrman-crew/internal/files"
+	"github.com/kesokaj/styrman-crew/internal/history"
+	"github.com/kesokaj/styrman-crew/internal/identity"
 )
 
 // scopeFor resolves the file-explorer scope. The root is ALWAYS the user's

@@ -19,7 +19,7 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
 
-	"github.com/kesokaj/styrman/internal/config"
+	"github.com/kesokaj/styrman-crew/internal/config"
 )
 
 // Orchestrator creates, adopts, and reaps project microVMs.

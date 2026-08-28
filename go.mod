@@ -1,4 +1,4 @@
-module github.com/kesokaj/styrman
+module github.com/kesokaj/styrman-crew
 
 go 1.25.0
 

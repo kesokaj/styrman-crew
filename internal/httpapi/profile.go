@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"sync"
 
-	"github.com/kesokaj/styrman/internal/identity"
+	"github.com/kesokaj/styrman-crew/internal/identity"
 )
 
 // profileStore holds per-user preferences — today just the in-guest

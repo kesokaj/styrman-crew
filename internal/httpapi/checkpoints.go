@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/kesokaj/styrman/internal/files"
-	"github.com/kesokaj/styrman/internal/gitrepo"
-	"github.com/kesokaj/styrman/internal/project"
+	"github.com/kesokaj/styrman-crew/internal/files"
+	"github.com/kesokaj/styrman-crew/internal/gitrepo"
+	"github.com/kesokaj/styrman-crew/internal/project"
 )
 
 // workspacePath is the host-side path of a project's working tree, resolved

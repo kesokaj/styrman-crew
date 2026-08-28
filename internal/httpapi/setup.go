@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kesokaj/styrman/internal/files"
+	"github.com/kesokaj/styrman-crew/internal/files"
 )
 
 // setupStatus reports which credentials already exist in the user's home.
