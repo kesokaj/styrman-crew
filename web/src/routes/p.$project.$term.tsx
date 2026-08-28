@@ -23,7 +23,7 @@ function TerminalPage() {
     savingRef.current = true;
     setEditing(false);
     if (title.trim() && title.trim() !== record?.title) {
-      await api.renameTerminal(project, term, title.trim()).catch(() => {});
+      await api.updateTerminal(project, term, { title: title.trim() }).catch(() => {});
       refresh();
     }
     savingRef.current = false;

@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -72,6 +73,15 @@ func key(user, project string) string { return user + "/" + project }
 // Touch records terminal activity for the idle reaper.
 func (o *Orchestrator) Touch(user, project string) { o.activity.Store(key(user, project), time.Now()) }
 
+// LastActivity returns the last recorded terminal activity for a project
+// (zero time if none) — lets the checkpoint loop skip idle trees.
+func (o *Orchestrator) LastActivity(user, project string) time.Time {
+	if v, ok := o.activity.Load(key(user, project)); ok {
+		return v.(time.Time)
+	}
+	return time.Time{}
+}
+
 // Status inspects the project's container.
 func (o *Orchestrator) Status(ctx context.Context, user, project string) (Status, error) {
 	insp, err := o.docker.ContainerInspect(ctx, config.ContainerName(project))
@@ -106,6 +116,24 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 	name := config.ContainerName(project)
 	id := ""
 	insp, err := o.docker.ContainerInspect(ctx, name)
+	// Pre-ADR-027 containers bind only the home: after the workspace
+	// migration their ~/projects/<dir> would be an EMPTY dir inside the home
+	// mount — the project would look wiped. Recreate them once with the
+	// workspace bind (rootfs apt state is lost; the manifest replay, ADR-028,
+	// wasn't captured by the old entrypoint — accepted one-time cost).
+	// STOP first (grace period): a force-remove would skip the entrypoint's
+	// SIGTERM trap and tear down the loop-mounted ext4 dirty (review finding).
+	if err == nil && !hasWorkspaceBind(insp.HostConfig, o.cfg.ProjectWorkspace(user, project)) {
+		o.logger.Info("recreating pre-ADR-027 container to add the workspace bind", "project", project)
+		stopTimeout := 30
+		if serr := o.docker.ContainerStop(ctx, insp.ID, container.StopOptions{Timeout: &stopTimeout}); serr != nil {
+			o.logger.Warn("pre-recreate stop failed — removing anyway", "project", project, "error", serr)
+		}
+		if rerr := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); rerr != nil {
+			return "", fmt.Errorf("recreate for workspace bind: %w", rerr)
+		}
+		err = errdefs.NotFound(fmt.Errorf("recreated"))
+	}
 	switch {
 	case err == nil:
 		id = insp.ID
@@ -125,12 +153,29 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 			}
 		}
 	case errdefs.IsNotFound(err):
+		// The workspace dir must exist BEFORE the bind: Docker would
+		// auto-create a missing source as root, and every guest write to the
+		// workspace would then fail (same failure class as the home mount).
+		ws := o.cfg.ProjectWorkspace(user, project)
+		if _, serr := os.Stat(ws); serr != nil {
+			// Missing new location + real tree still in the home = failed
+			// ADR-027 migration. Creating an empty dir here would shadow the
+			// real workspace permanently — refuse and let a boot retry it.
+			if o.cfg.LegacyWorkspaceExists(user, opts.Dir) {
+				return "", fmt.Errorf("workspace migration incomplete for %s — restart the server to retry", opts.Dir)
+			}
+		}
+		if err := os.MkdirAll(ws, 0o700); err != nil {
+			return "", fmt.Errorf("create workspace dir: %w", err)
+		}
 		id, err = o.create(ctx, createSpec{
-			name:      name,
-			netName:   config.NetworkName(project),
-			hostname:  "styrman-" + opts.Name,
-			guestUser: opts.GuestUser,
-			homePath:  o.cfg.UserHome(user),
+			name:          name,
+			netName:       config.NetworkName(project),
+			hostname:      "styrman-" + opts.Name,
+			guestUser:     opts.GuestUser,
+			homePath:      o.cfg.UserHome(user),
+			workspacePath: ws,
+			workspaceDst:  "/home/" + opts.GuestUser + "/projects/" + opts.Dir,
 			extraEnv: []string{
 				config.EnvProject + "=" + project,
 				config.EnvProjectDir + "=" + opts.Dir,
@@ -159,6 +204,20 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 	// published dev port). The port-preview proxy attaches lazily instead.
 	o.Touch(user, project)
 	return id, nil
+}
+
+// hasWorkspaceBind reports whether the container already mounts the
+// project's workspace dir (ADR-027).
+func hasWorkspaceBind(hc *container.HostConfig, workspace string) bool {
+	if hc == nil {
+		return false
+	}
+	for _, b := range hc.Binds {
+		if strings.HasPrefix(b, workspace+":") {
+			return true
+		}
+	}
+	return false
 }
 
 // EnsureSelfAttached joins the server's own container to the project's
@@ -337,9 +396,14 @@ type createSpec struct {
 	hostname  string
 	guestUser string // in-guest username; its home is homePath
 	homePath  string // host path mounted as /home/<guestUser>
-	extraEnv  []string
-	labels    map[string]string
-	noRestart bool // ephemeral (setup VM): don't auto-restart after reboot
+	// workspacePath/workspaceDst: the project's own storage dir (ADR-027),
+	// bind-mounted OVER ~/projects/<dir> inside the home mount. Empty for
+	// system VMs (setup) which have no workspace.
+	workspacePath string
+	workspaceDst  string
+	extraEnv      []string
+	labels        map[string]string
+	noRestart     bool // ephemeral (setup VM): don't auto-restart after reboot
 }
 
 // create builds a network and container. Caller holds the relevant lock.
@@ -381,9 +445,13 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 			DNS:         []string{"8.8.8.8", "1.1.1.1"},
 			Sysctls:     map[string]string{"net.ipv4.ip_forward": "1"},
 			SecurityOpt: []string{"apparmor=unconfined"},
-			Binds: []string{
-				spec.homePath + ":/home/" + spec.guestUser,
-			},
+			Binds: func() []string {
+				b := []string{spec.homePath + ":/home/" + spec.guestUser}
+				if spec.workspacePath != "" {
+					b = append(b, spec.workspacePath+":"+spec.workspaceDst)
+				}
+				return b
+			}(),
 			RestartPolicy: restartPolicy(spec.noRestart),
 		},
 		&network.NetworkingConfig{

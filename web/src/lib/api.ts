@@ -19,6 +19,9 @@ export interface Project {
 export interface Terminal {
   id: string;
   title: string;
+  /** Autostart: runs when the tmux session is created (first open, and
+   * re-opens after pause/VM restart), then drops to the shell. */
+  command?: string;
   createdAt: string;
   lastOpened: string;
   live: boolean;
@@ -217,10 +220,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ title: title ?? "" }),
     }),
-  renameTerminal: (project: string, id: string, title: string) =>
+  updateTerminal: (
+    project: string,
+    id: string,
+    patch: { title?: string; command?: string },
+  ) =>
     request<void>(`/api/projects/${project}/terminals/${id}`, {
       method: "PATCH",
-      body: JSON.stringify({ title }),
+      body: JSON.stringify(patch),
     }),
   deleteTerminal: (project: string, id: string) =>
     request<void>(`/api/projects/${project}/terminals/${id}`, {

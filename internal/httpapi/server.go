@@ -226,7 +226,7 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("GET /api/projects/{project}/terminals", s.listTerminals)
 	mux.HandleFunc("POST /api/projects/{project}/terminals", s.createTerminal)
 	mux.HandleFunc("DELETE /api/projects/{project}/terminals", s.deleteAllTerminals)
-	mux.HandleFunc("PATCH /api/projects/{project}/terminals/{term}", s.renameTerminal)
+	mux.HandleFunc("PATCH /api/projects/{project}/terminals/{term}", s.updateTerminal)
 	mux.HandleFunc("DELETE /api/projects/{project}/terminals/{term}", s.deleteTerminal)
 	mux.HandleFunc("POST /api/projects/{project}/terminals/{term}/pause", s.pauseTerminal)
 	mux.Handle("GET /ws/term/{project}/{term}", s.bridge)
@@ -558,17 +558,12 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err)
 		return
 	}
-	// Confined create: refuses a symlinked ~/projects escaping the home.
-	home := s.cfg.UserHome(u.Username)
-	if err := files.MkdirAll(home, "projects/"+p.Dir); err != nil {
+	// Per-project workspace dir (ADR-027) — server-controlled path outside
+	// the shared home, bind-mounted into the microVM at ~/projects/<dir>.
+	workdir := s.cfg.ProjectWorkspace(u.Username, p.ID)
+	if err := os.MkdirAll(workdir, 0o700); err != nil {
 		_ = sp.projects.Remove(p.ID)
 		writeErr(w, http.StatusInternalServerError, errors.New("cannot create workspace"))
-		return
-	}
-	workdir, err := files.ContainedPath(home, "projects/"+p.Dir)
-	if err != nil {
-		_ = sp.projects.Remove(p.ID)
-		writeErr(w, http.StatusInternalServerError, errors.New("workspace unavailable"))
 		return
 	}
 	// R13: the workspace is a git repo from second zero. A clone fills the
@@ -586,6 +581,14 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	// the docker network churn it causes), and the terminal attach waits for
 	// readiness anyway (per-project lock serializes with this boot).
 	guest := sp.profile.GuestUser()
+	// No runtime image configured = handler-level tests: skip the boot (it
+	// would otherwise reach the host's real Docker daemon and race test
+	// cleanup with its writes). config.Load always sets an image.
+	if s.cfg.Image == "" {
+		s.logger.Warn("no runtime image configured — skipping microVM boot", "project", p.Name)
+		writeJSON(w, http.StatusCreated, projectView{Project: p, State: "creating"})
+		return
+	}
 	go func() {
 		defer func() { // outlives the request — net/http's recover doesn't cover it
 			if rec := recover(); rec != nil {
@@ -721,17 +724,24 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 			s.deletingMu.Unlock()
 			return
 		}
-		// wipe=true also removes the workspace, docker storage, and
-		// transcripts — irreversible, so it is opt-in per request.
+		// wipe=true also removes the workspace, docker storage, transcripts,
+		// and apt manifest — irreversible, so it is opt-in per request.
 		if wipe {
+			// The workspace dir is server-controlled (ADR-027, outside the
+			// home); os.RemoveAll removes symlinks without following them.
+			if err := os.RemoveAll(s.cfg.ProjectWorkspace(u.Username, p.ID)); err != nil {
+				s.logger.Warn("wipe failed", "project", p.ID, "path", "workspace", "error", err)
+			}
 			home := s.cfg.UserHome(u.Username)
-			// Confined removal: a guest that symlinked ~/projects at another
-			// tenant's home must not make this RemoveAll recurse into it.
+			// Confined removal: a guest that symlinked these home paths at
+			// another tenant's home must not make RemoveAll recurse into it.
 			for _, rel := range []string{
-				"projects/" + p.Dir,
+				"projects/" + p.Dir, // pre-ADR-027 leftovers (or the empty mount point)
 				".dockerd/" + p.ID + ".img",
 				".dockerd/" + p.ID,
 				".styrman/logs/" + p.ID,
+				".styrman/apt/" + p.ID + ".list",
+				".styrman/apt/" + p.ID + ".log",
 			} {
 				if err := files.RemoveAll(home, rel); err != nil {
 					s.logger.Warn("wipe failed", "project", p.ID, "path", rel, "error", err)
@@ -862,22 +872,49 @@ func (s *Server) createTerminal(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, terminalView{Record: rec})
 }
 
-func (s *Server) renameTerminal(w http.ResponseWriter, r *http.Request) {
+// updateTerminal updates a terminal record: title, autostart command, or
+// both (PATCH semantics — absent fields are untouched; command "" clears).
+func (s *Server) updateTerminal(w http.ResponseWriter, r *http.Request) {
 	_, sp, p, err := s.getProjectFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
 	var body struct {
-		Title string `json:"title"`
+		Title   *string `json:"title"`
+		Command *string `json:"command"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Title == "" {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("title required"))
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := sp.terms.Rename(p.ID, r.PathValue("term"), clampTitle(body.Title)); err != nil {
-		writeErr(w, http.StatusNotFound, err)
+	if body.Title == nil && body.Command == nil {
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("title or command required"))
 		return
+	}
+	id := r.PathValue("term")
+	if body.Title != nil {
+		if *body.Title == "" {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("title cannot be empty"))
+			return
+		}
+		if err := sp.terms.Rename(p.ID, id, clampTitle(*body.Title)); err != nil {
+			writeErr(w, http.StatusNotFound, err)
+			return
+		}
+	}
+	if body.Command != nil {
+		// The command runs as the user, in their own VM — not a security
+		// boundary, but keep it one sane line (chain with && or ;).
+		cmd := strings.TrimSpace(*body.Command)
+		if len(cmd) > 500 || strings.ContainsAny(cmd, "\n\r\x00") {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("command must be one line, at most 500 characters"))
+			return
+		}
+		if err := sp.terms.SetCommand(p.ID, id, cmd); err != nil {
+			writeErr(w, http.StatusNotFound, err)
+			return
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

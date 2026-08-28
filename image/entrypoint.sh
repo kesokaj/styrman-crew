@@ -66,7 +66,8 @@ chown "${UID_}:${GID_}" "${HOME_DIR}" 2>/dev/null || true
 # workspace, no DinD — just the user, keyring, and a shell.
 MINIMAL="${STYRMAN_MINIMAL:-}"
 
-# Project-scoped dirs inside the shared home (write-discipline, ADR-003).
+# ~/projects/<dir> is the workspace BIND MOUNT since ADR-027 (mkdir -p is a
+# no-op on it, kept for the pre-migration edge); ~/.dockerd stays in the home.
 if [ -z "${MINIMAL}" ]; then
     runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/projects/${PROJECT_DIR}" "${HOME_DIR}/.dockerd" 2>/dev/null || true
 fi
@@ -218,6 +219,49 @@ fi
 touch /run/styrman/ready
 log "project ${PROJECT} ready (user=${USERNAME} uid=${UID_})"
 
+# ─── apt persistence (operator Q7, ADR-028) ────────────────────────────────
+# The rootfs survives stop/start but dies on container REMOVAL (delete,
+# username change, image upgrade). Packages the user apt-installed are
+# captured as a manifest (delta vs the image's base snapshot) at shutdown
+# and replayed here IN THE BACKGROUND after ready — the boot SLA must not
+# wait on apt. The manifest lives in the shared home, wiped with the project.
+APT_DIR="${HOME_DIR}/.styrman/apt"
+APT_MANIFEST="${APT_DIR}/${PROJECT}.list"
+APT_REPLAYING=/run/styrman/apt-replaying
+if [ -z "${MINIMAL}" ] && [ -s "${APT_MANIFEST}" ]; then
+    # Marker: while the replay runs (or after it fails), a shutdown must NOT
+    # capture a fresh delta — mid-replay dpkg state would SHRINK the manifest
+    # and permanently lose packages (review finding).
+    touch "${APT_REPLAYING}"
+    (
+        log "replaying apt manifest ($(wc -l < "${APT_MANIFEST}") packages) — see .styrman/apt/${PROJECT}.log"
+        export DEBIAN_FRONTEND=noninteractive
+        if apt-get update -qq && xargs -a "${APT_MANIFEST}" apt-get install -y -qq --no-install-recommends --; then
+            log "apt manifest replay complete"
+            rm -f "${APT_REPLAYING}"
+        else
+            log "WARN: apt manifest replay failed — keeping existing manifest"
+        fi
+    ) > "${APT_DIR}/${PROJECT}.log" 2>&1 &
+fi
+
+capture_apt_manifest() {
+    [ -n "${MINIMAL}" ] && return 0
+    # Replay still running or failed: the existing manifest is more complete
+    # than anything we could compute now — keep it.
+    [ -e "${APT_REPLAYING}" ] && return 0
+    runuser -u "${USERNAME}" -- mkdir -p "${APT_DIR}" 2>/dev/null || return 0
+    # Delta vs the image's base package snapshot = what the user installed.
+    # (apt REMOVALS of base packages are not recorded — ADR-028.)
+    if dpkg-query -W -f='${Package}\n' 2>/dev/null | sort \
+        | comm -13 /etc/styrman-base-packages - > "${APT_MANIFEST}.tmp" 2>/dev/null; then
+        mv "${APT_MANIFEST}.tmp" "${APT_MANIFEST}" 2>/dev/null || true
+        chown "${UID_}:${GID_}" "${APT_MANIFEST}" 2>/dev/null || true
+    else
+        rm -f "${APT_MANIFEST}.tmp" 2>/dev/null || true
+    fi
+}
+
 # Graceful shutdown (I9): on `docker stop`, tini forwards SIGTERM here. Stop
 # dockerd cleanly (so nested containers get their grace period and overlay2
 # isn't torn down mid-write) and unmount the loop-mounted ext4 so its journal
@@ -225,6 +269,7 @@ log "project ${PROJECT} ready (user=${USERNAME} uid=${UID_})"
 # the trap. tini (PID 1) still reaps exec'd session zombies.
 shutdown() {
     log "shutting down project ${PROJECT}"
+    capture_apt_manifest
     if [ -n "${DOCKERD_PID:-}" ]; then
         kill -TERM "${DOCKERD_PID}" 2>/dev/null || true
         wait "${DOCKERD_PID}" 2>/dev/null || true

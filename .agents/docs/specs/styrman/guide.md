@@ -168,8 +168,10 @@ forever. The same script works in any project terminal.
   terminal pause/close, and before restores) plus a "Checkpoint now"
   button; Restore (confirmation required) rewrites the working tree to that
   point and always checkpoints the current state first, so it's undoable.
-- **Terminals**: sidebar, per project; ⏸ pause / ✕ delete / close all;
-  transcripts land in History regardless.
+- **Terminals**: sidebar, per project; generated friendly names; ⏸ pause /
+  ✕ delete / close all; per-terminal autostart command (pencil → dialog;
+  runs at session creation, then drops to the shell); transcripts land in
+  History regardless.
 - **Settings**: account + terminal username, per-tool credential cards
   (incl. claude/agy skills & subagents), theme, runtime/storage facts, and —
   admins only — user access management.
@@ -177,12 +179,17 @@ forever. The same script works in any project terminal.
 
 | Path | What |
 |---|---|
-| `/var/lib/styrman/homes/<user>` | A user's world — THE thing to back up |
-| `…/homes/<user>/projects/<dir>` | Workspaces (dir = name at creation) |
+| `/var/lib/styrman/homes/<user>` | A user's credentials + dotfiles + docker disks — back up |
+| `/var/lib/styrman/projects/<user>/<uuid>` | Workspaces (ADR-027, per-project storage) — back up TOO: source code no longer lives in the home |
 | `…/homes/<user>/.dockerd/<uuid>.img` | Per-project Docker disk (sparse) |
 | `…/homes/<user>/.styrman/logs/<uuid>/` | Terminal transcripts |
 | `/var/lib/styrman/users/<user>/*.json` | Project/terminal/profile metadata |
 | `/var/lib/styrman/users.json` | Runtime-added accounts (admins are env-only) |
+
+Deleting a project WITHOUT "wipe files" keeps its workspace dir under
+`/var/lib/styrman/projects/<user>/` (that's the point), but nothing in the
+UI lists it anymore — reclaim disk by removing it manually if you never
+re-import it.
 | containers `styrman-<uuid>`, networks `sdb-<uuid>` | Disposable runtime state |
 
 - **Reboots**: containers restart themselves (`unless-stopped`); the server

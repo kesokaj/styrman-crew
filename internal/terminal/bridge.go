@@ -98,9 +98,16 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	paneCmd := "bash -l"
 	// Strict: the record must exist (created via POST). Auto-creating here
 	// let stale reconnects resurrect deleted terminals.
-	if _, ok := store.Get(projName, convID); !ok {
+	rec, ok := store.Get(projName, convID)
+	if !ok {
 		http.Error(w, "unknown terminal", http.StatusNotFound)
 		return
+	}
+	// Autostart (operator Q8): the command runs when the tmux SESSION is
+	// created — `tmux new -A` reattaches an existing session untouched, so a
+	// reconnect never re-runs it; a pause or VM restart (session gone) does.
+	if rec.Command != "" {
+		paneCmd = autostartPaneCmd(rec.Command)
 	}
 	store.Touch(projName, convID)
 	tmuxName := conversation.Prefix + convID

@@ -17,9 +17,13 @@ import (
 // containers, and reboots, carrying the title shown in the sidebar.
 // AgentSession is a stable UUID reserved for agent-session pinning
 // (parked with ADR-014; see ADR-011 for what it was used for).
+// Command is the optional autostart (operator Q8, 2026-08-28): it runs when
+// the terminal's tmux SESSION is created — first open, and every re-open
+// after a pause or VM restart — then drops to the login shell.
 type Record struct {
 	ID           string    `json:"id"`
 	Title        string    `json:"title"`
+	Command      string    `json:"command,omitempty"`
 	AgentSession string    `json:"agentSession,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
 	LastOpened   time.Time `json:"lastOpened"`
@@ -138,6 +142,19 @@ func (s *Store) Rename(project, id, title string) error {
 	for i, r := range s.byProject[project] {
 		if r.ID == id {
 			s.byProject[project][i].Title = title
+			return s.save()
+		}
+	}
+	return fmt.Errorf("terminal %s not found", id)
+}
+
+// SetCommand sets (or clears, with "") a terminal's autostart command.
+func (s *Store) SetCommand(project, id, command string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, r := range s.byProject[project] {
+		if r.ID == id {
+			s.byProject[project][i].Command = command
 			return s.save()
 		}
 	}

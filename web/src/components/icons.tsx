@@ -149,6 +149,12 @@ export const ExternalLinkIcon = (p: SVGProps<SVGSVGElement>) => (
   </Svg>
 );
 
+export const BoltIcon = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}>
+    <path d="M13 2 3 14h7l-1 8 10-12h-7z" />
+  </Svg>
+);
+
 export const BellIcon = (p: SVGProps<SVGSVGElement>) => (
   <Svg {...p}>
     <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" />

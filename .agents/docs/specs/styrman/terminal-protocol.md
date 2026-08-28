@@ -46,7 +46,7 @@ paste via the clipboard API.
 
 - One live WebSocket per conversation, enforced server-side (`activeConns`).
 - The tmux session is created lazily by the first attach:
-  `tmux new-session -A -D -s conv-<id> -x <cols> -y <rows> -c ~/projects/<dir> bash -l`
+  `tmux new-session -A -D -s conv-<id> -x <cols> -y <rows> -c ~/projects/<dir> <pane-cmd>` — `<pane-cmd>` is `bash -l`, or with an autostart set: `bash -lc '<command>\nexec bash -l'` (runs only when the session is CREATED; `-A` reattach never re-runs it)
   — every terminal is a login shell (ADR-014/016); `-A` attaches when the
   session exists, `-D` detaches stale clients. Panes are transcribed via
   pipe-pane to `~/.styrman/logs/<projectId>/` (ADR-017).

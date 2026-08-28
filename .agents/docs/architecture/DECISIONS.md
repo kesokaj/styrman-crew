@@ -646,3 +646,55 @@ links_api.go (serveShared, kind locks), internal/httpapi/shares.go (mint/
 revoke lifecycle), internal/httpapi/server.go (previewHostRewrite),
 deploy/caddy/ingress/generator.go (writePrivateWildcard), deploy/
 docker-compose.yml, web/src/components/SidePanel.tsx.
+
+---
+
+## ADR-027: Per-project workspace storage outside the shared home
+
+**Date:** 2026-08-28 · **Status:** accepted (operator Q5, v1.3 plan §4b)
+
+**Context:** ADR-003 put workspaces at `~/projects/<name>` inside the one
+shared home, separated by convention only ("write discipline"). The operator
+asked for real per-project storage; the review of the files API showed the
+convention also weakened confinement (project scope could reach the whole
+home via same-uid symlinks).
+
+**Decision:** Every project's working tree lives in its own host dir
+`StateDir/projects/<user>/<uuid>`, bind-mounted into the microVM at
+`~/projects/<dir>` (in-guest paths unchanged). The home stays shared (R3 —
+credentials once, ever). The server addresses workspaces ONLY via
+`cfg.ProjectWorkspace`; the files API's project scope roots its os.Root at
+the workspace itself (strictly better confinement); git/checkpoints use the
+path directly (its parent is never mounted into any guest, so no
+containment guard is needed). A boot sweep migrates pre-ADR-027 workspaces
+by same-filesystem rename; `~/.dockerd/<uuid>.img` stays in the home
+(ADR-008 unchanged).
+
+**Consequences:** Clean per-project deletion (one RemoveAll), per-project
+quotas/backup become possible, project scope can no longer see the home.
+Home-scope file browsing shows `~/projects/<dir>` as empty mount points —
+workspaces are browsed via Project scope.
+
+---
+
+## ADR-028: apt persistence via manifest replay
+
+**Date:** 2026-08-28 · **Status:** accepted (operator Q7, v1.3 plan §4b)
+
+**Context:** `apt install` writes the container rootfs: survives stop/start,
+dies on container removal (delete, guest-username change, image upgrade).
+The operator wants per-project packages that stick until project deletion.
+
+**Decision:** Manifest + replay, not image mutation: at graceful shutdown
+the entrypoint records the delta between `dpkg-query` and the image's
+`/etc/styrman-base-packages` snapshot to `~/.styrman/apt/<uuid>.list`; on
+boot, a non-empty manifest is replayed by `apt-get install` IN THE
+BACKGROUND after the ready marker (the boot SLA never waits on apt), logged
+to `~/.styrman/apt/<uuid>.log`. Wiped with the project. Alternatives
+rejected: overlay images over /usr (complex, ADR-008-style loop devices for
+little gain) and per-project derived images (couples projects to image
+builds).
+
+**Consequences:** Packages reappear minutes after a recreate rather than
+instantly; a hard kill loses deltas since the last graceful stop. Both
+accepted — the manifest is also human-readable and agent-editable.

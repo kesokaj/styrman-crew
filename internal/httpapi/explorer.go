@@ -20,69 +20,55 @@ import (
 	"github.com/kesokaj/styrman-crew/internal/identity"
 )
 
-// scopeFor resolves the file-explorer scope. The root is ALWAYS the user's
-// home (a real, server-created directory) so os.Root confinement holds; the
-// prefix narrows it to a project workspace. A guest-planted symlink at
-// projects/<dir> can therefore never escape the home (fixes the pre-os.Root
-// cross-tenant read/write via a symlinked workspace root).
-func (s *Server) scopeFor(r *http.Request) (root, prefix string, err error) {
+// scopeFor resolves the file-explorer scope. Both roots are real,
+// server-created directories, so os.Root confinement holds: home scope is
+// the user's home; project scope is the project's OWN workspace dir
+// (ADR-027) — a guest symlink inside the workspace can no longer even reach
+// the rest of the home, let alone another tenant's.
+func (s *Server) scopeFor(r *http.Request) (root string, err error) {
 	u, sp, err := s.who(r)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 	root = s.cfg.UserHome(u.Username)
 	if id := r.PathValue("project"); id != "" {
 		p, perr := sp.projects.Get(id)
 		if perr != nil {
-			return "", "", perr
+			return "", perr
 		}
-		prefix = path.Join("projects", p.Dir)
+		root = s.cfg.ProjectWorkspace(u.Username, p.ID)
 	}
-	return root, prefix, nil
-}
-
-// scopedPath joins the request's ?path= onto the scope prefix.
-func scopedPath(prefix, rel string) string {
-	return path.Join(prefix, strings.TrimPrefix(path.Clean("/"+rel), "/"))
+	return root, nil
 }
 
 func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) {
-	root, prefix, err := s.scopeFor(r)
+	root, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	entries, err := files.List(root, scopedPath(prefix, r.URL.Query().Get("path")))
+	// Paths in and out are scope-relative: since ADR-027 the scope root IS
+	// the workspace (or home), so nothing needs prefix stripping anymore.
+	entries, err := files.List(root, r.URL.Query().Get("path"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("cannot list path"))
 		return
-	}
-	// Report paths relative to the SCOPE (what the SPA sends back as ?path=),
-	// not the home root — else the project prefix is applied twice on drill-in.
-	if prefix != "" {
-		for i := range entries {
-			entries[i].Path = strings.TrimPrefix(entries[i].Path, prefix+"/")
-		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
 
 func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
-	root, prefix, err := s.scopeFor(r)
+	root, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	fc, err := files.Read(root, scopedPath(prefix, r.URL.Query().Get("path")))
+	// The echoed path is scope-relative and round-trips into PUT unchanged
+	// (regression-tested — a prefix mismatch here once broke every save).
+	fc, err := files.Read(root, r.URL.Query().Get("path"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("cannot read file"))
 		return
-	}
-	// Report the path relative to the SCOPE, like listFiles — the SPA sends
-	// it back as ?path= on save, so a home-relative path here would get the
-	// project prefix applied twice and every save in project scope would fail.
-	if prefix != "" {
-		fc.Path = strings.TrimPrefix(fc.Path, prefix+"/")
 	}
 	writeJSON(w, http.StatusOK, fc)
 }
@@ -98,13 +84,14 @@ func scopeRel(rel string) (string, error) {
 }
 
 // managedHomeTarget refuses destructive operations on platform-managed
-// subtrees in the HOME scope: ~/projects holds every workspace (deleting one
-// belongs to project delete + wipe), ~/.dockerd the loop-mounted docker
-// disks of possibly-RUNNING microVMs, ~/.styrman the transcripts, ~/.ssh the
-// set-up-once-ever identity (R3). Project scope is already confined to the
-// workspace, so prefix != "" passes.
-func managedHomeTarget(prefix, rel string) bool {
-	if prefix != "" {
+// subtrees in the HOME scope: ~/projects holds the workspace mount points,
+// ~/.dockerd the loop-mounted docker disks of possibly-RUNNING microVMs,
+// ~/.styrman the transcripts + apt manifests, ~/.ssh the set-up-once-ever
+// identity (R3). Project scope is confined to its own workspace dir
+// (ADR-027), where these names are ordinary user dirs — so the guard keys
+// on the SCOPE, not the path shape.
+func managedHomeTarget(isHome bool, rel string) bool {
+	if !isHome {
 		return false
 	}
 	first, _, _ := strings.Cut(rel, "/")
@@ -116,7 +103,7 @@ func managedHomeTarget(prefix, rel string) bool {
 }
 
 func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
-	root, prefix, err := s.scopeFor(r)
+	root, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
@@ -126,12 +113,12 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if managedHomeTarget(prefix, rel) {
-		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman — delete it from its project instead"))
+	if managedHomeTarget(r.PathValue("project") == "", rel) {
+		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
 		return
 	}
-	if err := files.RemoveAll(root, scopedPath(prefix, rel)); err != nil {
-		s.logger.Warn("file delete failed", "scope", prefix, "path", rel, "error", err)
+	if err := files.RemoveAll(root, rel); err != nil {
+		s.logger.Warn("file delete failed", "project", r.PathValue("project"), "path", rel, "error", err)
 		writeErr(w, http.StatusBadRequest, errors.New("cannot delete path"))
 		return
 	}
@@ -139,7 +126,7 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
-	root, prefix, err := s.scopeFor(r)
+	root, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
@@ -161,12 +148,13 @@ func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if managedHomeTarget(prefix, from) || managedHomeTarget(prefix, to) {
+	isHome := r.PathValue("project") == ""
+	if managedHomeTarget(isHome, from) || managedHomeTarget(isHome, to) {
 		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
 		return
 	}
-	if err := files.Rename(root, scopedPath(prefix, from), scopedPath(prefix, to)); err != nil {
-		s.logger.Warn("file rename failed", "scope", prefix, "from", from, "to", to, "error", err)
+	if err := files.Rename(root, from, to); err != nil {
+		s.logger.Warn("file rename failed", "project", r.PathValue("project"), "from", from, "to", to, "error", err)
 		msg := "cannot rename path"
 		if strings.Contains(err.Error(), "destination already exists") {
 			msg = "destination already exists" // user-actionable, worth surfacing
@@ -178,7 +166,7 @@ func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) makeDir(w http.ResponseWriter, r *http.Request) {
-	root, prefix, err := s.scopeFor(r)
+	root, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
@@ -188,8 +176,8 @@ func (s *Server) makeDir(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := files.MkdirAll(root, scopedPath(prefix, rel)); err != nil {
-		s.logger.Warn("mkdir failed", "scope", prefix, "path", rel, "error", err)
+	if err := files.MkdirAll(root, rel); err != nil {
+		s.logger.Warn("mkdir failed", "project", r.PathValue("project"), "path", rel, "error", err)
 		writeErr(w, http.StatusBadRequest, errors.New("cannot create folder"))
 		return
 	}
@@ -197,7 +185,7 @@ func (s *Server) makeDir(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
-	root, prefix, err := s.scopeFor(r)
+	root, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
@@ -209,7 +197,7 @@ func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := files.Write(root, scopedPath(prefix, r.URL.Query().Get("path")), body.Content); err != nil {
+	if err := files.Write(root, r.URL.Query().Get("path"), body.Content); err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("cannot write file"))
 		return
 	}
@@ -220,7 +208,7 @@ func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 // directory); each part keeps its filename. Binary-safe, 512 MB cap via the
 // csrf guard's MaxBytesReader.
 func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
-	root, prefix, err := s.scopeFor(r)
+	root, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
@@ -245,7 +233,7 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 		if name == "" || name == "." || name == "/" {
 			continue
 		}
-		if err := files.SaveStream(root, scopedPath(prefix, path.Join(dir, name)), part); err != nil {
+		if err := files.SaveStream(root, path.Join(dir, name), part); err != nil {
 			writeErr(w, http.StatusInternalServerError, errors.New("cannot save upload"))
 			return
 		}
@@ -256,12 +244,12 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 
 // downloadFile streams a raw file (any type) as an attachment.
 func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
-	root, prefix, err := s.scopeFor(r)
+	root, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	rel := scopedPath(prefix, r.URL.Query().Get("path"))
+	rel := strings.TrimPrefix(path.Clean("/"+r.URL.Query().Get("path")), "/")
 	f, st, err := files.OpenForDownload(root, rel)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("cannot open file"))
@@ -370,8 +358,7 @@ func (s *Server) projectDiff(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	// Resolve through the symlink-containment guard: a guest could point its
-	// workspace at another user's home (same uid on the shared mount).
+	// Server-controlled per-project path (ADR-027) — see workspacePath.
 	ws, err := s.workspacePath(u.Username, p)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("workspace unavailable"))

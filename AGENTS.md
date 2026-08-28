@@ -52,6 +52,9 @@ bash web/e2e/run.sh                                # 35 Playwright checks (self-
 - Multi-tenant: identity from the ingress header → username slug → own home
   at `/var/lib/styrman/homes/<u>`; configurable in-guest "terminal
   username". Admins = env-provided emails.
+- Per-project workspace storage (ADR-027): each working tree lives at
+  `/var/lib/styrman/projects/<u>/<uuid>`, bind-mounted into the microVM at
+  `~/projects/<dir>`; the shared home holds everything else.
 - Terminals: durable records over tmux sessions; transcripts piped to
   `~/.styrman/logs/<projectId>/`. WS protocol: binary = PTY bytes, JSON
   text = resize, close 4000 = exited, 4001 = replaced.

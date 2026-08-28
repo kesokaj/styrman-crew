@@ -16,7 +16,7 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> image/
 - Agents: `claude` (npm `@anthropic-ai/claude-code`), `agy` (official installer → `/usr/local/bin/agy`)
 - Keyring stack for agy: dbus, gnome-keyring, libsecret-tools (spike S4)
 - e2fsprogs (project docker.img), tini (PID-1 reaper)
-- `/etc/styrman-base-packages`: dpkg snapshot for drift debugging
+- `/etc/styrman-base-packages`: dpkg snapshot — the DIFF BASE for apt persistence (ADR-028: user-installed packages are captured vs this at shutdown and replayed on boot), and still useful for drift debugging
 
 ## Entrypoint contract (`entrypoint.sh`, runs as root)
 

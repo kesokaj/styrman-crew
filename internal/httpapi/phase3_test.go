@@ -57,6 +57,65 @@ func TestUpdateRuntime(t *testing.T) {
 	}
 }
 
+// TestTerminalAutostart: PATCH sets/clears the command with validation, and
+// the terminals listing carries it.
+func TestTerminalAutostart(t *testing.T) {
+	h := testRoutes(t)
+	do := func(method, path, body string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return w
+	}
+	w := do(http.MethodPost, "/api/projects", `{"name":"auto"}`)
+	var proj struct {
+		ID string `json:"id"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &proj)
+	w = do(http.MethodPost, "/api/projects/"+proj.ID+"/terminals", `{}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create terminal = %d: %s", w.Code, w.Body.String())
+	}
+	var term struct {
+		ID    string `json:"id"`
+		Title string `json:"title"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &term)
+	if term.Title == "" || strings.HasPrefix(term.Title, "Terminal ") {
+		t.Errorf("expected generated friendly name, got %q", term.Title)
+	}
+	base := "/api/projects/" + proj.ID + "/terminals/" + term.ID
+
+	// Invalid commands are refused.
+	for _, bad := range []string{
+		`{"command":"a\nb"}`,
+		`{"command":"` + strings.Repeat("x", 600) + `"}`,
+	} {
+		if w := do(http.MethodPatch, base, bad); w.Code != http.StatusBadRequest {
+			t.Errorf("PATCH %.30q = %d, want 400", bad, w.Code)
+		}
+	}
+	// Empty body (neither field) is refused.
+	if w := do(http.MethodPatch, base, `{}`); w.Code != http.StatusBadRequest {
+		t.Errorf("empty PATCH = %d, want 400", w.Code)
+	}
+
+	if w := do(http.MethodPatch, base, `{"command":"docker compose up"}`); w.Code != http.StatusNoContent {
+		t.Fatalf("set command = %d: %s", w.Code, w.Body.String())
+	}
+	w = do(http.MethodGet, "/api/projects/"+proj.ID+"/terminals", "")
+	if !strings.Contains(w.Body.String(), `"command":"docker compose up"`) {
+		t.Errorf("listing missing command: %s", w.Body.String())
+	}
+	// Clearing with "" while renaming in the same PATCH.
+	if w := do(http.MethodPatch, base, `{"title":"svc","command":""}`); w.Code != http.StatusNoContent {
+		t.Fatalf("clear+rename = %d", w.Code)
+	}
+	w = do(http.MethodGet, "/api/projects/"+proj.ID+"/terminals", "")
+	if strings.Contains(w.Body.String(), `"command"`) || !strings.Contains(w.Body.String(), `"title":"svc"`) {
+		t.Errorf("clear+rename not reflected: %s", w.Body.String())
+	}
+}
+
 // TestHistorySearchRoute: the literal /history/search route wins over
 // /history/{id}, is scoped to the project, and returns title-joined matches.
 func TestHistorySearchRoute(t *testing.T) {

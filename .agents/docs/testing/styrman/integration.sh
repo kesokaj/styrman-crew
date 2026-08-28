@@ -50,8 +50,8 @@ for i in $(seq 1 20); do
     sleep 0.5
 done
 check "health endpoint" "curl -fsS ${API}/api/health | grep -q ok"
-check "embedded SPA served" "curl -fsS ${API}/ | grep -q '<title>styrman</title>'"
-check "SPA deep-link fallback" "curl -fsS ${API}/p/x/1 | grep -q '<title>styrman</title>'"
+check "embedded SPA served" "curl -fsS ${API}/ | grep -q '<title>crew</title>'"
+check "SPA deep-link fallback" "curl -fsS ${API}/p/x/1 | grep -q '<title>crew</title>'"
 check "unknown API path is a JSON 404" \
     "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/api/nope) = 404 ]"
 
@@ -71,7 +71,7 @@ done
 check "microVM became ready in the background" "docker exec ${CN} test -f /run/styrman/ready"
 check "microVM kernel differs from host" \
     "[ \"\$(docker exec "${CN}" uname -r)\" != \"\$(uname -r)\" ]"
-check "workspace dir on host" "[ -d '${STATE}/homes/${ME}/projects/itest' ]"
+check "workspace dir on host" "[ -d '${STATE}/projects/${ME}/${ID}' ]"
 check "git repo initialized" "docker exec "${CN}" test -d /home/$(id -un)/projects/itest/.git"
 check "in-guest dockerd runs overlay2" \
     "docker exec "${CN}" docker info --format '{{.Driver}}' | grep -q overlay2"
@@ -118,7 +118,8 @@ curl -fsS -X PUT "${API}/api/projects/${ID}/file?path=note.txt" \
     -d '{"content":"written by the explorer"}' -o /dev/null
 check "file written and read back" \
     "curl -fsS '${API}/api/projects/${ID}/file?path=note.txt' | grep -q 'written by the explorer'"
-check "file visible on the host" "grep -q explorer '${STATE}/homes/${ME}/projects/itest/note.txt'"
+# ADR-027: workspaces live in per-project storage, not the home
+check "file visible on the host" "grep -q explorer '${STATE}/projects/${ME}/${ID}/note.txt'"
 check "download serves the file" \
     "curl -fsS '${API}/api/projects/${ID}/download?path=note.txt' | grep -q explorer"
 
@@ -163,7 +164,7 @@ check "identical tree dedups" \
 check "restore succeeds and reports a safety checkpoint" \
     "curl -fsS -X POST ${API}/api/projects/${ID}/checkpoints/${CP_ID}/restore | grep -q '\"safetyId\"'"
 check "restore reverted the file to the checkpoint content" \
-    "! grep -q DAMAGED /var/lib/styrman/homes/*/projects/itest/note.txt"
+    "! grep -q DAMAGED '${STATE}/projects/${ME}/${ID}/note.txt'"
 check "restore of malformed id → 400" \
     "[ \$(curl -s -o /dev/null -w '%{http_code}' -X POST ${API}/api/projects/${ID}/checkpoints/nope/restore) = 400 ]"
 check "restore of absent id → 404" \
@@ -210,8 +211,13 @@ say "stop + delete (wipe)"
 curl -fsS -X POST "${API}/api/projects/${ID}/stop" >/dev/null
 check "container stopped" "! docker ps --format '{{.Names}}' | grep -q ${CN}"
 check "terminals still listed while stopped" \
-    "curl -fsS ${API}/api/projects/${ID}/terminals | grep -q Terminal"
+    "curl -fsS ${API}/api/projects/${ID}/terminals | grep -q '\"title\"'"
 curl -fsS -X DELETE "${API}/api/projects/${ID}?wipe=true" -o /dev/null
-check "container gone" "! docker ps -a --format '{{.Names}}' | grep -q ${CN}"
-check "workspace wiped" "[ ! -d '${STATE}/homes/${ME}/projects/itest' ]"
+# Delete is ASYNC since v1.3 (202 + background destroy) — wait for it.
+for i in $(seq 1 60); do
+    docker ps -a --format '{{.Names}}' | grep -q "${CN}" || break
+    sleep 2
+done
+check "container gone (async delete)" "! docker ps -a --format '{{.Names}}' | grep -q ${CN}"
+check "workspace wiped" "[ ! -d '${STATE}/projects/${ME}/${ID}' ]"
 check "project gone from API" "! curl -fsS ${API}/api/projects | grep -q ${ID}"

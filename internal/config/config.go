@@ -273,6 +273,24 @@ func (c *Config) ProjectsFile() string { return filepath.Join(c.StateDir, "proje
 // UserHome returns a user's home directory on the host.
 func (c *Config) UserHome(user string) string { return filepath.Join(c.HomesDir, user) }
 
+// LegacyWorkspaceExists reports whether a project's PRE-ADR-027 workspace is
+// still sitting in the shared home — the signal that migration hasn't
+// completed and nothing may create (and thereby permanently shadow) the new
+// location with an empty dir.
+func (c *Config) LegacyWorkspaceExists(user, projectDir string) bool {
+	st, err := os.Lstat(filepath.Join(c.UserHome(user), "projects", projectDir))
+	return err == nil && st.IsDir()
+}
+
+// ProjectWorkspace is the host-side working tree of one project (ADR-027):
+// per-project storage OUTSIDE the shared home, bind-mounted into the microVM
+// at ~/projects/<dir>. Keyed by UUID — names are renamable. The parent
+// (StateDir/projects/<user>) is never mounted into any guest, so the path
+// itself cannot be redirected by a guest symlink; contents are guest-written.
+func (c *Config) ProjectWorkspace(user, projectID string) string {
+	return filepath.Join(c.StateDir, "projects", user, projectID)
+}
+
 // UserStateDir returns where a user's metadata stores live.
 func (c *Config) UserStateDir(user string) string {
 	return filepath.Join(c.StateDir, "users", user)
