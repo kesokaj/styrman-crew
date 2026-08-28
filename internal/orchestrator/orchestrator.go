@@ -192,6 +192,26 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 		}
 		err = errdefs.NotFound(fmt.Errorf("recreated"))
 	}
+	// Image upgrade (v1.5 review finding): a STOPPED container whose rootfs
+	// was built from an OLDER build of cfg.Image keeps that old rootfs across
+	// stop/start forever — new profile.d snippets, tools, and entrypoint fixes
+	// silently never reach it. Recreate it here so the next boot runs the
+	// current image. Only stopped containers: recreating a RUNNING one would
+	// kill live terminal sessions (it upgrades on its next stop/start cycle
+	// instead). Safe: home + workspace are mounts, and the apt manifest
+	// (ADR-028) replays what the user installed.
+	if err == nil && (insp.State == nil || !insp.State.Running) {
+		if cur, ierr := o.docker.ImageInspect(ctx, o.cfg.Image); ierr == nil && cur.ID != insp.Image {
+			o.logger.Info("recreating stopped container for image upgrade",
+				"project", project,
+				"old", insp.Image[:min(19, len(insp.Image))],
+				"new", cur.ID[:min(19, len(cur.ID))])
+			if rerr := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); rerr != nil {
+				return "", fmt.Errorf("recreate for image upgrade: %w", rerr)
+			}
+			err = errdefs.NotFound(fmt.Errorf("recreated"))
+		}
+	}
 	switch {
 	case err == nil:
 		id = insp.ID

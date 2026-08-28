@@ -159,6 +159,11 @@ func (s *Store) PutEnv(user, key, value string) error {
 	if hasCtrl(value) {
 		return fmt.Errorf("env value for %q contains a control character", key)
 	}
+	// Real tokens are well under 1 KiB; the cap keeps a paste mistake (a whole
+	// file as the "value") from being exported into every login shell.
+	if len(value) > 4096 {
+		return fmt.Errorf("env value for %q exceeds 4096 bytes", key)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	data, err := json.MarshalIndent(EnvCred{Key: key, Value: value}, "", "  ")
@@ -280,19 +285,24 @@ func (s *Store) List(user string) ([]Item, error) {
 			continue
 		}
 		data, _ := os.ReadFile(filepath.Join(s.userDir(user), n))
+		// A corrupt store file yields zero values — skip it rather than emit a
+		// ghost row (empty ID) the UI can render but never delete.
 		switch {
 		case strings.HasPrefix(n, "git-"):
 			var c GitCred
-			json.Unmarshal(data, &c)
-			out = append(out, Item{Kind: "git", ID: c.Host, Name: c.Host})
+			if json.Unmarshal(data, &c) == nil && c.Host != "" {
+				out = append(out, Item{Kind: "git", ID: c.Host, Name: c.Host})
+			}
 		case strings.HasPrefix(n, "env-"):
 			var c EnvCred
-			json.Unmarshal(data, &c)
-			out = append(out, Item{Kind: "env", ID: c.Key, Name: c.Key})
+			if json.Unmarshal(data, &c) == nil && c.Key != "" {
+				out = append(out, Item{Kind: "env", ID: c.Key, Name: c.Key})
+			}
 		case strings.HasPrefix(n, "file-"):
 			var w fileCredWire
-			json.Unmarshal(data, &w)
-			out = append(out, Item{Kind: "file", ID: w.ID, Name: w.Path})
+			if json.Unmarshal(data, &w) == nil && w.ID != "" {
+				out = append(out, Item{Kind: "file", ID: w.ID, Name: w.Path})
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

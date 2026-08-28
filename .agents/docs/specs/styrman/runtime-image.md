@@ -80,6 +80,10 @@ Steps, in order:
 
 - Everything user-precious lives in `/home/<user>` (the virtiofs mount);
   the container itself is disposable at all times.
+- **Image upgrades apply on the next stop/start**: a stopped container whose
+  rootfs came from an older build of the runtime image is recreated at boot
+  (v1.5 review fix). Running containers keep their rootfs until stopped. The
+  apt manifest (ADR-028) replays what the user installed.
 - Agent conversations are exec'd as `bash -lc 'exec <agent>'` so
   `/etc/profile.d` (keyring env) always applies.
 - The image never contains secrets; `STYRMAN_KEYRING_PW` arrives via env and

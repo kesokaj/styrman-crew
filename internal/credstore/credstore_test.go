@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -54,6 +55,26 @@ func TestEnvCreds(t *testing.T) {
 	m, _ = cs.AllEnv("alice")
 	if m["GOOD_KEY"] != "" {
 		t.Fatal("a rejected value was still stored")
+	}
+	// An absurdly long value (a paste mistake) is rejected.
+	if err := cs.PutEnv("alice", "GOOD_KEY", strings.Repeat("x", 5000)); err == nil {
+		t.Error("PutEnv accepted a >4096-byte value")
+	}
+}
+
+// A corrupt store file must not surface as a ghost list row (empty ID the UI
+// can never delete) — it is skipped.
+func TestListSkipsCorruptFiles(t *testing.T) {
+	cs, _ := New(t.TempDir())
+	cs.PutEnv("alice", "GOOD", "v")
+	os.WriteFile(filepath.Join(cs.userDir("alice"), "env-BROKEN.json"), []byte("{not json"), 0o600)
+	os.WriteFile(filepath.Join(cs.userDir("alice"), "file-empty.json"), []byte("{}"), 0o600)
+	items, err := cs.List("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != "GOOD" {
+		t.Fatalf("List with corrupt files = %+v, want only GOOD", items)
 	}
 }
 
