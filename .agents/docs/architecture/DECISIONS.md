@@ -698,3 +698,34 @@ builds).
 **Consequences:** Packages reappear minutes after a recreate rather than
 instantly; a hard kill loses deltas since the last graceful stop. Both
 accepted — the manifest is also human-readable and agent-editable.
+
+---
+
+## ADR-029: Project→host network isolation
+
+**Date:** 2026-08-28 · **Status:** accepted (operator directive, v1.3.1)
+
+**Context:** R12 required project microVMs not to reach one another, enforced
+by per-project bridges + Docker's inter-bridge DROP (the FORWARD path) and
+the server container's `ip_forward=0`. But a project's default gateway is the
+host, and nothing guarded the INPUT path — traffic addressed to the host
+itself. Live verification from a project VM reached the host's SSH (:22) and
+Caddy (:443). The operator's model is explicit: **a project may reach the
+internet and nothing else — not another project, not the host ("Dave").**
+
+**Decision:** Drop traffic arriving on any project bridge (`sdb-+`) that is
+addressed to the host, via `iptables -I INPUT -i sdb-+ -j DROP`. Installed by
+`deploy/host-setup.sh` as a systemd oneshot (`styrman-firewall.service`,
+After=docker.service) so it survives reboots and Docker restarts (Docker
+rebuilds its own chains but never touches INPUT). Internet egress is
+unaffected (routed/NAT'd in FORWARD, never INPUT); the port-preview proxy is
+unaffected (server↔project is same-bridge L2, not host INPUT).
+
+**Consequences:** Projects are now egress-internet-only at the network layer.
+The project can still TCP-connect to the styrman **server container** on its
+own bridge (same-bridge L2), but every API request requires the secret
+`X-Styrman-Ingress` header it does not have (→403), so that residual path is
+already neutralized at L7 (defense-in-depth, not a new hole). Blocking it
+too would need fragile ebtables/physdev L2 filtering for no real gain —
+declined. Note the wildcard `sdb-+` covers all present and future project
+bridges with one rule.

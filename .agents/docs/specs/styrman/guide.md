@@ -122,7 +122,12 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
 - **Isolation** (R12): per-project bridges shared only with the server,
   which runs `ip_forward=0`; the server joins project networks in the
   background (a live join can drop in-flight connections — the preview
-  proxy 307s once instead when it must join on demand).
+  proxy 307s once instead when it must join on demand). A project reaches
+  the **internet and nothing else**: not another project (separate bridges
+  + Docker's inter-bridge DROP), and not the host itself — `host-setup.sh`
+  installs `styrman-firewall.service`, an `iptables -I INPUT -i sdb-+ -j
+  DROP` that blocks every project bridge from the host's own ports (SSH,
+  Caddy, …) while leaving NAT egress untouched (ADR-029).
 - **Idle lifecycle**: terminal traffic timestamps the project; idle ones
   stop after `STYRMAN_IDLE_TIMEOUT` (24h); reopening boots on connect.
 - **Auth is two-layer** (R8): the ingress proves identity via Google OAuth

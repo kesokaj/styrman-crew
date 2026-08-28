@@ -121,6 +121,42 @@ else
     log "daemon.json already correct — not restarting docker"
 fi
 
+# ─── 3b. Project→host isolation (R12, ADR-029) ──────────────────────────────
+# Docker's per-bridge rules already stop project↔project traffic (the FORWARD
+# path). But a project VM's default gateway IS the host, so without this a
+# project could reach anything the host listens on (SSH, Caddy) — the INPUT
+# path, which Docker never guards. Drop traffic from any project bridge
+# (sdb-*) addressed to the host itself. Internet egress is unaffected (that's
+# routed/NAT'd in FORWARD, never INPUT); the port-preview proxy is unaffected
+# (server↔project is same-bridge L2). Installed as a systemd oneshot so it
+# re-applies after every reboot and after any Docker restart (Docker rebuilds
+# its own chains but never touches INPUT).
+cat > /usr/local/sbin/styrman-firewall.sh <<'FWEOF'
+#!/usr/bin/env bash
+# Project microVMs may reach the internet and NOTHING on the host (R12/ADR-029).
+set -eu
+iptables -C INPUT -i sdb-+ -j DROP 2>/dev/null || iptables -I INPUT -i sdb-+ -j DROP
+FWEOF
+chmod 0755 /usr/local/sbin/styrman-firewall.sh
+cat > /etc/systemd/system/styrman-firewall.service <<'EOF'
+[Unit]
+Description=styrman project→host network isolation (R12/ADR-029)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/styrman-firewall.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now styrman-firewall.service 2>/dev/null \
+    && log "project→host isolation rule active (styrman-firewall.service)" \
+    || log "WARN: could not enable styrman-firewall.service — apply /usr/local/sbin/styrman-firewall.sh manually"
+
 # ─── 4. Host tuning: KSM (merges identical microVM pages) ───────────────────
 if [[ -w /sys/kernel/mm/ksm/run ]]; then
     echo 1 > /sys/kernel/mm/ksm/run
