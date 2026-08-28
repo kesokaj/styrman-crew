@@ -45,9 +45,9 @@ containers disposable always.
   import it, and a **credential broker** (ADR-030/032) keeps the single live
   copy and delivers the current one to every project — git (per-op helper,
   nothing stored in the VM), gh/npm/claude tokens (exported into each login
-  shell), gcloud ADC + ssh key (written into each home). A refresh anywhere
-  propagates; new projects are current with no re-auth. Only `agy` still needs
-  per-project sign-in (its OAuth lives in the keyring with no broker-able path).
+  shell), gcloud ADC + ssh key (written into each home), and agy (its keyring
+  item seeded into each project's keyring, ADR-032a). A refresh anywhere
+  propagates; new projects are current with no re-auth.
 
 ## Architecture
 
@@ -83,9 +83,10 @@ stores — a restart or reboot recovers everything by adoption.
 **v1.5.0**, deployed: https://crew.styrman.xyz (Google sign-in). Verified by
 3 suites (unit + race, 62 integration checks against real Kata, 35
 self-hosted Playwright browser checks) plus a live post-deploy battery.
-v1.5 completes the **credential broker** (ADR-030/032): all tools except `agy`
-are shared once and kept current across a user's projects via one
-pull-on-login mechanism (git helper / env exports / file injection), with a
+v1.5 completes the **credential broker** (ADR-030/032/032a): every shipped
+tool — agy included — is shared once and kept current across a user's
+projects via one pull-on-login mechanism (git helper / env / files /
+keyring), with a
 Settings **Credentials** panel and one-pass import from a running project. It
 builds on v1.4's **per-project homes** (ADR-031) — each project fully
 individual, credentials the only shared thing. v1.3 brought the full UI

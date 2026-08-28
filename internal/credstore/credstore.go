@@ -67,13 +67,33 @@ type fileCredWire struct {
 	DataB64 string `json:"data"`
 }
 
+// KeyringCred is a Secret Service item materialized into each project's
+// gnome-keyring at login (ADR-032 keyring tier — agy). The attribute shape is
+// zalando/go-keyring's: {service, username}; Label is cosmetic.
+type KeyringCred struct {
+	ID       string `json:"id"`      // stable store key, e.g. "agy"
+	Service  string `json:"service"` // attribute: service (e.g. "antigravity")
+	Username string `json:"username"`
+	Label    string `json:"label"`
+	Secret   []byte `json:"-"` // raw bytes; marshaled base64 in secretB64
+}
+
+// keyringCredWire is the on-disk shape (base64 secret).
+type keyringCredWire struct {
+	ID        string `json:"id"`
+	Service   string `json:"service"`
+	Username  string `json:"username"`
+	Label     string `json:"label"`
+	SecretB64 string `json:"secret"`
+}
+
 // Item is a value-free descriptor of one stored credential, for the Settings
 // status view (never carries the secret). ID is the delete key (host for git,
-// KEY for env, the store id for file); Name is the human label (Path for file).
+// KEY for env, the store id for file/keyring); Name is the human label.
 type Item struct {
-	Kind string `json:"kind"` // "git" | "env" | "file"
-	ID   string `json:"id"`   // delete key: host | KEY | file id
-	Name string `json:"name"` // display: host | KEY | path
+	Kind string `json:"kind"` // "git" | "env" | "file" | "keyring"
+	ID   string `json:"id"`   // delete key: host | KEY | file id | keyring id
+	Name string `json:"name"` // display: host | KEY | path | service (username)
 }
 
 // Store is the per-user credential store rooted at a base dir.
@@ -264,6 +284,68 @@ func (s *Store) AllFiles(user string) ([]FileCred, error) {
 	return out, nil
 }
 
+// ─── keyring tier ───────────────────────────────────────────────────────────
+
+// PutKeyring stores (or replaces) a Secret Service item credential. The
+// service/username/label are interpolated into the login snippet's TSV
+// delivery, so they must be single-line printable strings; the secret is
+// arbitrary bytes (delivered base64).
+func (s *Store) PutKeyring(user string, c KeyringCred) error {
+	if c.ID == "" || !envKeyRe.MatchString(strings.ReplaceAll(c.ID, "-", "_")) {
+		return fmt.Errorf("invalid keyring id %q", c.ID)
+	}
+	if c.Service == "" || hasCtrl(c.Service) || c.Username == "" || hasCtrl(c.Username) || hasCtrl(c.Label) {
+		return fmt.Errorf("keyring service/username/label must be non-empty single-line strings")
+	}
+	if len(c.Secret) == 0 {
+		return fmt.Errorf("empty keyring secret")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w := keyringCredWire{ID: c.ID, Service: c.Service, Username: c.Username, Label: c.Label,
+		SecretB64: base64.StdEncoding.EncodeToString(c.Secret)}
+	data, err := json.MarshalIndent(w, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Join(s.userDir(user), "keyring-"+c.ID+".json"), append(data, '\n'))
+}
+
+// AllKeyring returns every keyring credential for a user (empty when none).
+func (s *Store) AllKeyring(user string) ([]KeyringCred, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []KeyringCred
+	entries, err := os.ReadDir(s.userDir(user))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out, nil
+		}
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasPrefix(e.Name(), "keyring-") || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.userDir(user), e.Name()))
+		if err != nil {
+			continue
+		}
+		var w keyringCredWire
+		if err := json.Unmarshal(data, &w); err != nil ||
+			w.Service == "" || hasCtrl(w.Service) || w.Username == "" || hasCtrl(w.Username) || hasCtrl(w.Label) {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(w.SecretB64)
+		if err != nil || len(raw) == 0 {
+			continue
+		}
+		out = append(out, KeyringCred{ID: w.ID, Service: w.Service, Username: w.Username, Label: w.Label, Secret: raw})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
 // ─── management ─────────────────────────────────────────────────────────────
 
 // List returns value-free descriptors of everything stored for a user, for the
@@ -303,6 +385,11 @@ func (s *Store) List(user string) ([]Item, error) {
 			if json.Unmarshal(data, &w) == nil && w.ID != "" {
 				out = append(out, Item{Kind: "file", ID: w.ID, Name: w.Path})
 			}
+		case strings.HasPrefix(n, "keyring-"):
+			var w keyringCredWire
+			if json.Unmarshal(data, &w) == nil && w.ID != "" {
+				out = append(out, Item{Kind: "keyring", ID: w.ID, Name: w.Service + " (" + w.Username + ")"})
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -333,6 +420,11 @@ func (s *Store) Delete(user, kind, name string) error {
 			return fmt.Errorf("invalid file id %q", name)
 		}
 		fn = "file-" + name + ".json"
+	case "keyring":
+		if name == "" || strings.ContainsAny(name, "/\\") {
+			return fmt.Errorf("invalid keyring id %q", name)
+		}
+		fn = "keyring-" + name + ".json"
 	default:
 		return fmt.Errorf("unknown kind %q", kind)
 	}

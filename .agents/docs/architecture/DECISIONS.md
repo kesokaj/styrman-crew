@@ -864,3 +864,51 @@ unit tests + the live server. An adversarial review fixed one cross-tenant
 leak (the IP→owner cache now re-verifies the container holds the source IP on
 every hit, so a reused subnet/IP after a destroy can't serve another user's
 credentials) and hardened env values against control-character injection.
+
+---
+
+## ADR-032a: agy joins the broker — the keyring tier (pull-on-login)
+
+**Date:** 2026-08-28 · **Status:** accepted. Amends ADR-032, which shipped
+agy as "unsupported — keyring mapping unverified".
+
+**Context:** The operator asked "agy pull on login?". Re-investigation
+settled the two unknowns: (1) `strings` on the agy binary shows it vendors
+**zalando/go-keyring**, whose Secret Service items always carry the
+attribute pair `{service, username}`; (2) our own `styrman-setup` probe
+already keys on `service antigravity` — so the item shape is fully known.
+Nothing needs installing at login; agy ships in the image — only the TOKEN
+moves.
+
+**Decision:** a fourth broker tier, `keyring`:
+- Store: `keyring-<id>.json` (`{id, service, username, label, secret}`,
+  0600; service/username/label validated single-line — they ride the TSV
+  delivery; secret = arbitrary bytes, base64 on the wire).
+- Broker: `GET /keyring` → `[{service, username, label, secret(b64)}]`,
+  caller-identified by bridge IP like every other endpoint.
+- Delivery: `zz-styrman-credentials.sh` (after the keyring daemon is up —
+  `styrman-keyring.sh` sorts first) pipes each item into
+  `secret-tool store --label=… service … username …`. Identical attributes
+  replace-or-create, so a seeded item is indistinguishable from a native
+  sign-in to go-keyring.
+- Import: from a signed-in reference project — `secret-tool search --all
+  service antigravity` learns the username, `secret-tool lookup` returns
+  the raw secret. **Gotcha (live-verified):** `secret-tool search` prints
+  the item to stdout but the `attribute.*` lines to STDERR — the import
+  merges streams; `2>/dev/null` silently loses the attributes.
+
+**Proven live** (synthetic token, then scrubbed back to virgin state):
+seeded a fake `{service: antigravity, username: synth@test}` item in
+project A → import reported `agy: stored (keyring)` → a brand-new project
+B's first login shell held the item (`secret-tool lookup` returned the
+exact secret; the styrman-setup probe reported "agy: keyring credentials
+present") with zero manual steps.
+
+**Consequences:** every tool the platform ships is now broker-delivered;
+"sign in once, import, all projects current" has no exceptions in
+mechanism. Remaining assumption to confirm with a REAL token (operator's
+next sign-in): agy stores exactly one item under `service antigravity` and
+accepts a seeded refresh token — go-keyring semantics say yes; if agy ever
+adds a second service name, extend the import's search. Same
+stale-overwrite caveat as the file tier: re-importing after a re-auth
+keeps the broker copy current.

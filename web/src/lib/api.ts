@@ -128,7 +128,7 @@ export interface Settings {
 /** A stored credential, value-free. `id` is the delete key (host | KEY | file
  *  id); `name` is the display label (host | KEY | path). */
 export interface CredItem {
-  kind: "git" | "env" | "file";
+  kind: "git" | "env" | "file" | "keyring";
   id: string;
   name: string;
 }

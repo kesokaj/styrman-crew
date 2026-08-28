@@ -138,12 +138,13 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   `GET /env` (shell vars — `GH_TOKEN`, `NPM_TOKEN`, `CLAUDE_*` — exported by a
   login-shell snippet, `/etc/profile.d/zz-styrman-credentials.sh`); and
   `GET /files` (files — gcloud ADC, ssh key — written into the home by the
-  same snippet). Sign in once in any project, then
+  same snippet); and `GET /keyring` (Secret Service items — agy's OAuth —
+  secret-tool-stored into each project's unlocked keyring, ADR-032a). Sign
+  in once in any project, then
   `POST /api/settings/credentials/import {project}` pulls gh/claude/gcloud/
-  ssh/npm into the store in one pass; every project (new ones included) is
-  then current with no re-auth. Manage from the Settings **Credentials**
-  panel. Only `agy` still needs per-project sign-in (its OAuth lives in the
-  gnome-keyring with no broker-able mapping — issue #632).
+  ssh/npm/agy into the store in one pass; every project (new ones included)
+  is then current with no re-auth. Manage from the Settings **Credentials**
+  panel.
 - **Idle lifecycle**: terminal traffic timestamps the project; idle ones
   stop after `STYRMAN_IDLE_TIMEOUT` (24h); reopening boots on connect.
 - **Auth is two-layer** (R8): the ingress proves identity via Google OAuth

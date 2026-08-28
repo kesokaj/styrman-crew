@@ -115,12 +115,40 @@ func TestBrokerFiles(t *testing.T) {
 	}
 }
 
+func TestBrokerKeyring(t *testing.T) {
+	b, cs := newBroker(t, fakeResolver{user: "alice", project: "p1"})
+	cs.PutKeyring("alice", credstore.KeyringCred{
+		ID: "agy", Service: "antigravity", Username: "user@example.com",
+		Label: "L", Secret: []byte("TOKENBYTES"),
+	})
+	srv := httptest.NewServer(b.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/keyring")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("keyring = %d, want 200", resp.StatusCode)
+	}
+	var got []struct{ Service, Username, Label, Secret string }
+	json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	if len(got) != 1 || got[0].Service != "antigravity" || got[0].Username != "user@example.com" {
+		t.Fatalf("keyring payload = %+v", got)
+	}
+	raw, err := base64.StdEncoding.DecodeString(got[0].Secret)
+	if err != nil || string(raw) != "TOKENBYTES" {
+		t.Fatalf("keyring secret = %q (%v)", got[0].Secret, err)
+	}
+}
+
 // An unresolved caller gets 403 on every credential endpoint, not just /git.
 func TestBrokerEnvFilesForbidden(t *testing.T) {
 	b, _ := newBroker(t, fakeResolver{err: errors.New("no bridge")})
 	srv := httptest.NewServer(b.Handler())
 	defer srv.Close()
-	for _, path := range []string{"/env", "/files"} {
+	for _, path := range []string{"/env", "/files", "/keyring"} {
 		resp, _ := http.Get(srv.URL + path)
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("%s unresolved = %d, want 403", path, resp.StatusCode)

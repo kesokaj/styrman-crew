@@ -121,6 +121,66 @@ func TestFileCreds(t *testing.T) {
 	}
 }
 
+func TestKeyringCreds(t *testing.T) {
+	cs, _ := New(t.TempDir())
+	kcs, err := cs.AllKeyring("alice")
+	if err != nil || len(kcs) != 0 {
+		t.Fatalf("empty AllKeyring = %v, %v", kcs, err)
+	}
+	secret := []byte("oauth-json-{\"refresh\":\"tok\"}\x00\xff")
+	if err := cs.PutKeyring("alice", KeyringCred{
+		ID: "agy", Service: "antigravity", Username: "user@example.com",
+		Label: "Password for 'user@example.com' on 'antigravity'", Secret: secret,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	kcs, _ = cs.AllKeyring("alice")
+	if len(kcs) != 1 || kcs[0].Service != "antigravity" || kcs[0].Username != "user@example.com" || string(kcs[0].Secret) != string(secret) {
+		t.Fatalf("AllKeyring = %+v", kcs)
+	}
+	// Cross-user isolation.
+	if k2, _ := cs.AllKeyring("bob"); len(k2) != 0 {
+		t.Fatal("cross-user keyring leak")
+	}
+	// Refresh (replace) read back.
+	cs.PutKeyring("alice", KeyringCred{ID: "agy", Service: "antigravity", Username: "user@example.com", Label: "l", Secret: []byte("new")})
+	kcs, _ = cs.AllKeyring("alice")
+	if string(kcs[0].Secret) != "new" {
+		t.Fatalf("refresh not read back: %q", kcs[0].Secret)
+	}
+	// Control chars / empties rejected (they'd break the TSV delivery).
+	for _, bad := range []KeyringCred{
+		{ID: "x", Service: "a\tb", Username: "u", Secret: []byte("s")},
+		{ID: "x", Service: "a", Username: "u\nv", Secret: []byte("s")},
+		{ID: "x", Service: "", Username: "u", Secret: []byte("s")},
+		{ID: "x", Service: "a", Username: "", Secret: []byte("s")},
+		{ID: "x", Service: "a", Username: "u", Label: "l\nl", Secret: []byte("s")},
+		{ID: "x", Service: "a", Username: "u", Secret: nil},
+		{ID: "bad/id", Service: "a", Username: "u", Secret: []byte("s")},
+	} {
+		if err := cs.PutKeyring("alice", bad); err == nil {
+			t.Errorf("PutKeyring accepted invalid %+v", bad)
+		}
+	}
+	// List + delete round-trip.
+	items, _ := cs.List("alice")
+	found := false
+	for _, it := range items {
+		if it.Kind == "keyring" && it.ID == "agy" && strings.Contains(it.Name, "antigravity") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("keyring item missing from List: %+v", items)
+	}
+	if err := cs.Delete("alice", "keyring", "agy"); err != nil {
+		t.Fatal(err)
+	}
+	if kcs, _ := cs.AllKeyring("alice"); len(kcs) != 0 {
+		t.Fatal("keyring not deleted")
+	}
+}
+
 func TestListAndDelete(t *testing.T) {
 	cs, _ := New(t.TempDir())
 	cs.PutGit("alice", GitCred{Host: "github.com", Username: "u", Token: "t"})

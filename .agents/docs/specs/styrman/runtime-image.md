@@ -56,7 +56,8 @@ Steps, in order:
     snippet). On every login shell it pulls the CURRENT credentials for this
     project's user from the broker on the project bridge (`$STYRMAN_CRED_BROKER`)
     — `GET /env` → `export` each var, `GET /files` → write each file at its
-    mode under `$HOME`. Quiet + fast (5 s timeout); no broker → no-op.
+    mode under `$HOME`, `GET /keyring` → `secret-tool store` each Secret
+    Service item (agy, ADR-032a). Quiet + fast (5 s timeout); no broker → no-op.
 7. Default `~/.tmux.conf` if the user has none (status off, login shells,
    `mouse off` — mouse mode steals selection from the browser terminal, so
    it's off so xterm.js can select natively and copy-on-select works).

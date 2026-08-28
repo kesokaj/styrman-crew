@@ -169,6 +169,7 @@ function CredentialsSection() {
     git: "git helper",
     env: "shell var",
     file: "file",
+    keyring: "keyring",
   };
 
   if (brokerOff) {
@@ -277,7 +278,7 @@ function CredentialsSection() {
               {busy ? "Importing…" : "Import"}
             </button>
             <span className="text-[10px] text-text-dim">
-              reads gh · claude · gcloud · ssh · npm
+              reads gh · claude · gcloud · ssh · npm · agy
             </span>
           </div>
         )}

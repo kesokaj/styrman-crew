@@ -196,10 +196,35 @@ func (s *Server) importCredentials(w http.ResponseWriter, r *http.Request) {
 		report["npm"] = "not found — set //registry.npmjs.org/:_authToken in ~/.npmrc"
 	}
 
-	// agy stores its OAuth ONLY in the gnome-keyring, with no verified
-	// service/account mapping yet (plan §4, issue #632). Reported honestly
-	// rather than silently half-wired.
-	report["agy"] = "unsupported — keyring mapping unverified (re-auth per project for now)"
+	// agy → its go-keyring Secret Service item {service: antigravity,
+	// username: <account>} (ADR-032 keyring tier). Two steps: search learns
+	// the username attribute, lookup returns the raw secret bytes. Login
+	// shell so the keyring is unlocked.
+	// NB: secret-tool search splits its output — item/label/secret on stdout
+	// but the attribute.* lines on STDERR — so merge the streams (verified
+	// live; 2>/dev/null silently drops exactly the lines parsed here).
+	if kuser, ok := s.guestOut(r, st.ContainerID, guest,
+		`secret-tool search --all service antigravity 2>&1 | sed -n 's/^attribute.username = //p' | head -1`); ok && kuser != "" && !strings.ContainsAny(kuser, "\n\t") {
+		if b64, ok := s.guestOut(r, st.ContainerID, guest,
+			"secret-tool lookup service antigravity username "+shellQuote(kuser)+" 2>/dev/null | base64 -w0"); ok && b64 != "" {
+			if raw, err := base64.StdEncoding.DecodeString(b64); err == nil && len(raw) > 0 {
+				if err := s.creds.PutKeyring(u.Username, credstore.KeyringCred{
+					ID: "agy", Service: "antigravity", Username: kuser,
+					Label: "Password for '" + kuser + "' on 'antigravity'", Secret: raw,
+				}); err != nil {
+					report["agy"] = "error"
+				} else {
+					report["agy"] = "stored (keyring)"
+				}
+			} else {
+				report["agy"] = "not found — run `agy` and sign in"
+			}
+		} else {
+			report["agy"] = "not found — run `agy` and sign in"
+		}
+	} else {
+		report["agy"] = "not found — run `agy` and sign in"
+	}
 
 	s.logger.Info("credential import complete", "user", u.Username, "from", p.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"report": report})

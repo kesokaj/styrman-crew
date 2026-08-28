@@ -49,6 +49,7 @@ func (b *Broker) Handler() http.Handler {
 	mux.HandleFunc("GET /git", b.git)
 	mux.HandleFunc("GET /env", b.env)
 	mux.HandleFunc("GET /files", b.files)
+	mux.HandleFunc("GET /keyring", b.keyring)
 	return mux
 }
 
@@ -138,6 +139,40 @@ func (b *Broker) files(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(out) > 0 {
 		b.logger.Info("cred broker: served file credentials", "user", user, "project", project, "count", len(out))
+	}
+	writeJSON(w, out)
+}
+
+// keyringOut is the wire shape for a Secret Service item (base64 secret).
+type keyringOut struct {
+	Service  string `json:"service"`
+	Username string `json:"username"`
+	Label    string `json:"label"`
+	Secret   string `json:"secret"` // base64
+}
+
+// keyring serves the calling project's Secret Service items (agy's OAuth
+// token, ADR-032 keyring tier). The in-guest login snippet secret-tool-stores
+// each into the project's unlocked gnome-keyring. Always 200 with a (possibly
+// empty) array.
+func (b *Broker) keyring(w http.ResponseWriter, r *http.Request) {
+	user, project, ok := b.caller(r)
+	if !ok {
+		http.Error(w, "unknown caller", http.StatusForbidden)
+		return
+	}
+	kcs, err := b.store.AllKeyring(user)
+	if err != nil {
+		http.Error(w, "store error", http.StatusInternalServerError)
+		return
+	}
+	out := make([]keyringOut, 0, len(kcs))
+	for _, c := range kcs {
+		out = append(out, keyringOut{Service: c.Service, Username: c.Username, Label: c.Label,
+			Secret: base64.StdEncoding.EncodeToString(c.Secret)})
+	}
+	if len(out) > 0 {
+		b.logger.Info("cred broker: served keyring credentials", "user", user, "project", project, "count", len(out))
 	}
 	writeJSON(w, out)
 }

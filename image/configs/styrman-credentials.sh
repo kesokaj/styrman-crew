@@ -51,4 +51,24 @@ EOF
             done
     fi
     unset __sc_files
+
+    # keyring tier (ADR-032, agy): store each Secret Service item into THIS
+    # project's gnome-keyring (unlocked by styrman-keyring.sh, which sorts
+    # before this snippet). go-keyring items key on {service, username} —
+    # secret-tool store with identical attributes replaces/creates, so the
+    # seeded item is indistinguishable from a native sign-in. agy itself is
+    # already installed in the image — only the token is pulled here.
+    if command -v secret-tool >/dev/null 2>&1; then
+        __sc_kr="$(curl -fsS --max-time 5 "${STYRMAN_CRED_BROKER}/keyring" 2>/dev/null || true)"
+        if [ -n "${__sc_kr}" ] && [ "${__sc_kr}" != "[]" ]; then
+            printf '%s' "${__sc_kr}" \
+                | jq -r '.[] | [.service, .username, .label, .secret] | @tsv' 2>/dev/null \
+                | while IFS="$(printf '\t')" read -r __s __u __l __d; do
+                    [ -n "${__s}" ] && [ -n "${__u}" ] || continue
+                    printf '%s' "${__d}" | base64 -d 2>/dev/null \
+                        | secret-tool store --label="${__l:-${__s}}" service "${__s}" username "${__u}" 2>/dev/null || true
+                done
+        fi
+        unset __sc_kr
+    fi
 fi

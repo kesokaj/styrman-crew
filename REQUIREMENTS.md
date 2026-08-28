@@ -32,11 +32,11 @@
    installs, history) leaks between them. The ONLY thing shared across a user's
    projects is credentials, delivered by the credential broker (ADR-032): git via
    per-op credential helper (nothing stored in the VM); gh/npm/claude via env
-   tokens; gcloud ADC + the ssh key via file injection — all pulled current on
-   every login shell. docker→registry creds: planned (no adapter yet). **agy is
-   NOT brokered** (its OAuth lives only in the gnome-keyring, upstream issue
-   #632) — it needs per-project sign-in until upstream adds a path. Sign in to
-   each brokered tool **once**; a refresh in any project propagates to all;
+   tokens; gcloud ADC + the ssh key via file injection; agy via the keyring
+   tier (its go-keyring Secret Service item, `service antigravity`, seeded
+   into each project's unlocked keyring — ADR-032a) — all pulled current on
+   every login shell. docker→registry creds: planned (no adapter yet). Sign in
+   to each brokered tool **once**; a refresh in any project propagates to all;
    destroying and recreating any container must lose nothing outside that
    container's runtime state.
 4. **R4 — Terminal-first, no embedded IDE**: the agent CLI is the primary interface.
