@@ -8,7 +8,7 @@ identity, friendly renamable name), and get browser terminals inside a
 dedicated Kata microVM with both `claude` and `agy` preinstalled. One
 project = one microVM = one Docker daemon; one user = one persistent home
 disk (credentials once, forever; users fully isolated from each other).
-Live at https://app.styrman.xyz.
+Live at https://crew.styrman.xyz.
 
 Successor to `~/workspace/devbox` (multi-tenant Kata shell platform) and
 `~/workspace/argolis-devbox` (single-VM cloud shell). Terminal-first: the agent CLI *is*

@@ -12,7 +12,7 @@ isolated projects. Sign in with Google, create a project, and get browser
 terminals inside a dedicated **Kata Containers microVM** — its own kernel,
 its own Docker daemon, its own network. Both agents (`claude`, `agy`) are
 preinstalled; run whichever you want, in as many terminals as you want.
-Live at https://app.styrman.xyz.
+Live at https://crew.styrman.xyz.
 
 Load-bearing ideas:
 

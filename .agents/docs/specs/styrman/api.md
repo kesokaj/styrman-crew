@@ -131,7 +131,7 @@ Git tab's "Checkpoint now" button or the POST below.
 | `STYRMAN_DEV_ADDR` | unset | Auth-bypassed second listener — publish on host loopback ONLY |
 | `STYRMAN_AUTH` | `none` | `header` behind the ingress |
 | `STYRMAN_INGRESS_TOKEN` | unset (disabled) | Shared secret the ingress injects as `X-Styrman-Ingress`; header mode rejects requests without it when set — blocks a project VM from spoofing `X-Caddy-Email` directly against the server |
-| `STYRMAN_PREVIEW_BASE` | unset (off) | Public preview host base (ADR-025), e.g. `preview.styrman.xyz`; when set, `/link/{token}` is also reachable as `https://{token}.<base>/` and minted link URLs use that form. Fed by `STYRMAN_PREVIEW_DOMAIN` in `deploy/.env` — see deploy.md |
+| `STYRMAN_PREVIEW_BASE` | unset (off) | Public preview host base (ADR-025), e.g. `preview.crew.styrman.xyz`; when set, `/link/{token}` is also reachable as `https://{token}.<base>/` and minted link URLs use that form. Fed by `STYRMAN_PREVIEW_DOMAIN` in `deploy/.env` — see deploy.md |
 | `STYRMAN_ALLOWED_EMAILS` | — | Admin accounts (comma-sep); first one is the dev-listener identity |
 | `STYRMAN_STATE_DIR` | `/var/lib/styrman` | Root: `homes/<user>`, `users/<user>/*.json`, `users.json` |
 | `STYRMAN_IMAGE` / `STYRMAN_RUNTIME` | `styrman-runtime:latest` / `mvm` | Project microVM image + runtime |

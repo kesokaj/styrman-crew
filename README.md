@@ -57,7 +57,7 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-Beta, deployed: https://app.styrman.xyz (Google sign-in, admin-managed
+Beta, deployed: https://crew.styrman.xyz (Google sign-in, admin-managed
 access). All four build phases landed — microVM runtime, UI, OAuth ingress,
 multi-tenancy — verified by 3 suites (unit, 56 integration checks against
 real Kata, 33 self-hosted Playwright browser checks). Since launch: per-port
