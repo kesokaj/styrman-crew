@@ -81,6 +81,12 @@ func NewStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("parse links store: %w", err)
 	}
 	for _, l := range f.Links {
+		// Validate-on-load like the project/conversation stores: a
+		// hand-edited record with a malformed token must not enter the map
+		// (a short token would panic the token[:8] log slice downstream).
+		if !ValidToken(l.Token) {
+			continue
+		}
 		s.links[l.Token] = l
 	}
 	return s, nil
@@ -256,17 +262,26 @@ func (s *Store) ListFor(project string, now time.Time) []Link {
 func (s *Store) DeleteProject(project string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	changed := false
+	removed := map[string]Link{}
 	for t, l := range s.links {
 		if l.Project == project {
+			removed[t] = l
 			delete(s.links, t)
-			changed = true
 		}
 	}
-	if !changed {
+	if len(removed) == 0 {
 		return nil
 	}
-	return s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		// B3 discipline (same as Delete/DeletePrivate): restore on a failed
+		// save so the tokens don't resurrect on restart while callers
+		// believe they're gone.
+		for t, l := range removed {
+			s.links[t] = l
+		}
+		return err
+	}
+	return nil
 }
 
 // Delete revokes a link. Revoking an unknown/expired token is a no-op success.

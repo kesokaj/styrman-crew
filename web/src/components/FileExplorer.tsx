@@ -1,4 +1,11 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   api,
   tryUI,
@@ -66,14 +73,23 @@ export function FileExplorer({
     setPath("");
   }, [project]);
 
+  // Generation guard (audit finding): quick directory hops could let an
+  // EARLIER listing resolve last and repaint the previous directory's entries
+  // under the new breadcrumb. Each (scope,path) change invalidates in-flight
+  // responses.
+  const loadGen = useRef(0);
   const load = useCallback(() => {
+    const gen = ++loadGen.current;
     api
       .listFiles(scope, path)
       .then((r) => {
+        if (gen !== loadGen.current) return; // stale response
         setEntries(r.entries);
         setError(undefined);
       })
-      .catch((e: Error) => setError(e.message));
+      .catch((e: Error) => {
+        if (gen === loadGen.current) setError(e.message);
+      });
   }, [scope, path]);
 
   useEffect(() => {
@@ -149,7 +165,9 @@ export function FileExplorer({
             key={k}
             onClick={() => {
               setScope(
-                k === "home" ? { kind: "home", project } : { kind: "project", project },
+                k === "home"
+                  ? { kind: "home", project }
+                  : { kind: "project", project },
               );
               setPath("");
             }}
@@ -403,16 +421,22 @@ function FileViewer({
   useEffect(() => {
     if (!previewing || !isMarkdown) return;
     let stale = false;
-    import("micromark").then(({ micromark }) => {
-      if (stale) return;
-      // micromark escapes raw HTML and sanitizes javascript: hrefs; the
-      // target/rel rewrite just keeps README links from navigating the SPA.
-      const html = micromark(text, { allowDangerousHtml: false }).replaceAll(
-        "<a href=",
-        '<a target="_blank" rel="noopener noreferrer" href=',
-      );
-      setPreviewHtml(html);
-    });
+    import("micromark")
+      .then(({ micromark }) => {
+        if (stale) return;
+        // micromark escapes raw HTML and sanitizes javascript: hrefs; the
+        // target/rel rewrite just keeps README links from navigating the SPA.
+        const html = micromark(text, { allowDangerousHtml: false }).replaceAll(
+          "<a href=",
+          '<a target="_blank" rel="noopener noreferrer" href=',
+        );
+        setPreviewHtml(html);
+      })
+      .catch(() => {
+        // A failed chunk load must not leave "Rendering…" forever (audit
+        // finding) — fall back to the plain editor view.
+        if (!stale) setPreviewing(false);
+      });
     return () => {
       stale = true;
     };

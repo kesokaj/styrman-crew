@@ -20,15 +20,17 @@ Load-bearing ideas:
    containers are `styrman-<uuid>`, so friendly names are freely renamable
    and reusable. Projects cannot reach each other over the network, ever
    (R12, verified adversarially).
-2. **1 user = 1 home disk** (ADR-019, R3). Each account owns
-   `/var/lib/styrman/homes/<user>` — credentials, dotfiles, transcripts —
-   mounted into each of *their* microVMs; since ADR-027 every project's
-   WORKSPACE additionally lives in its own storage dir
-   (`/var/lib/styrman/projects/<user>/<uuid>`), bind-mounted at
-   `~/projects/<dir>`. Sign in to claude/agy/gh/ssh once per user, forever;
-   containers stay disposable. Users never see each other's worlds. Access
-   is managed via `STYRMAN_ALLOWED_EMAILS` (+ admin-only API endpoints —
-   the runtime user-management UI was removed in v1.3, operator Q4).
+2. **1 project = 1 home** (ADR-031, revising ADR-019; R3). Each project
+   mounts its OWN home at `/var/lib/styrman/homes/<user>/p/<uuid>`, seeded
+   identically from the base image (dotfiles + agent harness) — no tool
+   state leaks between projects. The workspace additionally lives in its own
+   storage dir (`/var/lib/styrman/projects/<user>/<uuid>`, ADR-027),
+   bind-mounted at `~/projects/<dir>`. The ONLY thing shared across a
+   user's projects is credentials, via the broker (ADR-030/032): sign in
+   once in any project, import, and every project stays current. Containers
+   stay disposable; users never see each other's worlds. Access is managed
+   via `STYRMAN_ALLOWED_EMAILS` (+ admin-only API endpoints — the runtime
+   user-management UI was removed in v1.3, operator Q4).
 3. **Terminals** (ADR-016): durable records backed by tmux sessions — they
    survive tab closes and disconnects, get a GENERATED friendly name at
    creation (rename any time: header click or the sidebar pencil), carry an
@@ -106,7 +108,7 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
                           ├── virtiofs: projects/<user>/<uuid> → ~/projects/<dir> (ADR-027)
                           ├── tmux conv-<n> per terminal (bash -l), piped to
                           │   ~/.styrman/logs/<id>/  (transcripts)
-                          └── virtiofs: /home/<guestname> = homes/<user>
+                          └── virtiofs: /home/<guestname> = homes/<user>/p/<uuid> (ADR-031)
 ```
 
 - **Identity**: email → username slug (`ostling.simon@gmail.com` →
@@ -178,15 +180,17 @@ vi deploy/.env    # BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET, CLOUDFLARE_API_TOKEN,
                   # ADMIN_EMAIL, STYRMAN_ALLOWED_EMAILS (redirect URI:
                   # https://auth.<domain>/oauth2/google/authorization-code-callback)
 docker compose -f deploy/docker-compose.yml up -d --build
-# DNS records + certs are automatic → https://app.<domain>
+# DNS records + certs are automatic → https://<STYRMAN_HOSTNAME>.<domain>
 ```
 
 First use per user: the sidebar shows a **First-time setup** banner →
 "Open setup" boots a hidden minimal microVM running the guided
 `styrman-setup` (git identity → SSH key → gh → claude → agy). The generated
 SSH key's comment is the user's git email (fallback `user@styrman` if none
-is set), not "styrman". Everything lands in that user's home — once,
-forever. The same script works in any project terminal.
+is set), not "styrman". Everything lands in the VM's own home — then run
+Settings → Credentials → **Import from this project** so the broker shares
+it with every project, current and future (ADR-032). The same script works
+in any project terminal.
 
 ## 4. Operating it
 
@@ -213,18 +217,19 @@ forever. The same script works in any project terminal.
 
 | Path | What |
 |---|---|
-| `/var/lib/styrman/homes/<user>` | A user's credentials + dotfiles + docker disks — back up |
+| `/var/lib/styrman/homes/<user>/p/<uuid>` | A project's OWN home (ADR-031): dotfiles, tool state, docker disk, transcripts — back up |
 | `/var/lib/styrman/projects/<user>/<uuid>` | Workspaces (ADR-027, per-project storage) — back up TOO: source code no longer lives in the home |
-| `…/homes/<user>/.dockerd/<uuid>.img` | Per-project Docker disk (sparse) |
-| `…/homes/<user>/.styrman/logs/<uuid>/` | Terminal transcripts |
+| `…/homes/<user>/p/<uuid>/.dockerd/<uuid>.img` | Per-project Docker disk (sparse) |
+| `…/homes/<user>/p/<uuid>/.styrman/logs/<uuid>/` | Terminal transcripts |
+| `/var/lib/styrman/credentials/<user>/` | The broker's credential store (ADR-032, 0600) — back up |
 | `/var/lib/styrman/users/<user>/*.json` | Project/terminal/profile metadata |
 | `/var/lib/styrman/users.json` | Runtime-added accounts (admins are env-only) |
+| containers `styrman-<uuid>`, networks `sdb-<uuid>` | Disposable runtime state |
 
 Deleting a project WITHOUT "wipe files" keeps its workspace dir under
 `/var/lib/styrman/projects/<user>/` (that's the point), but nothing in the
 UI lists it anymore — reclaim disk by removing it manually if you never
 re-import it.
-| containers `styrman-<uuid>`, networks `sdb-<uuid>` | Disposable runtime state |
 
 - **Reboots**: containers restart themselves (`unless-stopped`); the server
   re-adopts from labels. **Disaster recovery**: fresh host → host-setup →
@@ -253,11 +258,11 @@ cd web && npm run build                              # UI → dist/client (commi
 
 Layout: `cmd/styrman` (server) · `cmd/wsprobe` (WS test client) ·
 `internal/{config, identity, userstore, project, conversation, orchestrator,
-terminal, httpapi, files, history, gitrepo}` · `image/` (runtime microVM
+terminal, httpapi, files, history, gitrepo, links, credstore, credbroker}` · `image/` (runtime microVM
 image) ·
 `deploy/` (host-setup, compose, vendored caddy ingress, server Dockerfile) ·
 `web/` (TanStack Start SPA). Conventions: `AGENTS.md`; non-negotiables:
-`REQUIREMENTS.md` (R1–R12).
+`REQUIREMENTS.md` (R1–R13).
 
 ## 7. Roadmap
 

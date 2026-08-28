@@ -1,7 +1,7 @@
 // Package history exposes what happened in a project: transcripts of every
 // terminal session (captured by tmux pipe-pane inside the microVM, written
-// into the shared home so they outlive containers) and the project's current
-// git diff.
+// into the project's own home so they outlive containers, ADR-031) and the
+// project's current git diff.
 package history
 
 import (
@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // logsRel is the transcript directory relative to the user home, matching
@@ -24,12 +25,6 @@ import (
 // guest-planted symlink under ~/.styrman/logs from escaping the home.
 func logsRel(project string) string {
 	return path.Join(".styrman", "logs", project)
-}
-
-// LogsDir returns the absolute transcript directory (for callers that only
-// need the path, e.g. cleanup); reads/lists go through the confined helpers.
-func LogsDir(homeDir, project string) string {
-	return filepath.Join(homeDir, ".styrman", "logs", project)
 }
 
 // Transcript is one terminal session's log file.
@@ -42,19 +37,27 @@ type Transcript struct {
 // List returns the project's transcripts, most recently written first.
 // homeDir is the confinement root; the logs dir is addressed relative to it.
 func List(homeDir, project string) ([]Transcript, error) {
+	// "No transcripts yet" (missing home/dir) is empty+nil; any OTHER failure
+	// (permissions, I/O) is a real error — hiding it made a broken transcript
+	// dir indistinguishable from an idle project (audit finding).
 	rt, err := os.OpenRoot(homeDir)
 	if err != nil {
-		return []Transcript{}, nil
+		if os.IsNotExist(err) {
+			return []Transcript{}, nil
+		}
+		return nil, err
 	}
 	defer rt.Close()
 	d, err := rt.Open(logsRel(project))
 	if err != nil {
-		return []Transcript{}, nil // missing dir (or a symlink escaping home) = empty
+		// Missing dir — or a guest symlink escaping home, which os.Root
+		// refuses with a non-NotExist error we also treat as "none".
+		return []Transcript{}, nil
 	}
 	defer d.Close()
 	des, err := d.ReadDir(-1)
 	if err != nil {
-		return []Transcript{}, nil
+		return nil, err
 	}
 	var out []Transcript
 	for _, de := range des {
@@ -107,7 +110,7 @@ func Search(ctx context.Context, homeDir, project, query string) ([]Match, error
 	}
 	transcripts, err := List(homeDir, project)
 	if err != nil {
-		return []Match{}, nil
+		return nil, err
 	}
 	if len(transcripts) > searchMaxFiles {
 		transcripts = transcripts[:searchMaxFiles]
@@ -215,9 +218,14 @@ func Read(homeDir, project, id string, maxBytes int64) (string, error) {
 			return "", err
 		}
 	}
-	buf := make([]byte, maxBytes)
-	n, _ := f.Read(buf)
-	text := ansiRe.ReplaceAllString(string(buf[:n]), "")
+	// io.ReadAll, not a single f.Read: one read(2) is not guaranteed to fill
+	// the buffer (maxBytes reaches MiB), and a real I/O error must not be
+	// presented as a silently short transcript (audit finding).
+	buf, err := io.ReadAll(io.LimitReader(f, maxBytes))
+	if err != nil {
+		return "", err
+	}
+	text := ansiRe.ReplaceAllString(string(buf), "")
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	return text, nil
@@ -231,7 +239,7 @@ type Diff struct {
 	Diff   string `json:"diff,omitempty"`
 }
 
-// GitDiff runs git in the project's workspace on the host (the shared home
+// GitDiff runs git in the project's workspace on the host (the workspace
 // is mounted, so this works whether or not the microVM is running).
 func GitDiff(workspace string) (*Diff, error) {
 	if _, err := os.Stat(filepath.Join(workspace, ".git")); err != nil {
@@ -263,7 +271,11 @@ func GitDiff(workspace string) (*Diff, error) {
 	}
 	if full, _ := run("diff", "HEAD"); full != "" {
 		if len(full) > 256<<10 {
-			full = full[:256<<10] + "\n… (truncated)"
+			cut := 256 << 10
+			for cut > 0 && !utf8.RuneStart(full[cut]) {
+				cut-- // never split a multi-byte rune (audit nit)
+			}
+			full = full[:cut] + "\n… (truncated)"
 		}
 		d.Diff += "\n" + full
 	}

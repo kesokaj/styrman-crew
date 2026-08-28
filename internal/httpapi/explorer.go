@@ -183,6 +183,13 @@ func (s *Server) makeDir(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	// Same managed-subtree guard as delete/rename (audit finding: the write
+	// paths were unguarded, letting a home-scope write clobber e.g. the
+	// loop-mounted docker disk of a RUNNING microVM).
+	if managedHomeTarget(strings.Contains(r.Pattern, "/home/"), rel) {
+		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
+		return
+	}
 	if err := files.MkdirAll(root, rel); err != nil {
 		s.logger.Warn("mkdir failed", "project", r.PathValue("project"), "path", rel, "error", err)
 		writeErr(w, http.StatusBadRequest, errors.New("cannot create folder"))
@@ -204,7 +211,19 @@ func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := files.Write(root, r.URL.Query().Get("path"), body.Content); err != nil {
+	rel, err := scopeRel(r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	// Managed-subtree guard on the write path too (audit finding): without
+	// it, PUT home/file?path=.dockerd/<uuid>.img O_TRUNCs the loop-mounted
+	// docker disk of a possibly-running microVM.
+	if managedHomeTarget(strings.Contains(r.Pattern, "/home/"), rel) {
+		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
+		return
+	}
+	if err := files.Write(root, rel, body.Content); err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("cannot write file"))
 		return
 	}
@@ -240,7 +259,14 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 		if name == "" || name == "." || name == "/" {
 			continue
 		}
-		if err := files.SaveStream(root, path.Join(dir, name), part); err != nil {
+		target := strings.TrimPrefix(path.Clean("/"+path.Join(dir, name)), "/")
+		// Managed-subtree guard per part (audit finding): an upload into
+		// ~/.dockerd or ~/.ssh must be refused like delete/rename/write.
+		if managedHomeTarget(strings.Contains(r.Pattern, "/home/"), target) {
+			writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
+			return
+		}
+		if err := files.SaveStream(root, target, part); err != nil {
 			writeErr(w, http.StatusInternalServerError, errors.New("cannot save upload"))
 			return
 		}
@@ -366,11 +392,7 @@ func (s *Server) projectDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Server-controlled per-project path (ADR-027) — see workspacePath.
-	ws, err := s.workspacePath(u.Username, p)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, errors.New("workspace unavailable"))
-		return
-	}
+	ws := s.workspacePath(u.Username, p)
 	d, err := history.GitDiff(ws)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)

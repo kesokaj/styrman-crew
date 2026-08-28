@@ -31,7 +31,9 @@ cleanup() {
     [ -n "${ID}" ] && docker network rm "sdb-${ID}" 2>/dev/null || true
     sudo rm -rf "${STATE}" 2>/dev/null || rm -rf "${STATE}" || true
     echo "passed=${PASS} failed=${FAIL}"
-    [[ ${FAIL} -eq 0 ]]
+    # An EXIT trap's status does NOT become the script's exit status (audit
+    # finding: failing runs exited 0) — exit explicitly from the trap.
+    exit $(( FAIL == 0 ? 0 : 1 ))
 }
 trap cleanup EXIT
 
@@ -70,11 +72,11 @@ for i in $(seq 1 60); do
 done
 check "microVM became ready in the background" "docker exec ${CN} test -f /run/styrman/ready"
 check "microVM kernel differs from host" \
-    "[ \"\$(docker exec "${CN}" uname -r)\" != \"\$(uname -r)\" ]"
+    "[ \"\$(docker exec ${CN} uname -r)\" != \"\$(uname -r)\" ]"
 check "workspace dir on host" "[ -d '${STATE}/projects/${ME}/${ID}' ]"
-check "git repo initialized" "docker exec "${CN}" test -d /home/$(id -un)/projects/itest/.git"
+check "git repo initialized" "docker exec ${CN} test -d /home/$(id -un)/projects/itest/.git"
 check "in-guest dockerd runs overlay2" \
-    "docker exec "${CN}" docker info --format '{{.Driver}}' | grep -q overlay2"
+    "docker exec ${CN} docker info --format '{{.Driver}}' | grep -q overlay2"
 
 say "terminals (durable records, ADR-016)"
 NEW=$(curl -fsS -X POST "${API}/api/projects/${ID}/terminals" -d '{"title":"First terminal"}')

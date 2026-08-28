@@ -8,7 +8,6 @@ export interface Project {
   dir: string; // workspace dir under ~/projects (frozen at creation)
   createdAt: string;
   gitInit: boolean;
-  archived: boolean;
   state: "running" | "stopped" | "absent" | "creating" | "deleting";
   /** Last failed background destroy — the DELETE answered 202, so this is
    * how the user learns the delete didn't stick. */
@@ -145,6 +144,14 @@ export interface SetupStatus {
   keyring: boolean;
   done: boolean;
   vmRunning: boolean;
+}
+
+/** Client-side mirror of the server's project-name rule (project.nameRe) —
+ *  shared by create and rename so both fail fast with the same message. */
+export function projectNameError(name: string): string | undefined {
+  return /^[a-z][a-z0-9-]{0,30}$/.test(name)
+    ? undefined
+    : "lowercase letters, digits and dashes; starts with a letter (max 31)";
 }
 
 /** Run a UI action; surface API failures instead of swallowing the rejection. */

@@ -27,7 +27,6 @@ type Project struct {
 	Agent     string    `json:"agent,omitempty"` // legacy field
 	CreatedAt time.Time `json:"createdAt"`
 	GitInit   bool      `json:"gitInit"`
-	Archived  bool      `json:"archived"`
 	// SharedPorts maps an exposed port → the Google emails allowed to open
 	// THAT port's preview (and only that port — never the terminal, files, or
 	// dashboard). Per-port so a share is least-privilege; an empty/absent entry
@@ -100,7 +99,13 @@ func NewStore(path string) (*Store, error) {
 	}
 	if migrated {
 		s.mu.Lock()
-		_ = s.save()
+		if err := s.save(); err != nil {
+			// Loud, not silent (audit finding): if this write fails, the next
+			// boot re-runs the migration and mints NEW UUIDs for the same
+			// projects — orphaning containers, networks, and homes.
+			slog.Error("project UUID migration save FAILED — next boot will re-migrate with new IDs",
+				"path", path, "error", err)
+		}
 		s.mu.Unlock()
 	}
 	return s, nil
@@ -192,19 +197,6 @@ func (s *Store) Remove(id string) error {
 		return ErrNotFound
 	}
 	delete(s.projects, id)
-	return s.save()
-}
-
-// SetArchived flips the archived flag.
-func (s *Store) SetArchived(id string, archived bool) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p, ok := s.projects[id]
-	if !ok {
-		return ErrNotFound
-	}
-	p.Archived = archived
-	s.projects[id] = p
 	return s.save()
 }
 

@@ -145,3 +145,26 @@ Images build; compose config validates; the containerized server passed the
 header-auth matrix (401 no header / 403 unauthorized / 200 authorized /
 health open) against the live state dir. The remaining untested step is the
 Google OAuth handshake itself, which needs the real client + domain.
+
+## Credential broker (ADR-030/032)
+
+The containerized server runs a second, credential-only listener
+(`STYRMAN_BROKER_ADDR`, default `:8091`). It is **bridge-only**: the server
+binds a fixed IP (subnet broadcast−1) on every project bridge it attaches
+to, and each project receives that URL as `STYRMAN_CRED_BROKER`. Caller
+identity is network position (the source IP maps to the owning project) —
+so the port must NEVER be published to the host or the ingress; there is
+nothing to configure for it beyond leaving it unpublished (the compose file
+does not expose it).
+
+On-disk: the broker's store lives at `<state>/credentials/<user>/` (0600
+JSON files — git tokens, env tokens, injected files). **Back it up** with
+the rest of the state dir; deleting a file revokes that credential for new
+sessions. Onboarding: sign the tools in inside any running project, then
+`Settings → Credentials → Import from a project` (or
+`POST /api/settings/credentials/import`).
+
+Per-project homes (ADR-031) live at `<state>/homes/<user>/p/<uuid>` —
+each mounted as that project's `$HOME`; `homes/<user>` itself is only the
+setup VM's home. The old shared-home model (and `deploy/home-init.sh`) is
+gone: the base image seeds every new home.

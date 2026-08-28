@@ -23,7 +23,6 @@ const (
 	LabelProject = "styrman.project"
 	LabelUser    = "styrman.user"
 	LabelName    = "styrman.name" // friendly project name (informational)
-	LabelAgent   = "styrman.agent"
 	// LabelSystem marks hidden system containers (e.g. the onboarding VM);
 	// they carry no project label and never appear in project listings.
 	LabelSystem = "styrman.system"
@@ -57,13 +56,6 @@ const (
 	// The frontend must NOT auto-reconnect on this code.
 	CloseReplaced = 4001
 )
-
-// Agent CLIs a project can be created with. "shell" is used internally for
-// plain terminals and is not a valid project agent.
-var Agents = map[string]string{
-	"claude": "claude",
-	"agy":    "agy",
-}
 
 // Config holds runtime configuration resolved from the environment.
 type Config struct {
@@ -275,9 +267,6 @@ func (c *Config) SetOperator(diskGB int, idle time.Duration) error {
 	return nil
 }
 
-// ProjectsFile is the metadata store path.
-func (c *Config) ProjectsFile() string { return filepath.Join(c.StateDir, "projects.json") }
-
 // UserHome returns a user's home directory on the host.
 //
 // NOTE (ADR-031): homes are PER-PROJECT now. UserHome remains the per-user
@@ -334,7 +323,8 @@ func (c *Config) DefaultUser() (email, username string) {
 	return "", c.Username
 }
 
-// usernameFromEmail is identity.DeriveUsername without the import cycle.
+// usernameFromEmail mirrors identity.DeriveUsername (config is imported by
+// identity consumers early in boot; the tiny duplicate beats the coupling).
 func usernameFromEmail(email string) string {
 	name, _, _ := strings.Cut(email, "@")
 	name = strings.ReplaceAll(name, ".", "-")

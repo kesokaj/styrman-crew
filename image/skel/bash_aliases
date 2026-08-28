@@ -29,3 +29,4 @@ alias kgs='kubectl get svc'
 alias kgd='kubectl get deploy'
 
 alias ports='ss -tlnp'
+alias grep='grep --color=auto'

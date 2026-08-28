@@ -161,7 +161,7 @@ func (s *Store) SetCommand(project, id, command string) error {
 	return fmt.Errorf("terminal %s not found", id)
 }
 
-// Delete removes a record. The transcript in the shared home is left alone
+// Delete removes a record. The transcript in the project's home is left alone
 // (ADR-016) — history outlives the terminal it came from.
 func (s *Store) Delete(project, id string) error {
 	s.mu.Lock()

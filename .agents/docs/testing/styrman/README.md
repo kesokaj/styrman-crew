@@ -15,9 +15,9 @@ No mocks in the orchestrator path.
    persistence across container destruction, UUID identity + friendly
    rename, wipe. Safe next to a real install.
 3. **Manual / UX** — things scripts can't judge:
-   - `go run ./cmd/styrman/` → http://127.0.0.1:8080/dev/ in a browser
+   - `go run ./cmd/styrman/` → http://127.0.0.1:8080/ in a browser
    - create a project each for claude and agy; complete each agent's first-run
-     sign-in in the terminal (one time ever, thanks to the shared home)
+     sign-in in the terminal (per project — or once + Settings → Credentials → Import, ADR-032)
    - reload the tab mid-session → same scrollback; open a second tab → first
      shows "replaced" (4001) and does NOT reconnect
    - type `exit` in a shell conversation → "session exited" (4000)
@@ -49,7 +49,7 @@ door to test against anymore (2026-08-27 security review; see
 from project microVMs either way.
 Drives the real UI in headless Chromium against that server: project
 creation (boots a microVM), agent + shell terminals (xterm's DOM renderer
-makes terminal text assertable, plus the link-rescue bar and copy-on-select),
+makes terminal text assertable, plus copy-on-select),
 typing into the microVM, the Files/Ports/History/Git/Clipboard side-panel tabs,
 rename/delete, deep links, setup page, theme, and full cleanup — 35 checks +
 screenshots.

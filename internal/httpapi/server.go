@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kesokaj/styrman-crew/internal/config"
 	"github.com/kesokaj/styrman-crew/internal/conversation"
@@ -390,9 +391,15 @@ func (s *Server) previewHostRewrite(next http.Handler) http.Handler {
 type origPathKey struct{}
 
 // redirectSlash sends /p/x/1/port/3000 → …/3000/ so the proxied app's
-// relative asset paths resolve under the prefix.
+// relative asset paths resolve under the prefix. The query string must
+// survive the redirect (audit finding: a preview URL with ?params silently
+// lost them, and browsers cache the 301).
 func redirectSlash(w http.ResponseWriter, r *http.Request) {
-	http.Redirect(w, r, r.URL.Path+"/", http.StatusMovedPermanently)
+	target := r.URL.Path + "/"
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusMovedPermanently)
 }
 
 // csrfGuard rejects cross-origin mutating requests. Browsers always send
@@ -556,9 +563,12 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	// R13: the workspace is a git repo from second zero. A clone fills the
 	// (still empty) directory in the background boot instead.
 	if req.CloneURL == "" {
-		if err := gitrepo.EnsureRepo(workdir); err != nil {
+		if err := gitrepo.EnsureRepo(r.Context(), workdir); err != nil {
 			_ = sp.projects.Remove(p.ID)
-			writeErr(w, http.StatusInternalServerError, err)
+			// gitrepo errors embed git's output, which can carry host paths
+			// (its own doc says it must not reach a response verbatim).
+			s.logger.Error("project git init failed", "project", p.Name, "error", err)
+			writeErr(w, http.StatusInternalServerError, errors.New("could not initialize the project repository"))
 			return
 		}
 	}
@@ -584,6 +594,15 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
+		// A delete can land between the 201 and this boot. Booting anyway
+		// could win the per-project lock ordering against Destroy and
+		// resurrect a container+network for a record that no longer exists —
+		// an orphan microVM invisible to the UI (audit finding; same guard as
+		// ensureFor and startProject).
+		if inFlight, _ := s.deletingState(u.Username, p.ID); inFlight {
+			s.logger.Info("background boot skipped — delete in flight", "project", p.Name)
+			return
+		}
 		containerID, err := s.orch.EnsureRunning(ctx, u.Username, p.ID,
 			orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest})
 		if err != nil {
@@ -591,7 +610,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			// R13 must hold even if the microVM never booted: a clone can't
 			// run without the guest, so leave an empty repo behind.
 			if req.CloneURL != "" {
-				if e := gitrepo.EnsureRepo(workdir); e != nil {
+				if e := gitrepo.EnsureRepo(ctx, workdir); e != nil {
 					s.logger.Error("R13 fallback init failed", "project", p.Name, "error", e)
 				}
 			}
@@ -619,7 +638,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 				"clone", "--", req.CloneURL, "."); err != nil || code != 0 {
 				s.logger.Warn("clone failed — falling back to empty repo",
 					"project", p.Name, "url", redactURL(req.CloneURL), "exit", code, "output", out, "error", err)
-				if err := gitrepo.EnsureRepo(workdir); err != nil {
+				if err := gitrepo.EnsureRepo(ctx, workdir); err != nil {
 					s.logger.Error("fallback git init failed", "project", p.Name, "error", err)
 				}
 			}
@@ -993,7 +1012,11 @@ func clampTitle(t string) string {
 		return r
 	}, t)
 	if len(t) > 120 {
-		t = t[:120]
+		cut := 120
+		for cut > 0 && !utf8.RuneStart(t[cut]) {
+			cut-- // never split a multi-byte rune (audit nit)
+		}
+		t = t[:cut]
 	}
 	return t
 }

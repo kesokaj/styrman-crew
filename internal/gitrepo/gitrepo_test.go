@@ -20,15 +20,15 @@ func write(t *testing.T, ws, name, content string) {
 
 func TestEnsureRepoIdempotent(t *testing.T) {
 	ws := t.TempDir()
-	if IsRepo(ws) {
+	if IsRepo(t.Context(), ws) {
 		t.Fatal("fresh dir must not be a repo")
 	}
 	for i := 0; i < 2; i++ {
-		if err := EnsureRepo(ws); err != nil {
+		if err := EnsureRepo(t.Context(), ws); err != nil {
 			t.Fatalf("EnsureRepo #%d: %v", i+1, err)
 		}
 	}
-	if !IsRepo(ws) {
+	if !IsRepo(t.Context(), ws) {
 		t.Fatal("repo not created")
 	}
 	// HEAD is unborn until the user's first commit, but must point at main.
@@ -54,7 +54,7 @@ func TestSnapshotAndDedup(t *testing.T) {
 	if err != nil || !created || id3 == id1 {
 		t.Fatalf("changed tree must snapshot: id=%q created=%v err=%v", id3, created, err)
 	}
-	cps, err := List(ws)
+	cps, err := List(t.Context(), ws)
 	if err != nil || len(cps) != 2 {
 		t.Fatalf("want 2 checkpoints, got %d (%v)", len(cps), err)
 	}
@@ -69,7 +69,7 @@ func TestSnapshotAndDedup(t *testing.T) {
 func TestSnapshotLeavesUserIndexAlone(t *testing.T) {
 	ws := t.TempDir()
 	write(t, ws, "a.txt", "one")
-	if err := EnsureRepo(ws); err != nil {
+	if err := EnsureRepo(t.Context(), ws); err != nil {
 		t.Fatal(err)
 	}
 	// User's index is empty (nothing staged); snapshot must keep it that way.
@@ -132,7 +132,7 @@ func TestRestore(t *testing.T) {
 
 func TestRestoreRejectsBadID(t *testing.T) {
 	ws := t.TempDir()
-	if err := EnsureRepo(ws); err != nil {
+	if err := EnsureRepo(t.Context(), ws); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []string{"", "../../etc", "HEAD", "main", "20260101T000000Z-zzzz"} {
@@ -149,7 +149,7 @@ func TestRestoreRejectsBadID(t *testing.T) {
 func TestConcurrentSnapshots(t *testing.T) {
 	ws := t.TempDir()
 	write(t, ws, "a.txt", "one")
-	if err := EnsureRepo(ws); err != nil {
+	if err := EnsureRepo(t.Context(), ws); err != nil {
 		t.Fatal(err)
 	}
 	// Per-workspace serialization must let simultaneous snapshots all
@@ -167,7 +167,7 @@ func TestConcurrentSnapshots(t *testing.T) {
 			t.Fatalf("concurrent snapshot failed: %v", err)
 		}
 	}
-	cps, err := List(ws)
+	cps, err := List(t.Context(), ws)
 	if err != nil {
 		t.Fatal(err)
 	}

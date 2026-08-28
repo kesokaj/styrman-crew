@@ -11,9 +11,6 @@
 // - unicode 11 widths (emoji don't break box-drawing)
 // - Ctrl/Cmd+C copy-when-selected (else SIGINT), Ctrl/Cmd+V paste, plus
 //   copy-on-select (clipboard writes the instant a selection is highlighted)
-// - URL extraction from the buffer (extractUrls) and the raw output stream
-//   (sniffChunk) — built for the removed v1.2 link bar; currently unused at
-//   runtime (nothing calls sniffChunk) but kept as a documented capability.
 
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -84,15 +81,9 @@ export interface StyrmanTerminal {
   term: Terminal;
   fit: FitAddon;
   search: SearchAddon;
-  /** Extract http(s) URLs from the last `rows` buffer lines, newest last.
-   *  Soft-wrapped lines are joined first, so long URLs survive wrapping. */
-  extractUrls(rows?: number): string[];
   /** Add a keydown handler; return false to swallow the event. xterm allows
    *  only ONE custom key handler, so this module owns it and chains. */
   addKeyHandler(h: (ev: KeyboardEvent) => boolean): void;
-  /** Feed a raw output chunk so hard-wrapped URLs can be sniffed from the
-   *  stream (call from the WebSocket onmessage, before term.write). */
-  sniffChunk(data: Uint8Array): void;
   dispose(): void;
 }
 
@@ -209,98 +200,11 @@ export function createTerminal(
     keyHandlers.push(h);
   };
 
-  // Stream sniffer: TUIs sometimes HARD-wrap a URL on screen (each fragment
-  // its own line — buffer joining can't help), but the URL usually arrives
-  // contiguous in the output stream. Feed raw chunks here; escape sequences
-  // become separators (a cursor move mid-URL genuinely breaks contiguity),
-  // and a rolling tail handles URLs split across chunk boundaries.
-  const ansiRe =
-    // eslint-disable-next-line no-control-regex
-    /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-B0-9]|\x1b[=>]|[\x00-\x08\x0b\x0c\x0e-\x1f]/g;
-  // Styled hard-wrap continuation: TUIs (agy) print long URLs as separate
-  // styled lines, and tmux re-renders that as "…frag ESC(B ESC[m ESC[K CRLF
-  // indent ESC[34m ESC[4m frag…" (style/charset/erase codes around the
-  // newline — captured from a real client stream). A newline bracketed by
-  // escape runs on BOTH sides is a styled-wrap marker; collapsing it rejoins
-  // the URL. The lookahead refuses to glue two distinct URLs, and prose
-  // damaged by the join doesn't matter — only URLs are extracted.
-  const wrapSeq = "(?:\\x1b\\[[0-9;]*[mK]|\\x1b\\([A-B0-9])";
-  const styledWrapRe = new RegExp(
-    `(?:${wrapSeq})+[\\r\\n]+[ \\t]*(?:${wrapSeq})+(?!https?://)`,
-    "g",
-  );
-  const decoder = new TextDecoder();
-  let rawTail = "";
-  const streamUrls: string[] = [];
-  const sniffChunk = (data: Uint8Array) => {
-    // Keep the RAW tail (escapes intact) so a wrap marker split across two
-    // chunks is still seen whole on the next scan.
-    rawTail = (rawTail + decoder.decode(data, { stream: true })).slice(-8192);
-    const text = rawTail.replace(styledWrapRe, "").replace(ansiRe, " ");
-    for (const m of text.matchAll(/https?:\/\/[^\s"'`<>()[\]{}|\\^]+/g)) {
-      const url = m[0].replace(/[.,;:!?]+$/, "");
-      if (url.length > 10) {
-        const i = streamUrls.indexOf(url);
-        if (i !== -1) streamUrls.splice(i, 1);
-        streamUrls.push(url);
-        if (streamUrls.length > 8) streamUrls.shift();
-      }
-    }
-  };
-
-  const extractUrls = (rows = 400): string[] => {
-    const buf = term.buffer.active;
-    const end = buf.length;
-    const start = Math.max(0, end - rows);
-    // Join soft-wrapped rows into logical lines (isWrapped marks rows that
-    // continue the previous one) — this is what makes wrapped URLs whole.
-    const logical: string[] = [];
-    for (let i = start; i < end; i++) {
-      const line = buf.getLine(i);
-      if (!line) continue;
-      const text = line.translateToString(true);
-      if (line.isWrapped && logical.length > 0) {
-        logical[logical.length - 1] += text;
-      } else {
-        logical.push(text);
-      }
-    }
-    const found: string[] = [];
-    const re = /https?:\/\/[^\s"'`<>()[\]{}|\\^]+/g;
-    for (const line of logical) {
-      for (const m of line.matchAll(re)) {
-        // Trim trailing punctuation that's prose, not URL.
-        const url = m[0].replace(/[.,;:!?]+$/, "");
-        if (url.length > 10 && !found.includes(url)) found.push(url);
-      }
-    }
-    // Merge in stream-sniffed URLs (they survive hard-wrapping), then drop
-    // truncated variants: a URL that is a strict prefix of another, or that
-    // shares its first 80 chars with a LONGER one, is a partial render of
-    // the same link (TUIs re-render at several widths) — keep the longest.
-    for (const u of streamUrls) {
-      if (!found.includes(u)) found.push(u);
-    }
-    return found.filter(
-      (u) =>
-        !found.some(
-          (v) =>
-            v !== u &&
-            (v.startsWith(u) ||
-              (u.length > 80 &&
-                v.length > u.length &&
-                v.slice(0, 80) === u.slice(0, 80))),
-        ),
-    );
-  };
-
   return {
     term,
     fit,
     search,
-    extractUrls,
     addKeyHandler,
-    sniffChunk,
     dispose: () => {
       clearTimeout(selTimer); // don't fire copy-on-select after teardown (N2)
       term.dispose();

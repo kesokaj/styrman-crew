@@ -126,8 +126,10 @@ func (s *Server) revokeLink(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	u := r.Header.Get(HeaderEmail)
-	s.logger.Info("public link revoked", "by", u, "project", p.ID, "token", token[:8]+"…")
+	// Context identity, not the raw header — every other audit line does the
+	// same, and the header is empty on the local no-auth path.
+	s.logger.Info("public link revoked",
+		"by", identity.FromContext(r.Context()).Email, "project", p.ID, "token", token[:8]+"…")
 	w.WriteHeader(http.StatusNoContent)
 }
 

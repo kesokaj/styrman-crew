@@ -60,9 +60,9 @@ RUN printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > /etc/resolv.conf.styrman
 
 COPY entrypoint.sh /styrman/entrypoint.sh
 COPY configs/ /styrman/configs/
-# Default shell dotfiles (ADR-031): the base image carries them; the
-# entrypoint seeds each per-project home write-once. Same set as
-# internal/dotfiles/userprofile (kept in sync).
+# Default shell dotfiles (ADR-031): the base image carries them (the single
+# source of truth since internal/dotfiles was removed); the entrypoint seeds
+# each per-project home write-once.
 COPY skel/ /styrman/skel/
 # Agent harness (claude + agy), vendored snapshot of devshell_prompt/harness
 # (R5/ADR-030): the base image carries identical defaults for every project;

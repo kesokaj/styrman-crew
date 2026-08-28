@@ -19,7 +19,7 @@ cleanup() {
     # Remove any project VM + network the run created (isolated state dir, so
     # these UUIDs are ours alone).
     for c in $(docker ps -aq --filter "label=styrman.managed=true" \
-               --filter "status=running" 2>/dev/null); do
+               2>/dev/null); do
         env=$(docker inspect "$c" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null)
         echo "$env" | grep -q "STYRMAN_STATE_DIR=${STATE}" && docker rm -f "$c" >/dev/null 2>&1 || true
     done

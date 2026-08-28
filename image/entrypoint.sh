@@ -56,7 +56,7 @@ echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/${USERNAME}"
 chmod 440 "/etc/sudoers.d/${USERNAME}"
 usermod -aG docker "${USERNAME}" 2>/dev/null || true
 
-# Self-heal home ownership: if the shared home was ever missing at mount time,
+# Self-heal home ownership: if the home was ever missing at mount time,
 # Docker auto-creates the bind source owned by root, which makes every write
 # by the guest fail (git config, ssh-keygen, gh). Claim the mount point for
 # the guest uid. Non-recursive so existing user files keep their ownership.
@@ -100,7 +100,11 @@ chown "${UID_}:${GID_}" /run/styrman/keyring-pw
 chmod 400 /run/styrman/keyring-pw
 unset STYRMAN_KEYRING_PW
 cp /styrman/configs/profile-keyring.sh /etc/profile.d/styrman-keyring.sh
-cp /styrman/configs/profile-motd.sh /etc/profile.d/styrman-motd.sh
+# zzz- prefix: the MOTD probes ~/.claude/.credentials.json etc., so it must
+# run AFTER zz-styrman-credentials.sh has materialized them (audit finding —
+# it otherwise nags "run styrman-setup" on a fully-onboarded project).
+cp /styrman/configs/profile-motd.sh /etc/profile.d/zzz-styrman-motd.sh
+rm -f /etc/profile.d/styrman-motd.sh
 # Credential materialization (ADR-032): every login shell pulls the current
 # env/file credentials from the broker on this project's bridge. Named to sort
 # AFTER the keyring snippet so the Secret Service is up first.
@@ -140,7 +144,7 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/harness/setup.sh ]; then
 fi
 
 # ─── Terminal transcripts (history) ─────────────────────────────────────────
-# Every tmux session pipes its output to a log in the shared home, so the
+# Every tmux session pipes its output to a log in the project home, so the
 # record of what the agents and the operator did outlives the container.
 # The path is project-specific, but ~/.tmux.conf is shared across projects —
 # hence a per-container include file that the shared config sources.
@@ -214,7 +218,6 @@ mkdir -p /var/lib/docker-project
 # Check the ext4 image before mounting — a dirty journal from an ungraceful
 # shutdown (now less likely with the SIGTERM trap) is repaired, not tolerated.
 [ -f "${IMG}" ] && fsck.ext4 -p "${IMG}" >/dev/null 2>&1 || true
-STORAGE_NOTE=""
 if [ -f "${IMG}" ] && mount -o loop "${IMG}" /var/lib/docker-project; then
     STORAGE_DRIVER="overlay2"
     DATA_ROOT="/var/lib/docker-project"
@@ -227,7 +230,6 @@ else
     STORAGE_DRIVER="vfs"
     DATA_ROOT="${HOME_DIR}/.dockerd/${PROJECT}"
     mkdir -p "${DATA_ROOT}"
-    STORAGE_NOTE="vfs-fallback"
     runuser -u "${USERNAME}" -- sh -c "printf 'vfs (loop mount failed)\n' > '${HOME_DIR}/.styrman/logs/${PROJECT}/storage-warning.txt'" 2>/dev/null || true
 fi
 
@@ -278,7 +280,7 @@ log "project ${PROJECT} ready (user=${USERNAME} uid=${UID_})"
 # username change, image upgrade). Packages the user apt-installed are
 # captured as a manifest (delta vs the image's base snapshot) at shutdown
 # and replayed here IN THE BACKGROUND after ready — the boot SLA must not
-# wait on apt. The manifest lives in the shared home, wiped with the project.
+# wait on apt. The manifest lives in the project home, wiped with the project.
 APT_DIR="${HOME_DIR}/.styrman/apt"
 APT_MANIFEST="${APT_DIR}/${PROJECT}.list"
 APT_REPLAYING=/run/styrman/apt-replaying

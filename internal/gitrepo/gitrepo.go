@@ -95,21 +95,21 @@ func gitDir(ctx context.Context, ws string) (string, error) {
 }
 
 // IsRepo reports whether the workspace is inside a git repository.
-func IsRepo(ws string) bool {
+func IsRepo(ctx context.Context, ws string) bool {
 	if _, err := os.Stat(ws); err != nil {
 		return false
 	}
-	_, err := gitDir(context.Background(), ws)
+	_, err := gitDir(ctx, ws)
 	return err == nil
 }
 
 // EnsureRepo initializes a repository at the workspace root if none exists
 // — the R13 invariant. Idempotent; never touches an existing repo.
-func EnsureRepo(ws string) error {
-	if IsRepo(ws) {
+func EnsureRepo(ctx context.Context, ws string) error {
+	if IsRepo(ctx, ws) {
 		return nil
 	}
-	_, err := git(context.Background(), ws, nil, "init", "-b", "main")
+	_, err := git(ctx, ws, nil, "init", "-b", "main")
 	return err
 }
 
@@ -136,7 +136,7 @@ func tempIndex(ctx context.Context, ws string) (env []string, cleanup func(), er
 	_ = f.Close()
 	_ = os.Remove(path) // git wants to create it itself; we only reserved the name
 	return []string{"GIT_INDEX_FILE=" + path},
-		func() { _, _ = os.Stat(path); os.Remove(path); os.Remove(path + ".lock") },
+		func() { os.Remove(path); os.Remove(path + ".lock") },
 		nil
 }
 
@@ -146,7 +146,7 @@ func tempIndex(ctx context.Context, ws string) (env []string, cleanup func(), er
 // that one's id is returned and nothing new is written. Serialized per
 // workspace.
 func Snapshot(ctx context.Context, ws, label string) (id string, created bool, err error) {
-	if err := EnsureRepo(ws); err != nil {
+	if err := EnsureRepo(ctx, ws); err != nil {
 		return "", false, err
 	}
 	l := lockWorkspace(ws)
@@ -213,11 +213,11 @@ func sanitizeLabel(label string) string {
 func refName(id string) string { return "refs/styrman/checkpoints/" + id }
 
 // List returns the project's checkpoints, newest first.
-func List(ws string) ([]Checkpoint, error) {
-	if !IsRepo(ws) {
+func List(ctx context.Context, ws string) ([]Checkpoint, error) {
+	if !IsRepo(ctx, ws) {
 		return []Checkpoint{}, nil
 	}
-	return list(context.Background(), ws)
+	return list(ctx, ws)
 }
 
 func list(ctx context.Context, ws string) ([]Checkpoint, error) {
@@ -254,7 +254,7 @@ func Restore(ctx context.Context, ws, id string) (safetyID string, err error) {
 	if !idRe.MatchString(id) {
 		return "", ErrBadID
 	}
-	if !IsRepo(ws) {
+	if !IsRepo(ctx, ws) {
 		return "", ErrNotFound
 	}
 	l := lockWorkspace(ws)

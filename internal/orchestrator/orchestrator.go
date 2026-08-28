@@ -581,35 +581,61 @@ func (o *Orchestrator) DestroySetup(ctx context.Context, user string) error {
 // containers, without a name label (pre-UUID). Their data lives in the
 // homes; containers are disposable and recreate on demand.
 func (o *Orchestrator) CleanupLegacy(ctx context.Context) {
-	list, err := o.docker.ContainerList(ctx, container.ListOptions{
-		All:     true,
-		Filters: filters.NewArgs(filters.Arg("label", config.LabelManaged+"=true")),
-	})
+	collectKeep := func(cs []container.Summary) (map[string]bool, []container.Summary) {
+		keep := map[string]bool{}
+		var legacy []container.Summary
+		for _, c := range cs {
+			hasUser := c.Labels[config.LabelUser] != ""
+			hasName := c.Labels[config.LabelName] != ""
+			isSystem := c.Labels[config.LabelSystem] != ""
+			if hasUser && (hasName || isSystem) {
+				if isSystem {
+					keep[config.SetupNetwork(c.Labels[config.LabelUser])] = true
+				} else if proj := c.Labels[config.LabelProject]; proj != "" {
+					keep[config.NetworkName(proj)] = true
+				}
+				continue
+			}
+			legacy = append(legacy, c)
+		}
+		return keep, legacy
+	}
+	listAll := func() ([]container.Summary, error) {
+		return o.docker.ContainerList(ctx, container.ListOptions{
+			All:     true,
+			Filters: filters.NewArgs(filters.Arg("label", config.LabelManaged+"=true")),
+		})
+	}
+	list, err := listAll()
 	if err != nil {
+		// Loud, not silent (audit finding): a cleanup that never ran should be
+		// visible in the boot log.
+		o.logger.Warn("legacy cleanup skipped: container list failed", "error", err)
 		return
 	}
 	// Networks that belong to a CURRENT-scheme container (running OR stopped)
 	// must be kept — removing a stopped project's network would make its next
 	// EnsureRunning fail "network not found" with no recreate path (R7).
-	keepNets := map[string]bool{}
-	for _, c := range list {
-		hasUser := c.Labels[config.LabelUser] != ""
-		hasName := c.Labels[config.LabelName] != ""
-		isSystem := c.Labels[config.LabelSystem] != ""
-		if hasUser && (hasName || isSystem) {
-			if isSystem {
-				keepNets[config.SetupNetwork(c.Labels[config.LabelUser])] = true
-			} else if proj := c.Labels[config.LabelProject]; proj != "" {
-				keepNets[config.NetworkName(proj)] = true
-			}
-			continue
-		}
+	_, legacy := collectKeep(list)
+	for _, c := range legacy {
 		o.logger.Info("removing previous-layout container", "id", c.ID[:12], "names", c.Names)
 		_ = o.docker.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true})
+	}
+	// Re-list containers immediately before the network sweep (audit finding):
+	// this runs concurrently with the HTTP listener, and a project created in
+	// the window between the first snapshot and here has its sdb- network
+	// created but not yet attached — the stale keep-set would delete it.
+	keepNets := map[string]bool{}
+	if fresh, err := listAll(); err == nil {
+		keepNets, _ = collectKeep(fresh)
+	} else {
+		o.logger.Warn("legacy cleanup: network sweep skipped (container re-list failed)", "error", err)
+		return
 	}
 	// Remove only sdb- networks NOT referenced by a current container.
 	nets, err := o.docker.NetworkList(ctx, network.ListOptions{})
 	if err != nil {
+		o.logger.Warn("legacy cleanup: network list failed", "error", err)
 		return
 	}
 	for _, n := range nets {
@@ -726,8 +752,21 @@ func (o *Orchestrator) waitReady(ctx context.Context, containerID string, timeou
 	return fmt.Errorf("timeout after %s", timeout)
 }
 
-// Stop stops a project's container (home and workspace persist).
+// Stop stops a project's container (home and workspace persist). Holds the
+// per-project lock so a stop cannot interleave with EnsureRunning's
+// create/start/waitReady (audit finding: an HTTP stop racing a terminal
+// attach could power the VM off mid-boot and leave the API reporting
+// "running" for a stopped VM).
 func (o *Orchestrator) Stop(ctx context.Context, user, project string) error {
+	l := o.lockProject(key(user, project))
+	l.Lock()
+	defer l.Unlock()
+	return o.stopLocked(ctx, project)
+}
+
+// stopLocked is Stop's body; the caller must hold the per-project lock
+// (stopIfIdle already does — the lock is not reentrant).
+func (o *Orchestrator) stopLocked(ctx context.Context, project string) error {
 	name := config.ContainerName(project)
 	// Kata's `docker stop` powers the microVM off without delivering SIGTERM
 	// to the in-guest init, so the entrypoint's graceful-shutdown trap (clean
@@ -781,7 +820,7 @@ func (o *Orchestrator) stopIfIdle(ctx context.Context, user, project string, idl
 			return nil // touched since the reap decision — leave it running
 		}
 	}
-	return o.Stop(ctx, user, project)
+	return o.stopLocked(ctx, project)
 }
 
 // Destroy removes the project's container and network. The workspace and all

@@ -1,5 +1,5 @@
 # styrman userprofile — ported from devbox shell-launcher (trimmed).
-# Seeded write-once by the server (internal/dotfiles); edit freely, it is
+# Seeded write-once from the base image (image/skel, ADR-031); edit freely, it is
 # yours after first creation. Machine-specific bits live in ~/.bash_exports,
 # aliases in ~/.bash_aliases, secrets in ~/.bash_secrets (never overwritten).
 

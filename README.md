@@ -103,18 +103,19 @@ is `.agents/docs/specs/styrman/guide.md`; per-release notes live in
 - Debian 13 host (baremetal, or a GCP VM with nested virtualization) — Docker,
   Kata, and everything else is installed by `deploy/host-setup.sh`
 - Go 1.25+ to build/run the server
+- Node 22+ / npm (only to rebuild the frontend; `web/dist` ships committed)
 
 ## Quick start
 
 ```bash
 sudo bash deploy/host-setup.sh --user $USER   # Docker + Kata "mvm" + dirs (idempotent)
-docker build -t styrman-runtime:dev image/    # runtime image (~10 min first build)
+docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/  # runtime image (~10 min first build; the version keys harness re-seeding)
 
 # Dev (loopback, no auth):
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
 
 # Production (Google OAuth, HTTPS, reboot-safe; stamp the version you deploy):
-vi deploy/.env && STYRMAN_VERSION=1.3.0 docker compose -f deploy/docker-compose.yml up -d --build
+vi deploy/.env && STYRMAN_VERSION=1.5.0 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 Full walkthrough, operations, and troubleshooting:

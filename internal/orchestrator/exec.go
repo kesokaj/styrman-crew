@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -77,12 +78,9 @@ func (o *Orchestrator) Exec(ctx context.Context, containerID string, spec ExecSp
 
 // InteractiveExec is a live TTY exec stream into a container.
 type InteractiveExec struct {
-	ID   string
-	o    *Orchestrator
-	conn interface {
-		Read(p []byte) (int, error)
-		Write(p []byte) (int, error)
-	}
+	ID      string
+	o       *Orchestrator
+	conn    io.ReadWriter
 	closeFn func()
 }
 

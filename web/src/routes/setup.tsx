@@ -121,7 +121,15 @@ function SetupPage() {
           </p>
         )}
         {phase === "error" && (
-          <p className="p-4 text-xs text-danger">{error}</p>
+          <div className="flex flex-col items-start gap-2 p-4">
+            <p className="text-xs text-danger">{error}</p>
+            <button
+              onClick={() => setPhase("username")}
+              className="rounded bg-accent-soft px-2 py-1 text-xs text-on-accent-soft hover:brightness-110"
+            >
+              Try again
+            </button>
+          </div>
         )}
         {phase === "ready" && <TerminalPane target={{ kind: "setup" }} />}
       </div>

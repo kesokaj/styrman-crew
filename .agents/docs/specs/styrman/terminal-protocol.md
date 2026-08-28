@@ -54,7 +54,7 @@ paste via the clipboard API.
 - A browser disconnect never signals the shell; the session stays alive until
   killed via the API, the pane command exits, or the container stops.
 - Container stop/idle-reap ends all tmux sessions. Agent history survives in
-  the shared home (`claude --resume`, agy's own history).
+  the project's own home (`claude --resume`, agy's own history).
 - Server keepalive: WebSocket ping every 30 s; a dead client is detected in
   ≤ 30 s instead of TCP-keepalive minutes.
 

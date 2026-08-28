@@ -9,9 +9,18 @@ export function SetupBanner() {
   const onSetupPage = useRouterState({
     select: (s) => s.location.pathname === "/setup",
   });
-  const { data: st, refresh } = usePolled(() => api.setupStatus(), 10000);
+  const { data: st, refresh, error } = usePolled(() => api.setupStatus(), 10000);
   const [confirming, setConfirming] = useState(false);
 
+  // A failed probe hides the banner but must not pretend setup is done —
+  // show a one-line note instead of nothing (audit finding). Once st is
+  // known, transient poll errors don't flicker the banner.
+  if (!st && error)
+    return (
+      <div className="border-b border-border bg-bg-raised px-3 py-1.5 text-[11px] text-text-dim">
+        Setup status unavailable — retrying…
+      </div>
+    );
   if (!st || st.done) return null;
 
   const items: Array<[string, boolean]> = [

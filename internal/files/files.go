@@ -1,8 +1,8 @@
 // Package files serves the file explorer: directory listings and file
-// contents under a fixed root. The styrman server has the shared home
-// mounted at the same path as the host, so this reads the very files the
-// agents see inside the microVMs — no exec needed, works while a project
-// is stopped.
+// contents under a fixed root. The server reads the per-project home and
+// workspace straight from the host paths that are bind-mounted into the
+// microVM — the very files the agents see, no exec needed, works while a
+// project is stopped.
 //
 // Every operation is confined with os.Root (Go 1.24+): the root must be a
 // real directory (the user's home, created 0700 by the server), and traversal
@@ -205,6 +205,33 @@ func Read(root, rel string) (*FileContent, error) {
 	return fc, nil
 }
 
+// openRegWrite opens rel for writing (create+truncate) and refuses anything
+// that is not a regular file — the write-side twin of openReg (audit finding):
+// without O_NONBLOCK, opening a guest-planted FIFO write-only blocks until a
+// reader appears, wedging the request goroutine forever.
+func openRegWrite(rt *os.Root, rel string) (*os.File, error) {
+	f, err := rt.OpenFile(rel, os.O_WRONLY|os.O_CREATE|syscall.O_NONBLOCK, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		f.Close()
+		return nil, fmt.Errorf("not a regular file")
+	}
+	// Truncate only once we know it is a regular file (O_TRUNC on a device
+	// would have been wrong before the check).
+	if err := f.Truncate(0); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
 // Write saves content to a file, creating it if needed (confined to root).
 func Write(root, rel, content string) error {
 	rt, err := openRoot(root)
@@ -216,7 +243,7 @@ func Write(root, rel, content string) error {
 	if st, err := rt.Stat(crel); err == nil && st.IsDir() {
 		return fmt.Errorf("path is a directory")
 	}
-	f, err := rt.OpenFile(crel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := openRegWrite(rt, crel)
 	if err != nil {
 		return err
 	}
@@ -232,7 +259,7 @@ func SaveStream(root, rel string, src io.Reader) error {
 		return err
 	}
 	defer rt.Close()
-	f, err := rt.OpenFile(cleanRel(rel), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	f, err := openRegWrite(rt, cleanRel(rel))
 	if err != nil {
 		return err
 	}

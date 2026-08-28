@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { api } from "../lib/api";
+import { toast } from "../lib/toast";
+import { api, projectNameError } from "../lib/api";
 
 type Repo = "local" | "private" | "public" | "clone";
 
@@ -26,7 +27,7 @@ export function NewProjectDialog({
       .catch(() => {});
   }, []);
 
-  const nameValid = /^[a-z][a-z0-9-]{0,30}$/.test(name);
+  const nameValid = !projectNameError(name);
   // Mirror the server's cloneURLRe so the client rejects the same shapes.
   const cloneValid = /^(https:\/\/|ssh:\/\/|git@)[\w.@:/~+-]+$/.test(cloneUrl);
   const valid = nameValid && (repo !== "clone" || cloneValid);
@@ -39,8 +40,17 @@ export function NewProjectDialog({
         github: repo === "private" || repo === "public" ? repo : "none",
         cloneUrl: repo === "clone" ? cloneUrl.trim() : undefined,
       });
-      const term = await api.createTerminal(p.id);
-      onCreated(p.id, term.id);
+      // The project EXISTS from here on. A failed first-terminal create must
+      // not present as "creation failed" — retrying would then hit "name
+      // already exists" (audit finding). Enter the project; a terminal can
+      // be added there.
+      try {
+        const term = await api.createTerminal(p.id);
+        onCreated(p.id, term.id);
+      } catch {
+        toast("info", "Project created — add a terminal from the sidebar");
+        onCreated(p.id, "");
+      }
     } catch (e) {
       setError((e as Error).message);
       setBusy(false);

@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { api } from "../lib/api";
+import { api, tryUI } from "../lib/api";
 import { usePolled } from "../lib/hooks";
 import { SidePanel } from "../components/SidePanel";
 import { TerminalPane } from "../components/TerminalPane";
@@ -23,7 +23,11 @@ function TerminalPage() {
     savingRef.current = true;
     setEditing(false);
     if (title.trim() && title.trim() !== record?.title) {
-      await api.updateTerminal(project, term, { title: title.trim() }).catch(() => {});
+      // tryUI, not a silent catch: a failed rename otherwise reverts the
+      // header with no explanation (audit finding).
+      await tryUI(async () => {
+        await api.updateTerminal(project, term, { title: title.trim() });
+      });
       refresh();
     }
     savingRef.current = false;

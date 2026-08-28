@@ -288,6 +288,9 @@ func forEachProject(cfg *config.Config, logger *slog.Logger, fn func(user string
 // workspace without a git repository (pre-R13 projects, or dirs restored
 // from backup) gets one initialized in place. Never touches existing repos.
 func ensureRepos(cfg *config.Config, logger *slog.Logger) {
+	// A boot sweep must not hang forever on a wedged git — bound the whole pass.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 	forEachProject(cfg, logger, func(user string, p project.Project) {
 		// ADR-027: the workspace path is server-controlled end to end — no
 		// home-containment guard needed anymore.
@@ -308,10 +311,10 @@ func ensureRepos(cfg *config.Config, logger *slog.Logger) {
 				return
 			}
 		}
-		if gitrepo.IsRepo(ws) {
+		if gitrepo.IsRepo(ctx, ws) {
 			return
 		}
-		if err := gitrepo.EnsureRepo(ws); err != nil {
+		if err := gitrepo.EnsureRepo(ctx, ws); err != nil {
 			logger.Warn("R13 sweep: git init failed", "user", user, "project", p.ID, "error", err)
 		} else {
 			logger.Info("R13 sweep: initialized git repo", "user", user, "project", p.Name)

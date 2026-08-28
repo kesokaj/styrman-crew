@@ -6,8 +6,10 @@
 agents in isolated projects. Sign in with Google, create a project (UUID
 identity, friendly renamable name), and get browser terminals inside a
 dedicated Kata microVM with both `claude` and `agy` preinstalled. One
-project = one microVM = one Docker daemon; one user = one persistent home
-disk (credentials once, forever; users fully isolated from each other).
+project = one microVM = one Docker daemon = one home (truly individual,
+ADR-031); credentials are the one shared thing, kept current by the
+credential broker (ADR-030/032) — sign in once, every project stays signed
+in. Users fully isolated from each other.
 Live at https://crew.styrman.xyz.
 
 Successor to `~/workspace/devbox` (multi-tenant Kata shell platform) and
@@ -49,12 +51,17 @@ bash web/e2e/run.sh                                # 35 Playwright checks (self-
 - Per-project Kata microVMs (runtime `mvm`), containers `styrman-<uuid>`;
   state from labels + per-user JSON stores (`/var/lib/styrman/users/<u>/`)
   — no database. Project creation is async (instant 201, background boot).
-- Multi-tenant: identity from the ingress header → username slug → own home
-  at `/var/lib/styrman/homes/<u>`; configurable in-guest "terminal
-  username". Admins = env-provided emails.
+- Multi-tenant: identity from the ingress header → username slug; each
+  PROJECT mounts its own home at `/var/lib/styrman/homes/<u>/p/<uuid>`
+  (ADR-031; `homes/<u>` is just the base/setup-VM home). Configurable
+  in-guest "terminal username". Admins = env-provided emails.
 - Per-project workspace storage (ADR-027): each working tree lives at
   `/var/lib/styrman/projects/<u>/<uuid>`, bind-mounted into the microVM at
-  `~/projects/<dir>`; the shared home holds everything else.
+  `~/projects/<dir>`; the project home holds everything else.
+- Credential broker (ADR-030/032): a bridge-only listener (`:8091`) serves
+  the CURRENT git/env/file credentials to each project (caller = bridge IP);
+  a login-shell snippet materializes them. Onboard once via Settings →
+  Credentials → Import. Only `agy` still needs per-project sign-in.
 - Terminals: durable records over tmux sessions; transcripts piped to
   `~/.styrman/logs/<projectId>/`. WS protocol: binary = PTY bytes, JSON
   text = resize, close 4000 = exited, 4001 = replaced.
@@ -94,6 +101,9 @@ bash web/e2e/run.sh                                # 35 Playwright checks (self-
 | `internal/files/`, `internal/history/` | File explorer, transcripts + git diff |
 | `internal/httpapi/` | REST/WS routing, auth guard, settings, proxy |
 | `internal/userstore/` | Allowlist + admin flags |
+| `internal/links/` | Public/private preview-link store |
+| `internal/credstore/`, `internal/credbroker/` | Credential broker: store + bridge-only HTTP (ADR-030/032) |
+| `internal/config/` | Env config, paths, operator-tunable settings |
 | `image/` | Runtime microVM image: Dockerfile, entrypoint, styrman-setup |
 | `deploy/` | host-setup, compose, vendored caddy ingress, server Dockerfile |
 | `web/` | TanStack Start SPA (dist/client committed + embedded) |

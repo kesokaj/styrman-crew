@@ -139,8 +139,23 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
+	// Atomic temp+fsync+rename like every other store (audit finding): the
+	// allowlist is the authorization source of truth (R8) — a power cut must
+	// not be able to leave it truncated.
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tf, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := tf.Write(data); err != nil {
+		tf.Close()
+		return err
+	}
+	if err := tf.Sync(); err != nil {
+		tf.Close()
+		return err
+	}
+	if err := tf.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.path)

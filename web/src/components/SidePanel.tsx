@@ -8,7 +8,7 @@ import {
 } from "../lib/api";
 import { clearClips, getClips, subscribeClips, type Clip } from "../lib/clips";
 import { usePolled } from "../lib/hooks";
-import { toast } from "../lib/toast";
+import { copyToClipboard, toast } from "../lib/toast";
 import { FileExplorer } from "./FileExplorer";
 import { ConfirmDialog } from "./ui";
 import { XIcon } from "./icons";
@@ -166,9 +166,7 @@ function PortRow({
         <button
           className="shrink-0 text-[11px] text-text-dim hover:text-text"
           onClick={() =>
-            navigator.clipboard?.writeText(
-              location.origin + portUrl(project, term, info.port),
-            )
+            copyToClipboard(location.origin + portUrl(project, term, info.port))
           }
           title="Copy link"
         >
@@ -388,7 +386,7 @@ function PublicLinks({
         >
           <button
             onClick={() =>
-              navigator.clipboard?.writeText(
+              copyToClipboard(
                 l.url.startsWith("http") ? l.url : location.origin + l.url,
               )
             }
@@ -442,13 +440,15 @@ function HistoryTab({ project }: { project: string }) {
   const titleOf = (id: string) =>
     transcripts.find((t) => t.id === id)?.title || id;
 
+  const openGen = useRef(0);
   const open = async (id: string) => {
+    const gen = ++openGen.current; // two quick opens: only the last one wins
     setOpenId(id);
     setText("loading…");
     const r = await api
       .readHistory(project, id)
       .catch((e: Error) => ({ text: e.message }));
-    setText(r.text);
+    if (gen === openGen.current) setText(r.text);
   };
 
   const runSearch = async (q: string) => {
@@ -716,10 +716,13 @@ function ClipsTab() {
   const clips = useSyncExternalStore(subscribeClips, getClips);
 
   const recopy = (c: Clip) =>
-    navigator.clipboard?.writeText(c.text).then(() => {
-      setCopiedAt(c.at);
-      setTimeout(() => setCopiedAt(undefined), 1200);
-    });
+    navigator.clipboard?.writeText(c.text).then(
+      () => {
+        setCopiedAt(c.at);
+        setTimeout(() => setCopiedAt(undefined), 1200);
+      },
+      () => toast("error", "Could not copy — select and copy manually"),
+    );
 
   const fmt = (at: number) => {
     const d = new Date(at);

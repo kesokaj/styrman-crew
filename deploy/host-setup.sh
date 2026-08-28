@@ -9,7 +9,7 @@
 #
 # Usage:  sudo ./host-setup.sh [--user <name>]
 #         --user: the operator account that runs the styrman server and owns
-#                 the shared home (default: $SUDO_USER).
+#                 the per-user home tree (default: $SUDO_USER).
 set -euo pipefail
 
 KATA_VERSION="${KATA_VERSION:-3.31.0}"
@@ -168,8 +168,12 @@ EOF
 fi
 
 # ─── 5. State dirs ──────────────────────────────────────────────────────────
-mkdir -p "${STATE_DIR}/home/projects"
-chown -R "${OPERATOR}:${OPERATOR}" "${STATE_DIR}"
+# Current layout (ADR-027/031): homes/<user>/p/<uuid> per-project homes,
+# projects/<user>/<uuid> workspaces — both created lazily by the server; only
+# the roots are needed here. chown is NON-recursive: a re-run must not walk
+# every project home/workspace/sparse docker.img (idempotence).
+mkdir -p "${STATE_DIR}/homes" "${STATE_DIR}/projects"
+chown "${OPERATOR}:${OPERATOR}" "${STATE_DIR}" "${STATE_DIR}/homes" "${STATE_DIR}/projects"
 log "state dir ready: ${STATE_DIR} (owner ${OPERATOR})"
 
 # ─── 5b. Deployment .env: computed identity values ──────────────────────────
@@ -209,21 +213,20 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RUNTIME_IMAGE="${STYRMAN_IMAGE:-styrman-runtime:latest}"
 if ! docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
     log "building runtime image ${RUNTIME_IMAGE} (a few minutes)"
-    docker build -t "${RUNTIME_IMAGE}" "${REPO_ROOT}/image" \
+    # STYRMAN_VERSION stamps /styrman/VERSION, which keys the write-once
+    # harness seeding in each home — without it every build stamps 0.0.0 and
+    # existing homes never re-seed (audit finding).
+    docker build -t "${RUNTIME_IMAGE}" \
+        --build-arg STYRMAN_VERSION="$(cd "${REPO_ROOT}" && git describe --tags --always 2>/dev/null || date +%Y%m%d%H%M)" \
+        "${REPO_ROOT}/image" \
         || { echo "FATAL: runtime image build failed"; exit 1; }
 else
     log "runtime image ${RUNTIME_IMAGE} present"
 fi
 
-# ─── 8. Seed the shared home (dotfiles + agent harness, R5) ──────────────────
-# Seeds the legacy path (${STATE_DIR}/home); the server's migrateLegacy renames
-# it into homes/<admin-email-slug> on first boot (the email slug isn't known
-# until the operator fills STYRMAN_ALLOWED_EMAILS in .env, step 1 below).
-if [[ -x "${SCRIPT_DIR}/home-init.sh" && ! -d "${STATE_DIR}/homes" ]]; then
-    log "seeding shared home (dotfiles + agent harness)"
-    sudo -u "${OPERATOR}" bash "${SCRIPT_DIR}/home-init.sh" \
-        || log "WARN: home-init reported errors (continuing)"
-fi
+# (Step 8, the shared-home seeding, was removed: since ADR-030/031 the base
+# image carries the dotfiles + agent harness and the entrypoint seeds each
+# PER-PROJECT home write-once — there is no shared home to initialize.)
 
 # ─── 9. Next steps (secrets can't be auto-filled) ────────────────────────────
 cat <<NEXT

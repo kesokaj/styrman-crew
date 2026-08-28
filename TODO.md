@@ -23,7 +23,7 @@ Deferred work items. Not blocking current work, but should be addressed later.
 - [ ] Exercise the entrypoint's vfs fallback path (loop-mount failure) in a test (added 2026-08-26)
 
 - [x] ~~systemd unit~~ — superseded: compose restart-unless-stopped covers reboots (2026-08-26)
-- [ ] Pin + verify SHA-256 of the Kata release tarball in host-setup.sh (added 2026-08-26)
+- [x] ~~Pin + verify SHA-256 of the Kata release tarball in host-setup.sh~~ — done (host-setup.sh verifies; confirmed by the 2026-08-28 audit)
 - [ ] Keyring password visible via docker inspect (container env); move to one-shot exec injection (added 2026-08-26)
 - [ ] Phase 3 needs Google OAuth client ID/secret, Cloudflare API token, and BASE_DOMAIN
       from the operator — the old devbox `.env` is not on this machine (added 2026-08-26)
@@ -52,7 +52,7 @@ Deferred work items. Not blocking current work, but should be addressed later.
 - [x] ~~Mobile-friendly layout~~ — v1.3 phase 2: sidebar drawer + top bar below md, side panel overlay below xl (2026-08-28)
 
 - **Notifications scan efficiency** (2026-08-27, reviewer): `GET /api/notifications` runs one sequential tmux exec per running project per poll and `Live()` re-fetches container status the caller already has. Fine at current scale; if project counts grow, add a `LiveIn(ctx, containerID, guest)` variant, scan projects concurrently (bounded errgroup), and cache per-user results for a few seconds.
-- **profile.go GuestUser race** (2026-08-27, reviewer, pre-existing): `GuestUser()` reads `p.GuestName` without a mutex while `setGuestUser` writes it; add a `sync.RWMutex`.
+- [x] ~~profile.go GuestUser race~~ — fixed: profileStore has a sync.RWMutex; verified by the 2026-08-28 audit (go test -race clean)
 - [x] ~~Idle-reaper auto-snapshot~~ — covered by the v1.3 periodic checkpoint loop (10-min cadence for active projects; worst-case loss = one interval) (2026-08-28)
 
 - **SPA hydration mismatch (2026-08-27, Batch E e2e):** the prerendered
@@ -70,9 +70,9 @@ Deferred work items. Not blocking current work, but should be addressed later.
   - **I13 (partial)** OpenTofu `--skip-verify` + unpinned Go/claude/node/yq in
     image/Dockerfile — pin versions + drop skip-verify, validating the image
     still builds. (Kata tarball checksum: DONE in host-setup.sh.)
-  - **I15** make host-setup.sh the single convergent fresh-install entry point
-    (build runtime image, run home-init, print compose command) + per-user
-    harness in ensureHome; align deploy.md. (R11/R5.)
+  - **I15** — DONE for the parts that still exist (2026-08-28): host-setup
+    builds the runtime image (version-stamped) and prints the compose command;
+    home-init/ensureHome were removed by ADR-031 (image seeds homes).
 
 - **WON'T DO (operator decision 2026-08-27):**
   - **I14** docker-socket proxy for Caddy — declined.
@@ -81,14 +81,42 @@ Deferred work items. Not blocking current work, but should be addressed later.
     versions; pinning would defeat the purpose. (Kata tarball checksum in
     host-setup.sh stays — that's supply-chain, not version pinning.)
 
-- **Multi-user harness (I15 residual, 2026-08-27):** host-setup.sh + home-init.sh
-  now seed the OPERATOR's home (dotfiles + agent harness) and converge to the
-  compose bring-up. But additional users' homes are created by ensureHome
-  (internal/httpapi/server.go) inside the server container, which has no
-  devshell_prompt/harness checkout — so users 2+ get dotfiles but NOT the
-  harness (R5 gap for multi-user). Decide: bake the harness into the server
-  image, or mount it, then have ensureHome deploy it. Single-operator installs
-  are unaffected.
+- [x] ~~Multi-user harness (I15 residual)~~ — closed by ADR-030/031: the base
+  image carries the harness and the entrypoint seeds every per-project home;
+  ensureHome and home-init.sh no longer exist (2026-08-28 audit).
+
+## Deferred from the 2026-08-28 full audit (fix-worthy, not urgent)
+
+- [ ] UI: route the three hand-rolled modals (NewProjectDialog,
+      DeleteProjectDialog, FileViewer) through the shared `Dialog` primitive
+      (role/aria/Escape), and give `Dialog` a focus trap + focus restore.
+- [ ] UI: make the primary rows (Sidebar project, TerminalList terminal,
+      FileExplorer entry) keyboard-reachable (`role="button"`/tabIndex or real
+      buttons).
+- [ ] UI: split the 770-line `SidePanel.tsx` into `components/panel/*`;
+      dedupe the "first terminal or create" navigation helper; `PublicLinks`'
+      sticky poll override; `useMediaQuery` for the panel's 1280px breakpoint.
+- [ ] UI: surface `usePolled` errors at the remaining call sites
+      (NotificationBell, SidePanel tabs, terminal route) — dashboard, sidebar,
+      settings, and SetupBanner were fixed in the audit.
+- [ ] API client: handle 401/403 centrally in `request()` (re-auth prompt)
+      or drop the unused `ApiError.status`.
+- [ ] Go: `Settings.homeDir` (and the Settings UI "Your home" row) still
+      reports the per-user BASE home; post-ADR-031 decide what "your home"
+      means there. Same question for `GET /api/settings/tools`, which probes
+      the setup-VM home for skills/commands (empty for brand-new users).
+- [ ] Go: `EnsureSelfAttached` discards its ctx param (drop it);
+      `IPAddress` ignores `user`; `SetOperator` holds its lock across fsync;
+      dedupe `NewUUID` (project/conversation) and `usernameFromEmail`.
+- [ ] Go: unbounded (tiny) maps never pruned: `projLocks`, `ipCache`,
+      `wsLocks`, checkpoint-loop `snapped` — fine at current scale.
+- [ ] Image: `--skip-verify` on the OpenTofu installer (supply-chain; needs
+      cosign in the build env to drop).
+- [ ] Deploy: compose hands Caddy the whole `.env` (`env_file`) — narrow to
+      an explicit `environment:` list (it only needs OAuth/CF/JWT/domains).
+- [ ] SPA hydration mismatch (React #418) — see above; still open.
+- [ ] Conversation `AgentSession` field is written+validated but never read
+      (ADR-014 parked native resume) — remove or implement with agy resume.
 
 ## Post-1.0.0 (from the pre-1.0.0 review, 2026-08-27)
 

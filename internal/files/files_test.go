@@ -213,6 +213,26 @@ func TestRejectNonRegular(t *testing.T) {
 	if IsRegular(root, "projects/p/pipe") {
 		t.Fatal("FIFO must not be a regular file")
 	}
+	// The WRITE paths must refuse it just as promptly (audit finding: a
+	// write-only open of a FIFO blocks until a reader appears).
+	go func() { done <- Write(root, "projects/p/pipe", "x") }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("writing a FIFO must fail")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Write blocked on a FIFO (DoS)")
+	}
+	go func() { done <- SaveStream(root, "projects/p/pipe", strings.NewReader("x")) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("SaveStream to a FIFO must fail")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("SaveStream blocked on a FIFO (DoS)")
+	}
 }
 
 func TestListNamesConfined(t *testing.T) {

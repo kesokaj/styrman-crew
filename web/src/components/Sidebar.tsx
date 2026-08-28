@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { api, tryUI, type Project } from "../lib/api";
+import { api, projectNameError, tryUI, type Project } from "../lib/api";
 import {
   useMediaQuery,
   usePolled,
@@ -46,7 +46,7 @@ export function Sidebar({
     project?: string;
     term?: string;
   };
-  const { data, refresh } = usePolled(() => api.listProjects(), 5000);
+  const { data, refresh, error } = usePolled(() => api.listProjects(), 5000);
   const { pref, setPref } = useTheme();
   // Off-screen ≠ gone: without inert, keyboard/screen-reader users tab into
   // the translated-away drawer on mobile.
@@ -126,11 +126,18 @@ export function Sidebar({
         <div className="px-1 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-text-dim">
           Projects
         </div>
-        {projects.length === 0 && (
-          <p className="px-2 py-4 text-xs text-text-dim">
-            No projects yet. Create one to get a terminal in its own microVM.
-          </p>
-        )}
+        {projects.length === 0 &&
+          (error ? (
+            // The empty state must not lie when the LIST failed (audit
+            // finding) — the poll keeps retrying.
+            <p className="px-2 py-4 text-xs text-danger">
+              Could not load projects — retrying…
+            </p>
+          ) : (
+            <p className="px-2 py-4 text-xs text-text-dim">
+              No projects yet. Create one to get a terminal in its own microVM.
+            </p>
+          ))}
         {projects.map((p) => (
           <div key={p.id} className="mb-0.5">
             <div
@@ -255,7 +262,7 @@ export function Sidebar({
           title={`Rename “${renaming.name}”`}
           initial={renaming.name}
           submitLabel="Rename"
-          validate={(v) => (v ? undefined : "Name required")}
+          validate={(v) => (v ? projectNameError(v) : "Name required")}
           onSubmit={(name) =>
             tryUI(async () => {
               if (name !== renaming.name)
@@ -286,10 +293,16 @@ export function Sidebar({
             setShowNew(false);
             refresh();
             onNavigate?.();
-            navigate({
-              to: "/p/$project/$term",
-              params: { project: p, term: termId },
-            });
+            // termId can be "" when the project was created but its first
+            // terminal wasn't (partial success) — land on the dashboard then.
+            if (termId) {
+              navigate({
+                to: "/p/$project/$term",
+                params: { project: p, term: termId },
+              });
+            } else {
+              navigate({ to: "/" });
+            }
           }}
         />
       )}

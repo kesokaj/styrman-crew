@@ -148,7 +148,9 @@ func TestFileEndpointsManagedAndTraversal(t *testing.T) {
 		return w
 	}
 
-	// Managed home subtrees: delete and rename (either side) are refused.
+	// Managed home subtrees: delete, rename (either side), AND the write
+	// paths (audit finding: an unguarded PUT could O_TRUNC a running VM's
+	// .dockerd disk) are all refused.
 	for _, p := range []string{"projects", ".dockerd", ".styrman", ".ssh", "projects/x", ".dockerd/y.img"} {
 		if w := do(http.MethodDelete, home+"/file?path="+p, ""); w.Code != http.StatusBadRequest {
 			t.Errorf("home delete %q = %d, want 400", p, w.Code)
@@ -156,6 +158,31 @@ func TestFileEndpointsManagedAndTraversal(t *testing.T) {
 		if w := do(http.MethodPost, home+"/file/rename?path="+p, `{"to":"elsewhere"}`); w.Code != http.StatusBadRequest {
 			t.Errorf("home rename from %q = %d, want 400", p, w.Code)
 		}
+		if w := do(http.MethodPut, home+"/file?path="+p, `{"content":"x"}`); w.Code != http.StatusBadRequest {
+			t.Errorf("home write %q = %d, want 400", p, w.Code)
+		}
+		if w := do(http.MethodPost, home+"/mkdir?path="+p, ""); w.Code != http.StatusBadRequest {
+			t.Errorf("home mkdir %q = %d, want 400", p, w.Code)
+		}
+	}
+	// Upload into a managed dir is refused too (multipart, part named x).
+	{
+		var mp strings.Builder
+		mp.WriteString("--BOUND\r\nContent-Disposition: form-data; name=\"file\"; filename=\"x.img\"\r\n\r\ndata\r\n--BOUND--\r\n")
+		req := httptest.NewRequest(http.MethodPost, home+"/upload?path=.dockerd", strings.NewReader(mp.String()))
+		req.Header.Set("Content-Type", "multipart/form-data; boundary=BOUND")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("home upload into .dockerd = %d, want 400", w.Code)
+		}
+	}
+	// The same names in PROJECT scope are ordinary paths — mkdir + write OK.
+	if w := do(http.MethodPost, "/api/projects/"+pid+"/mkdir?path=.dockerd", ""); w.Code != http.StatusNoContent {
+		t.Errorf("project-scope mkdir .dockerd = %d, want 204", w.Code)
+	}
+	if w := do(http.MethodPut, "/api/projects/"+pid+"/file?path=.dockerd/ok.txt", `{"content":"x"}`); w.Code != http.StatusNoContent {
+		t.Errorf("project-scope write to .dockerd = %d, want 204", w.Code)
 	}
 	do(http.MethodPut, home+"/file?path=loose.txt", `{"content":"x"}`)
 	if w := do(http.MethodPost, home+"/file/rename?path=loose.txt", `{"to":".ssh/id_ed25519"}`); w.Code != http.StatusBadRequest {

@@ -17,20 +17,16 @@ import (
 // ADR-027 a dedicated per-project dir under StateDir/projects/<user>/<uuid>,
 // bind-mounted into the microVM. The path is server-controlled end to end
 // (its parent is never mounted into any guest), so the old home-containment
-// guard no longer applies; the error return is kept for call-site stability.
-func (s *Server) workspacePath(user string, p project.Project) (string, error) {
-	return s.cfg.ProjectWorkspace(user, p.ID), nil
+// guard no longer applies.
+func (s *Server) workspacePath(user string, p project.Project) string {
+	return s.cfg.ProjectWorkspace(user, p.ID)
 }
 
 // snapshot takes a best-effort automatic checkpoint (R13); failures are
 // logged, never fatal — a snapshot must not block the action that triggered
 // it. Runs on its own bounded context so a slow tree can't hang a caller.
 func (s *Server) snapshot(user string, p project.Project, label string) {
-	ws, err := s.workspacePath(user, p)
-	if err != nil {
-		s.logger.Warn("checkpoint: workspace path rejected", "project", p.ID, "error", err)
-		return
-	}
+	ws := s.workspacePath(user, p)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	if _, _, err := gitrepo.Snapshot(ctx, ws, label); err != nil {
@@ -96,12 +92,8 @@ func (s *Server) listCheckpoints(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	ws, err := s.workspacePath(u.Username, p)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, errors.New("workspace unavailable"))
-		return
-	}
-	cps, err := gitrepo.List(ws)
+	ws := s.workspacePath(u.Username, p)
+	cps, err := gitrepo.List(r.Context(), ws)
 	if err != nil {
 		s.logger.Warn("list checkpoints failed", "project", p.ID, "error", err)
 		writeErr(w, http.StatusInternalServerError, errors.New("could not list checkpoints"))
@@ -123,11 +115,7 @@ func (s *Server) createCheckpoint(w http.ResponseWriter, r *http.Request) {
 	if body.Label == "" {
 		body.Label = "manual"
 	}
-	ws, err := s.workspacePath(u.Username, p)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, errors.New("workspace unavailable"))
-		return
-	}
+	ws := s.workspacePath(u.Username, p)
 	id, created, err := gitrepo.Snapshot(r.Context(), ws, body.Label)
 	if err != nil {
 		s.logger.Warn("create checkpoint failed", "project", p.ID, "error", err)
@@ -150,11 +138,7 @@ func (s *Server) restoreCheckpoint(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	ws, err := s.workspacePath(u.Username, p)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, errors.New("workspace unavailable"))
-		return
-	}
+	ws := s.workspacePath(u.Username, p)
 	id := r.PathValue("id")
 	safetyID, err := gitrepo.Restore(r.Context(), ws, id)
 	switch {

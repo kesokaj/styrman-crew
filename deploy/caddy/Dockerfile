@@ -20,6 +20,6 @@ ARG DEVBOX_VERSION=0.1.0
 LABEL devbox.version=${DEVBOX_VERSION}
 
 # Verify the build includes our modules
-RUN caddy list-modules | grep -E "(security|cloudflare|rate_limit|layer4|ingress)" || true
+RUN caddy list-modules | grep -E "(security|cloudflare|rate_limit|layer4|ingress)"
 
 EXPOSE 80 443 2019

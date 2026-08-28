@@ -11,9 +11,17 @@ export const Route = createFileRoute("/")({ component: Home });
  * live transcript tail (operator item 15), click to jump straight in.
  */
 function Home() {
-  const { data } = usePolled(() => api.listProjects(), 5000);
+  const { data, error } = usePolled(() => api.listProjects(), 5000);
   const projects = data?.projects ?? [];
 
+  // A failed load must say so — a permanently blank dashboard reads as
+  // "no projects" (audit finding). The poll retries on its own.
+  if (!data && error)
+    return (
+      <div className="flex flex-1 items-center justify-center p-6 text-xs text-danger">
+        Could not load projects: {error} — retrying…
+      </div>
+    );
   // Until the first poll lands (and during prerender) render a calm blank —
   // not a zero-card dashboard that flashes before the data arrives.
   if (!data) return <div className="flex-1" />;

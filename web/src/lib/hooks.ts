@@ -21,10 +21,14 @@ export function usePolled<T>(
   useEffect(() => {
     fetcherRef.current = fetcher;
   });
-  // Guards: skip if a request is still in flight (slow VM boots stacked polls
-  // otherwise), drop stale responses (a slow earlier reply must not overwrite
-  // a newer one), and ignore results after unmount.
+  // Guards: don't STACK requests (slow VM boots stacked polls otherwise) but
+  // never silently DROP a refresh either — a post-mutation refresh that lands
+  // while a poll is in flight is queued and re-fired when it settles (audit
+  // finding: dropped refreshes made lists lag their own mutations). Stale
+  // responses are dropped (a slow earlier reply must not overwrite a newer
+  // one), and results after unmount are ignored.
   const inFlight = useRef(false);
+  const pendingRefresh = useRef(false);
   const gen = useRef(0);
   const mounted = useRef(true);
   useEffect(() => {
@@ -35,7 +39,10 @@ export function usePolled<T>(
   }, []);
 
   const refresh = useCallback(() => {
-    if (inFlight.current) return;
+    if (inFlight.current) {
+      pendingRefresh.current = true;
+      return;
+    }
     inFlight.current = true;
     const myGen = ++gen.current;
     fetcherRef
@@ -51,6 +58,10 @@ export function usePolled<T>(
       })
       .finally(() => {
         inFlight.current = false;
+        if (pendingRefresh.current && mounted.current) {
+          pendingRefresh.current = false;
+          refresh();
+        }
       });
   }, []);
 

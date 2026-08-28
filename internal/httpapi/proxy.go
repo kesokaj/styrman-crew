@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httputil"
@@ -182,7 +183,11 @@ func (s *Server) proxyFor(ip string, port int, prefix string, sandbox bool) *htt
 			return nil
 		},
 		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			writeErr(w, http.StatusBadGateway, fmt.Errorf("upstream: %w", err))
+			// Log the detail, serve an opaque error: the dial error carries
+			// the guest IP:port, and link visitors must not learn topology
+			// (audit finding; same rationale as the S2 handling above).
+			s.logger.Warn("port proxy upstream error", "error", err)
+			writeErr(w, http.StatusBadGateway, errors.New("preview is not available right now"))
 		},
 		FlushInterval: 100 * time.Millisecond,
 	}

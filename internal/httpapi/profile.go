@@ -80,7 +80,20 @@ func (p *profileStore) setGuestUser(name string) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// Rollback-on-failure (audit finding): a failed write must not leave the
+	// live process serving a guest username that disk doesn't have — same
+	// discipline as config.SetOperator and the links store.
+	old := p.GuestName
 	p.GuestName = name
+	if err := p.writeLocked(); err != nil {
+		p.GuestName = old
+		return err
+	}
+	return nil
+}
+
+// writeLocked persists the profile (atomic temp+fsync+rename); caller holds mu.
+func (p *profileStore) writeLocked() error {
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return err

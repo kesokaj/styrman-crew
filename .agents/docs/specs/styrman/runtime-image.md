@@ -29,6 +29,7 @@ Inputs (env, set by the orchestrator):
 | `STYRMAN_PROJECT_DIR` | Workspace dir name under ~/projects |
 | `STYRMAN_MINIMAL` | System VMs (onboarding): skip workspace + DinD |
 | `STYRMAN_DOCKER_DISK_GB` | Size for a newly created docker.img |
+| `STYRMAN_CRED_BROKER` | Credential broker URL on this project's bridge (ADR-030/032); consumed by the git helper + login-shell snippet. Empty = broker off. |
 | `STYRMAN_KEYRING_PW` | Written to `/run/styrman/keyring-pw` (0400, user-owned), then unset |
 
 Steps, in order:
@@ -44,7 +45,8 @@ Steps, in order:
 5. `~/projects/<dir>` and `~/.dockerd` (as the user; skipped in minimal mode).
 6. Keyring plumbing: password file + `/etc/profile.d/styrman-keyring.sh`
    (starts session dbus + unlocked gnome-keyring on first login shell; keyring
-   files persist at `~/.local/share/keyrings` on the shared home).
+   files persist at `~/.local/share/keyrings` in the PER-PROJECT home —
+   which is why agy, keyring-only, still needs per-project sign-in).
 6b. Seed the per-project home (ADR-031) write-once from the image: shell
     dotfiles from `image/skel/` (`~/.bashrc`, `~/.profile`, `~/.bash_*`, and
     `~/.npmrc` — the last referencing `${NPM_TOKEN}` from the broker) and the

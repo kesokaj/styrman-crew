@@ -320,10 +320,17 @@ function CredentialsSection() {
 
 function SettingsPage() {
   const navigate = useNavigate();
-  const { data, refresh } = usePolled(() => api.settings(), 15000);
+  const { data, refresh, error } = usePolled(() => api.settings(), 15000);
   const { data: toolData } = usePolled(() => api.tools(), 20000);
   const { pref, setPref } = useTheme();
 
+  // Surface a failed load instead of "Loading…" forever (audit finding).
+  if (!data && error)
+    return (
+      <div className="p-6 text-xs text-danger">
+        Could not load settings: {error}
+      </div>
+    );
   if (!data)
     return <div className="p-6 text-xs text-text-dim">Loading settings…</div>;
 

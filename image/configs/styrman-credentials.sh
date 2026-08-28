@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # styrman credential materialization (ADR-032). Sourced by every login shell.
 # Pulls the CURRENT credentials for this project's user from the broker on the
 # project's own bridge and makes them usable:

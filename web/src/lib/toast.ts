@@ -2,7 +2,7 @@
 // browser popups). Framework-free so lib modules (api.ts) can emit without
 // importing React; ToastHost subscribes via useSyncExternalStore.
 
-export interface Toast {
+interface Toast {
   id: number;
   kind: "error" | "success" | "info";
   text: string;
@@ -52,4 +52,18 @@ export function subscribeToasts(l: () => void): () => void {
 
 export function getToasts(): Toast[] {
   return toasts;
+}
+
+/** Copy text to the clipboard with toast feedback — a rejected writeText
+ *  (unfocused document, denied permission) must not be an unhandled
+ *  rejection with zero feedback (audit finding). */
+export function copyToClipboard(text: string, label = "Link"): void {
+  if (typeof navigator.clipboard?.writeText !== "function") {
+    toast("error", "Clipboard unavailable in this browser context");
+    return;
+  }
+  navigator.clipboard.writeText(text).then(
+    () => toast("success", `${label} copied`),
+    () => toast("error", `Could not copy — select and copy manually`),
+  );
 }
