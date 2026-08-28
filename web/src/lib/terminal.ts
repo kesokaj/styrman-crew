@@ -11,10 +11,9 @@
 // - unicode 11 widths (emoji don't break box-drawing)
 // - Ctrl/Cmd+C copy-when-selected (else SIGINT), Ctrl/Cmd+V paste, plus
 //   copy-on-select (clipboard writes the instant a selection is highlighted)
-// - URL extraction from both the buffer (reassembling soft-wrapped lines) and
-//   the raw output stream (collapsing hard-wrapped lines) — the reliable
-//   escape hatch for auth URLs that TUIs wrap and redraw, surfaced as
-//   Open/Copy chips in TerminalPane's link bar.
+// - URL extraction from the buffer (extractUrls) and the raw output stream
+//   (sniffChunk) — built for the removed v1.2 link bar; currently unused at
+//   runtime (nothing calls sniffChunk) but kept as a documented capability.
 
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -24,12 +23,62 @@ import { ClipboardAddon } from "@xterm/addon-clipboard";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { addClip } from "./clips";
 
-const THEME = {
-  background: "#0d0e10",
-  foreground: "#d6d8dd",
-  cursor: "#5b9dd9",
-  selectionBackground: "#2b3038",
+// Paired ANSI palettes (operator Q2): one per app theme, M3-tinted so the
+// pane matches the chrome. background mirrors --term-bg in index.css —
+// change them together. A single palette can't hold contrast on both
+// grounds; every color here is picked against its own background.
+const DARK_THEME = {
+  background: "#101216", // --term-bg dark
+  foreground: "#e2e4e9",
+  cursor: "#a8c7fa",
+  cursorAccent: "#101216",
+  selectionBackground: "#2e4468",
+  black: "#3c4043",
+  red: "#f28b82",
+  green: "#81c995",
+  yellow: "#fdd663",
+  blue: "#8ab4f8",
+  magenta: "#d7aefb",
+  cyan: "#78d9ec",
+  white: "#bdc1c6",
+  brightBlack: "#7d818a",
+  brightRed: "#f6aea9",
+  brightGreen: "#a8dab5",
+  brightYellow: "#fde293",
+  brightBlue: "#aecbfa",
+  brightMagenta: "#e9d2fd",
+  brightCyan: "#a1e4f2",
+  brightWhite: "#f1f3f4",
 };
+
+const LIGHT_THEME = {
+  background: "#f6f8fb", // --term-bg light
+  foreground: "#1b1d22",
+  cursor: "#185abc",
+  cursorAccent: "#f6f8fb",
+  selectionBackground: "#cfe0f8",
+  black: "#20242b",
+  red: "#c5221f",
+  green: "#137333",
+  yellow: "#915f00",
+  blue: "#185abc",
+  magenta: "#7c2bbf",
+  cyan: "#036e77",
+  white: "#8f96a3",
+  brightBlack: "#5c6370",
+  brightRed: "#a50e0e",
+  brightGreen: "#0d652d",
+  brightYellow: "#7a5000",
+  brightBlue: "#174ea6",
+  brightMagenta: "#681da8",
+  brightCyan: "#005a60",
+  brightWhite: "#b8bec9",
+};
+
+/** The xterm theme for the app's resolved color scheme. */
+export function terminalTheme(dark: boolean) {
+  return dark ? DARK_THEME : LIGHT_THEME;
+}
 
 export interface StyrmanTerminal {
   term: Terminal;
@@ -51,6 +100,9 @@ export interface TerminalOptions {
   /** Called whenever text lands on the clipboard (copy-on-select or
    *  Ctrl+C), so the UI can confirm it — vital feedback in a web app. */
   onCopy?: (text: string) => void;
+  /** Start with the dark palette (default true). Swap later via
+   *  `term.options.theme = terminalTheme(dark)`. */
+  dark?: boolean;
 }
 
 export function createTerminal(
@@ -59,11 +111,12 @@ export function createTerminal(
 ): StyrmanTerminal {
   const term = new Terminal({
     fontSize: 13,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontFamily:
+      "'Google Sans Code Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
     cursorBlink: true,
     scrollback: 10000,
     allowProposedApi: true, // unicode11 + search decorations
-    theme: THEME,
+    theme: terminalTheme(opts.dark ?? true),
   });
 
   const fit = new FitAddon();

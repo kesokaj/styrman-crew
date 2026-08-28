@@ -7,6 +7,20 @@ import {
   type Scope,
 } from "../lib/api";
 import { useTheme } from "../lib/hooks";
+import { Button, ConfirmDialog, IconButton, PromptDialog } from "./ui";
+import {
+  ChevronRightIcon,
+  DownloadIcon,
+  FileIcon,
+  FilePlusIcon,
+  FolderIcon,
+  FolderPlusIcon,
+  PencilIcon,
+  RefreshIcon,
+  TrashIcon,
+  UploadIcon,
+  XIcon,
+} from "./icons";
 
 // CodeMirror is heavy — load it only when a file is actually opened.
 const CodeEditor = lazy(() => import("./CodeEditor"));
@@ -17,6 +31,12 @@ const fmtSize = (n: number) =>
     : n < 1024 * 1024
       ? `${(n / 1024).toFixed(0)} KB`
       : `${(n / 1048576).toFixed(1)} MB`;
+
+type ExplorerDialog =
+  | { kind: "newFile" }
+  | { kind: "newFolder" }
+  | { kind: "rename"; entry: FileEntry }
+  | { kind: "delete"; entry: FileEntry };
 
 /**
  * File explorer over a project's workspace or the shared home. The server
@@ -30,6 +50,7 @@ export function FileExplorer({ project }: { project: string }) {
   const [error, setError] = useState<string>();
   const [open, setOpen] = useState<FileContent | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [dialog, setDialog] = useState<ExplorerDialog | null>(null);
 
   // Switching project resets the view to that project's root.
   useEffect(() => {
@@ -56,10 +77,13 @@ export function FileExplorer({ project }: { project: string }) {
   const crumbs = path ? path.split("/") : [];
 
   // A file/dir name typed by the user; rejects separators and dot-navigation.
-  const validName = (name: string | null): name is string => {
-    const n = name?.trim() ?? "";
-    return n !== "" && n !== "." && n !== ".." && !n.includes("/");
+  const nameError = (v: string): string | undefined => {
+    if (!v || v === "." || v === "..") return "Enter a name";
+    if (v.includes("/")) return "Names cannot contain /";
+    return undefined;
   };
+
+  const inDir = (name: string) => (path ? `${path}/${name}` : name);
 
   // The open editor must not survive its file being renamed/deleted — Save
   // on the stale path would recreate what the user just removed.
@@ -71,41 +95,38 @@ export function FileExplorer({ project }: { project: string }) {
     );
   };
 
-  const newFolder = () => {
-    const name = prompt("New folder name (in the current directory):");
-    if (!validName(name)) return;
+  const createFile = (name: string) =>
     tryUI(async () => {
-      await api.makeDir(scope, path ? `${path}/${name.trim()}` : name.trim());
+      const p = inDir(name);
+      await api.saveFile(scope, p, "");
+      load();
+      setOpen(await api.readFile(scope, p));
+    });
+
+  const createFolder = (name: string) =>
+    tryUI(async () => {
+      await api.makeDir(scope, inDir(name));
       load();
     });
-  };
 
-  const renameEntry = (e: FileEntry) => {
-    const name = prompt("Rename to:", e.name);
-    if (!validName(name) || name.trim() === e.name) return;
-    const dir = e.path.includes("/")
-      ? e.path.slice(0, e.path.lastIndexOf("/"))
+  const renameEntry = (entry: FileEntry, name: string) => {
+    if (name === entry.name) return;
+    const dir = entry.path.includes("/")
+      ? entry.path.slice(0, entry.path.lastIndexOf("/"))
       : "";
     tryUI(async () => {
-      await api.renameFile(
-        scope,
-        e.path,
-        dir ? `${dir}/${name.trim()}` : name.trim(),
-      );
-      closeIfOpen(e.path);
+      await api.renameFile(scope, entry.path, dir ? `${dir}/${name}` : name);
+      closeIfOpen(entry.path);
       load();
     });
   };
 
-  const deleteEntry = (e: FileEntry) => {
-    const what = e.dir ? `"${e.name}" and everything inside it` : `"${e.name}"`;
-    if (!confirm(`Delete ${what}?`)) return;
+  const deleteEntry = (entry: FileEntry) =>
     tryUI(async () => {
-      await api.deleteFile(scope, e.path);
-      closeIfOpen(e.path);
+      await api.deleteFile(scope, entry.path);
+      closeIfOpen(entry.path);
       load();
     });
-  };
 
   return (
     <div className="flex h-full flex-col">
@@ -124,62 +145,53 @@ export function FileExplorer({ project }: { project: string }) {
               );
               setPath("");
             }}
-            className={`rounded px-2 py-0.5 ${
+            className={`rounded-full px-2.5 py-1 ${
               scope.kind === k
-                ? "bg-accent-soft text-accent"
+                ? "bg-accent-soft font-medium text-on-accent-soft"
                 : "text-text-dim hover:bg-bg-hover"
             }`}
           >
             {label}
           </button>
         ))}
-        <button
-          onClick={() => {
-            const name = prompt("New file name (in the current directory):");
-            if (!name || name.includes("/")) return;
-            const newPath = path ? `${path}/${name}` : name;
-            tryUI(async () => {
-              await api.saveFile(scope, newPath, "");
-              load();
-              setOpen(await api.readFile(scope, newPath));
-            });
-          }}
-          className="ml-auto px-1 text-text-dim hover:text-accent"
-          title="New file"
-        >
-          ＋
-        </button>
-        <button
-          onClick={newFolder}
-          className="px-1 text-text-dim hover:text-accent"
-          title="New folder"
-        >
-          ⊞
-        </button>
-        <label className="cursor-pointer px-1 text-text-dim hover:text-accent" title="Upload files">
-          ↥
-          <input
-            type="file"
-            multiple
-            className="hidden"
-            onChange={(e) => {
-              const list = Array.from(e.target.files ?? []);
-              if (list.length)
-                tryUI(async () => {
-                  await api.uploadFiles(scope, path, list);
-                  load();
-                });
-              e.target.value = "";
-            }}
-          />
-        </label>
-        <button
-          onClick={load}
-          className="px-1 text-text-dim hover:text-text"
-          title="Refresh"
-        >
-          ⟳
-        </button>
+        <div className="ml-auto flex items-center">
+          <IconButton
+            label="New file"
+            onClick={() => setDialog({ kind: "newFile" })}
+          >
+            <FilePlusIcon />
+          </IconButton>
+          <IconButton
+            label="New folder"
+            onClick={() => setDialog({ kind: "newFolder" })}
+          >
+            <FolderPlusIcon />
+          </IconButton>
+          <label
+            className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-lg text-text-dim transition-colors hover:bg-bg-hover hover:text-text"
+            title="Upload files"
+            aria-label="Upload files"
+          >
+            <UploadIcon />
+            <input
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const list = Array.from(e.target.files ?? []);
+                if (list.length)
+                  tryUI(async () => {
+                    await api.uploadFiles(scope, path, list);
+                    load();
+                  });
+                e.target.value = "";
+              }}
+            />
+          </label>
+          <IconButton label="Refresh" onClick={load}>
+            <RefreshIcon />
+          </IconButton>
+        </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-0.5 px-2 py-1 text-[11px] text-text-dim">
@@ -188,7 +200,7 @@ export function FileExplorer({ project }: { project: string }) {
         </button>
         {crumbs.map((c, i) => (
           <span key={i} className="flex items-center gap-0.5">
-            <span>/</span>
+            <ChevronRightIcon className="h-3 w-3 opacity-60" />
             <button
               className="hover:text-text"
               onClick={() => setPath(crumbs.slice(0, i + 1).join("/"))}
@@ -223,7 +235,7 @@ export function FileExplorer({ project }: { project: string }) {
         )}
         {path !== "" && (
           <button
-            className="flex w-full items-center gap-2 rounded px-2 py-1 text-xs text-text-dim hover:bg-bg-hover"
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-text-dim hover:bg-bg-hover"
             onClick={() => setPath(crumbs.slice(0, -1).join("/"))}
           >
             ../
@@ -232,15 +244,19 @@ export function FileExplorer({ project }: { project: string }) {
         {entries.map((e) => (
           <div
             key={e.path}
-            className="group flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs hover:bg-bg-hover"
+            className="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-bg-hover"
             onClick={() =>
               e.dir
                 ? setPath(e.path)
                 : tryUI(async () => setOpen(await api.readFile(scope, e.path)))
             }
           >
-            <span className="w-3 shrink-0 text-text-dim">
-              {e.dir ? "▸" : "·"}
+            <span className="shrink-0 text-text-dim">
+              {e.dir ? (
+                <FolderIcon className="h-3.5 w-3.5" />
+              ) : (
+                <FileIcon className="h-3.5 w-3.5" />
+              )}
             </span>
             <span
               className={`min-w-0 flex-1 truncate ${e.dir ? "text-text" : "text-text-dim"}`}
@@ -253,40 +269,89 @@ export function FileExplorer({ project }: { project: string }) {
                 {fmtSize(e.size)}
               </span>
             )}
-            {!e.dir && (
-              <a
-                href={api.downloadUrl(scope, e.path)}
-                onClick={(ev) => ev.stopPropagation()}
-                className="invisible shrink-0 text-text-dim hover:text-accent group-hover:visible"
-                title="Download"
+            <span className="invisible flex shrink-0 items-center group-hover:visible">
+              {!e.dir && (
+                <a
+                  href={api.downloadUrl(scope, e.path)}
+                  onClick={(ev) => ev.stopPropagation()}
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-dim hover:bg-bg-active hover:text-accent"
+                  title="Download"
+                  aria-label={`Download ${e.name}`}
+                >
+                  <DownloadIcon className="h-3.5 w-3.5" />
+                </a>
+              )}
+              <button
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  setDialog({ kind: "rename", entry: e });
+                }}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-dim hover:bg-bg-active hover:text-text"
+                title="Rename"
+                aria-label={`Rename ${e.name}`}
               >
-                ↓
-              </a>
-            )}
-            <button
-              onClick={(ev) => {
-                ev.stopPropagation();
-                renameEntry(e);
-              }}
-              className="invisible shrink-0 text-text-dim hover:text-accent group-hover:visible"
-              title="Rename"
-            >
-              ✎
-            </button>
-            <button
-              onClick={(ev) => {
-                ev.stopPropagation();
-                deleteEntry(e);
-              }}
-              className="invisible shrink-0 text-text-dim hover:text-danger group-hover:visible"
-              title="Delete"
-            >
-              ⨯
-            </button>
+                <PencilIcon className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  setDialog({ kind: "delete", entry: e });
+                }}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-dim hover:bg-danger-soft hover:text-danger"
+                title="Delete"
+                aria-label={`Delete ${e.name}`}
+              >
+                <TrashIcon className="h-3.5 w-3.5" />
+              </button>
+            </span>
           </div>
         ))}
       </div>
 
+      {dialog?.kind === "newFile" && (
+        <PromptDialog
+          title="New file"
+          label="Created in the current directory."
+          submitLabel="Create"
+          validate={nameError}
+          onSubmit={createFile}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === "newFolder" && (
+        <PromptDialog
+          title="New folder"
+          label="Created in the current directory."
+          submitLabel="Create"
+          validate={nameError}
+          onSubmit={createFolder}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === "rename" && (
+        <PromptDialog
+          title={`Rename “${dialog.entry.name}”`}
+          initial={dialog.entry.name}
+          submitLabel="Rename"
+          validate={nameError}
+          onSubmit={(name) => renameEntry(dialog.entry, name)}
+          onClose={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === "delete" && (
+        <ConfirmDialog
+          title={`Delete “${dialog.entry.name}”?`}
+          body={
+            dialog.entry.dir
+              ? "The folder and everything inside it are deleted. This cannot be undone from here (checkpoints may still hold it)."
+              : "This cannot be undone from here (checkpoints may still hold it)."
+          }
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => deleteEntry(dialog.entry)}
+          onClose={() => setDialog(null)}
+        />
+      )}
       {open && (
         <FileViewer
           scope={scope}
@@ -312,7 +377,8 @@ function FileViewer({
 }) {
   const [text, setText] = useState(file.content);
   const [saving, setSaving] = useState(false);
-  const { theme } = useTheme();
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const { resolved } = useTheme();
   const dirty = text !== file.content;
 
   const save = () => {
@@ -331,41 +397,42 @@ function FileViewer({
 
   // Don't silently drop edits when clicking the backdrop or ✕.
   const tryClose = () => {
-    if (!dirty || confirm("Discard unsaved changes?")) onClose();
+    if (!dirty) onClose();
+    else setConfirmDiscard(true);
   };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-8"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 md:p-8"
       onClick={tryClose}
     >
       <div
-        className="flex h-full w-full max-w-4xl flex-col rounded-lg border border-border bg-bg-raised shadow-2xl"
+        className="flex h-full w-full max-w-4xl flex-col rounded-2xl bg-bg-raised shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs">
-          <span className="truncate font-medium">{file.path}</span>
+          <span className="truncate font-mono font-medium">{file.path}</span>
           <span className="text-text-dim">{fmtSize(file.size)}</span>
           {file.truncated && <span className="text-warn">truncated</span>}
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-1">
             <a
               href={api.downloadUrl(scope, file.path)}
-              className="text-text-dim hover:text-accent"
+              className="inline-flex h-7 items-center rounded-lg px-2 text-text-dim hover:bg-bg-hover hover:text-accent"
             >
               Download
             </a>
             {!file.binary && !file.truncated && (
-              <button
+              <Button
+                variant="filled"
                 onClick={save}
                 disabled={!dirty || saving}
-                className="rounded bg-accent px-2 py-1 font-medium text-white disabled:opacity-40"
               >
                 {saving ? "Saving…" : "Save"}
-              </button>
+              </Button>
             )}
-            <button onClick={tryClose} className="text-text-dim hover:text-text">
-              ✕
-            </button>
+            <IconButton label="Close" onClick={tryClose}>
+              <XIcon />
+            </IconButton>
           </div>
         </div>
         {file.binary ? (
@@ -381,7 +448,7 @@ function FileViewer({
             <CodeEditor
               value={text}
               filename={file.path}
-              dark={theme === "dark"}
+              dark={resolved === "dark"}
               readOnly={file.truncated}
               onChange={setText}
               onSave={save}
@@ -389,6 +456,16 @@ function FileViewer({
           </Suspense>
         )}
       </div>
+      {confirmDiscard && (
+        <ConfirmDialog
+          title="Discard unsaved changes?"
+          body="The edits in this file are lost."
+          confirmLabel="Discard"
+          danger
+          onConfirm={onClose}
+          onClose={() => setConfirmDiscard(false)}
+        />
+      )}
     </div>
   );
 }

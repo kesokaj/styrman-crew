@@ -1,39 +1,89 @@
-@import 'tailwindcss';
-@import '@xterm/xterm/css/xterm.css';
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+/* Self-hosted brand fonts (OFL, bundled — no CDN, R9): latin subsets only. */
+@import "@fontsource-variable/google-sans-flex";
+@import "@fontsource-variable/google-sans-code";
 
-/* Theme tokens. Dark is the default (terminal-first product surface,
-   documented project deviation from the light-first global standard);
-   data-theme="light" flips the palette. */
+/* Theme tokens — Material 3-derived tonal ladder on cool blue-tinted
+   neutrals, Google-blue primary (v1.3 redesign, operator Q1/Q2).
+
+   Three theme states: an explicit choice stamps data-theme="light|dark" on
+   <html>; the default "system" stamps nothing and follows the OS via the
+   media query below. Light is the bare :root so the un-stamped document
+   always resolves. Values are hex ON PURPOSE: lib/terminal.ts mirrors
+   --term-* and the ladder in its paired xterm palettes — change them
+   together. */
 :root {
-  --bg: #131417;
-  --bg-raised: #1b1d21;
-  --bg-hover: #24262b;
-  --bg-active: #2b3038;
-  --border: #2a2d33;
-  --text: #d6d8dd;
-  --text-dim: #8b8f98;
-  --accent: #5b9dd9;
-  --accent-soft: #23384d;
-  --ok: #5fb573;
-  --warn: #d9a75b;
-  --danger: #d97b6c;
-  --term-bg: #0d0e10;
+  color-scheme: light; /* native widgets (select, scrollbars) follow */
+  --bg: #fbfcfe; /* surface */
+  --bg-raised: #f3f5f9; /* surface-container-low: sidebar, panels, cards */
+  --bg-hover: #e9ecf2; /* surface-container-high: hover state */
+  --bg-active: #e1e6ee; /* surface-container-highest: active/pressed */
+  --border: #dde1e9; /* outline-variant */
+  --text: #1b1d22; /* on-surface */
+  --text-dim: #59606c; /* on-surface-variant */
+  --accent: #1a73e8; /* primary */
+  --on-accent: #ffffff;
+  --accent-soft: #d8e6fb; /* primary-container */
+  --on-accent-soft: #0f3f77; /* on-primary-container */
+  --ok: #137333;
+  --ok-soft: #ddf0e2;
+  --warn: #9a5f00;
+  --warn-soft: #f7ead6;
+  --danger: #c5221f;
+  --on-danger: #ffffff;
+  --danger-soft: #fbe1e0;
+  --term-bg: #f6f8fb; /* paired light terminal (surface-dim) */
 }
 
-[data-theme='light'] {
-  --bg: #f5f5f4;
-  --bg-raised: #ffffff;
-  --bg-hover: #ebebe9;
-  --bg-active: #dde5ee;
-  --border: #d8d8d5;
-  --text: #23252a;
-  --text-dim: #6d7178;
-  --accent: #2f6cab;
-  --accent-soft: #dbe7f3;
-  --ok: #2e7d43;
-  --warn: #a3742a;
-  --danger: #b5493a;
-  --term-bg: #16181c;
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #131519;
+  --bg-raised: #1a1d22;
+  --bg-hover: #22262d;
+  --bg-active: #2a2f38;
+  --border: #30343d;
+  --text: #e2e4e9;
+  --text-dim: #9aa0ab;
+  --accent: #a8c7fa;
+  --on-accent: #0e2f5e;
+  --accent-soft: #24436b;
+  --on-accent-soft: #d6e3fb;
+  --ok: #6dd58c;
+  --ok-soft: #1d3a26;
+  --warn: #efb266;
+  --warn-soft: #3e2e17;
+  --danger: #f2938c;
+  --on-danger: #46110d;
+  --danger-soft: #46201d;
+  --term-bg: #101216;
+}
+
+/* System preference: dark unless the user explicitly chose light. Must stay
+   byte-for-byte identical to the [data-theme='dark'] block above. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #131519;
+    --bg-raised: #1a1d22;
+    --bg-hover: #22262d;
+    --bg-active: #2a2f38;
+    --border: #30343d;
+    --text: #e2e4e9;
+    --text-dim: #9aa0ab;
+    --accent: #a8c7fa;
+    --on-accent: #0e2f5e;
+    --accent-soft: #24436b;
+    --on-accent-soft: #d6e3fb;
+    --ok: #6dd58c;
+    --ok-soft: #1d3a26;
+    --warn: #efb266;
+    --warn-soft: #3e2e17;
+    --danger: #f2938c;
+    --on-danger: #46110d;
+    --danger-soft: #46201d;
+    --term-bg: #101216;
+  }
 }
 
 @theme inline {
@@ -45,11 +95,23 @@
   --color-text: var(--text);
   --color-text-dim: var(--text-dim);
   --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
   --color-accent-soft: var(--accent-soft);
+  --color-on-accent-soft: var(--on-accent-soft);
   --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
   --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
   --color-danger: var(--danger);
+  --color-on-danger: var(--on-danger);
+  --color-danger-soft: var(--danger-soft);
   --color-term-bg: var(--term-bg);
+  --font-sans:
+    "Google Sans Flex Variable", "Google Sans", Roboto, Inter, system-ui,
+    sans-serif;
+  --font-mono:
+    "Google Sans Code Variable", "JetBrains Mono", ui-monospace, SFMono-Regular,
+    Menlo, monospace;
 }
 
 html,
@@ -60,8 +122,9 @@ body {
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-sans);
   font-size: 13px;
+  -webkit-font-smoothing: antialiased;
 }
 
 /* xterm fills its pane */

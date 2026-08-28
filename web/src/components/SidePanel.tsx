@@ -2,7 +2,10 @@ import { useState, useSyncExternalStore } from "react";
 import { api, portUrl, type PortInfo, type PublicLink } from "../lib/api";
 import { clearClips, getClips, subscribeClips, type Clip } from "../lib/clips";
 import { usePolled } from "../lib/hooks";
+import { toast } from "../lib/toast";
 import { FileExplorer } from "./FileExplorer";
+import { ConfirmDialog } from "./ui";
+import { XIcon } from "./icons";
 
 type Tab = "files" | "ports" | "history" | "git" | "clips";
 const TABS: Array<[Tab, string]> = [
@@ -10,7 +13,7 @@ const TABS: Array<[Tab, string]> = [
   ["ports", "Ports"],
   ["history", "History"],
   ["git", "Git"],
-  ["clips", "Clips"],
+  ["clips", "Clipboard"],
 ];
 
 /**
@@ -26,7 +29,14 @@ export function SidePanel({
   project: string;
   term: string;
 }) {
-  const [open, setOpen] = useState(true);
+  // Desktop: inline panel, open by default. Below xl it OVERLAYS the
+  // terminal, so it starts collapsed there (the route is client-rendered —
+  // never prerendered — so reading the viewport in the initializer is safe).
+  const [open, setOpen] = useState(
+    () =>
+      typeof window === "undefined" ||
+      window.matchMedia("(min-width: 1280px)").matches,
+  );
   const [tab, setTab] = useState<Tab>("files");
 
   if (!open) {
@@ -44,7 +54,7 @@ export function SidePanel({
   }
 
   return (
-    <aside className="flex h-full w-80 shrink-0 flex-col border-l border-border bg-bg-raised">
+    <aside className="fixed inset-y-0 right-0 z-40 flex h-full w-80 max-w-[85vw] shrink-0 flex-col border-l border-border bg-bg-raised shadow-2xl xl:static xl:z-auto xl:max-w-none xl:shadow-none">
       <div className="flex items-center border-b border-border">
         {TABS.map(([k, label]) => (
           <button
@@ -52,7 +62,7 @@ export function SidePanel({
             onClick={() => setTab(k)}
             className={`px-2.5 py-2 text-xs ${
               tab === k
-                ? "border-b border-accent text-text"
+                ? "border-b-2 border-accent font-medium text-text"
                 : "text-text-dim hover:text-text"
             }`}
           >
@@ -61,10 +71,11 @@ export function SidePanel({
         ))}
         <button
           onClick={() => setOpen(false)}
-          className="ml-auto px-2 text-text-dim hover:text-text"
+          className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-lg text-text-dim hover:bg-bg-hover hover:text-text"
           title="Hide panel"
+          aria-label="Hide panel"
         >
-          ⨯
+          <XIcon className="h-3.5 w-3.5" />
         </button>
       </div>
       <div className="min-h-0 flex-1">
@@ -134,7 +145,7 @@ function PortRow({
           href={portUrl(project, term, info.port)}
           target="_blank"
           rel="noreferrer"
-          className="rounded bg-accent-soft px-2 py-0.5 text-accent hover:brightness-110"
+          className="rounded bg-accent-soft px-2 py-0.5 text-on-accent-soft hover:brightness-110"
         >
           :{info.port}
         </a>
@@ -214,7 +225,7 @@ function PortShare({
       setOverride(res); // trust the server's normalized list + link URL
       return true;
     } catch (e) {
-      alert((e as Error).message || "Request failed");
+      toast("error", (e as Error).message || "Request failed");
       return false;
     } finally {
       setBusy(false);
@@ -289,7 +300,7 @@ function PortShare({
         <button
           onClick={add}
           disabled={!valid || busy || !loaded}
-          className="rounded bg-accent-soft px-2 py-1 text-[11px] text-accent hover:brightness-110 disabled:opacity-40"
+          className="rounded bg-accent-soft px-2 py-1 text-[11px] text-on-accent-soft hover:brightness-110 disabled:opacity-40"
         >
           add
         </button>
@@ -346,7 +357,7 @@ function PublicLinks({
     try {
       await fn();
     } catch (e) {
-      alert((e as Error).message || "Request failed");
+      toast("error", (e as Error).message || "Request failed");
     } finally {
       setBusy(false);
     }
@@ -396,7 +407,7 @@ function PublicLinks({
         <button
           onClick={create}
           disabled={busy}
-          className="flex-1 rounded bg-accent-soft px-2 py-1 text-[11px] text-accent hover:brightness-110 disabled:opacity-40"
+          className="flex-1 rounded bg-accent-soft px-2 py-1 text-[11px] text-on-accent-soft hover:brightness-110 disabled:opacity-40"
         >
           create public link
         </button>
@@ -473,15 +484,21 @@ function HistoryTab({ project }: { project: string }) {
  * safety checkpoint of the current state is taken first).
  */
 function GitTab({ project }: { project: string }) {
-  const { data, error: diffError, refresh: refreshDiff } = usePolled(
-    () => api.diff(project),
-    10000,
-  );
-  const { data: cpData, error: cpError, refresh: refreshCps } = usePolled(
-    () => api.listCheckpoints(project),
-    15000,
-  );
+  const {
+    data,
+    error: diffError,
+    refresh: refreshDiff,
+  } = usePolled(() => api.diff(project), 10000);
+  const {
+    data: cpData,
+    error: cpError,
+    refresh: refreshCps,
+  } = usePolled(() => api.listCheckpoints(project), 15000);
   const [busy, setBusy] = useState(false);
+  const [restoring, setRestoring] = useState<{
+    id: string;
+    subject: string;
+  } | null>(null);
   const checkpoints = cpData?.checkpoints ?? [];
 
   const afterChange = () => {
@@ -495,25 +512,19 @@ function GitTab({ project }: { project: string }) {
       await api.createCheckpoint(project, "manual");
       afterChange();
     } catch (e) {
-      alert((e as Error).message);
+      toast("error", (e as Error).message);
     } finally {
       setBusy(false);
     }
   };
 
-  const restore = async (id: string, subject: string) => {
-    if (
-      !confirm(
-        `Restore "${subject}"?\n\nThe working tree is rewritten to that exact state — later edits and new files are removed. The current state is checkpointed first, so this can be undone.`,
-      )
-    )
-      return;
+  const restore = async (id: string) => {
     setBusy(true);
     try {
       await api.restoreCheckpoint(project, id);
       afterChange();
     } catch (e) {
-      alert((e as Error).message);
+      toast("error", (e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -538,7 +549,7 @@ function GitTab({ project }: { project: string }) {
         <button
           onClick={checkpointNow}
           disabled={busy}
-          className="ml-auto rounded bg-accent-soft px-2 py-0.5 text-accent hover:brightness-110 disabled:opacity-40"
+          className="ml-auto rounded bg-accent-soft px-2 py-0.5 text-on-accent-soft hover:brightness-110 disabled:opacity-40"
           title="Snapshot the whole working tree (kept outside your branches)"
         >
           Checkpoint now
@@ -571,7 +582,7 @@ function GitTab({ project }: { project: string }) {
             </span>
             <span className="min-w-0 flex-1 truncate">{c.subject}</span>
             <button
-              onClick={() => restore(c.id, c.subject)}
+              onClick={() => setRestoring({ id: c.id, subject: c.subject })}
               disabled={busy}
               className="invisible shrink-0 text-accent hover:brightness-110 disabled:opacity-40 group-hover:visible"
               aria-label={`Restore checkpoint ${c.subject}`}
@@ -581,14 +592,24 @@ function GitTab({ project }: { project: string }) {
           </div>
         ))}
       </div>
+      {restoring && (
+        <ConfirmDialog
+          title={`Restore “${restoring.subject}”?`}
+          body="The working tree is rewritten to that exact state — later edits and new files are removed. The current state is checkpointed first, so this can be undone."
+          confirmLabel="Restore"
+          danger
+          onConfirm={() => restore(restoring.id)}
+          onClose={() => setRestoring(null)}
+        />
+      )}
     </div>
   );
 }
 
 /**
- * Everything copied inside styrman (terminal selections, Ctrl+C, link-bar
- * Copy) — the OS clipboard can't be read back by a web app, so styrman
- * remembers what it put there. Stored per-browser, never uploaded.
+ * Everything copied inside crew (terminal selections, Ctrl+C) — the OS
+ * clipboard can't be read back by a web app, so crew remembers what it put
+ * there. Stored per-browser, never uploaded.
  */
 function ClipsTab() {
   const [copiedAt, setCopiedAt] = useState<number>();
@@ -610,7 +631,8 @@ function ClipsTab() {
     <div className="flex h-full flex-col">
       <div className="flex items-center border-b border-border px-2 py-1.5">
         <p className="flex-1 text-[11px] text-text-dim">
-          Copied in styrman, newest first. Click to copy again.
+          Copied in crew, newest first — kept for an hour, this tab only. Click
+          to copy again.
         </p>
         {clips.length > 0 && (
           <button
@@ -624,8 +646,8 @@ function ClipsTab() {
       <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
         {clips.length === 0 && (
           <p className="px-1 text-xs text-text-dim">
-            Nothing yet. Select text in a terminal — it's copied the moment
-            you release, and lands here too.
+            Nothing yet. Select text in a terminal — it's copied the moment you
+            release, and lands here too.
           </p>
         )}
         {clips.map((c) => (

@@ -61,7 +61,7 @@ try {
   // ── Home ────────────────────────────────────────────────────────────────
   await page.goto(BASE + "/");
   await check("app shell renders", () =>
-    page.waitForSelector('aside:has-text("styrman")'),
+    page.waitForSelector('aside:has-text("crew")'),
   );
   await check("projects section present", () =>
     page.waitForSelector('nav:has-text("Projects")'),
@@ -85,7 +85,7 @@ try {
   await shot("01-home");
 
   // ── Create a project (boots a real microVM) ─────────────────────────────
-  await page.click("text=+ New Project");
+  await page.click("aside >> text=New project");
   await page.fill("#np-name", PROJECT);
   await shot("02-new-project-modal");
   await page.click('button:has-text("Create")');
@@ -132,25 +132,12 @@ try {
       ),
     ),
   );
-  // Link bar: a long URL that soft-wraps across terminal lines must still be
-  // reassembled and surfaced as an Open/Copy chip (auth-flow rescue).
-  await check("wrapped URL appears in the link bar", async () => {
-    await page.keyboard.type(
-      'echo "https://auth.example.com/oauth2/authorize?client_id=styrman-e2e&scope=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&state=wrapcheck"',
-      { delay: 5 },
-    );
-    await page.keyboard.press("Enter");
-    await page.waitForFunction(() =>
-      [...document.querySelectorAll("a")].some((a) =>
-        (a.href ?? "").includes("state=wrapcheck"),
-      ),
-    );
-  });
+  // (The URL "link bar" was removed in v1.3 — copy-on-select superseded it.)
 
   await check("both agents are installed", async () => {
     // Assert the OUTPUT sentinel, not the echoed command — otherwise this
     // passes even if neither agent exists (F10).
-    await page.keyboard.type('echo agents=$(command -v claude agy | wc -l)', {
+    await page.keyboard.type("echo agents=$(command -v claude agy | wc -l)", {
       delay: 10,
     });
     await page.keyboard.press("Enter");
@@ -216,10 +203,7 @@ try {
   // Per-port sharing: add an email then remove it (the remove button must be
   // visible + working — it was hover-hidden and undeletable before).
   await check("share add + remove on a port", async () => {
-    await page
-      .locator('aside button:has-text("share")')
-      .first()
-      .click();
+    await page.locator('aside button:has-text("share")').first().click();
     await page.fill('aside input[placeholder*="@"]', "e2e-guest@gmail.com");
     await panel().getByRole("button", { name: "add", exact: true }).click();
     await page.waitForSelector("aside >> text=e2e-guest@gmail.com");
@@ -235,9 +219,7 @@ try {
     ).json();
     if (!shares.url?.startsWith("/shared/"))
       throw new Error(`share url missing: ${JSON.stringify(shares)}`);
-    const viaShared = await page.request.get(
-      `${BASE}${shares.url}index.html`,
-    );
+    const viaShared = await page.request.get(`${BASE}${shares.url}index.html`);
     if (!(await viaShared.text()).includes("e2e-app"))
       throw new Error("private link did not serve the app");
     await panel()
@@ -256,13 +238,13 @@ try {
       `${BASE}${shares.url}index.html`,
     );
     if (afterRevoke.status() !== 404)
-      throw new Error(`revoked private link still serves: ${afterRevoke.status()}`);
+      throw new Error(
+        `revoked private link still serves: ${afterRevoke.status()}`,
+      );
   });
   await check("public link create + revoke", async () => {
     const revokeBtn = panel().getByRole("button", { name: "Revoke link" });
-    await panel()
-      .getByRole("button", { name: "create public link" })
-      .click();
+    await panel().getByRole("button", { name: "create public link" }).click();
     await revokeBtn.waitFor({ state: "visible", timeout: 10000 });
     await revokeBtn.click();
     await revokeBtn.waitFor({ state: "detached", timeout: 5000 });
@@ -296,15 +278,17 @@ try {
   // Clips tab must open without spinning: getClips backs useSyncExternalStore,
   // and an unstable snapshot infinite-loops the SPA (regression guard).
   await check("clips tab opens (no render loop)", async () => {
-    await panel().getByText("Clips", { exact: true }).click();
-    await page.waitForSelector("aside >> text=Copied in styrman", {
+    await panel().getByText("Clipboard", { exact: true }).click();
+    await page.waitForSelector("aside >> text=Copied in crew", {
       timeout: 4000,
     });
   });
 
   // ── Terminals: rename + second terminal ─────────────────────────────────
-  await page.locator("header button").first().click();
-  await page.fill("header input", "Renamed by e2e");
+  // "main header": the root layout's mobile top bar is also a <header>
+  // (hidden on md+ but present in the DOM).
+  await page.locator("main header button").first().click();
+  await page.fill("main header input", "Renamed by e2e");
   await page.keyboard.press("Enter");
   await check("rename sticks in header", () =>
     page.waitForSelector('header button:has-text("Renamed by e2e")'),
@@ -312,7 +296,7 @@ try {
   await check("rename visible in sidebar", () =>
     page.waitForSelector("aside >> text=Renamed by e2e"),
   );
-  await page.click("text=+ New terminal");
+  await page.click("text=New terminal");
   await check("second terminal opens", () => page.waitForURL(`**/p/${PID}/2`));
 
   // ── Deep link ───────────────────────────────────────────────────────────
@@ -322,7 +306,7 @@ try {
   );
 
   // ── Settings ────────────────────────────────────────────────────────────
-  await page.click("text=⚙ Settings");
+  await page.click("aside >> text=Settings");
   await check("settings page renders sections", async () => {
     await page.waitForURL("**/settings");
     await page.waitForSelector("text=Allowed accounts");
@@ -352,8 +336,8 @@ try {
   });
   await shot("08-setup");
 
-  // ── Theme ───────────────────────────────────────────────────────────────
-  await page.click("text=☀ Light");
+  // ── Theme (3-state radio: light / dark / system) ────────────────────────
+  await page.click('aside button[aria-label="Light theme"]');
   await check("light theme applies", async () => {
     const theme = await page.evaluate(
       () => document.documentElement.dataset.theme,
@@ -361,19 +345,23 @@ try {
     if (theme !== "light") throw new Error(`theme=${theme}`);
   });
   await shot("09-light-theme");
-  await page.click("text=☾ Dark");
+  await page.click('aside button[aria-label="Dark theme"]');
 
   // ── Cleanup: delete terminal + project via UI ───────────────────────────
   await page.goto(`${BASE}/p/${PID}/2`);
+  // Any NATIVE browser dialog is a v1.3 regression (everything moved to
+  // styled dialogs/toasts) — fail loudly instead of silently accepting.
   page.on("dialog", (d) => {
-    console.log(`  [dialog:${d.type()}] ${d.message().slice(0, 80)}`);
-    d.accept();
+    bad("native browser dialog appeared", `${d.type()}: ${d.message().slice(0, 80)}`);
+    d.dismiss();
   });
   const termRow = page
     .locator("aside .group", { hasText: "Terminal 2" })
     .last();
   await termRow.hover();
   await termRow.locator('button[aria-label^="Delete"]').click({ force: true });
+  // Styled confirm dialog (no native popups since v1.3).
+  await page.locator('div[role="dialog"] button:has-text("Delete")').click();
   await check("terminal deleted from sidebar", () =>
     page.waitForFunction(
       () =>
@@ -410,7 +398,9 @@ try {
 } finally {
   await browser.close();
   if (hydrationWarns.length)
-    console.log(`  (note: ${hydrationWarns.length} recoverable hydration warning(s) — see TODO)`);
+    console.log(
+      `  (note: ${hydrationWarns.length} recoverable hydration warning(s) — see TODO)`,
+    );
   if (pageErrors.length) {
     failed++;
     console.log(`FAIL no uncaught client errors — saw ${pageErrors.length}:`);

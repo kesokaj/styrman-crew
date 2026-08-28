@@ -1,5 +1,7 @@
 // Typed client for the styrman REST API (spec: .agents/docs/specs/styrman/api.md).
 
+import { toast } from "./toast";
+
 export interface Project {
   id: string; // UUID — the identity everything keys on
   name: string; // friendly, renamable label
@@ -128,7 +130,7 @@ export async function tryUI(action: () => Promise<void>): Promise<void> {
   try {
     await action();
   } catch (e) {
-    alert((e as Error).message || "Request failed");
+    toast("error", (e as Error).message || "Request failed");
   }
 }
 

@@ -1,6 +1,9 @@
+import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { api, tryUI } from "../lib/api";
 import { usePolled } from "../lib/hooks";
+import { ConfirmDialog } from "./ui";
+import { PauseIcon, PlusIcon, XIcon } from "./icons";
 
 /**
  * The project's terminals. Each is a durable record backed by a tmux session
@@ -11,16 +14,23 @@ import { usePolled } from "../lib/hooks";
 export function TerminalList({
   project,
   activeTerm,
+  onNavigate,
 }: {
   project: string;
   activeTerm?: string;
+  onNavigate?: () => void;
 }) {
   const navigate = useNavigate();
   const { data, refresh } = usePolled(() => api.listTerminals(project), 5000);
   const terminals = data?.terminals ?? [];
+  const [confirming, setConfirming] = useState<
+    { kind: "one"; id: string; title: string } | { kind: "all" } | null
+  >(null);
 
-  const open = (id: string) =>
+  const open = (id: string) => {
+    onNavigate?.();
     navigate({ to: "/p/$project/$term", params: { project, term: id } });
+  };
 
   const create = () =>
     tryUI(async () => {
@@ -35,40 +45,26 @@ export function TerminalList({
       refresh();
     });
 
-  const remove = async (id: string, title: string) => {
-    if (
-      !confirm(
-        `Delete "${title}"? Its session ends; the transcript stays in History.`,
-      )
-    )
-      return;
-    await tryUI(async () => {
+  const remove = (id: string) =>
+    tryUI(async () => {
       await api.deleteTerminal(project, id);
       refresh();
       if (activeTerm === id) navigate({ to: "/" });
     });
-  };
 
-  const removeAll = async () => {
-    if (
-      !confirm(
-        `Close ALL ${terminals.length} terminals in "${project}"? Sessions end; transcripts stay.`,
-      )
-    )
-      return;
-    await tryUI(async () => {
+  const removeAll = () =>
+    tryUI(async () => {
       await api.deleteAllTerminals(project);
       refresh();
       navigate({ to: "/" });
     });
-  };
 
   return (
     <div className="ml-4 border-l border-border pl-1">
       {terminals.map((t) => (
         <div
           key={t.id}
-          className={`group flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 text-xs hover:bg-bg-hover ${
+          className={`group flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1 text-xs hover:bg-bg-hover ${
             activeTerm === t.id ? "bg-bg-active text-text" : "text-text-dim"
           }`}
           onClick={() => open(t.id)}
@@ -82,7 +78,7 @@ export function TerminalList({
           )}
           {t.live ? (
             <button
-              className="invisible text-text-dim hover:text-warn group-hover:visible"
+              className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-text-dim hover:text-warn group-hover:visible"
               onClick={(e) => {
                 e.stopPropagation();
                 pause(t.id);
@@ -90,7 +86,7 @@ export function TerminalList({
               title="Pause: end the session, keep the terminal + transcript"
               aria-label={`Pause ${t.title}`}
             >
-              ⏸
+              <PauseIcon className="h-3 w-3" />
             </button>
           ) : (
             <span className="text-[9px] uppercase tracking-wide text-text-dim/60">
@@ -101,34 +97,56 @@ export function TerminalList({
             <span className="h-1 w-1 rounded-full bg-ok" title="live session" />
           )}
           <button
-            className="invisible text-text-dim hover:text-danger group-hover:visible"
+            className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-text-dim hover:text-danger group-hover:visible"
             onClick={(e) => {
               e.stopPropagation();
-              remove(t.id, t.title);
+              setConfirming({ kind: "one", id: t.id, title: t.title });
             }}
             aria-label={`Delete ${t.title}`}
           >
-            ✕
+            <XIcon className="h-3 w-3" />
           </button>
         </div>
       ))}
       <div className="flex items-center">
         <button
-          className="flex-1 rounded-md px-2 py-1 text-left text-xs text-accent hover:bg-bg-hover"
+          className="inline-flex flex-1 items-center gap-1 rounded-lg px-2 py-1 text-left text-xs text-accent hover:bg-bg-hover"
           onClick={create}
         >
-          + New terminal
+          <PlusIcon className="h-3 w-3" />
+          New terminal
         </button>
         {terminals.length > 1 && (
           <button
-            className="rounded-md px-2 py-1 text-[10px] text-text-dim hover:text-danger"
-            onClick={removeAll}
+            className="rounded-lg px-2 py-1 text-[10px] text-text-dim hover:text-danger"
+            onClick={() => setConfirming({ kind: "all" })}
             title="Close all terminals"
           >
             close all
           </button>
         )}
       </div>
+
+      {confirming?.kind === "one" && (
+        <ConfirmDialog
+          title={`Delete “${confirming.title}”?`}
+          body="Its session ends; the transcript stays in History."
+          confirmLabel="Delete"
+          danger
+          onConfirm={() => remove(confirming.id)}
+          onClose={() => setConfirming(null)}
+        />
+      )}
+      {confirming?.kind === "all" && (
+        <ConfirmDialog
+          title={`Close all ${terminals.length} terminals?`}
+          body="Sessions end; transcripts stay in History."
+          confirmLabel="Close all"
+          danger
+          onConfirm={removeAll}
+          onClose={() => setConfirming(null)}
+        />
+      )}
     </div>
   );
 }

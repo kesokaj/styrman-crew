@@ -57,7 +57,7 @@ func TestRouting(t *testing.T) {
 	// SPA: root and client-side routes serve index.html…
 	for _, path := range []string{"/", "/setup", "/p/foo/1"} {
 		w := get(path)
-		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<title>styrman</title>") {
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "<title>crew</title>") {
 			t.Errorf("GET %s: code=%d, SPA index expected", path, w.Code)
 		}
 	}

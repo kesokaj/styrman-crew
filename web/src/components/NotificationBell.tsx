@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { api } from "../lib/api";
 import { usePolled } from "../lib/hooks";
+import { BellIcon } from "./icons";
 
 /**
  * Terminals waiting for attention, across all projects. A terminal "wants
@@ -18,8 +19,10 @@ export function NotificationBell() {
     <div className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
-        className={`relative rounded-md px-1.5 py-1 text-sm ${
-          items.length ? "text-warn" : "text-text-dim hover:text-text"
+        className={`relative inline-flex h-7 w-7 items-center justify-center rounded-lg ${
+          items.length
+            ? "text-warn"
+            : "text-text-dim hover:bg-bg-hover hover:text-text"
         }`}
         title={
           items.length
@@ -28,9 +31,9 @@ export function NotificationBell() {
         }
         aria-label="Notifications"
       >
-        🔔
+        <BellIcon />
         {items.length > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-warn px-0.5 text-[9px] font-bold text-black">
+          <span className="absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-warn px-0.5 text-[9px] font-bold text-warn-soft">
             {items.length}
           </span>
         )}

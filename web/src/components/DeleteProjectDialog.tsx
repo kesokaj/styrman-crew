@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../lib/api";
 
 /**
@@ -35,13 +36,15 @@ export function DeleteProjectDialog({
     }
   };
 
-  return (
+  // Portal: a transformed ancestor (the sidebar drawer) would otherwise
+  // become the containing block for position:fixed and shrink the dialog.
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       onClick={onClose}
     >
       <div
-        className="w-96 rounded-lg border border-danger/40 bg-bg-raised p-4 shadow-2xl"
+        className="w-96 max-w-full rounded-3xl bg-bg-raised p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="mb-1 text-sm font-semibold text-danger">
@@ -95,12 +98,12 @@ export function DeleteProjectDialog({
           <button
             onClick={run}
             disabled={!armed || busy}
-            className="rounded-md bg-danger px-3 py-1.5 font-medium text-white disabled:opacity-40"
+            className="rounded-md bg-danger px-3 py-1.5 font-medium text-on-danger disabled:opacity-40"
           >
             {busy ? "Deleting…" : "Delete project"}
           </button>
         </div>
       </div>
     </div>
-  );
+  , document.body);
 }

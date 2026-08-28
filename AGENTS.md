@@ -35,7 +35,7 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 # Test suites
 bash .agents/docs/testing/styrman/integration.sh   # 56 checks vs real Kata
-bash web/e2e/run.sh                                # 33 Playwright checks (self-hosted)
+bash web/e2e/run.sh                                # 35 Playwright checks (self-hosted)
 ```
 
 ## Architecture
@@ -73,7 +73,7 @@ bash web/e2e/run.sh                                # 33 Playwright checks (self-
 - Local-first on this machine (Kata runtime `mvm` required — already configured).
 - Integration scripts + guides in `.agents/docs/testing/styrman/`.
 - Browser e2e: `bash web/e2e/run.sh` (self-hosts its own server on host
-  loopback with an isolated state dir, then runs `web/e2e/run.mjs`'s 33
+  loopback with an isolated state dir, then runs `web/e2e/run.mjs`'s 35
   Playwright checks against it — production has no auth-bypass listener to
   test against instead; prereq `npx playwright install chromium`).
 - Spike results (Phase 0) in `.agents/docs/testing/spikes/`.

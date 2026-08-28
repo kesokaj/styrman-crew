@@ -5,3 +5,6 @@ web/node_modules/
 
 web/.output/
 /styrman
+
+# Operator feedback screenshots (session input, not source)
+/screens/

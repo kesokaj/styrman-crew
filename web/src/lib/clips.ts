@@ -1,5 +1,5 @@
 // Clipboard history for text copied inside styrman (terminal copy-on-select,
-// Ctrl+C, link-bar Copy). Browser security makes the OS clipboard unreadable
+// Ctrl+C). Browser security makes the OS clipboard unreadable
 // in the background, so this records what styrman itself put there — the
 // history a user wants back ("what was that URL from ten minutes ago?").
 //

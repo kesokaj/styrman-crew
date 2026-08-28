@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../lib/api";
 
 type Repo = "local" | "private" | "public" | "clone";
@@ -53,13 +54,15 @@ export function NewProjectDialog({
     ["clone", "Clone a repo", false],
   ];
 
-  return (
+  // Portal: a transformed ancestor (the sidebar drawer) would otherwise
+  // become the containing block for position:fixed and shrink the dialog.
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       onClick={onClose}
     >
       <div
-        className="w-80 rounded-lg border border-border bg-bg-raised p-4 shadow-xl"
+        className="w-80 max-w-full rounded-3xl bg-bg-raised p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="mb-3 text-sm font-semibold">New project</h2>
@@ -94,7 +97,7 @@ export function NewProjectDialog({
               onClick={() => setRepo(value)}
               className={`rounded-md border px-2 py-1.5 text-left text-xs ${
                 repo === value
-                  ? "border-accent bg-accent-soft text-accent"
+                  ? "border-accent bg-accent-soft text-on-accent-soft"
                   : "border-border hover:bg-bg-hover"
               } disabled:cursor-not-allowed disabled:opacity-35`}
               title={disabled ? "Sign in to GitHub first (styrman-setup)" : undefined}
@@ -134,12 +137,12 @@ export function NewProjectDialog({
           <button
             onClick={create}
             disabled={!valid || busy}
-            className="rounded-md bg-accent px-3 py-1.5 font-medium text-white disabled:opacity-40"
+            className="rounded-md bg-accent px-3 py-1.5 font-medium text-on-accent disabled:opacity-40"
           >
             {busy ? "Creating…" : "Create"}
           </button>
         </div>
       </div>
     </div>
-  );
+  , document.body);
 }

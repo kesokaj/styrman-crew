@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { CLOSE_EXITED, CLOSE_REPLACED, termSocketUrl } from "../lib/api";
-import { addClip } from "../lib/clips";
-import { createTerminal, type StyrmanTerminal } from "../lib/terminal";
+import { useTheme } from "../lib/hooks";
+import {
+  createTerminal,
+  terminalTheme,
+  type StyrmanTerminal,
+} from "../lib/terminal";
 
 export type TermTarget =
   { kind: "term"; project: string; id: string } | { kind: "setup" };
@@ -25,10 +29,9 @@ const MAX_RETRIES = 8;
  * resize, close 4000 = paused (no auto-reconnect), close 4001 = replaced by
  * another tab (NEVER reconnect), anything else = transient → reconnect.
  *
- * The link bar above the terminal surfaces URLs found in the buffer
- * (wrapped lines reassembled) as Open/Copy buttons — auth flows print long
- * URLs that TUIs wrap and redraw, making them unclickable and unselectable
- * in any terminal; lifting them out of the buffer sidesteps all of that.
+ * (The former URL "link bar" was removed in v1.3 — copy-on-select made it
+ * redundant, and it mostly harvested junk URLs from apt output. The
+ * extraction machinery survives in lib/terminal.ts if it's ever wanted.)
  */
 export function TerminalPane({
   target,
@@ -41,9 +44,6 @@ export function TerminalPane({
   const styrRef = useRef<StyrmanTerminal | null>(null);
   const [state, setState] = useState<ConnState>("connecting");
   const [epoch, setEpoch] = useState(0);
-  const [urls, setUrls] = useState<string[]>([]);
-  const [dismissed, setDismissed] = useState<string[]>([]);
-  const [copied, setCopied] = useState<string>();
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -61,20 +61,27 @@ export function TerminalPane({
     (target.kind === "setup" ? "setup" : `${target.project}/${target.id}`) +
     `#${epoch}`;
 
-  // N5: a reconnect (epoch bump) or a switch to another terminal starts fresh
-  // — old link chips / dismissals must not carry over.
+  // N5: a reconnect (epoch bump) or a switch to another terminal starts fresh.
   useEffect(() => {
-    setUrls([]);
-    setDismissed([]);
-    setCopied(undefined);
     setToast(undefined); // a stale "✓ Copied" pill must not survive a switch
   }, [targetKey]);
+
+  // Live theme: swap the paired ANSI palette without recreating the
+  // terminal (which would drop scrollback).
+  const { resolved } = useTheme();
+  useEffect(() => {
+    const s = styrRef.current;
+    if (s) s.term.options.theme = terminalTheme(resolved === "dark");
+  }, [resolved]);
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
 
     const styr = createTerminal(host, {
+      // Captured at effect run (targetKey change); the theme effect above
+      // keeps it current afterwards.
+      dark: resolved === "dark",
       onCopy: () => {
         setToast("Copied");
         clearTimeout(toastTimer.current);
@@ -101,16 +108,6 @@ export function TerminalPane({
       return true;
     });
 
-    // Debounced URL harvesting: scan after output settles, not per byte.
-    let scanTimer: ReturnType<typeof setTimeout> | undefined;
-    const scheduleScan = () => {
-      clearTimeout(scanTimer);
-      scanTimer = setTimeout(() => {
-        // Latest URLs win; cap the bar at the 3 most recent.
-        setUrls(styr.extractUrls().slice(-3).reverse());
-      }, 600);
-    };
-
     let ws: WebSocket | null = null;
     let closedForGood = false;
     let retries = 0;
@@ -136,10 +133,7 @@ export function TerminalPane({
         term.focus();
       };
       ws.onmessage = (ev) => {
-        const bytes = new Uint8Array(ev.data as ArrayBuffer);
-        styr.sniffChunk(bytes);
-        term.write(bytes);
-        scheduleScan();
+        term.write(new Uint8Array(ev.data as ArrayBuffer));
       };
       ws.onclose = (ev) => {
         if (closedForGood) return;
@@ -201,7 +195,11 @@ export function TerminalPane({
         if (term.cols < 10 || term.rows < 3) return;
         if (ws?.readyState === WebSocket.OPEN) {
           ws.send(
-            JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
+            JSON.stringify({
+              type: "resize",
+              cols: term.cols,
+              rows: term.rows,
+            }),
           );
         }
       }, 120);
@@ -212,7 +210,6 @@ export function TerminalPane({
     return () => {
       closedForGood = true;
       clearTimeout(reconnectTimer);
-      clearTimeout(scanTimer);
       clearTimeout(resizeTimer);
       clearTimeout(toastTimer.current); // no toast after unmount (N2)
       dataSub.dispose();
@@ -227,21 +224,6 @@ export function TerminalPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetKey]);
 
-  const copyUrl = (u: string) => {
-    navigator.clipboard
-      ?.writeText(u)
-      .then(() => {
-        addClip(u);
-        setCopied(u);
-        setTimeout(() => setCopied(undefined), 1500);
-      })
-      .catch(() => {});
-  };
-
-  const visibleUrls = urls.filter((u) => !dismissed.includes(u));
-  const short = (u: string) =>
-    u.length > 46 ? u.slice(0, 30) + "…" + u.slice(-12) : u;
-
   const runSearch = (backwards: boolean) => {
     const s = styrRef.current;
     if (!s || !query) return;
@@ -251,47 +233,6 @@ export function TerminalPane({
 
   return (
     <div className="flex h-full w-full flex-col bg-term-bg">
-      {visibleUrls.length > 0 && state === "connected" && (
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-bg-raised px-2 py-1.5">
-          <span className="text-[10px] uppercase tracking-wider text-text-dim">
-            links
-          </span>
-          {visibleUrls.map((u) => (
-            <span
-              key={u}
-              className="flex items-center gap-1 rounded-full border border-border bg-bg px-2 py-0.5 text-[11px]"
-              title={u}
-            >
-              <span className="max-w-[40vw] truncate text-text-dim">
-                {short(u)}
-              </span>
-              <a
-                href={u}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label={`Open ${u}`}
-                className="font-medium text-accent hover:brightness-110"
-              >
-                Open
-              </a>
-              <button
-                onClick={() => copyUrl(u)}
-                aria-label={`Copy ${u}`}
-                className="text-text-dim hover:text-text"
-              >
-                {copied === u ? "✓" : "Copy"}
-              </button>
-              <button
-                onClick={() => setDismissed((d) => [...d, u])}
-                className="text-text-dim hover:text-text"
-                aria-label={`Dismiss ${u}`}
-              >
-                ✕
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
       {searchOpen && (
         <div className="flex items-center gap-1.5 border-b border-border bg-bg-raised px-2 py-1">
           <input
@@ -348,7 +289,7 @@ export function TerminalPane({
                   setState("connecting");
                   setEpoch((e) => e + 1);
                 }}
-                className="rounded-full border border-accent bg-accent-soft px-3 py-1 text-xs text-accent hover:brightness-110"
+                className="rounded-full border border-accent bg-accent-soft px-3 py-1 text-xs text-on-accent-soft hover:brightness-110"
               >
                 {state === "exited" ? "Resume" : "Reconnect"}
               </button>
