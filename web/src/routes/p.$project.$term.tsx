@@ -4,6 +4,7 @@ import { api, tryUI } from "../lib/api";
 import { usePolled } from "../lib/hooks";
 import { SidePanel } from "../components/SidePanel";
 import { TerminalPane } from "../components/TerminalPane";
+import { TerminalStatusBar } from "../components/TerminalStatusBar";
 
 export const Route = createFileRoute("/p/$project/$term")({
   component: TerminalPage,
@@ -80,6 +81,7 @@ function TerminalPage() {
             onExited={refresh}
           />
         </div>
+        <TerminalStatusBar project={project} />
       </div>
       <SidePanel project={project} term={term} projectName={proj?.name} />
     </>

@@ -14,6 +14,22 @@ export interface Project {
   deleteError?: string;
 }
 
+/** Live resource snapshot of a project's microVM (terminal status bar). */
+export interface ProjectStats {
+  state: "running" | "stopped" | "absent" | "creating" | "deleting";
+  cpuPercent: number;
+  cpuCount: number;
+  load1: number;
+  memUsedBytes: number;
+  memTotalBytes: number;
+  diskUsedBytes: number;
+  diskTotalBytes: number;
+  processes: number;
+  ip?: string;
+  uptimeSeconds: number;
+  host?: string;
+}
+
 /** A terminal: a durable record whose live view is a tmux session. */
 export interface Terminal {
   id: string;
@@ -190,8 +206,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 /** File-explorer scope: a project's workspace, or the shared home. */
 // Homes are per-project (ADR-031), so the home scope carries its project too.
 export type Scope =
-  | { kind: "project"; project: string }
-  | { kind: "home"; project: string };
+  { kind: "project"; project: string } | { kind: "home"; project: string };
 
 const scopeBase = (s: Scope) =>
   s.kind === "home"
@@ -213,6 +228,8 @@ export const api = {
       }),
     }),
   getProject: (id: string) => request<Project>(`/api/projects/${id}`),
+  projectStats: (id: string) =>
+    request<ProjectStats>(`/api/projects/${id}/stats`),
   renameProject: (id: string, name: string) =>
     request<void>(`/api/projects/${id}`, {
       method: "PATCH",
@@ -385,10 +402,10 @@ export const api = {
       "/api/settings/credentials",
     ),
   importCredentials: (project: string) =>
-    request<{ report: CredImportReport }>(
-      "/api/settings/credentials/import",
-      { method: "POST", body: JSON.stringify({ project }) },
-    ),
+    request<{ report: CredImportReport }>("/api/settings/credentials/import", {
+      method: "POST",
+      body: JSON.stringify({ project }),
+    }),
   putCredentialToken: (key: string, value: string) =>
     request<{ key: string; status: string }>(
       "/api/settings/credentials/token",
