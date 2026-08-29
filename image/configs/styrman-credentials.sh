@@ -52,6 +52,25 @@ EOF
     fi
     unset __sc_files
 
+    # claude onboarding flag: a materialized ~/.claude/.credentials.json means
+    # the user already signed in and onboarded (in the setup VM / another
+    # project), but a fresh per-project ~/.claude.json has no
+    # hasCompletedOnboarding, so the interactive CLI re-runs onboarding and
+    # prompts for login DESPITE valid creds (`claude -p` works, `claude` asks to
+    # sign in). Set the flag whenever the token is present — jq-merge to keep the
+    # file's other per-project state; create a minimal file if it's absent.
+    if [ -f "${HOME}/.claude/.credentials.json" ]; then
+        __cj="${HOME}/.claude.json"
+        if [ -f "${__cj}" ]; then
+            __ct="$(jq '.hasCompletedOnboarding = true' "${__cj}" 2>/dev/null)"
+            [ -n "${__ct}" ] && printf '%s' "${__ct}" > "${__cj}"
+            unset __ct
+        else
+            printf '{"hasCompletedOnboarding":true}' > "${__cj}"
+        fi
+        unset __cj
+    fi
+
     # keyring tier (ADR-032, agy): store each Secret Service item into THIS
     # project's gnome-keyring (unlocked by styrman-keyring.sh, which sorts
     # before this snippet). go-keyring items key on {service, username} —
