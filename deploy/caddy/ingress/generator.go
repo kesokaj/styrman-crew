@@ -202,7 +202,6 @@ func writeGlobalOptions(b *strings.Builder, apps []App, cfg GeneratorConfig, nee
 	if needsOAuth {
 		b.WriteString("    order authenticate before respond\n")
 		b.WriteString("    order authorize before reverse_proxy\n")
-		b.WriteString("    order picture_extractor before reverse_proxy\n")
 	}
 	b.WriteString("\n")
 
@@ -398,8 +397,6 @@ func writeAppBlock(b *strings.Builder, app App, cfg GeneratorConfig) {
 		fmt.Fprintf(b, "        request_header %s \"{http.request.header.%s}\"\n", HeaderEmail, UpstreamHeaderEmail)
 		fmt.Fprintf(b, "        request_header %s \"{http.request.header.%s}\"\n", HeaderUser, UpstreamHeaderName)
 		fmt.Fprintf(b, "        request_header %s \"{http.request.header.%s}\"\n", HeaderSubject, UpstreamHeaderSub)
-		// Extract picture URL from AUTHP_ACCESS_TOKEN JWT cookie
-		b.WriteString("        picture_extractor\n")
 
 		if app.Mode == ModeRoleGated {
 			// Set role: viewer first, then admin, then superadmin overwrites (highest wins)

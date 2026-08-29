@@ -470,10 +470,9 @@ func (s *Server) updateRuntime(w http.ResponseWriter, r *http.Request) {
 var hostnameRe = regexp.MustCompile(`^[A-Za-z0-9.-]+$`)
 
 // importGitCredential onboards the caller's CURRENT GitHub token into the
-// credential broker store (ADR-030). gh keeps its token in the guest keyring
-// (not a file), so we extract it by running `gh auth token` inside one of the
-// user's RUNNING projects (where the keyring is unlocked) and store it once.
-// Thereafter the broker serves it to every project. Body: {"project": "<id>"}
+// credential broker store (ADR-030) by running `gh auth token` inside one of
+// the user's RUNNING projects and storing the result once; thereafter the
+// broker serves it to every project. Body: {"project": "<id>"}
 // names the running project to extract from; "host" optional (default
 // github.com).
 func (s *Server) importGitCredential(w http.ResponseWriter, r *http.Request) {
@@ -514,10 +513,11 @@ func (s *Server) importGitCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	guest := s.guestUserFor(u.Username)
-	// Login shell so /etc/profile.d unlocks the keyring gh reads from.
+	// Login shell so gh's config/PATH are set up; skip the broker cred-pull so
+	// we read the project's REAL gh token, not the broker's own copy (H6).
 	code, out, err := s.orch.Exec(r.Context(), st.ContainerID, orchestrator.ExecSpec{
 		User: guest,
-		Env:  []string{"HOME=/home/" + guest, "USER=" + guest},
+		Env:  []string{"HOME=/home/" + guest, "USER=" + guest, "STYRMAN_SKIP_CRED_PULL=1"},
 		Cmd:  []string{"bash", "-lc", "gh auth token --hostname " + body.Host + " 2>/dev/null"},
 	})
 	token := strings.TrimSpace(out)

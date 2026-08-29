@@ -29,7 +29,6 @@ const (
 	HeaderUser    = "X-Caddy-User"
 	HeaderRole    = "X-Caddy-Role"
 	HeaderSubject = "X-Caddy-Subject"
-	HeaderPicture = "X-Caddy-Picture"
 	// HeaderIngress proves to the upstream that a request came through this
 	// ingress (not from a container on a shared bridge spoofing X-Caddy-Email
 	// directly). Set to the shared STYRMAN_INGRESS_TOKEN when present.

@@ -58,9 +58,10 @@ func ParseLabels(labels map[string]string, containerName string, exposedPorts []
 		RPS:  defaultRPS,
 	}
 
-	// Hostname: label override or container name
+	// Hostname: label override or container name — sanitize BOTH so a hostname
+	// can never inject into the generated Caddyfile.
 	if h := strings.TrimSpace(labels[LabelHostname]); h != "" {
-		app.Hostname = h
+		app.Hostname = sanitizeHostname(h)
 	} else {
 		app.Hostname = sanitizeHostname(containerName)
 	}
@@ -153,5 +154,14 @@ func isTrue(s string) bool {
 func sanitizeHostname(name string) string {
 	name = strings.TrimLeft(name, "/")
 	name = strings.ReplaceAll(name, "_", "-")
-	return strings.ToLower(name)
+	name = strings.ToLower(name)
+	// Keep only DNS-label-safe characters so a hostname value can never carry
+	// Caddyfile-significant bytes (spaces, braces, newlines) into the generated
+	// config — defense in depth, even though labels are set by the server.
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '.' {
+			return r
+		}
+		return -1
+	}, name)
 }

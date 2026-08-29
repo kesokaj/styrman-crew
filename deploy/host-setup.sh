@@ -13,6 +13,9 @@
 set -euo pipefail
 
 KATA_VERSION="${KATA_VERSION:-3.31.0}"
+# Pin Docker too (like Kata) so a fresh install is reproducible; override to
+# match/upgrade. The convenience script reads $VERSION.
+DOCKER_VERSION="${DOCKER_VERSION:-29.7.2}"
 STATE_DIR="${STYRMAN_STATE_DIR:-/var/lib/styrman}"
 OPERATOR="${SUDO_USER:-}"
 
@@ -43,8 +46,8 @@ fi
 
 # ─── 1. Docker CE ───────────────────────────────────────────────────────────
 if ! command -v docker >/dev/null; then
-    log "installing Docker CE"
-    curl -fsSL https://get.docker.com | sh
+    log "installing Docker CE ${DOCKER_VERSION}"
+    curl -fsSL https://get.docker.com | VERSION="${DOCKER_VERSION}" sh
 else
     log "Docker present: $(docker --version)"
 fi
@@ -105,6 +108,24 @@ features = cfg.setdefault("features", {})
 # them (kata-containers#13080).
 if features.get("time-namespaces") is not False:
     features["time-namespaces"] = False
+    changed = True
+# Project isolation is IPv4-only (the firewall matches sdb-* v4 traffic), so an
+# IPv6-enabled Docker bridge could bypass it — keep IPv6 off at the daemon.
+for _k in ("ipv6", "ip6tables"):
+    if cfg.get(_k) is not False:
+        cfg[_k] = False
+        changed = True
+# Keep running project microVMs alive across a daemon restart.
+if cfg.get("live-restore") is not True:
+    cfg["live-restore"] = True
+    changed = True
+# Bound container log growth so a chatty guest can't fill the disk.
+if cfg.get("log-driver") != "json-file":
+    cfg["log-driver"] = "json-file"
+    changed = True
+_want_log = {"max-size": "50m", "max-file": "3"}
+if cfg.get("log-opts") != _want_log:
+    cfg["log-opts"] = _want_log
     changed = True
 if changed:
     # Copy (not move) the backup, then write via temp + atomic rename so a

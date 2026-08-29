@@ -36,6 +36,10 @@ services:
 
   styrman:
     container_name: styrman-server
+    # :latest is the running tag; the deployed version is baked into the binary
+    # (STYRMAN_VERSION build-arg, shown in logs/UI) and every release is git-
+    # tagged. Roll back by rebuilding at the desired tag: `git checkout vX.Y.Z &&
+    # STYRMAN_VERSION=X.Y.Z docker compose build/up styrman`.
     image: styrman-server:latest
     build:
       context: ..
