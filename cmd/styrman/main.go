@@ -93,9 +93,6 @@ func main() {
 	go orch.RunIdleReaper(ctx)
 
 	api := httpapi.New(cfg, users, orch, logger)
-	// Periodic whole-tree checkpoints of running projects (operator Q6);
-	// also covers the idle-reaper's missing pre-stop snapshot.
-	go api.RunCheckpointLoop(ctx)
 
 	// Credential broker (ADR-030): a bridge-only, credential-only listener,
 	// separate from the ingress-gated main API. Never published to the host.

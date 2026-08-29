@@ -30,6 +30,27 @@ export interface ProjectStats {
   host?: string;
 }
 
+/** One changed path in the git working tree / index. */
+export interface GitFile {
+  path: string;
+  staged: string; // index code (M A D R C) or ""
+  unstaged: string; // worktree code, or "?" for untracked
+  untracked: boolean;
+  origPath?: string;
+}
+
+/** Git working-tree status for the project's repo. */
+export interface GitStatus {
+  state: "running" | "stopped" | "absent";
+  repo: boolean;
+  branch?: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  clean: boolean;
+  files: GitFile[];
+}
+
 /** A terminal: a durable record whose live view is a tmux session. */
 export interface Terminal {
   id: string;
@@ -364,6 +385,47 @@ export const api = {
       `/api/projects/${project}/history/${id}${bytes ? `?bytes=${bytes}` : ""}`,
     ),
   diff: (project: string) => request<Diff>(`/api/projects/${project}/diff`),
+
+  // Git side panel (real git client; runs in the guest VM).
+  gitStatus: (project: string) =>
+    request<GitStatus>(`/api/projects/${project}/git/status`),
+  gitDiff: (
+    project: string,
+    opts: { path?: string; staged?: boolean; untracked?: boolean } = {},
+  ) => {
+    const q = new URLSearchParams();
+    if (opts.path) q.set("path", opts.path);
+    if (opts.staged) q.set("staged", "true");
+    if (opts.untracked) q.set("untracked", "true");
+    const qs = q.toString();
+    return request<{ state: string; diff: string }>(
+      `/api/projects/${project}/git/diff${qs ? `?${qs}` : ""}`,
+    );
+  },
+  gitStage: (project: string, body: { path?: string; all?: boolean }) =>
+    request<{ output: string }>(`/api/projects/${project}/git/stage`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  gitUnstage: (project: string, body: { path?: string; all?: boolean }) =>
+    request<{ output: string }>(`/api/projects/${project}/git/unstage`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  gitDiscard: (project: string, path: string, untracked: boolean) =>
+    request<{ output: string }>(`/api/projects/${project}/git/discard`, {
+      method: "POST",
+      body: JSON.stringify({ path, untracked }),
+    }),
+  gitCommit: (project: string, message: string) =>
+    request<{ output: string }>(`/api/projects/${project}/git/commit`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
+  gitPush: (project: string) =>
+    request<{ output: string }>(`/api/projects/${project}/git/push`, {
+      method: "POST",
+    }),
 
   listCheckpoints: (project: string) =>
     request<{ checkpoints: Checkpoint[] }>(

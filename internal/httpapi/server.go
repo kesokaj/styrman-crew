@@ -197,6 +197,14 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("POST /api/projects/{project}/start", s.startProject)
 	mux.HandleFunc("POST /api/projects/{project}/stop", s.stopProject)
 	mux.HandleFunc("GET /api/projects/{project}/stats", s.projectStats)
+	// Git side panel — a real git client (runs in the guest VM).
+	mux.HandleFunc("GET /api/projects/{project}/git/status", s.gitStatus)
+	mux.HandleFunc("GET /api/projects/{project}/git/diff", s.gitDiff)
+	mux.HandleFunc("POST /api/projects/{project}/git/stage", s.gitStage)
+	mux.HandleFunc("POST /api/projects/{project}/git/unstage", s.gitUnstage)
+	mux.HandleFunc("POST /api/projects/{project}/git/discard", s.gitDiscard)
+	mux.HandleFunc("POST /api/projects/{project}/git/commit", s.gitCommit)
+	mux.HandleFunc("POST /api/projects/{project}/git/push", s.gitPush)
 	// Terminals: durable records, one tmux session each (ADR-016).
 	mux.HandleFunc("GET /api/projects/{project}/terminals", s.listTerminals)
 	mux.HandleFunc("POST /api/projects/{project}/terminals", s.createTerminal)
@@ -815,9 +823,6 @@ func (s *Server) stopProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	// Snapshot after the container is down: the tree is quiescent (no agent
-	// mid-write) and the request isn't blocked on git.
-	go s.snapshot(u.Username, p, "project stopped")
 	writeJSON(w, http.StatusOK, map[string]string{"state": "stopped"})
 }
 
@@ -937,7 +942,6 @@ func (s *Server) pauseTerminal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	go s.snapshot(u.Username, p, "terminal "+id+" paused")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -958,7 +962,6 @@ func (s *Server) deleteTerminal(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	go s.snapshot(u.Username, p, "terminal "+id+" closed")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -975,7 +978,6 @@ func (s *Server) deleteAllTerminals(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = sp.terms.Delete(p.ID, rec.ID)
 	}
-	go s.snapshot(u.Username, p, "all terminals closed")
 	w.WriteHeader(http.StatusNoContent)
 }
 
