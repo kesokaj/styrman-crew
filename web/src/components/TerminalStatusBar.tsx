@@ -48,7 +48,9 @@ function Stat({
  * seconds. Doubles as the terminal's hard bottom edge.
  */
 export function TerminalStatusBar({ project }: { project: string }) {
-  const { data, error } = usePolled(() => api.projectStats(project), 4000);
+  const { data, error } = usePolled(() => api.projectStats(project), 4000, [
+    project,
+  ]);
 
   const base =
     "flex h-7 shrink-0 items-center gap-3 overflow-x-auto border-t border-border bg-accent-soft px-3 text-[11px] text-on-accent-soft [scrollbar-width:none]";

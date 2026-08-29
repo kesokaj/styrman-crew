@@ -12,8 +12,12 @@ export const Route = createFileRoute("/p/$project/$term")({
 
 function TerminalPage() {
   const { project, term } = Route.useParams();
-  const { data: proj } = usePolled(() => api.getProject(project), 20000);
-  const { data, refresh } = usePolled(() => api.listTerminals(project), 10000);
+  const { data: proj } = usePolled(() => api.getProject(project), 20000, [
+    project,
+  ]);
+  const { data, refresh } = usePolled(() => api.listTerminals(project), 10000, [
+    project,
+  ]);
   const record = data?.terminals.find((t) => t.id === term);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState("");

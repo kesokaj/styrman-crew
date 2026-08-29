@@ -101,11 +101,12 @@ export function SidePanel({
 }
 
 function PortsTab({ project, term }: { project: string; term: string }) {
-  const { data } = usePolled(() => api.listPorts(project), 7000);
+  const { data } = usePolled(() => api.listPorts(project), 7000, [project]);
   // One project-wide links poll shared by all rows (not one per open row).
   const { data: linkData, refresh: refreshLinks } = usePolled(
     () => api.listLinks(project),
     30000,
+    [project],
   );
   const ports = data?.ports ?? [];
   return (
@@ -428,7 +429,7 @@ function PublicLinks({
 }
 
 function HistoryTab({ project }: { project: string }) {
-  const { data } = usePolled(() => api.listHistory(project), 10000);
+  const { data } = usePolled(() => api.listHistory(project), 10000, [project]);
   const [openId, setOpenId] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [query, setQuery] = useState("");
@@ -587,12 +588,12 @@ function GitTab({ project }: { project: string }) {
     data,
     error: diffError,
     refresh: refreshDiff,
-  } = usePolled(() => api.diff(project), 10000);
+  } = usePolled(() => api.diff(project), 10000, [project]);
   const {
     data: cpData,
     error: cpError,
     refresh: refreshCps,
-  } = usePolled(() => api.listCheckpoints(project), 15000);
+  } = usePolled(() => api.listCheckpoints(project), 15000, [project]);
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState<{
     id: string;

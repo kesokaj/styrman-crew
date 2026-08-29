@@ -10,6 +10,12 @@ import {
 export function usePolled<T>(
   fetcher: () => Promise<T>,
   intervalMs: number,
+  // Reset key: when any value here changes, the poll re-fetches IMMEDIATELY
+  // with the current fetcher instead of waiting for the next interval. Pass the
+  // ids the fetcher closes over (e.g. [project]) when the same component is
+  // reused across route params — otherwise a project switch shows stale data
+  // (header/status-bar name lag) until the interval ticks.
+  deps: readonly unknown[] = [],
 ): {
   data: T | undefined;
   refresh: () => void;
@@ -82,7 +88,9 @@ export function usePolled<T>(
       clearInterval(t);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [refresh, intervalMs]);
+    // Re-run (immediate refresh + fresh interval) when the reset key changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refresh, intervalMs, ...deps]);
 
   return { data, refresh, error };
 }
