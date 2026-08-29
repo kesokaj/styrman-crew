@@ -912,3 +912,130 @@ accepts a seeded refresh token — go-keyring semantics say yes; if agy ever
 adds a second service name, extend the import's search. Same
 stale-overwrite caveat as the file tier: re-importing after a re-auth
 keeps the broker copy current.
+
+---
+
+## ADR-033: Per-entity atomic writers self-create their directory
+
+**Date:** 2026-08-29 · **Status:** accepted (bug-driven — first real-login
+400 on v1.5.2)
+
+**Context:** `Server.space()` (`internal/httpapi/server.go`) `MkdirAll`s
+`users/<user>/` once and caches the resulting `userSpace` (profileStore,
+project.Store, conversation.Store) for the process lifetime. The
+2026-08-28 clean-reinstall's post-restart verification calls warmed that
+cache for `ostling-simon`, and the final byte-virgin scrub then `rm -rf`'d
+`users/` **without restarting the server** — leaving the running process
+holding stores whose path pointed at a deleted directory. The operator's
+first real `POST /api/settings/profile` (v1.5.2, ~14h later) hit that stale
+path and got a 400 (`open .../profile.json.tmp: no such file or
+directory`). Only `credstore.atomicWrite` already self-created its
+directory before writing; the other three per-user atomic writers assumed
+`space()`'s one-time `MkdirAll` was durable for the life of the cache — an
+assumption any external scrub of `StateDir` breaks.
+
+**Decision:** Every atomic writer that persists a cached, per-entity store
+(profileStore, project.Store, conversation.Store — matching the existing
+credstore.atomicWrite pattern) now `os.MkdirAll(filepath.Dir(path), 0o755)`
+immediately before opening its `.tmp` file, so a write recovers a missing
+directory instead of failing. This is the write-time complement to the
+existing tmp+fsync+rename atomicity: directory presence is no longer an
+invariant the cache's creator (`space()`) has to guarantee for the whole
+process lifetime — each writer guarantees it for itself, on every write.
+Going forward, any new cached per-entity store in this codebase should
+follow the same self-creating-directory pattern rather than relying on a
+one-time `MkdirAll` elsewhere.
+
+**Scope (deliberate):** this covers the writers under
+`StateDir/users/<user>/` — profileStore, project.Store, conversation.Store —
+because that per-user subtree's parent directory is exactly what the
+documented reset removes (`rm -rf StateDir/users`). The other three
+process-lifetime cached stores — `links.Store` (`StateDir/links.json`),
+`userstore.Store` (`StateDir/users.json`), and the operator overrides in
+`config.SetOperator` (`StateDir/settings.json`) — write directly under the
+`StateDir` root, which is the container's bind-mount source
+(`deploy/docker-compose.yml`) and is never removed by any reset short of
+unmounting the volume itself. Deleting those individual files leaves their
+parent intact, so their next save recreates the file with no ENOENT; they
+were intentionally left unchanged. If `StateDir` itself is ever unmounted
+under a running server, `MkdirAll` is the wrong recovery anyway (it would
+create an orphaned tree on the container's own layer, masking the loss) —
+the `slog.Warn` each writer now emits when it has to recreate a missing
+directory is the breadcrumb for that case.
+
+**Consequences:** A stale in-memory cache pointed at a deleted directory
+now self-heals on next write rather than 400ing. This does not replace
+correct operational procedure: scrubbing `StateDir/users` (or any dir a
+cache depends on) under a running server should still be followed by a
+restart — cheap, and doesn't rely on every code path having this fix
+(noted operationally in
+`.agents/docs/changes/2026-08-29-first-login-profile-write-enoent-v1.5.3.md`).
+Shipped as v1.5.3.
+
+---
+
+## ADR-034: Setup completion seeds the credential broker (2026-08-29)
+
+**Context:** ADR-032/032a made the broker pull-on-login from every project,
+but only after the operator ran Settings → Credentials → Import from some
+project. `styrman-setup` runs in the hidden onboarding VM, which mounts the
+user's SHARED base home (`orchestrator.EnsureSetup` → `cfg.UserHome(user)`),
+so every credential the operator signed into during setup landed there
+correctly. But ADR-031 gives projects their OWN per-project homes seeded
+from the image — they do not inherit the shared home. Import reads the
+PROJECT's guest home, not the shared home, so importing from a brand-new
+project found nothing to harvest, the broker stayed empty, and every new
+project still needed a full manual sign-in — silently defeating the whole
+point of ADR-030/032. Nothing in the system bridged shared home → broker;
+this was a real onboarding gap, not user error, and it reproduced live on
+the operator's actual first setup run.
+
+**Decision:** `finishSetup` (`POST /api/setup/done`,
+`internal/httpapi/setup.go`) now harvests the broker from the setup VM
+itself, before tearing it down, using the same extraction logic Import
+already used — pulled out of `importCredentials`
+(`internal/httpapi/credentials.go`) into a shared
+`(*Server).harvestCredentials(ctx, user, containerID, guest) map[string]string`,
+called against `config.SetupContainer(u.Username)`. `guestOut` and
+`importGuestFile` were changed to take a `context.Context` instead of
+reading off `*http.Request`, since `finishSetup` runs the harvest on its own
+background context (90s timeout) rather than the request's. The harvest is
+best-effort by design: a disabled broker (`s.creds == nil`) or a harvest
+that finds nothing must never block completing setup — it only logs a
+report. A companion UX change lands in the same deploy: the setup terminal's
+`paneCmd` dropped its trailing `exec bash -l` (`internal/terminal/bridge.go`
+`ServeSetup`), so the pane ends — and the existing close-4000 signal fires —
+the moment `styrman-setup` exits, instead of dropping the operator into an
+idle shell; `web/src/routes/setup.tsx` wires `<TerminalPane onExited>` to
+call `api.setupDone()` (which now also seeds the broker) and navigate to the
+dashboard, so finishing setup is a single, automatic action with no manual
+"Done" click.
+
+**Consequences:** the broker's "sign in once, every project current" promise
+now holds starting from the very first project — no separate in-project
+Import step is required, closing the exact gap the operator hit live. The
+Import panel remains as a supplementary path for a tool the operator missed
+or re-authed after setup. One known gap remains open: agy did NOT harvest
+live, because the minimal-mode setup VM (`STYRMAN_MINIMAL=1`) doesn't run
+`gnome-keyring-daemon`, so `secret-tool search service antigravity` finds
+nothing even though `~/.local/share/keyrings/login.keyring` exists on disk —
+ADR-032a's keyring tier needs a running/unlocked Secret Service to extract
+from, and the setup VM in minimal mode doesn't provide one. This is the same
+"agy real-token check" the ADR-032a handoff flagged as open, now pinned to
+this specific cause rather than left as a general unknown; fixing it (start
++ unlock the keyring daemon in minimal mode, or harvest agy from a full
+project VM instead) is deferred. The `styrman-setup` completion message
+still tells the operator to manually run Import — now redundant advice — but
+correcting it requires a runtime-image rebuild and is deferred rather than
+rolled into this patch deploy. Shipped as v1.5.4 (`docker compose up -d
+styrman`, in-place restart, state preserved — not a virgin reset); live-
+verified against the operator's real account: an existing project restarted
+after `finishSetup` pulled git/gh/claude/ssh with zero re-sign-in
+(`gh api user` → `kesokaj`, authenticated `git ls-remote` succeeded). As of
+this writing the change (including the rebuilt `web/dist/**`) is deployed
+live but **not yet committed to git** — prod (1.5.4) is ahead of the
+working tree's git history.
+
+Source: internal/httpapi/setup.go, internal/httpapi/credentials.go,
+internal/terminal/bridge.go, web/src/routes/setup.tsx. Verification:
+.agents/docs/changes/2026-08-29-setup-seeds-broker-v1.5.4.md

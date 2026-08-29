@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -131,17 +132,29 @@ func (s *Server) importCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	guest := s.guestUserFor(u.Username)
+	report := s.harvestCredentials(r.Context(), u.Username, st.ContainerID, guest)
+	s.logger.Info("credential import complete", "user", u.Username, "from", p.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"report": report})
+}
+
+// harvestCredentials extracts every credential it can find from a RUNNING
+// container's guest home into the broker store, best-effort, one pass. Shared
+// by the manual "Import from project" API and first-run setup completion (the
+// setup VM mounts the user's shared base home, so finishing setup seeds the
+// broker directly — no separate project sign-in needed). Returns a per-tool
+// report of what happened.
+func (s *Server) harvestCredentials(ctx context.Context, user, containerID, guest string) map[string]string {
 	report := map[string]string{}
 
 	// gh → git helper credential + GH_TOKEN env (same token; gh keeps it in the
 	// guest keyring, so a login shell is needed to reach it).
-	if tok, ok := s.guestOut(r, st.ContainerID, guest, "gh auth token --hostname github.com 2>/dev/null"); ok && tok != "" {
-		if err := s.creds.PutGit(u.Username, credstore.GitCred{Host: "github.com", Username: "x-access-token", Token: tok}); err != nil {
+	if tok, ok := s.guestOut(ctx, containerID, guest, "gh auth token --hostname github.com 2>/dev/null"); ok && tok != "" {
+		if err := s.creds.PutGit(user, credstore.GitCred{Host: "github.com", Username: "x-access-token", Token: tok}); err != nil {
 			report["git"] = "error"
 		} else {
 			report["git"] = "stored (github.com)"
 		}
-		if err := s.creds.PutEnv(u.Username, "GH_TOKEN", tok); err != nil {
+		if err := s.creds.PutEnv(user, "GH_TOKEN", tok); err != nil {
 			report["gh"] = "error"
 		} else {
 			report["gh"] = "stored (GH_TOKEN)"
@@ -152,7 +165,7 @@ func (s *Server) importCredentials(w http.ResponseWriter, r *http.Request) {
 
 	// claude → the whole ~/.claude/.credentials.json (holds the OAuth refresh
 	// token, so each project can refresh itself). File-injection tier.
-	if s.importGuestFile(r, u.Username, st.ContainerID, guest,
+	if s.importGuestFile(ctx, user, containerID, guest,
 		"claude-credentials", "~/.claude/.credentials.json", "0600") {
 		report["claude"] = "stored (credentials.json)"
 	} else {
@@ -161,7 +174,7 @@ func (s *Server) importCredentials(w http.ResponseWriter, r *http.Request) {
 
 	// gcloud → Application Default Credentials (covers terraform, client
 	// libraries, and gcloud with ADC). File-injection tier.
-	if s.importGuestFile(r, u.Username, st.ContainerID, guest,
+	if s.importGuestFile(ctx, user, containerID, guest,
 		"gcloud-adc", "~/.config/gcloud/application_default_credentials.json", "0600") {
 		report["gcloud"] = "stored (ADC)"
 	} else {
@@ -172,7 +185,7 @@ func (s *Server) importCredentials(w http.ResponseWriter, r *http.Request) {
 	// agent-socket forwarding, so the key is materialized into each home).
 	sshDone := false
 	for _, key := range []string{"id_ed25519", "id_rsa", "id_ecdsa"} {
-		if s.importGuestFile(r, u.Username, st.ContainerID, guest,
+		if s.importGuestFile(ctx, user, containerID, guest,
 			"ssh-"+key, "~/.ssh/"+key, "0600") {
 			report["ssh"] = "stored (" + key + ")"
 			sshDone = true
@@ -185,9 +198,9 @@ func (s *Server) importCredentials(w http.ResponseWriter, r *http.Request) {
 
 	// npm → an authToken from ~/.npmrc, stored as NPM_TOKEN (the skel .npmrc
 	// references it). Env-token tier.
-	if tok, ok := s.guestOut(r, st.ContainerID, guest,
+	if tok, ok := s.guestOut(ctx, containerID, guest,
 		`sed -n 's|^//registry.npmjs.org/:_authToken=||p' ~/.npmrc 2>/dev/null | grep -v '\${' | head -1`); ok && tok != "" {
-		if err := s.creds.PutEnv(u.Username, "NPM_TOKEN", tok); err != nil {
+		if err := s.creds.PutEnv(user, "NPM_TOKEN", tok); err != nil {
 			report["npm"] = "error"
 		} else {
 			report["npm"] = "stored (NPM_TOKEN)"
@@ -196,45 +209,28 @@ func (s *Server) importCredentials(w http.ResponseWriter, r *http.Request) {
 		report["npm"] = "not found — set //registry.npmjs.org/:_authToken in ~/.npmrc"
 	}
 
-	// agy → its go-keyring Secret Service item {service: antigravity,
-	// username: <account>} (ADR-032 keyring tier). Two steps: search learns
-	// the username attribute, lookup returns the raw secret bytes. Login
-	// shell so the keyring is unlocked.
-	// NB: secret-tool search splits its output — item/label/secret on stdout
-	// but the attribute.* lines on STDERR — so merge the streams (verified
-	// live; 2>/dev/null silently drops exactly the lines parsed here).
-	if kuser, ok := s.guestOut(r, st.ContainerID, guest,
-		`secret-tool search --all service antigravity 2>&1 | sed -n 's/^attribute.username = //p' | head -1`); ok && kuser != "" && !strings.ContainsAny(kuser, "\n\t") {
-		if b64, ok := s.guestOut(r, st.ContainerID, guest,
-			"secret-tool lookup service antigravity username "+shellQuote(kuser)+" 2>/dev/null | base64 -w0"); ok && b64 != "" {
-			if raw, err := base64.StdEncoding.DecodeString(b64); err == nil && len(raw) > 0 {
-				if err := s.creds.PutKeyring(u.Username, credstore.KeyringCred{
-					ID: "agy", Service: "antigravity", Username: kuser,
-					Label: "Password for '" + kuser + "' on 'antigravity'", Secret: raw,
-				}); err != nil {
-					report["agy"] = "error"
-				} else {
-					report["agy"] = "stored (keyring)"
-				}
-			} else {
-				report["agy"] = "not found — run `agy` and sign in"
-			}
-		} else {
-			report["agy"] = "not found — run `agy` and sign in"
-		}
+	// agy → its OAuth token file. This agy build persists a portable
+	// {access_token, refresh_token, expiry} JSON at
+	// ~/.gemini/antigravity-cli/antigravity-oauth-token (0600) — NOT the
+	// gnome-keyring that ADR-032a assumed (the tiny login.keyring never held
+	// it). So it harvests as a plain file like claude and, unlike the keyring
+	// path, works from the minimal setup VM (no Secret Service daemon there);
+	// the refresh_token lets each project renew the token on its own.
+	if s.importGuestFile(ctx, user, containerID, guest,
+		"agy-oauth-token", "~/.gemini/antigravity-cli/antigravity-oauth-token", "0600") {
+		report["agy"] = "stored (oauth token)"
 	} else {
 		report["agy"] = "not found — run `agy` and sign in"
 	}
 
-	s.logger.Info("credential import complete", "user", u.Username, "from", p.ID)
-	writeJSON(w, http.StatusOK, map[string]any{"report": report})
+	return report
 }
 
 // guestOut runs a login-shell command as the guest in a project and returns
 // trimmed stdout (ok=false on non-zero exit or exec error). The command must
 // redirect its own stderr (Exec combines the streams).
-func (s *Server) guestOut(r *http.Request, containerID, guest, script string) (string, bool) {
-	code, out, err := s.orch.Exec(r.Context(), containerID, orchestrator.ExecSpec{
+func (s *Server) guestOut(ctx context.Context, containerID, guest, script string) (string, bool) {
+	code, out, err := s.orch.Exec(ctx, containerID, orchestrator.ExecSpec{
 		User: guest,
 		Env:  []string{"HOME=/home/" + guest, "USER=" + guest},
 		Cmd:  []string{"bash", "-lc", script},
@@ -247,11 +243,11 @@ func (s *Server) guestOut(r *http.Request, containerID, guest, script string) (s
 
 // importGuestFile reads a guest file as base64 and stores it as a file
 // credential. Returns false when the file is absent/empty (best-effort).
-func (s *Server) importGuestFile(r *http.Request, user, containerID, guest, id, homePath, mode string) bool {
+func (s *Server) importGuestFile(ctx context.Context, user, containerID, guest, id, homePath, mode string) bool {
 	// homePath is "~/…"; expand for the read, keep "~/…" for the store (the
 	// login snippet re-expands it against each project's own $HOME).
 	readPath := strings.Replace(homePath, "~/", "/home/"+guest+"/", 1)
-	b64, ok := s.guestOut(r, containerID, guest, "base64 -w0 "+shellQuote(readPath)+" 2>/dev/null")
+	b64, ok := s.guestOut(ctx, containerID, guest, "base64 -w0 "+shellQuote(readPath)+" 2>/dev/null")
 	if !ok || b64 == "" {
 		return false
 	}

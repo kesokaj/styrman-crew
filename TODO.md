@@ -28,6 +28,8 @@ Deferred work items. Not blocking current work, but should be addressed later.
 - [ ] Phase 3 needs Google OAuth client ID/secret, Cloudflare API token, and BASE_DOMAIN
       from the operator — the old devbox `.env` is not on this machine (added 2026-08-26)
 - [ ] Decide backup story for `/var/lib/styrman/{homes,projects,users}` (restic/borg to GCS?) — since ADR-027 source code lives under projects/, not the homes (added 2026-08-26, updated 2026-08-28)
+- [ ] Update the clean-reinstall procedure doc (`.agents/docs/changes/2026-08-28-clean-reinstall.md` or wherever it's canonicalized next) to explicitly call out "restart the server after scrubbing StateDir/users" as a required step, not an implicit one — its omission caused the v1.5.2 first-login 400 fixed in v1.5.3 (ADR-033) (added 2026-08-29)
+- [ ] Remove the now-dormant broker keyring tier: with agy moved to the file tier in v1.5.5 (`~/.gemini/antigravity-cli/antigravity-oauth-token`), nothing uses `credstore.KeyringCred`/`PutKeyring`, the broker `GET /keyring` endpoint, or the `secret-tool store` block in `styrman-credentials.sh`. Left dormant in v1.5.5 to keep the change small; delete as a separate cleanup and note ADR-032a is superseded on the agy-storage point (added 2026-08-29)
 
 ## Low Priority
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kesokaj/styrman-crew/internal/config"
 	"github.com/kesokaj/styrman-crew/internal/files"
 )
 
@@ -77,6 +78,20 @@ func (s *Server) finishSetup(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
+	}
+	// Seed the broker from the setup VM BEFORE tearing it down. The setup VM
+	// mounts the user's shared base home (orchestrator.EnsureSetup) with the
+	// keyring unlocked, so finishing setup harvests every credential the user
+	// just signed into straight into the broker store — every later project
+	// then pulls them on login, with no separate "sign in again inside a
+	// project" step. Best-effort: a broker that's disabled or a harvest that
+	// finds nothing must never block completing setup.
+	if s.creds != nil {
+		hctx, hcancel := context.WithTimeout(context.Background(), 90*time.Second)
+		guest := s.guestUserFor(u.Username)
+		report := s.harvestCredentials(hctx, u.Username, config.SetupContainer(u.Username), guest)
+		hcancel()
+		s.logger.Info("setup seeded the credential broker", "user", u.Username, "report", report)
 	}
 	// Confined write: refuses to follow a symlinked marker planted at
 	// another tenant's file (was an arbitrary-overwrite vector).

@@ -3,8 +3,10 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sync"
 
@@ -96,6 +98,19 @@ func (p *profileStore) setGuestUser(name string) error {
 func (p *profileStore) writeLocked() error {
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
+		return err
+	}
+	// Self-create the metadata dir (like credstore.atomicWrite): space()
+	// normally makes it, but a cached store can outlive its directory if the
+	// users tree is scrubbed under a running server (an operator reset that
+	// forgets to restart) — the write must recover, not fail with ENOENT.
+	// Warn when we actually had to recreate it: a silent 200 would otherwise
+	// mask the more serious case where /var/lib/styrman itself was unmounted.
+	dir := filepath.Dir(p.path)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		slog.Warn("metadata dir missing — recreating (users tree scrubbed under a running server?)", "path", dir)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	tmp := p.path + ".tmp"

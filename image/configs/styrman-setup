@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# styrman-setup — one-time-per-user onboarding, run inside any project
-# terminal. Walks through every credential styrman needs; each lands in the
-# THIS project's home (homes are per-project, ADR-031). To share the results
-# with every project, run Settings -> Credentials -> Import from this project
-# afterwards — the broker then keeps all projects current (R3/ADR-032).
+# styrman-setup — one-time-per-user onboarding, run in the first-run setup VM
+# (also re-runnable in any project to check status). Walks through every
+# credential styrman needs; each lands in the home it runs in. Finishing setup
+# harvests them into the broker, which then keeps every project (current and
+# future) signed in automatically — no manual Import step (R3/ADR-032/ADR-034).
 # Idempotent: shows status and only prompts for what's missing.
 set -uo pipefail
 
@@ -91,7 +91,8 @@ else
 fi
 
 step "Done"
-echo "Everything above lives in THIS project's home. To share it with every"
-echo "project (current and future), open ${BOLD}Settings → Credentials → Import${RESET}"
-echo "and pick this project — the broker keeps all projects signed in from then on."
-echo "Rerun ${BOLD}styrman-setup${RESET} anytime to check status."
+echo "Your tools are signed in. When setup closes, these credentials are shared"
+echo "with every project — current and future — automatically through the broker:"
+echo "no manual import, no signing in again."
+echo "Rerun ${BOLD}styrman-setup${RESET} anytime to check status;"
+echo "${BOLD}Settings → Credentials${RESET} shows what's shared and can re-import."

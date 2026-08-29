@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { api } from "../lib/api";
 import { TerminalPane } from "../components/TerminalPane";
 
@@ -8,6 +8,7 @@ export const Route = createFileRoute("/setup")({ component: SetupPage });
 type Phase = "loading" | "username" | "booting" | "ready" | "error";
 
 function SetupPage() {
+  const navigate = useNavigate();
   const [phase, setPhase] = useState<Phase>("loading");
   const [username, setUsername] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -131,7 +132,17 @@ function SetupPage() {
             </button>
           </div>
         )}
-        {phase === "ready" && <TerminalPane target={{ kind: "setup" }} />}
+        {phase === "ready" && (
+          <TerminalPane
+            target={{ kind: "setup" }}
+            onExited={() => {
+              // styrman-setup finished (the pane exits → close 4000). Mark setup
+              // done, which also tears the onboarding VM down, then return to the
+              // dashboard — no manual "Done" click, no idle VM left behind.
+              api.setupDone().finally(() => navigate({ to: "/" }));
+            }}
+          />
+        )}
       </div>
     </div>
   );

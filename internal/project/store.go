@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"sync"
@@ -221,6 +222,16 @@ func (s *Store) save() error {
 	sort.Slice(f.Projects, func(i, j int) bool { return f.Projects[i].ID < f.Projects[j].ID })
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
+		return err
+	}
+	// MkdirAll first (like credstore): the cached store can outlive its dir if
+	// the users tree is scrubbed under a running server; warn when we actually
+	// had to recreate it (a silent 200 would mask an unmounted state dir).
+	dir := filepath.Dir(s.path)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		slog.Warn("metadata dir missing — recreating (users tree scrubbed under a running server?)", "path", dir)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	// Atomic + durable: fsync the temp file before rename so a power cut

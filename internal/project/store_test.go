@@ -90,3 +90,29 @@ func TestListNewestFirst(t *testing.T) {
 		t.Errorf("List order wrong: %+v", list)
 	}
 }
+
+// A cached project Store must survive its metadata dir being scrubbed under a
+// running server (see internal/httpapi/profile_test.go for the shared cause):
+// the next save recreates users/<user>/ instead of failing with ENOENT.
+func TestSaveRecreatesMissingDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "users", "ostling-simon")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	s, err := NewStore(filepath.Join(dir, "projects.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Add(Project{Name: "alpha"}); err != nil {
+		t.Fatalf("first Add (dir present): %v", err)
+	}
+	if err := os.RemoveAll(dir); err != nil { // the scrub, store still live
+		t.Fatalf("scrub: %v", err)
+	}
+	if _, err := s.Add(Project{Name: "beta"}); err != nil {
+		t.Fatalf("Add after the dir was scrubbed must recover, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "projects.json")); err != nil {
+		t.Fatalf("projects.json not persisted after recovery: %v", err)
+	}
+}

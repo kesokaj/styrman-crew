@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -58,5 +59,31 @@ func TestStoreLifecycle(t *testing.T) {
 	}
 	if got := s2.List("alpha"); len(got) != 0 {
 		t.Errorf("DeleteProject left %d records", len(got))
+	}
+}
+
+// A cached terminal Store must survive its metadata dir being scrubbed under a
+// running server (shared cause with the project/profile stores): the next save
+// recreates users/<user>/ instead of failing with ENOENT.
+func TestSaveRecreatesMissingDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "users", "ostling-simon")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	s, err := NewStore(filepath.Join(dir, "conversations.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create("alpha", ""); err != nil {
+		t.Fatalf("first Create (dir present): %v", err)
+	}
+	if err := os.RemoveAll(dir); err != nil { // the scrub, store still live
+		t.Fatalf("scrub: %v", err)
+	}
+	if _, err := s.Create("alpha", ""); err != nil {
+		t.Fatalf("Create after the dir was scrubbed must recover, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "conversations.json")); err != nil {
+		t.Fatalf("conversations.json not persisted after recovery: %v", err)
 	}
 }

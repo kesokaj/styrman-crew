@@ -137,7 +137,9 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // ServeSetup attaches the hidden onboarding microVM running styrman-setup
 // (no project, not listed anywhere). Reconnects re-enter the same tmux
-// session; when the script's shell exits the client gets close 4000.
+// session; when styrman-setup exits the pane ends and the client gets close
+// 4000 — the frontend finalizes setup and tears the VM down on that signal,
+// so the VM auto-closes on completion instead of idling at a shell prompt.
 func (b *Bridge) ServeSetup(w http.ResponseWriter, r *http.Request) {
 	user := identity.FromContext(r.Context()).Username
 	guest := b.guestFor(user)
@@ -154,8 +156,11 @@ func (b *Bridge) ServeSetup(w http.ResponseWriter, r *http.Request) {
 		key:         user + "/system/setup",
 		tmuxName:    "styrman-setup",
 		workdir:     "/home/" + guest,
-		paneCmd:     "bash -lc 'styrman-setup; exec bash -l'",
-		project:     "", // system VM: no idle tracking
+		// No trailing `exec bash -l`: styrman-setup is a guided one-shot, so
+		// when it exits the pane should end (→ close 4000 → frontend finalizes)
+		// rather than drop the user into an idle interactive shell.
+		paneCmd: "bash -lc 'styrman-setup'",
+		project: "", // system VM: no idle tracking
 	})
 }
 
