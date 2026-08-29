@@ -19,6 +19,43 @@ type ExecSpec struct {
 	WorkDir string
 }
 
+// maxExecOutput bounds how much of a non-interactive guest command's output we
+// hold in memory. The guest is untrusted and root inside its own VM, so it
+// controls the size of everything styrman execs there; without a cap one
+// project could OOM the whole shared server (H4/H7). 2 MiB comfortably covers
+// readiness probes, tmux bookkeeping, git status/diff, and the stats script.
+const maxExecOutput = 2 << 20
+
+// cappedBuffer accumulates up to max bytes, then keeps "accepting" writes but
+// discards them — so a hostile guest's output is bounded in memory yet still
+// fully drained, letting the command complete and its exit code be read.
+type cappedBuffer struct {
+	buf       bytes.Buffer
+	max       int
+	truncated bool
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if room := c.max - c.buf.Len(); room > 0 {
+		if room >= len(p) {
+			c.buf.Write(p)
+		} else {
+			c.buf.Write(p[:room])
+			c.truncated = true
+		}
+	} else {
+		c.truncated = true
+	}
+	return len(p), nil // always accept so StdCopy keeps draining the guest
+}
+
+func (c *cappedBuffer) String() string {
+	if c.truncated {
+		return c.buf.String() + "\n… (truncated)"
+	}
+	return c.buf.String()
+}
+
 // Exec runs a non-interactive command and returns its exit code and combined
 // output. Used for readiness probes and tmux session management.
 func (o *Orchestrator) Exec(ctx context.Context, containerID string, spec ExecSpec) (int, string, error) {
@@ -39,7 +76,7 @@ func (o *Orchestrator) Exec(ctx context.Context, containerID string, spec ExecSp
 	}
 	defer att.Close()
 
-	var buf bytes.Buffer
+	buf := &cappedBuffer{max: maxExecOutput}
 	// Non-TTY exec streams are multiplexed; demux stdout+stderr together.
 	// The Docker hijack has no ctx watchdog, so a wedged guest command would
 	// block StdCopy (and leak this goroutine + the hijacked conn) forever.
@@ -47,7 +84,7 @@ func (o *Orchestrator) Exec(ctx context.Context, containerID string, spec ExecSp
 	// then unblocks the reader.
 	copyDone := make(chan struct{})
 	go func() {
-		_, _ = stdcopy.StdCopy(&buf, &buf, att.Reader)
+		_, _ = stdcopy.StdCopy(buf, buf, att.Reader)
 		close(copyDone)
 	}()
 	select {

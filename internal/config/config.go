@@ -158,6 +158,19 @@ func Load() (*Config, error) {
 	if c.AuthMode == "none" && !isLoopbackAddr(c.Addr) {
 		return nil, fmt.Errorf("STYRMAN_AUTH=none requires STYRMAN_ADDR to be loopback (got %q) — it has no authentication", c.Addr)
 	}
+	// Auth mode must be exactly one we handle; a typo must fail closed, never
+	// silently fall through to an unguarded path (M16).
+	if c.AuthMode != "none" && c.AuthMode != "header" {
+		return nil, fmt.Errorf("STYRMAN_AUTH=%q is invalid — must be \"none\" or \"header\"", c.AuthMode)
+	}
+	// Header mode authenticates requests by the shared ingress token; an empty
+	// token makes the server trust a raw client-supplied X-Caddy-Email from
+	// anyone who can reach it on a project bridge — full impersonation, admin
+	// included. Refuse to start without one (H2), the same fail-closed
+	// discipline already applied to the dev listener above.
+	if c.AuthMode == "header" && c.IngressToken == "" {
+		return nil, fmt.Errorf("STYRMAN_AUTH=header requires STYRMAN_INGRESS_TOKEN to be set — an empty token lets any project VM spoof identity headers")
+	}
 	// The shared home's owner is authoritative for the in-guest uid/gid.
 	if st, err := os.Stat(c.HomeDir); err == nil {
 		if sys, ok := st.Sys().(*syscall.Stat_t); ok {

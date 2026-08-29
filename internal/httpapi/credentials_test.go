@@ -21,7 +21,7 @@ import (
 func routesWithCreds(t *testing.T) http.Handler {
 	t.Helper()
 	dir := t.TempDir()
-	cfg := &config.Config{StateDir: dir, HomesDir: filepath.Join(dir, "homes"), Username: "tester"}
+	cfg := &config.Config{StateDir: dir, HomesDir: filepath.Join(dir, "homes"), Username: "tester", AuthMode: "none"}
 	logger := slog.New(slog.DiscardHandler)
 	users, err := userstore.New(filepath.Join(dir, "users.json"), nil)
 	if err != nil {

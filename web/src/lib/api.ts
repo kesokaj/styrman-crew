@@ -106,20 +106,6 @@ export interface HistoryMatch {
   title?: string;
 }
 
-export interface Diff {
-  repo: boolean;
-  branch?: string;
-  status?: string;
-  diff?: string;
-}
-
-/** A whole-tree snapshot stored under refs/styrman/* — never on branches. */
-export interface Checkpoint {
-  id: string;
-  time: string;
-  subject: string;
-}
-
 export interface PortInfo {
   port: number;
   process?: string;
@@ -391,8 +377,6 @@ export const api = {
     request<{ id: string; text: string }>(
       `/api/projects/${project}/history/${id}${bytes ? `?bytes=${bytes}` : ""}`,
     ),
-  diff: (project: string) => request<Diff>(`/api/projects/${project}/diff`),
-
   // Git side panel (real git client; runs in the guest VM).
   gitStatus: (project: string) =>
     request<GitStatus>(`/api/projects/${project}/git/status`),
@@ -434,20 +418,6 @@ export const api = {
       method: "POST",
     }),
 
-  listCheckpoints: (project: string) =>
-    request<{ checkpoints: Checkpoint[] }>(
-      `/api/projects/${project}/checkpoints`,
-    ),
-  createCheckpoint: (project: string, label?: string) =>
-    request<{ id: string; created: boolean }>(
-      `/api/projects/${project}/checkpoints`,
-      { method: "POST", body: JSON.stringify({ label: label ?? "" }) },
-    ),
-  restoreCheckpoint: (project: string, id: string) =>
-    request<{ restored: string; safetyId: string }>(
-      `/api/projects/${project}/checkpoints/${id}/restore`,
-      { method: "POST" },
-    ),
 
   settings: () => request<Settings>("/api/settings"),
   tools: () => request<{ tools: ToolInfo[] }>("/api/settings/tools"),

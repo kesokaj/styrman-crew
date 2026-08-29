@@ -121,38 +121,85 @@ else
     log "daemon.json already correct — not restarting docker"
 fi
 
-# ─── 3b. Project→host + project→LAN isolation (R12, ADR-029) ────────────────
+# ─── 3b. Project→host + project→LAN isolation (R12, ADR-029/036) ────────────
 # A project microVM must reach the INTERNET but nothing private: not the host,
-# not the LAN, not other projects, not cloud metadata. Two paths guard this:
-#   INPUT       — traffic addressed to the host itself (its gateway IS the host).
-#   DOCKER-USER — traffic ROUTED onward (FORWARD) to a private network; runs
-#                 first in FORWARD and survives Docker restarts.
-# Both match `-i sdb-+`, the bridge INTERFACE name — styrman names project
-# bridges sdb-<hash> (config.BridgeNameFor) precisely so this matches; Docker's
-# default br-<hash> names would slip past it (the 2026-08-29 leak: full host +
-# LAN reachable). Return traffic (into the bridge, -o sdb-+) and the port-preview
-# proxy (server→project) are unaffected; the broker is same-bridge L2.
+# not the LAN, not other projects, not cloud metadata. Two paths guard this,
+# both keyed on the bridge INTERFACE `-i sdb-+` — styrman names project bridges
+# sdb-<hash> (config.BridgeNameFor) precisely so this matches; Docker's default
+# br-<hash> names would slip past it (the 2026-08-29 leak: full host + LAN).
+#   INPUT       → STYRMAN-IN  : traffic addressed to the host itself.
+#   DOCKER-USER → STYRMAN-FWD : traffic ROUTED onward; runs first in FORWARD.
+# The wildcard lives only on the chain JUMPS; the drop/return logic sits in
+# dedicated chains so the self-heal timer can re-apply everything by
+# INSERT-IF-MISSING and never delete a live rule — no window where isolation is
+# briefly absent (the old delete-then-insert had one every 60s). A physdev
+# RETURN exempts genuinely same-bridge L2 traffic so a project keeps reaching
+# the credential broker + port-preview proxy on its OWN bridge (both are the
+# server's IPs there); with bridge-nf-call-iptables=1 that traffic DOES traverse
+# DOCKER-USER, so without the exemption the broker is silently dropped (the
+# 2026-08-29 creds-broken regression).
 cat > /usr/local/sbin/styrman-firewall.sh <<'FWEOF'
 #!/usr/bin/env bash
-# Project microVMs (bridges sdb-*) reach the internet but NOT the host, the LAN,
-# other projects, or cloud metadata (R12/ADR-029). Idempotent via delete-then-
-# insert: iptables-nft's `-C` check is unreliable with the `sdb-+` wildcard (it
-# can report a missing rule as present), so we never rely on it. Safe to re-run,
-# which the self-heal timer does every 60s.
+# Keep project microVMs (bridges sdb-*) isolated from host / LAN / other projects
+# / cloud metadata while leaving the internet AND the same-bridge broker + proxy
+# reachable (R12, ADR-029/036). Self-heal-safe: every rule is INSERT-IF-MISSING,
+# never delete-then-insert, so the 60s timer re-runs open no unprotected window.
+# The `-i sdb-+` wildcard appears only on the chain jumps (matched textually via
+# -S, which renders it stably); the chains' own rules carry no wildcard, so `-C`
+# is reliable for them.
 set -eu
-add() {  # chain, then rule spec — delete any existing copy, then (re)insert.
-    local chain="$1"; shift
-    iptables -D "$chain" "$@" 2>/dev/null || true
-    iptables -I "$chain" "$@"
+
+modprobe xt_physdev 2>/dev/null || true   # same-bridge exemption below needs it
+
+ip4="$(command -v iptables)"
+ensure_chain() { "$ip4" -nL "$1" >/dev/null 2>&1 || "$ip4" -N "$1"; }
+ensure_rule()  { local c="$1"; shift; "$ip4" -C "$c" "$@" 2>/dev/null || "$ip4" -A "$c" "$@"; }
+ensure_jump()  { # parent iface target — textual presence test is wildcard-safe
+    "$ip4" -S "$1" 2>/dev/null | grep -qF -- "-i $2 -j $3" || "$ip4" -I "$1" -i "$2" -j "$3"
 }
-# Host itself (INPUT), then private networks + link-local/metadata routed onward
-# (FORWARD via DOCKER-USER). 172.16/12 also covers other project/system bridges
-# (cross-project isolation); a project's own bridge + broker are same-subnet L2,
-# never routed, so allowed.
-add INPUT -i sdb-+ -j DROP
+
+# One-time migration off the pre-chain direct rules from earlier versions.
+"$ip4" -D INPUT -i sdb-+ -j DROP 2>/dev/null || true
 for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
-    add DOCKER-USER -i sdb-+ -d "$net" -j DROP
+    "$ip4" -D DOCKER-USER -i sdb-+ -d "$net" -j DROP 2>/dev/null || true
 done
+
+# Host itself: a project bridge may send it nothing.
+ensure_chain STYRMAN-IN
+ensure_rule  STYRMAN-IN -j DROP
+ensure_jump  INPUT sdb-+ STYRMAN-IN
+
+# Routed egress: RETURN genuinely same-bridge L2 first (broker + proxy on the
+# project's OWN bridge), then drop every private range. Other projects live in
+# 172.16/12 too, so cross-project stays blocked; public internet falls through.
+ensure_chain STYRMAN-FWD
+ensure_rule  STYRMAN-FWD -m physdev --physdev-is-bridged -j RETURN 2>/dev/null \
+    || echo "styrman-firewall: WARN xt_physdev unavailable — broker may be blocked" >&2
+for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
+    ensure_rule STYRMAN-FWD -d "$net" -j DROP
+done
+ensure_jump  DOCKER-USER sdb-+ STYRMAN-FWD
+
+# IPv6: this isolation is IPv4. Don't silently rely on the host's ipv6.disable
+# boot flag — turn IPv6 off on each project bridge, and best-effort mirror the
+# drops so a future IPv6-enabled bridge cannot bypass isolation.
+for ifp in /sys/class/net/sdb-*; do
+    [ -e "$ifp" ] || continue
+    sysctl -qw "net.ipv6.conf.${ifp##*/}.disable_ipv6=1" 2>/dev/null || true
+done
+if command -v ip6tables >/dev/null 2>&1; then
+    ip6="$(command -v ip6tables)"
+    "$ip6" -nL STYRMAN-IN6 >/dev/null 2>&1 || "$ip6" -N STYRMAN-IN6 2>/dev/null || true
+    "$ip6" -C STYRMAN-IN6 -j DROP 2>/dev/null || "$ip6" -A STYRMAN-IN6 -j DROP 2>/dev/null || true
+    "$ip6" -S INPUT 2>/dev/null | grep -qF -- "-i sdb-+ -j STYRMAN-IN6" \
+        || "$ip6" -I INPUT -i sdb-+ -j STYRMAN-IN6 2>/dev/null || true
+    "$ip6" -nL STYRMAN-FWD6 >/dev/null 2>&1 || "$ip6" -N STYRMAN-FWD6 2>/dev/null || true
+    for net6 in fc00::/7 fe80::/10; do
+        "$ip6" -C STYRMAN-FWD6 -d "$net6" -j DROP 2>/dev/null || "$ip6" -A STYRMAN-FWD6 -d "$net6" -j DROP 2>/dev/null || true
+    done
+    "$ip6" -S FORWARD 2>/dev/null | grep -qF -- "-i sdb-+ -j STYRMAN-FWD6" \
+        || "$ip6" -I FORWARD -i sdb-+ -j STYRMAN-FWD6 2>/dev/null || true
+fi
 FWEOF
 chmod 0755 /usr/local/sbin/styrman-firewall.sh
 cat > /etc/systemd/system/styrman-firewall.service <<'EOF'

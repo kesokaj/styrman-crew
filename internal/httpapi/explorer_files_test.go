@@ -247,7 +247,7 @@ func TestFileDeleteSymlinkEscape(t *testing.T) {
 func testRoutesWithDir(t *testing.T) (http.Handler, string) {
 	t.Helper()
 	dir := t.TempDir()
-	cfg := &config.Config{StateDir: dir, HomesDir: filepath.Join(dir, "homes"), Username: "tester"}
+	cfg := &config.Config{StateDir: dir, HomesDir: filepath.Join(dir, "homes"), Username: "tester", AuthMode: "none"}
 	logger := slog.New(slog.DiscardHandler)
 	users, err := userstore.New(filepath.Join(dir, "users.json"), nil)
 	if err != nil {

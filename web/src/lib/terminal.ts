@@ -114,7 +114,21 @@ export function createTerminal(
   const search = new SearchAddon();
   term.loadAddon(fit);
   term.loadAddon(search);
-  term.loadAddon(new ClipboardAddon());
+  // OSC 52 clipboard, WRITE-ONLY. The default provider also implements read,
+  // so a `\x1b]52;c;?` query from the (untrusted) guest would exfiltrate the
+  // user's system clipboard — passwords, tokens copied from the credential
+  // viewer — into the PTY. Deny read (return empty); allow write only for the
+  // system selection so TUIs (tmux/vim yank) can still copy (H8).
+  term.loadAddon(
+    new ClipboardAddon(undefined, {
+      readText: () => "",
+      writeText: (selection: string, text: string) =>
+        selection === "c" &&
+        typeof navigator.clipboard?.writeText === "function"
+          ? navigator.clipboard.writeText(text)
+          : Promise.resolve(),
+    }),
+  );
   term.loadAddon(new Unicode11Addon());
   term.unicode.activeVersion = "11";
   term.loadAddon(
@@ -352,23 +366,28 @@ export function createTerminal(
     if (ev.type !== "keydown") return true;
     if (!(ev.ctrlKey || ev.metaKey)) return true;
     if (ev.code === "KeyC") {
-      // Ctrl+C MUST interrupt (SIGINT). A lingering copy-on-select highlight let
-      // the BROWSER copy and swallow the keydown, so ^C never reached the shell
-      // (couldn't kill e.g. ping). Send ETX (\x03) ourselves and preventDefault
-      // so nothing — browser or xterm default — can intercept it. Copy-on-select
-      // already puts selections on the clipboard; only Cmd+C (metaKey) copies.
+      // Ctrl+Shift+C copies the selection (terminals reserve plain Ctrl+C for
+      // SIGINT); Cmd+C (metaKey) copies too. Copy-on-select already mirrors
+      // selections to the clipboard, so this is the explicit path.
+      if ((ev.ctrlKey && ev.shiftKey) || (ev.metaKey && !ev.ctrlKey)) {
+        if (!term.hasSelection()) return true;
+        if (typeof navigator.clipboard?.writeText !== "function") return true;
+        ev.preventDefault();
+        copyText(term.getSelection());
+        term.clearSelection();
+        return false;
+      }
+      // Plain Ctrl+C MUST interrupt (SIGINT). A lingering copy-on-select
+      // highlight let the BROWSER copy and swallow the keydown, so ^C never
+      // reached the shell (couldn't kill e.g. ping). Send ETX (\x03) ourselves
+      // and preventDefault so nothing — browser or xterm default — intercepts.
       if (ev.ctrlKey && !ev.altKey) {
         ev.preventDefault();
         term.input("\x03");
         if (term.hasSelection()) term.clearSelection();
         return false;
       }
-      if (!term.hasSelection()) return true;
-      if (typeof navigator.clipboard?.writeText !== "function") return true;
-      ev.preventDefault();
-      copyText(term.getSelection());
-      term.clearSelection();
-      return false;
+      return true;
     }
     if (ev.code === "KeyV") {
       if (typeof navigator.clipboard?.readText !== "function") return true;

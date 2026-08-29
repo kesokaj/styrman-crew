@@ -156,6 +156,9 @@ func parseGitStatus(out string, v *gitStatusView) {
 			gf.OrigPath = orig
 			v.Files = append(v.Files, gf)
 		case '?': // untracked: ? <path>
+			if len(line) < 3 { // a hostile/garbled "?" line must not panic line[2:]
+				continue
+			}
 			v.Files = append(v.Files, gitFile{
 				Path: strings.TrimSpace(line[2:]), Unstaged: "?", Untracked: true,
 			})

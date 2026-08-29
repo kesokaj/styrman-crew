@@ -82,9 +82,15 @@ func (s *Server) authGuard(mode string, next http.Handler) http.Handler {
 				Admin:      s.users.IsAdmin(email),
 				Authorized: true,
 			}
-		} else {
+		} else if mode == "none" {
 			email, username := s.cfg.DefaultUser()
 			u = identity.User{Email: email, Username: username, Admin: true, Authorized: true}
+		} else {
+			// Unknown mode — fail closed. config.Load already rejects anything
+			// but "none"/"header" (M16); this is the defense-in-depth backstop so
+			// a future mode can never default to the admin dev-door.
+			writeErr(w, http.StatusUnauthorized, fmt.Errorf("server auth misconfigured"))
+			return
 		}
 		next.ServeHTTP(w, identity.WithUser(r, u))
 	})

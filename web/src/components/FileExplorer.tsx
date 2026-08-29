@@ -406,8 +406,8 @@ export function FileExplorer({
           title={`Delete “${dialog.entry.name}”?`}
           body={
             dialog.entry.dir
-              ? "The folder and everything inside it are deleted. This cannot be undone from here (checkpoints may still hold it)."
-              : "This cannot be undone from here (checkpoints may still hold it)."
+              ? "The folder and everything inside it are deleted. This cannot be undone from here — commit first if you want it recoverable."
+              : "This cannot be undone from here — commit first if you want it recoverable."
           }
           confirmLabel="Delete"
           danger

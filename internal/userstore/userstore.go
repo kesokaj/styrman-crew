@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kesokaj/styrman-crew/internal/identity"
 )
 
 // UserEntry is one stored user.
@@ -43,24 +45,63 @@ func New(path string, envEmails []string) (*Store, error) {
 			s.envUsers[e] = true
 		}
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return s, nil
+	if data, err := os.ReadFile(path); err == nil {
+		var f usersFile
+		if err := json.Unmarshal(data, &f); err != nil {
+			return nil, fmt.Errorf("parse %s: %w", path, err)
 		}
+		for _, u := range f.Users {
+			if e := normalize(u.Email); e != "" {
+				u.Email = e
+				s.users[e] = u
+			}
+		}
+	} else if !os.IsNotExist(err) {
 		return nil, err
 	}
-	var f usersFile
-	if err := json.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
-	}
-	for _, u := range f.Users {
-		if e := normalize(u.Email); e != "" {
-			u.Email = e
-			s.users[e] = u
+	// Isolation keys on DeriveUsername (per-user homes, state, and brokered
+	// credentials), so two authorized emails that slug to the same username
+	// would share one workspace — see and delete each other's projects, files,
+	// and secrets (H3). Refuse to start rather than silently merge them; the
+	// operator curates a small allowlist, so this is a config error to fix.
+	seen := map[string]string{}
+	for _, e := range s.authorizedEmails() {
+		slug := identity.DeriveUsername(e)
+		if prev, ok := seen[slug]; ok && prev != e {
+			return nil, fmt.Errorf("users %q and %q both map to username %q — pick distinct emails (per-user isolation keys on the username)", prev, e, slug)
 		}
+		seen[slug] = e
 	}
 	return s, nil
+}
+
+// authorizedEmails returns every authorized email (env + stored), deduped.
+// Caller need not hold s.mu during New; use List() elsewhere.
+func (s *Store) authorizedEmails() []string {
+	set := map[string]bool{}
+	for e := range s.envUsers {
+		set[e] = true
+	}
+	for e := range s.users {
+		set[e] = true
+	}
+	out := make([]string, 0, len(set))
+	for e := range set {
+		out = append(out, e)
+	}
+	return out
+}
+
+// slugCollision returns an already-authorized email (other than `email`) whose
+// DeriveUsername slug equals email's, or "" if none. Caller holds s.mu.
+func (s *Store) slugCollision(email string) string {
+	slug := identity.DeriveUsername(email)
+	for _, e := range s.authorizedEmails() {
+		if e != email && identity.DeriveUsername(e) == slug {
+			return e
+		}
+	}
+	return ""
 }
 
 // IsAdmin reports whether email is an environment-provided administrator
@@ -95,6 +136,11 @@ func (s *Store) Add(email, addedBy string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Reject an email that would share a username slug with an already-authorized
+	// one — it would collapse the two into a single shared workspace (H3).
+	if c := s.slugCollision(e); c != "" {
+		return fmt.Errorf("email %q maps to the same username %q as already-authorized %q — pick a different address", e, identity.DeriveUsername(e), c)
+	}
 	s.users[e] = UserEntry{Email: e, AddedBy: addedBy, AddedAt: time.Now().UTC()}
 	return s.save()
 }

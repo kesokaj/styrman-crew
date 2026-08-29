@@ -296,8 +296,10 @@ func (s *Server) harvestCredentials(ctx context.Context, user, containerID, gues
 func (s *Server) guestOut(ctx context.Context, containerID, guest, script string) (string, bool) {
 	code, out, err := s.orch.Exec(ctx, containerID, orchestrator.ExecSpec{
 		User: guest,
-		Env:  []string{"HOME=/home/" + guest, "USER=" + guest},
-		Cmd:  []string{"bash", "-lc", script},
+		// Skip the pull-on-login overwrite for this shell so a harvest reads the
+		// guest's REAL current files, not the broker's stale copy (H6).
+		Env: []string{"HOME=/home/" + guest, "USER=" + guest, "STYRMAN_SKIP_CRED_PULL=1"},
+		Cmd: []string{"bash", "-lc", script},
 	})
 	if err != nil || code != 0 {
 		return "", false

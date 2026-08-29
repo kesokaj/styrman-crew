@@ -385,22 +385,6 @@ func (s *Server) readHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": r.PathValue("id"), "text": text})
 }
 
-func (s *Server) projectDiff(w http.ResponseWriter, r *http.Request) {
-	u, _, p, err := s.getProjectFor(r)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, err)
-		return
-	}
-	// Server-controlled per-project path (ADR-027) — see workspacePath.
-	ws := s.workspacePath(u.Username, p)
-	d, err := history.GitDiff(ws)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, d)
-}
-
 // settings reports everything the settings page shows.
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	u, _, err := s.who(r)

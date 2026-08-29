@@ -266,15 +266,12 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("POST /api/projects/{project}/home/mkdir", s.makeDir)
 	mux.HandleFunc("POST /api/projects/{project}/home/upload", s.uploadFile)
 	mux.HandleFunc("GET /api/projects/{project}/home/download", s.downloadFile)
-	// What happened: terminal transcripts + working-tree diff.
+	// What happened: terminal transcripts. (The working-tree diff + checkpoint
+	// endpoints were removed — the git side panel runs in-guest via git.go, and
+	// the host-side git they used was a guest→server RCE vector; ADR-035/037.)
 	mux.HandleFunc("GET /api/projects/{project}/history", s.listHistory)
 	mux.HandleFunc("GET /api/projects/{project}/history/search", s.searchHistory)
 	mux.HandleFunc("GET /api/projects/{project}/history/{id}", s.readHistory)
-	mux.HandleFunc("GET /api/projects/{project}/diff", s.projectDiff)
-	// Checkpoints: whole-tree snapshots under refs/styrman/* (R13).
-	mux.HandleFunc("GET /api/projects/{project}/checkpoints", s.listCheckpoints)
-	mux.HandleFunc("POST /api/projects/{project}/checkpoints", s.createCheckpoint)
-	mux.HandleFunc("POST /api/projects/{project}/checkpoints/{id}/restore", s.restoreCheckpoint)
 	// Settings + admin.
 	mux.HandleFunc("GET /api/notifications", s.listNotifications)
 	mux.HandleFunc("GET /api/settings", s.settings)

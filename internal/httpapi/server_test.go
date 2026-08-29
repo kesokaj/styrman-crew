@@ -18,7 +18,7 @@ import (
 func testRoutes(t *testing.T) http.Handler {
 	t.Helper()
 	dir := t.TempDir()
-	cfg := &config.Config{StateDir: dir, HomesDir: filepath.Join(dir, "homes"), Username: "tester"}
+	cfg := &config.Config{StateDir: dir, HomesDir: filepath.Join(dir, "homes"), Username: "tester", AuthMode: "none"}
 	logger := slog.New(slog.DiscardHandler)
 	users, err := userstore.New(filepath.Join(dir, "users.json"), nil)
 	if err != nil {
@@ -84,7 +84,7 @@ func TestRouting(t *testing.T) {
 
 func TestAuthGuard(t *testing.T) {
 	dir := t.TempDir()
-	cfg := &config.Config{StateDir: dir, HomesDir: filepath.Join(dir, "homes"), Username: "tester"}
+	cfg := &config.Config{StateDir: dir, HomesDir: filepath.Join(dir, "homes"), Username: "tester", AuthMode: "none"}
 	users, err := userstore.New(filepath.Join(dir, "users.json"), []string{"me@example.com"})
 	if err != nil {
 		t.Fatal(err)

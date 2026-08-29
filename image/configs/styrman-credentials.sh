@@ -10,6 +10,12 @@
 # Quiet and fast: no broker (host-mode dev) or any hiccup → do nothing. The
 # broker URL is the fixed per-bridge address in $STYRMAN_CRED_BROKER.
 
+# A styrman credential harvest/import ("Import from project") reads the guest's
+# REAL current files; it sets STYRMAN_SKIP_CRED_PULL so this shell does NOT
+# overwrite them with the broker's copy first, which would both make the import
+# read back a stale value and clobber a token the user just re-authed (H6).
+[ -z "${STYRMAN_SKIP_CRED_PULL:-}" ] || return 0 2>/dev/null || exit 0
+
 [ -n "${STYRMAN_CRED_BROKER:-}" ] || return 0 2>/dev/null || exit 0
 command -v curl >/dev/null 2>&1 || return 0 2>/dev/null || exit 0
 

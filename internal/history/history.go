@@ -1,7 +1,6 @@
 // Package history exposes what happened in a project: transcripts of every
 // terminal session (captured by tmux pipe-pane inside the microVM, written
-// into the project's own home so they outlive containers, ADR-031) and the
-// project's current git diff.
+// into the project's own home so they outlive containers, ADR-031).
 package history
 
 import (
@@ -9,14 +8,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 )
 
 // logsRel is the transcript directory relative to the user home, matching
@@ -229,55 +225,4 @@ func Read(homeDir, project, id string, maxBytes int64) (string, error) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")
 	text = strings.ReplaceAll(text, "\r", "\n")
 	return text, nil
-}
-
-// Diff describes the project's working-tree state.
-type Diff struct {
-	Repo   bool   `json:"repo"`
-	Branch string `json:"branch,omitempty"`
-	Status string `json:"status,omitempty"`
-	Diff   string `json:"diff,omitempty"`
-}
-
-// GitDiff runs git in the project's workspace on the host (the workspace
-// is mounted, so this works whether or not the microVM is running).
-func GitDiff(workspace string) (*Diff, error) {
-	if _, err := os.Stat(filepath.Join(workspace, ".git")); err != nil {
-		return &Diff{Repo: false}, nil
-	}
-	run := func(args ...string) (string, error) {
-		cmd := exec.Command("git", append([]string{"-C", workspace}, args...)...)
-		// Containers see a foreign uid on some mounts; git refuses those
-		// without this. The path is ours by construction.
-		cmd.Env = append(os.Environ(), "GIT_CONFIG_COUNT=1",
-			"GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=*")
-		out, err := cmd.Output()
-		return string(out), err
-	}
-	// `git status` works even on an unborn HEAD (a fresh R13 repo), so it's the
-	// reliable repo-health check — a failure here is a genuinely broken repo,
-	// not an empty one, and must not silently render as a clean diff (N26).
-	status, err := run("status", "--short", "--branch")
-	if err != nil {
-		return nil, fmt.Errorf("git status failed (broken repo?): %w", err)
-	}
-	branch, _ := run("rev-parse", "--abbrev-ref", "HEAD") // fails on unborn HEAD; fine
-	stat, _ := run("diff", "--stat", "HEAD")
-	d := &Diff{
-		Repo:   true,
-		Branch: strings.TrimSpace(branch),
-		Status: status,
-		Diff:   stat,
-	}
-	if full, _ := run("diff", "HEAD"); full != "" {
-		if len(full) > 256<<10 {
-			cut := 256 << 10
-			for cut > 0 && !utf8.RuneStart(full[cut]) {
-				cut-- // never split a multi-byte rune (audit nit)
-			}
-			full = full[:cut] + "\n… (truncated)"
-		}
-		d.Diff += "\n" + full
-	}
-	return d, nil
 }
