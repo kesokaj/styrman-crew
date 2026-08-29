@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { api, tryUI, type CredItem, type ToolInfo } from "../lib/api";
+import { api, tryUI, type CredItem } from "../lib/api";
 import { usePolled, useTheme, type ThemePref } from "../lib/hooks";
 import { toast } from "../lib/toast";
 
@@ -39,59 +39,6 @@ function Section({
         {children}
       </div>
     </section>
-  );
-}
-
-function ToolCard({ tool }: { tool: ToolInfo }) {
-  const chips = (label: string, items?: string[]) =>
-    items && items.length > 0 ? (
-      <div className="mt-1">
-        <span className="text-[10px] uppercase tracking-wide text-text-dim">
-          {label}
-        </span>
-        <div className="mt-0.5 flex flex-wrap gap-1">
-          {items.map((i) => (
-            <span
-              key={i}
-              className="rounded bg-bg px-1.5 py-0.5 text-[10px] text-text-dim"
-            >
-              {i}
-            </span>
-          ))}
-        </div>
-      </div>
-    ) : null;
-
-  return (
-    <div className="mb-3 rounded-lg border border-border bg-bg-raised p-3">
-      <div className="flex items-center gap-2">
-        <span
-          className={`h-2 w-2 rounded-full ${tool.ready ? "bg-ok" : "bg-border"}`}
-        />
-        <span className="font-medium">{tool.name}</span>
-        <span className="text-[11px] text-text-dim">
-          {tool.ready
-            ? "configured"
-            : "not set up — run styrman-setup in a terminal"}
-        </span>
-        {tool.configDir && (
-          <span className="ml-auto font-mono text-[10px] text-text-dim">
-            {tool.configDir}
-          </span>
-        )}
-      </div>
-      {tool.details?.map((d) => (
-        <p
-          key={d}
-          className="mt-1 break-all font-mono text-[10px] text-text-dim"
-        >
-          {d}
-        </p>
-      ))}
-      {chips("skills", tool.skills)}
-      {chips("subagents", tool.agents)}
-      {chips("commands", tool.commands)}
-    </div>
   );
 }
 
@@ -158,8 +105,12 @@ function TerminalUsername({
  *  project — new ones included — is current with no re-auth. */
 function CredentialsSection() {
   const { data, refresh } = usePolled(() => api.credentials(), 20000);
+  const { data: st } = usePolled(() => api.setupStatus(), 20000);
+  const { data: toolData } = usePolled(() => api.tools(), 20000);
   const { data: projData } = usePolled(() => api.listProjects(), 15000);
-  const running = (projData?.projects ?? []).filter((p) => p.state === "running");
+  const running = (projData?.projects ?? []).filter(
+    (p) => p.state === "running",
+  );
   const [importFrom, setImportFrom] = useState("");
   const [busy, setBusy] = useState(false);
   const [key, setKey] = useState("");
@@ -168,12 +119,6 @@ function CredentialsSection() {
 
   const items = data?.items ?? [];
   const brokerOff = data?.brokerEnabled === false;
-  const kindLabel: Record<string, string> = {
-    git: "git helper",
-    env: "shell var",
-    file: "file",
-    keyring: "keyring",
-  };
 
   if (brokerOff) {
     return (
@@ -211,39 +156,125 @@ function CredentialsSection() {
     }
   };
 
+  // Each standard tool/credential, mapped to its setup-status flag, its primary
+  // broker item (click to read), and a one-line detail. Status dot: GREEN =
+  // signed in AND synced to the broker, GREY = not set up, RED = signed in
+  // locally but not synced (a gap to fix by re-running setup / Import).
+  const find = (pred: (i: CredItem) => boolean) => items.find(pred);
+  const detailOf = (name: string) =>
+    (toolData?.tools ?? []).find((t) => t.name === name)?.details?.join("  ");
+  const std = [
+    {
+      label: "git",
+      set: !!st?.gitIdentity,
+      item: find((i) => i.kind === "git"),
+      synced: !!find((i) => i.name === "STYRMAN_GIT_NAME"),
+      detail: detailOf("git"),
+    },
+    {
+      label: "ssh",
+      set: !!st?.sshKey,
+      item: find((i) => i.id.startsWith("ssh-")),
+      synced: !!find((i) => i.id.startsWith("ssh-")),
+      detail: "~/.ssh/id_ed25519",
+    },
+    {
+      label: "github",
+      set: !!st?.github,
+      item: find((i) => i.name === "GH_TOKEN"),
+      synced: !!find((i) => i.name === "GH_TOKEN"),
+      detail: detailOf("github"),
+    },
+    {
+      label: "gcloud",
+      set: !!st?.gcloud,
+      item: find((i) => i.id === "gcloud-adc"),
+      synced: !!find((i) => i.id === "gcloud-adc"),
+      detail: "ADC (terraform + client libraries)",
+    },
+    {
+      label: "claude",
+      set: !!st?.claude,
+      item: find((i) => i.id === "claude-credentials"),
+      synced: !!find((i) => i.id === "claude-credentials"),
+      detail: "~/.claude",
+    },
+    {
+      label: "agy",
+      set: !!st?.agy,
+      item: find((i) => i.id === "agy-oauth-token"),
+      synced: !!find((i) => i.id === "agy-oauth-token"),
+      detail: "~/.gemini (Antigravity)",
+    },
+  ];
+  const stdEnv = new Set(["STYRMAN_GIT_NAME", "STYRMAN_GIT_EMAIL", "GH_TOKEN"]);
+  const custom = items.filter((i) => i.kind === "env" && !stdEnv.has(i.name));
+
+  const dotClass = (c: (typeof std)[number]) =>
+    !c.set ? "bg-border" : c.synced ? "bg-ok" : "bg-danger";
+  const dotTitle = (c: (typeof std)[number]) =>
+    !c.set
+      ? "not set up"
+      : c.synced
+        ? "signed in · synced to every project"
+        : "signed in locally but NOT synced — re-run setup or Import";
+
   return (
     <Section title="Credentials">
       <Row label="How it works">
         <span className="text-text-dim">
-          The broker keeps one live copy of each credential and delivers the
-          current one to every project — sign in once, no re-auth. Removing one
-          stops sharing it with new sessions; restart a project to clear a
-          token or file already materialized in it.
+          Sign in once during setup; the broker keeps one live copy of each and
+          delivers it to every project — no re-auth. Click any credential to
+          read it. Green = synced, grey = not set up, red = signed in but not
+          synced.
         </span>
       </Row>
-      <Row label={`Shared now${items.length ? ` (${items.length})` : ""}`}>
-        {items.length === 0 ? (
-          <span className="text-text-dim">
-            None yet — finish setup, or import from a project you've signed into.
-          </span>
+      <div className="border-b border-border py-1">
+        {std.map((c) => (
+          <div
+            key={c.label}
+            className="flex items-center gap-2 px-1 py-1 text-xs"
+          >
+            <span
+              className={`h-2 w-2 shrink-0 rounded-full ${dotClass(c)}`}
+              title={dotTitle(c)}
+            />
+            <button
+              onClick={() => c.item && setViewing(c.item)}
+              disabled={!c.item}
+              className="w-16 shrink-0 text-left font-medium enabled:hover:text-accent enabled:hover:underline disabled:cursor-default"
+              title={c.item ? "Click to read" : undefined}
+            >
+              {c.label}
+            </button>
+            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-dim">
+              {c.set ? (c.detail ?? "signed in") : "not set up"}
+            </span>
+            {c.set && !c.synced && (
+              <span className="shrink-0 text-[10px] text-danger">
+                not synced
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+      <Row
+        label={`Custom variables${custom.length ? ` (${custom.length})` : ""}`}
+      >
+        {custom.length === 0 ? (
+          <span className="text-text-dim">none yet</span>
         ) : (
           <div className="flex flex-col gap-1 py-1">
-            {items.map((it) => (
-              <div
-                key={`${it.kind}:${it.name}`}
-                className="group flex items-center gap-2"
-              >
+            {custom.map((it) => (
+              <div key={it.id} className="group flex items-center gap-2">
                 <span className="h-2 w-2 shrink-0 rounded-full bg-ok" />
                 <button
                   onClick={() => setViewing(it)}
                   className="min-w-0 truncate text-left font-mono hover:text-accent hover:underline"
-                  title="Click to read this credential"
+                  title="Click to read"
                 >
                   {it.name}
                 </button>
-                <span className="shrink-0 rounded bg-bg px-1.5 py-0.5 text-[10px] text-text-dim">
-                  {kindLabel[it.kind] ?? it.kind}
-                </span>
                 <button
                   onClick={() =>
                     tryUI(async () => {
@@ -287,8 +318,8 @@ function CredentialsSection() {
               {busy ? "Importing…" : "Import"}
             </button>
             <span className="text-[10px] text-text-dim">
-              optional — setup already auto-syncs; use this to refresh/add from a
-              project (gh · claude · gcloud · ssh · npm · agy)
+              optional — setup already auto-syncs; use this to refresh/add from
+              a project (gh · claude · gcloud · ssh · npm · agy)
             </span>
           </div>
         )}
@@ -326,8 +357,9 @@ function CredentialsSection() {
             </button>
           </div>
           <span className="text-[10px] text-text-dim">
-            Any custom env variable (e.g. NPM_TOKEN, DATABASE_URL) — exported as a
-            shell var in every project. Storing the same name again updates it.
+            Any custom env variable (e.g. NPM_TOKEN, DATABASE_URL) — exported as
+            a shell var in every project. Storing the same name again updates
+            it.
           </span>
         </div>
       </Row>
@@ -425,7 +457,6 @@ function CredViewer({
 function SettingsPage() {
   const navigate = useNavigate();
   const { data, refresh, error } = usePolled(() => api.settings(), 15000);
-  const { data: toolData } = usePolled(() => api.tools(), 20000);
   const { pref, setPref } = useTheme();
 
   // Surface a failed load instead of "Loading…" forever (audit finding).
@@ -479,13 +510,6 @@ function SettingsPage() {
             </button>
           </Row>
         </Section>
-
-        <h2 className="mb-1 text-[11px] font-medium uppercase tracking-wider text-text-dim">
-          Tools & credentials
-        </h2>
-        {(toolData?.tools ?? []).map((t) => (
-          <ToolCard key={t.name} tool={t} />
-        ))}
 
         <CredentialsSection />
 
