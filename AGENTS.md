@@ -24,6 +24,9 @@ go build ./cmd/styrman/
 
 # Test
 go test ./...
+# The vendored Caddy ingress is a SEPARATE Go module — the root `go test ./...`
+# does NOT cover it; run its (security-critical) tests explicitly:
+(cd deploy/caddy/ingress && go test ./...)
 
 # Lint
 go vet ./...

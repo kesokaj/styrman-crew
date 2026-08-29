@@ -14,6 +14,10 @@ services:
     command: caddy ingress
     network_mode: host # direct access to container IPs on the bridge networks
     volumes:
+      # NOTE: `:ro` only makes the socket FILE read-only — it does NOT restrict
+      # the Docker API. This container has FULL Docker API access (it reads
+      # container labels + IPs to generate the ingress config) and is trusted
+      # accordingly. It is internet-facing, so treat any RCE in it as host root.
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - caddy_data:/data
       - caddy_config:/config

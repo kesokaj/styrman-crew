@@ -157,9 +157,6 @@ func (w *Watcher) scanAndReload(ctx context.Context) error {
 	// Only reload if config changed
 	w.caddyfileMu.Lock()
 	changed := caddyfile != w.lastCaddyfile
-	if changed {
-		w.lastCaddyfile = caddyfile
-	}
 	w.caddyfileMu.Unlock()
 
 	if !changed {
@@ -168,7 +165,16 @@ func (w *Watcher) scanAndReload(ctx context.Context) error {
 	}
 
 	w.log.Info("caddyfile changed, reloading caddy")
-	return w.reloadCaddy(ctx, caddyfile)
+	if err := w.reloadCaddy(ctx, caddyfile); err != nil {
+		// Do NOT record this as the last-applied config: a failed reload must be
+		// retried on the next scan, not masked as "unchanged" — otherwise one
+		// bad reload wedges the ingress on the stale live config forever (M23).
+		return err
+	}
+	w.caddyfileMu.Lock()
+	w.lastCaddyfile = caddyfile
+	w.caddyfileMu.Unlock()
+	return nil
 }
 
 // discoverApps scans all running containers and returns those with caddy labels.

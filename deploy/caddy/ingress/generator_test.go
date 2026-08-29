@@ -60,7 +60,11 @@ func TestGenerateCaddyfile_PublicApp(t *testing.T) {
 	assertContains(t, result, "events 100")
 	assertNotContains(t, result, "authorize with")
 	assertContains(t, result, `X-Caddy-Role "public"`)
-	assertNotContains(t, result, "X-Caddy-Email")
+	// Public apps must STRIP client-supplied identity/ingress headers (M24), and
+	// must never SET a real identity (only the public role).
+	assertContains(t, result, "request_header -X-Caddy-Email")
+	assertContains(t, result, "request_header -X-Styrman-Ingress")
+	assertNotContains(t, result, `X-Caddy-Email "{`)
 
 	// No auth portal needed (all apps are public)
 	assertNotContains(t, result, "security {")

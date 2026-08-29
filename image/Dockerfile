@@ -36,7 +36,7 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 
 # Helm + OpenTofu + yq
 RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash && \
-    curl -fsSL https://get.opentofu.org/install-opentofu.sh | bash -s -- --install-method standalone --skip-verify && \
+    curl -fsSL https://get.opentofu.org/install-opentofu.sh | bash -s -- --install-method standalone && \
     curl -fsSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq && \
     chmod +x /usr/local/bin/yq
 

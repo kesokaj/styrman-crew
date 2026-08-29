@@ -63,13 +63,17 @@ if [[ ! -x /opt/kata/bin/kata-runtime ]]; then
     if [[ -z "${EXPECT}" ]]; then
         EXPECT=$(curl -fsSL "https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/kata-static-${KATA_VERSION}-amd64.tar.xz.sha256sum" 2>/dev/null | awk '{print $1}')
     fi
-    if [[ -n "${EXPECT}" ]]; then
-        ACTUAL=$(sha256sum "${KATA_TMP}" | awk '{print $1}')
-        [[ "${ACTUAL}" == "${EXPECT}" ]] || { echo "FATAL: Kata tarball checksum mismatch (expected ${EXPECT}, got ${ACTUAL})"; rm -f "${KATA_TMP}"; exit 1; }
-        log "Kata tarball checksum verified"
-    else
-        log "WARNING: could not obtain Kata SHA256 — extracting UNVERIFIED (set KATA_SHA256 to enforce)"
+    if [[ -z "${EXPECT}" ]]; then
+        # Fail CLOSED (M15): extracting an unverified tarball as root into / is a
+        # code-execution vector on a MITM'd/tampered asset. Refuse rather than
+        # warn-and-continue; the operator can pin KATA_SHA256 to proceed offline.
+        echo "FATAL: could not obtain the Kata ${KATA_VERSION} SHA256 — refusing to extract an unverified tarball as root. Set KATA_SHA256 to the expected digest." >&2
+        rm -f "${KATA_TMP}"
+        exit 1
     fi
+    ACTUAL=$(sha256sum "${KATA_TMP}" | awk '{print $1}')
+    [[ "${ACTUAL}" == "${EXPECT}" ]] || { echo "FATAL: Kata tarball checksum mismatch (expected ${EXPECT}, got ${ACTUAL})"; rm -f "${KATA_TMP}"; exit 1; }
+    log "Kata tarball checksum verified"
     tar -xJf "${KATA_TMP}" -C /
     rm -f "${KATA_TMP}"
 else

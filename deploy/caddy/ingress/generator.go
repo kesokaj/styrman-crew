@@ -370,7 +370,13 @@ func writeAppBlock(b *strings.Builder, app App, cfg GeneratorConfig) {
 	fmt.Fprintf(b, "    }\n")
 
 	if app.Mode == ModePublic {
-		// Public: reverse proxy with role header
+		// Public + unauthenticated: strip any client-supplied identity / ingress
+		// headers before proxying so they can't be forwarded upstream and spoof
+		// anything downstream (M24 — a public preview carries no identity), then
+		// set the authentic public role.
+		for _, h := range []string{HeaderEmail, HeaderUser, HeaderRole, HeaderSubject, HeaderIngress} {
+			fmt.Fprintf(b, "    request_header -%s\n", h)
+		}
 		fmt.Fprintf(b, "    request_header %s \"%s\"\n", HeaderRole, RolePublic)
 		fmt.Fprintf(b, "    reverse_proxy %s:%d\n", app.ContainerIP, app.Port)
 	} else {
