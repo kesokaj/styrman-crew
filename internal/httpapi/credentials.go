@@ -163,6 +163,19 @@ func (s *Server) harvestCredentials(ctx context.Context, user, containerID, gues
 		report["gh"] = "not found — sign in with `gh auth login`"
 	}
 
+	// git identity → the broker syncs the auth TOKEN above but not the author
+	// name/email; per-project homes start without it, so `git commit` in a
+	// terminal fails. Store the identity from the shared home as env creds; the
+	// login snippet applies it as `git config --global` (per-repo overrides
+	// still win, unlike GIT_AUTHOR_* env vars).
+	if name, email := s.gitIdentity(user); name != "" && email != "" {
+		_ = s.creds.PutEnv(user, "STYRMAN_GIT_NAME", name)
+		_ = s.creds.PutEnv(user, "STYRMAN_GIT_EMAIL", email)
+		report["git-identity"] = "stored (" + name + ")"
+	} else {
+		report["git-identity"] = "not found — set git user.name/user.email"
+	}
+
 	// claude → the whole ~/.claude/.credentials.json (holds the OAuth refresh
 	// token, so each project can refresh itself). File-injection tier.
 	if s.importGuestFile(ctx, user, containerID, guest,

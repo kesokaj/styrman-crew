@@ -52,6 +52,16 @@ EOF
     fi
     unset __sc_files
 
+    # git identity: the broker serves the author name/email as env creds (the
+    # token flows via the git credential helper, but the identity doesn't).
+    # Apply it as global git config so `git commit` works in a terminal — as
+    # config, not GIT_AUTHOR_* env, so a per-repo user.name still overrides it.
+    if [ -n "${STYRMAN_GIT_NAME:-}" ] && command -v git >/dev/null 2>&1; then
+        git config --global user.name "${STYRMAN_GIT_NAME}" 2>/dev/null || true
+        [ -n "${STYRMAN_GIT_EMAIL:-}" ] &&
+            git config --global user.email "${STYRMAN_GIT_EMAIL}" 2>/dev/null || true
+    fi
+
     # claude onboarding flag: a materialized ~/.claude/.credentials.json means
     # the user already signed in and onboarded (in the setup VM / another
     # project), but a fresh per-project ~/.claude.json has no
