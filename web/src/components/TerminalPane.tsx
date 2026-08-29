@@ -207,6 +207,21 @@ export function TerminalPane({
     const resizeObserver = new ResizeObserver(onResize);
     resizeObserver.observe(host);
 
+    // The first fit() runs before the custom terminal font has loaded, so the
+    // cell height is measured from a fallback font. When Google Sans Code loads
+    // and the cell metrics change, the row count is stale — the last row clips
+    // (the visible "wrong bottom margin"). Refit once fonts are ready and tell
+    // the server if the row count changed.
+    void document.fonts?.ready.then(() => {
+      if (styrRef.current !== styr) return; // terminal was swapped/torn down
+      fit.fit();
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
+        );
+      }
+    });
+
     return () => {
       closedForGood = true;
       clearTimeout(reconnectTimer);

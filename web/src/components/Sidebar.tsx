@@ -14,6 +14,7 @@ import { SetupBanner } from "./SetupBanner";
 import { TerminalList } from "./TerminalList";
 import { PromptDialog } from "./ui";
 import {
+  ChevronRightIcon,
   CrewMark,
   GearIcon,
   MonitorIcon,
@@ -22,6 +23,19 @@ import {
   PlusIcon,
   SunIcon,
 } from "./icons";
+
+// Per-project expand state persists across navigation and reloads. We store
+// the COLLAPSED set (not expanded): projects stay expanded by default — a new
+// project shows its terminals without any action, and collapse is explicit.
+const COLLAPSED_KEY = "styrman-collapsed-projects";
+function loadCollapsed(): Set<string> {
+  try {
+    const raw = localStorage.getItem(COLLAPSED_KEY);
+    return raw ? new Set<string>(JSON.parse(raw)) : new Set();
+  } catch {
+    return new Set();
+  }
+}
 
 const themeOptions: Array<{
   pref: ThemePref;
@@ -55,11 +69,34 @@ export function Sidebar({
   const [deleting, setDeleting] = useState<Project | null>(null);
   const [renaming, setRenaming] = useState<Project | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
 
   const projects = data?.projects ?? [];
 
+  const persistCollapsed = (next: Set<string>) => {
+    setCollapsed(next);
+    try {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+    } catch {
+      // private mode / disabled storage — expand state is a convenience, not
+      // state we must keep; the UI still works for this session.
+    }
+  };
+  const setExpanded = (id: string, expanded: boolean) => {
+    const next = new Set(collapsed);
+    if (expanded) next.delete(id);
+    else next.add(id);
+    persistCollapsed(next);
+  };
+  const allExpanded = projects.every((p) => !collapsed.has(p.id));
+  const toggleAll = () =>
+    persistCollapsed(
+      allExpanded ? new Set(projects.map((p) => p.id)) : new Set(),
+    );
+
   const openProject = (p: Project) =>
     tryUI(async () => {
+      setExpanded(p.id, true); // opening a project reveals its terminals
       const { terminals } = await api.listTerminals(p.id);
       const first = terminals[0] ?? (await api.createTerminal(p.id));
       onNavigate?.();
@@ -123,8 +160,21 @@ export function Sidebar({
       <SetupBanner />
 
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-2">
-        <div className="px-1 pb-1 pt-2 text-[11px] font-medium uppercase tracking-wider text-text-dim">
-          Projects
+        <div className="flex items-center justify-between px-1 pb-1 pt-2">
+          <span className="text-[11px] font-medium uppercase tracking-wider text-text-dim">
+            Projects
+          </span>
+          {projects.length > 0 && (
+            <button
+              onClick={toggleAll}
+              className="rounded px-1.5 py-0.5 text-[10px] font-medium text-text-dim hover:bg-bg-hover hover:text-text"
+              title={
+                allExpanded ? "Collapse all projects" : "Expand all projects"
+              }
+            >
+              {allExpanded ? "Collapse all" : "Expand all"}
+            </button>
+          )}
         </div>
         {projects.length === 0 &&
           (error ? (
@@ -180,6 +230,26 @@ export function Sidebar({
               >
                 <MoreIcon />
               </button>
+              <button
+                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-text-dim hover:bg-bg-active hover:text-text"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExpanded(p.id, collapsed.has(p.id));
+                }}
+                aria-label={
+                  collapsed.has(p.id)
+                    ? `Expand ${p.name}`
+                    : `Collapse ${p.name}`
+                }
+                aria-expanded={!collapsed.has(p.id)}
+                title={collapsed.has(p.id) ? "Expand" : "Collapse"}
+              >
+                <ChevronRightIcon
+                  className={`h-3.5 w-3.5 transition-transform ${
+                    collapsed.has(p.id) ? "" : "rotate-90"
+                  }`}
+                />
+              </button>
             </div>
             {menuFor === p.id && p.state !== "deleting" && (
               <div className="mx-2 mb-1 flex gap-1 rounded-lg border border-border bg-bg p-1 text-xs">
@@ -212,10 +282,10 @@ export function Sidebar({
                 </button>
               </div>
             )}
-            {params.project === p.id && (
+            {!collapsed.has(p.id) && p.state !== "deleting" && (
               <TerminalList
                 project={p.id}
-                activeTerm={params.term}
+                activeTerm={params.project === p.id ? params.term : undefined}
                 onNavigate={onNavigate}
               />
             )}
