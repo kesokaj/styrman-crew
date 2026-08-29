@@ -746,13 +746,25 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 			// whole per-project home (docker disk, transcripts, apt manifest,
 			// dotfiles, any creds) AND the workspace. os.RemoveAll doesn't
 			// follow symlinks out.
+			wipeFailed := false
 			for _, dir := range []string{
 				s.cfg.ProjectHome(u.Username, p.ID),
 				s.cfg.ProjectWorkspace(u.Username, p.ID),
 			} {
 				if err := os.RemoveAll(dir); err != nil {
-					s.logger.Warn("wipe failed", "project", p.ID, "path", dir, "error", err)
+					s.logger.Error("wipe failed", "project", p.ID, "path", dir, "error", err)
+					wipeFailed = true
 				}
+			}
+			// A requested wipe that only partially succeeded must NOT then remove
+			// the record — that would report the project (and its materialized
+			// ssh key + agent tokens) as gone while the secrets stay on disk
+			// (M18). Keep it visible with a deleteError so the user can retry.
+			if wipeFailed {
+				s.deletingMu.Lock()
+				s.deleteErrs[key] = "wipe incomplete — some files could not be removed; retry"
+				s.deletingMu.Unlock()
+				return
 			}
 		}
 		if err := sp.projects.Remove(p.ID); err != nil {

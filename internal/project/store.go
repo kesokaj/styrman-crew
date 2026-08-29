@@ -76,12 +76,14 @@ func NewStore(path string) (*Store, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	migrated := false
+	var rejected []Project
 	for _, p := range f.Projects {
 		// Validate on load, not just on Add: everything downstream (paths,
 		// container/network names, tmux -c, wipe's RemoveAll) trusts store
 		// contents, so a hand-edited file must not break the invariant.
 		if err := ValidateName(p.Name); err != nil {
-			slog.Warn("skipping invalid project in store", "name", p.Name, "error", err)
+			slog.Error("quarantining invalid project from store (preserved in .rejected)", "name", p.Name, "error", err)
+			rejected = append(rejected, p)
 			continue
 		}
 		// Migration from name-keyed records: assign a UUID, freeze the dir.
@@ -93,10 +95,21 @@ func NewStore(path string) (*Store, error) {
 			p.Dir = p.Name
 		}
 		if !uuidRe.MatchString(p.ID) || ValidateName(p.Dir) != nil {
-			slog.Warn("skipping project with invalid id/dir", "name", p.Name)
+			slog.Error("quarantining project with invalid id/dir (preserved in .rejected)", "name", p.Name)
+			rejected = append(rejected, p)
 			continue
 		}
 		s.projects[p.ID] = p
+	}
+	// Preserve rejected records off to the side: save() rewrites the file from
+	// valid records only, which would otherwise erase them from disk forever
+	// (M21). Best-effort, loud on failure.
+	if len(rejected) > 0 {
+		if data, merr := json.MarshalIndent(storeFile{Projects: rejected}, "", "  "); merr == nil {
+			if werr := os.WriteFile(s.path+".rejected", append(data, '\n'), 0o600); werr != nil {
+				slog.Error("could not preserve rejected project records", "path", s.path+".rejected", "error", werr)
+			}
+		}
 	}
 	if migrated {
 		s.mu.Lock()
@@ -133,7 +146,11 @@ func (s *Store) Add(p Project) (Project, error) {
 	p.ID = NewUUID()
 	p.Dir = p.Name
 	s.projects[p.ID] = p
-	return p, s.save()
+	if err := s.save(); err != nil {
+		delete(s.projects, p.ID) // roll back so memory matches disk (M20)
+		return Project{}, err
+	}
+	return p, nil
 }
 
 // Rename changes the friendly name (the workspace dir stays put).
@@ -143,13 +160,18 @@ func (s *Store) Rename(id, name string) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.projects[id]
+	prev, ok := s.projects[id]
 	if !ok {
 		return ErrNotFound
 	}
+	p := prev
 	p.Name = name
 	s.projects[id] = p
-	return s.save()
+	if err := s.save(); err != nil {
+		s.projects[id] = prev // roll back (M20)
+		return err
+	}
+	return nil
 }
 
 // SetPortShares replaces the shared-email list for one exposed port (emails
@@ -157,13 +179,13 @@ func (s *Store) Rename(id, name string) error {
 func (s *Store) SetPortShares(id string, port int, emails []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.projects[id]
+	prev, ok := s.projects[id]
 	if !ok {
 		return ErrNotFound
 	}
 	// Copy-on-write so the stored map isn't mutated in place (Get returns it).
 	next := map[int][]string{}
-	for k, v := range p.SharedPorts {
+	for k, v := range prev.SharedPorts {
 		if k != port {
 			next[k] = v
 		}
@@ -174,9 +196,14 @@ func (s *Store) SetPortShares(id string, port int, emails []string) error {
 	if len(next) == 0 {
 		next = nil
 	}
+	p := prev
 	p.SharedPorts = next
 	s.projects[id] = p
-	return s.save()
+	if err := s.save(); err != nil {
+		s.projects[id] = prev // roll back (M20)
+		return err
+	}
+	return nil
 }
 
 // Get returns a project by ID.
@@ -194,11 +221,16 @@ func (s *Store) Get(id string) (Project, error) {
 func (s *Store) Remove(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.projects[id]; !ok {
+	prev, ok := s.projects[id]
+	if !ok {
 		return ErrNotFound
 	}
 	delete(s.projects, id)
-	return s.save()
+	if err := s.save(); err != nil {
+		s.projects[id] = prev // roll back (M20)
+		return err
+	}
+	return nil
 }
 
 // List returns all projects, newest first.

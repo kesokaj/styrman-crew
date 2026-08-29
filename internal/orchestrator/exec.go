@@ -17,6 +17,7 @@ type ExecSpec struct {
 	User    string // "" = container default (root)
 	Env     []string
 	WorkDir string
+	Stdin   []byte // optional; piped to the command's stdin, then EOF
 }
 
 // maxExecOutput bounds how much of a non-interactive guest command's output we
@@ -59,11 +60,21 @@ func (c *cappedBuffer) String() string {
 // Exec runs a non-interactive command and returns its exit code and combined
 // output. Used for readiness probes and tmux session management.
 func (o *Orchestrator) Exec(ctx context.Context, containerID string, spec ExecSpec) (int, string, error) {
+	// A wedged guest command would otherwise pin this goroutine + a hijacked
+	// Docker connection forever; several callers pass a request-scoped or even
+	// background context with no deadline. Guarantee one here (M31) — every
+	// Exec use (probes, tmux, git, stats, format) completes in well under 30s.
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
 	create, err := o.docker.ContainerExecCreate(ctx, containerID, container.ExecOptions{
 		Cmd:          spec.Cmd,
 		User:         spec.User,
 		Env:          spec.Env,
 		WorkingDir:   spec.WorkDir,
+		AttachStdin:  spec.Stdin != nil,
 		AttachStdout: true,
 		AttachStderr: true,
 	})
@@ -75,6 +86,19 @@ func (o *Orchestrator) Exec(ctx context.Context, containerID string, spec ExecSp
 		return -1, "", fmt.Errorf("exec attach: %w", err)
 	}
 	defer att.Close()
+
+	// Feed stdin (if any) then signal EOF so a command like `cat > file` finishes
+	// — piping content over stdin avoids the argv size limit that base64-in-argv
+	// hit (M9). Best-effort: if the hijacked conn can't half-close, the command
+	// waits on its stdin until the ctx deadline.
+	if spec.Stdin != nil {
+		go func() {
+			_, _ = att.Conn.Write(spec.Stdin)
+			if cw, ok := att.Conn.(interface{ CloseWrite() error }); ok {
+				_ = cw.CloseWrite()
+			}
+		}()
+	}
 
 	buf := &cappedBuffer{max: maxExecOutput}
 	// Non-TTY exec streams are multiplexed; demux stdout+stderr together.

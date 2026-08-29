@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,10 +13,15 @@ import (
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 )
 
+// maxFormatBytes bounds the editor content we'll format — source files are tiny;
+// anything larger is rejected with 413 rather than silently mishandled.
+const maxFormatBytes = 5 << 20
+
 // Real formatting runs the language's actual CLI formatter INSIDE the project
 // VM (where the toolchain lives) rather than shipping formatters to the browser.
-// The editor content is round-tripped through a temp file: base64 in (no shell
-// interpolation of user text), format in place, read back. A marker line
+// The editor content is piped in over the command's stdin (no argv size limit,
+// no shell interpolation of user text) to a temp file created in the workspace
+// root so formatters discover the project's own config; a marker line
 // distinguishes success from the formatter's own error output (docker exec
 // merges stdout+stderr).
 
@@ -48,8 +52,12 @@ func formatInPlace(ext string) string {
 // formatFile formats the posted content with the appropriate CLI formatter in
 // the project's guest VM and returns the formatted text.
 func (s *Server) formatFile(w http.ResponseWriter, r *http.Request) {
-	u, _, p, err := s.getProjectFor(r)
+	_, cid, guest, ws, _, err := s.gitContext(r)
 	if err != nil {
+		if errors.Is(err, errVMNotRunning) {
+			writeErr(w, http.StatusConflict, errors.New("start the project to format"))
+			return
+		}
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
@@ -61,32 +69,34 @@ func (s *Server) formatFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("path and content required"))
 		return
 	}
+	if len(body.Content) > maxFormatBytes {
+		writeErr(w, http.StatusRequestEntityTooLarge,
+			fmt.Errorf("file too large to format (%d bytes, max %d)", len(body.Content), maxFormatBytes))
+		return
+	}
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(body.Path), "."))
 	cmd := formatInPlace(ext)
 	if cmd == "" {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("no formatter for .%s files", ext))
 		return
 	}
-	st, serr := s.orch.Status(r.Context(), u.Username, p.ID)
-	if serr != nil || st.State != "running" {
-		writeErr(w, http.StatusConflict, errors.New("start the project to format"))
-		return
-	}
-	guest := s.guestUserFor(u.Username)
 
-	b64 := base64.StdEncoding.EncodeToString([]byte(body.Content))
-	script := fmt.Sprintf(`F=$(mktemp --suffix=.%s) || { printf 'STYRMAN_ERR\ncannot create temp file'; exit 0; }
+	// Temp file in the workspace (WorkDir=ws) so formatters discover repo config;
+	// content is read from stdin, so no size limit and no shell interpolation.
+	script := fmt.Sprintf(`F=$(mktemp -p . --suffix=.%s) || { printf 'STYRMAN_ERR\ncannot create temp file'; exit 0; }
 E="${F}.err"
-printf %%s '%s' | base64 -d > "$F"
+cat > "$F"
 if %s >"$E" 2>&1; then printf 'STYRMAN_OK\n'; cat "$F"; else printf 'STYRMAN_ERR\n'; cat "$E"; fi
-rm -f "$F" "$E"`, ext, b64, cmd)
+rm -f "$F" "$E"`, ext, cmd)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	_, out, err := s.orch.Exec(ctx, st.ContainerID, orchestrator.ExecSpec{
-		User: guest,
-		Env:  []string{"HOME=/home/" + guest, "USER=" + guest},
-		Cmd:  []string{"bash", "-c", script},
+	_, out, err := s.orch.Exec(ctx, cid, orchestrator.ExecSpec{
+		User:    guest,
+		Env:     []string{"HOME=/home/" + guest, "USER=" + guest},
+		WorkDir: ws,
+		Cmd:     []string{"bash", "-c", script},
+		Stdin:   []byte(body.Content),
 	})
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)

@@ -142,7 +142,11 @@ func (s *Store) Add(email, addedBy string) error {
 		return fmt.Errorf("email %q maps to the same username %q as already-authorized %q — pick a different address", e, identity.DeriveUsername(e), c)
 	}
 	s.users[e] = UserEntry{Email: e, AddedBy: addedBy, AddedAt: time.Now().UTC()}
-	return s.save()
+	if err := s.save(); err != nil {
+		delete(s.users, e) // roll back so memory matches disk (M20)
+		return err
+	}
+	return nil
 }
 
 // Remove revokes a stored email (env-derived users cannot be removed).
@@ -153,8 +157,15 @@ func (s *Store) Remove(email string) error {
 	if s.envUsers[e] {
 		return fmt.Errorf("%s comes from STYRMAN_ALLOWED_EMAILS and cannot be removed here", e)
 	}
+	prev, existed := s.users[e]
 	delete(s.users, e)
-	return s.save()
+	if err := s.save(); err != nil {
+		if existed {
+			s.users[e] = prev // roll back (M20)
+		}
+		return err
+	}
+	return nil
 }
 
 // List returns all authorized emails (env-derived first).

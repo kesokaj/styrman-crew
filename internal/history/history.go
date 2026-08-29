@@ -51,9 +51,20 @@ func List(homeDir, project string) ([]Transcript, error) {
 		return []Transcript{}, nil
 	}
 	defer d.Close()
-	des, err := d.ReadDir(-1)
-	if err != nil {
-		return nil, err
+	// Bounded read: the transcript directory is guest-controlled (the microVM
+	// writes its own session logs there), so an uncapped ReadDir(-1) over
+	// millions of crafted entries could pin the server. Cap the listing.
+	const maxTranscripts = 5000
+	var des []os.DirEntry
+	for len(des) < maxTranscripts {
+		batch, rerr := d.ReadDir(512)
+		des = append(des, batch...)
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			return nil, rerr
+		}
 	}
 	var out []Transcript
 	for _, de := range des {

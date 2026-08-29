@@ -116,6 +116,7 @@ func main() {
 					logger.Error("credential broker failed", "error", err)
 				}
 			}()
+			go func() { <-ctx.Done(); _ = brokerSrv.Close() }() // stop on shutdown (M30)
 		}
 	}
 	srv := &http.Server{
@@ -139,19 +140,32 @@ func main() {
 		}()
 		go func() { <-ctx.Done(); _ = devSrv.Close() }()
 	}
-	go func() {
-		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutCtx)
-	}()
-
 	logger.Info("styrman listening", "addr", cfg.Addr, "auth", cfg.AuthMode, "image", cfg.Image,
 		"runtime", cfg.Runtime, "homes", cfg.HomesDir, "version", httpapi.Version)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logger.Error("server failed", "error", err)
-		os.Exit(1)
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- srv.ListenAndServe() }()
+
+	select {
+	case err := <-serverErr:
+		// Stopped on its own (e.g. a bind error) before any signal.
+		if err != nil && err != http.ErrServerClosed {
+			logger.Error("server failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	case <-ctx.Done():
 	}
+	// Signal received: drain in-flight requests SYNCHRONOUSLY before exit. The
+	// old code triggered Shutdown in a goroutine and returned as soon as
+	// ListenAndServe unblocked, so the process exited mid-drain (M30). The dev
+	// and broker listeners already close on ctx.Done() above.
+	logger.Info("shutting down — draining in-flight requests…")
+	shutCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutCtx); err != nil {
+		logger.Warn("graceful shutdown did not fully drain", "error", err)
+	}
+	<-serverErr // ListenAndServe returns ErrServerClosed once Shutdown completes
 }
 
 // migrateLegacy moves the pre-multitenancy layout (one shared home at

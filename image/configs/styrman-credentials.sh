@@ -16,13 +16,28 @@
 # read back a stale value and clobber a token the user just re-authed (H6).
 [ -z "${STYRMAN_SKIP_CRED_PULL:-}" ] || return 0 2>/dev/null || exit 0
 
+# The broker listens at broadcast-1 of this VM's own /16 bridge subnet
+# (ADR-030). Derive that from our own IP rather than trusting the address baked
+# into the container env at create time, so a network recreation (which can hand
+# the bridge a different subnet) cannot strand the project on a stale broker IP
+# (M17). Keep the port from the injected env (defaults to 8091). Best-effort:
+# the injected value stands if we cannot read our own address.
+__sc_ip="$(ip -o -4 addr show scope global 2>/dev/null | awk 'NR==1{print $4}' | cut -d/ -f1)"
+case "${__sc_ip}" in
+    [0-9]*.[0-9]*.*)
+        __sc_port="$(printf '%s' "${STYRMAN_CRED_BROKER:-}" | sed -n 's#.*:\([0-9][0-9]*\)$#\1#p')"
+        STYRMAN_CRED_BROKER="http://$(printf '%s' "${__sc_ip}" | cut -d. -f1,2).255.254:${__sc_port:-8091}"
+        ;;
+esac
+unset __sc_ip __sc_port
+
 [ -n "${STYRMAN_CRED_BROKER:-}" ] || return 0 2>/dev/null || exit 0
 command -v curl >/dev/null 2>&1 || return 0 2>/dev/null || exit 0
 
 # env-token tier: export each KEY=VALUE. jq is in the base image; fall back to
 # doing nothing rather than mis-parsing if it is somehow absent.
 if command -v jq >/dev/null 2>&1; then
-    __sc_env="$(curl -fsS --max-time 5 "${STYRMAN_CRED_BROKER}/env" 2>/dev/null || true)"
+    __sc_env="$(curl -fsS --connect-timeout 1 --max-time 5 "${STYRMAN_CRED_BROKER}/env" 2>/dev/null || true)"
     if [ -n "${__sc_env}" ]; then
         while IFS="$(printf '\t')" read -r __k __v; do
             case "${__k}" in
@@ -36,7 +51,7 @@ EOF
     unset __sc_env __k __v
 
     # file-injection tier: write each file at its mode under $HOME.
-    __sc_files="$(curl -fsS --max-time 5 "${STYRMAN_CRED_BROKER}/files" 2>/dev/null || true)"
+    __sc_files="$(curl -fsS --connect-timeout 1 --max-time 5 "${STYRMAN_CRED_BROKER}/files" 2>/dev/null || true)"
     if [ -n "${__sc_files}" ]; then
         printf '%s' "${__sc_files}" \
             | jq -r '.[] | [.path, .mode, .data] | @tsv' 2>/dev/null \
@@ -94,7 +109,7 @@ EOF
     # seeded item is indistinguishable from a native sign-in. agy itself is
     # already installed in the image — only the token is pulled here.
     if command -v secret-tool >/dev/null 2>&1; then
-        __sc_kr="$(curl -fsS --max-time 5 "${STYRMAN_CRED_BROKER}/keyring" 2>/dev/null || true)"
+        __sc_kr="$(curl -fsS --connect-timeout 1 --max-time 5 "${STYRMAN_CRED_BROKER}/keyring" 2>/dev/null || true)"
         if [ -n "${__sc_kr}" ] && [ "${__sc_kr}" != "[]" ]; then
             printf '%s' "${__sc_kr}" \
                 | jq -r '.[] | [.service, .username, .label, .secret] | @tsv' 2>/dev/null \

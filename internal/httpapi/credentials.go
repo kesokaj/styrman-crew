@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -15,16 +17,22 @@ import (
 )
 
 // credentialContent returns a stored credential's readable content for the
-// Settings "click to read" view. It reveals the operator's OWN secret on the
-// admin-only settings surface — the same value the broker already materializes
-// into every project's home. Files return their text (binary flagged);
-// env/git return the value/token.
+// Settings "click to read" view. It reveals the AUTHORIZED user's OWN secret
+// (scoped by u.Username) — the same value the broker already materializes into
+// their projects' homes. Files return their text (binary flagged); env/git
+// return the value/token. The disclosure is audit-logged.
 func (s *Server) credentialContent(w http.ResponseWriter, r *http.Request) {
 	u := identity.FromContext(r.Context())
+	if !u.Authorized {
+		writeErr(w, http.StatusForbidden, errors.New("not authorized"))
+		return
+	}
 	if s.creds == nil {
 		writeErr(w, http.StatusServiceUnavailable, errors.New("credential broker disabled"))
 		return
 	}
+	// Reading a plaintext secret is worth an audit record.
+	s.logger.Info("credential content read", "user", u.Username, "kind", r.PathValue("kind"), "id", r.PathValue("id"))
 	kind := r.PathValue("kind")
 	id := r.PathValue("id")
 	switch kind {
@@ -138,6 +146,21 @@ func (s *Server) deleteCredential(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind, name := r.PathValue("kind"), r.PathValue("name")
+	// For a file credential, capture its home-relative path BEFORE deleting so we
+	// can also sweep the already-materialized copies out of the user's homes —
+	// otherwise "delete" only stops future delivery and leaves the secret on
+	// disk in every project (M22).
+	var filePath string
+	if kind == "file" {
+		if files, err := s.creds.AllFiles(u.Username); err == nil {
+			for _, f := range files {
+				if f.ID == name {
+					filePath = f.Path
+					break
+				}
+			}
+		}
+	}
 	if err := s.creds.Delete(u.Username, kind, name); err != nil {
 		if errors.Is(err, credstore.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, err)
@@ -145,6 +168,9 @@ func (s *Server) deleteCredential(w http.ResponseWriter, r *http.Request) {
 		}
 		writeErr(w, http.StatusBadRequest, err)
 		return
+	}
+	if filePath != "" {
+		s.sweepMaterializedFile(u.Username, filePath)
 	}
 	s.logger.Info("credential deleted", "user", u.Username, "kind", kind, "name", name)
 	w.WriteHeader(http.StatusNoContent)
@@ -326,6 +352,29 @@ func (s *Server) importGuestFile(ctx context.Context, user, containerID, guest, 
 		return false
 	}
 	return true
+}
+
+// sweepMaterializedFile best-effort removes a file credential's already-
+// materialized copies from the user's base home and every per-project home, so
+// deleting the credential actually revokes it rather than only stopping future
+// delivery (M22). homePath is the stored "~/…" path.
+func (s *Server) sweepMaterializedFile(user, homePath string) {
+	rel := strings.TrimPrefix(strings.TrimPrefix(homePath, "~/"), "/")
+	if rel == "" {
+		return
+	}
+	homes, _ := filepath.Glob(filepath.Join(s.cfg.HomesDir, user, "p", "*"))
+	homes = append(homes, s.cfg.UserHome(user))
+	for _, h := range homes {
+		target := filepath.Join(h, rel)
+		// Never let a crafted stored path escape the home root.
+		if rp, err := filepath.Rel(h, target); err != nil || rp == ".." || strings.HasPrefix(rp, ".."+string(os.PathSeparator)) {
+			continue
+		}
+		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+			s.logger.Warn("credential revoke: could not remove materialized copy", "user", user, "path", target, "error", err)
+		}
+	}
 }
 
 // shellQuote single-quotes a path for safe interpolation into a shell command.

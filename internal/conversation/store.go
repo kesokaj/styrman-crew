@@ -104,6 +104,8 @@ func (s *Store) Create(project, title string) (Record, error) {
 	}
 	s.byProject[project] = append(s.byProject[project], rec)
 	if err := s.save(); err != nil {
+		recs := s.byProject[project] // roll back the append (M20)
+		s.byProject[project] = recs[:len(recs)-1]
 		return Record{}, err
 	}
 	return rec, nil
@@ -142,8 +144,13 @@ func (s *Store) Rename(project, id, title string) error {
 	defer s.mu.Unlock()
 	for i, r := range s.byProject[project] {
 		if r.ID == id {
+			prev := r.Title
 			s.byProject[project][i].Title = title
-			return s.save()
+			if err := s.save(); err != nil {
+				s.byProject[project][i].Title = prev // roll back (M20)
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("terminal %s not found", id)
@@ -155,8 +162,13 @@ func (s *Store) SetCommand(project, id, command string) error {
 	defer s.mu.Unlock()
 	for i, r := range s.byProject[project] {
 		if r.ID == id {
+			prev := r.Command
 			s.byProject[project][i].Command = command
-			return s.save()
+			if err := s.save(); err != nil {
+				s.byProject[project][i].Command = prev // roll back (M20)
+				return err
+			}
+			return nil
 		}
 	}
 	return fmt.Errorf("terminal %s not found", id)
@@ -170,8 +182,13 @@ func (s *Store) Delete(project, id string) error {
 	recs := s.byProject[project]
 	for i, r := range recs {
 		if r.ID == id {
+			orig := append([]Record(nil), recs...) // copy for rollback (M20)
 			s.byProject[project] = append(recs[:i], recs[i+1:]...)
-			return s.save()
+			if err := s.save(); err != nil {
+				s.byProject[project] = orig
+				return err
+			}
+			return nil
 		}
 	}
 	return nil
@@ -181,11 +198,16 @@ func (s *Store) Delete(project, id string) error {
 func (s *Store) DeleteProject(project string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.byProject[project]; !ok {
+	prev, ok := s.byProject[project]
+	if !ok {
 		return nil
 	}
 	delete(s.byProject, project)
-	return s.save()
+	if err := s.save(); err != nil {
+		s.byProject[project] = prev // roll back (M20)
+		return err
+	}
+	return nil
 }
 
 // List returns the project's records, newest-opened first.

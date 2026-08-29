@@ -240,6 +240,12 @@ func (s *Store) PutFile(user string, c FileCred) error {
 	if _, err := strconv.ParseUint(c.Mode, 8, 32); err != nil {
 		return fmt.Errorf("invalid mode %q", c.Mode)
 	}
+	// A credential file is a token/key/ADC — never large. Cap it so a hostile or
+	// runaway guest can't push megabytes into the store (and thence into every
+	// login shell). 256 KiB is generous next to real credentials (ssh key ~3 KB).
+	if len(c.Data) > 256<<10 {
+		return fmt.Errorf("file credential %q too large: %d bytes (max 256 KiB)", c.ID, len(c.Data))
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w := fileCredWire{ID: c.ID, Path: c.Path, Mode: c.Mode, DataB64: base64.StdEncoding.EncodeToString(c.Data)}
