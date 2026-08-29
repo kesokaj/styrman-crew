@@ -183,16 +183,170 @@ export function createTerminal(
   // word-nav, F-keys and dead keys, so those keep their Meta behavior.
   const isMac =
     typeof navigator !== "undefined" &&
-    /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || "");
+    /Mac|iPhone|iPad|iPod/i.test(
+      navigator.platform || navigator.userAgent || "",
+    );
+  const altGrOf = (ev: KeyboardEvent) =>
+    (typeof ev.getModifierState === "function" &&
+      ev.getModifierState("AltGraph")) ||
+    (ev.ctrlKey && ev.altKey) ||
+    (isMac && ev.altKey && !ev.ctrlKey);
+
+  // Dead keys on Nordic/Swedish (ISO) layouts: ~ ` ^ ´ ¨ aren't typed directly —
+  // you press the diacritic key, then Space for the bare char (or a vowel to
+  // accent it). xterm routes these through the browser IME, which is buggy for
+  // these layouts (xterm.js #2151/#2479, both open), so ~ ` ^ come out mangled.
+  // We intercept: capture the pending diacritic on the dead keydown (bypassing
+  // xterm's composition) and resolve it ourselves on the next key.
+  const MODIFIER_KEYS = new Set([
+    "Shift",
+    "Control",
+    "Alt",
+    "AltGraph",
+    "Meta",
+    "CapsLock",
+    "NumLock",
+    "ScrollLock",
+  ]);
+  // Precomposed letters keyed by the resolved spacing diacritic.
+  const DEAD_COMPOSE: Record<string, Record<string, string>> = {
+    "~": { a: "ã", n: "ñ", o: "õ", A: "Ã", N: "Ñ", O: "Õ" },
+    "^": {
+      a: "â",
+      e: "ê",
+      i: "î",
+      o: "ô",
+      u: "û",
+      A: "Â",
+      E: "Ê",
+      I: "Î",
+      O: "Ô",
+      U: "Û",
+    },
+    "`": {
+      a: "à",
+      e: "è",
+      i: "ì",
+      o: "ò",
+      u: "ù",
+      A: "À",
+      E: "È",
+      I: "Ì",
+      O: "Ò",
+      U: "Ù",
+    },
+    "´": {
+      a: "á",
+      e: "é",
+      i: "í",
+      o: "ó",
+      u: "ú",
+      y: "ý",
+      A: "Á",
+      E: "É",
+      I: "Í",
+      O: "Ó",
+      U: "Ú",
+      Y: "Ý",
+    },
+    "¨": {
+      a: "ä",
+      e: "ë",
+      i: "ï",
+      o: "ö",
+      u: "ü",
+      y: "ÿ",
+      A: "Ä",
+      E: "Ë",
+      I: "Ï",
+      O: "Ö",
+      U: "Ü",
+    },
+  };
+  // Which spacing diacritic a dead keydown means, by physical key + modifiers.
+  // ev.code is layout-independent (US-QWERTY position); on a Nordic ISO board
+  // the ¨/^/~ key sits where US ] is (BracketRight) and ´/` where US = is (Equal).
+  const deadDiacritic = (ev: KeyboardEvent): string | null => {
+    const altGr = altGrOf(ev);
+    switch (ev.code) {
+      case "BracketRight":
+        if (altGr) return "~";
+        if (ev.shiftKey) return "^";
+        return "¨"; // ¨
+      case "Equal":
+        if (ev.shiftKey) return "`";
+        if (!altGr) return "´"; // ´
+        return null;
+      default:
+        return null;
+    }
+  };
+  let pendingDead: string | null = null;
+  keyHandlers.push((ev) => {
+    if (ev.type !== "keydown") return true;
+    // Resolve a pending dead key with this keystroke.
+    if (pendingDead !== null) {
+      if (MODIFIER_KEYS.has(ev.key)) return true; // wait for the base key
+      const dead = pendingDead;
+      pendingDead = null;
+      if (ev.code === "Space") {
+        ev.preventDefault();
+        term.input(dead);
+        return false;
+      }
+      const composed = DEAD_COMPOSE[dead]?.[ev.key];
+      if (composed) {
+        ev.preventDefault();
+        term.input(composed);
+        return false;
+      }
+      // Not composable — emit the bare diacritic, then let this key proceed
+      // (it may itself begin a new dead sequence, handled just below).
+      term.input(dead);
+    }
+    if (ev.key === "Dead") {
+      const dead = deadDiacritic(ev);
+      // TEMP diagnostic (dead-key presses only): if the mapping is wrong on a
+      // given Mac/browser, this line shows exactly what was sent so we can fix
+      // it. Remove once Nordic dead keys are confirmed working.
+      // eslint-disable-next-line no-console
+      console.log("[styrman kbd] Dead", {
+        code: ev.code,
+        shift: ev.shiftKey,
+        alt: ev.altKey,
+        ctrl: ev.ctrlKey,
+        altGraph:
+          typeof ev.getModifierState === "function" &&
+          ev.getModifierState("AltGraph"),
+        mapped: dead,
+      });
+      if (dead !== null) {
+        ev.preventDefault();
+        pendingDead = dead;
+        return false;
+      }
+      // Unknown dead key for this layout — let xterm try (no regression).
+    }
+    return true;
+  });
+
+  // Typing @ $ { } [ ] \ € etc. on Nordic and other non-US layouts uses a
+  // "compose" modifier that yields a special character rather than a Meta/ESC
+  // sequence. xterm otherwise mistakes it for Meta and sends ESC+key, which
+  // readline renders as "(arg: 2)" and never yields the "@". The modifier
+  // differs by platform:
+  //   - Windows/Linux: AltGr (Right Alt) — reported as the AltGraph modifier
+  //     state, or in Chrome as ctrlKey+altKey together. Left-Alt-only is real
+  //     Meta (readline Alt+b) and stays untouched.
+  //   - mac: Option (Left or Right Alt) composes, because we keep
+  //     macOptionIsMeta off so Option types symbols (Swedish @ = Option+2).
+  // When the OS has already composed a printable single character into ev.key,
+  // type exactly that and stop xterm. The length-1 guard skips Alt/Option+Arrow
+  // word-nav, F-keys and dead keys, so those keep their Meta behavior.
   keyHandlers.push((ev) => {
     if (ev.type !== "keydown" || ev.metaKey) return true;
-    const compose =
-      (typeof ev.getModifierState === "function" &&
-        ev.getModifierState("AltGraph")) ||
-      (ev.ctrlKey && ev.altKey) ||
-      (isMac && ev.altKey && !ev.ctrlKey);
     if (
-      compose &&
+      altGrOf(ev) &&
       ev.key &&
       ev.key.length === 1 &&
       (ev.key.codePointAt(0) ?? 0) >= 0x20
