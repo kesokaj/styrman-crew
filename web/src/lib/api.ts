@@ -485,6 +485,10 @@ export const api = {
       `/api/settings/credentials/${kind}/${encodeURIComponent(name)}`,
       { method: "DELETE" },
     ),
+  credentialContent: (kind: string, id: string) =>
+    request<{ content?: string; path?: string; binary?: boolean }>(
+      `/api/settings/credentials/${kind}/${encodeURIComponent(id)}/content`,
+    ),
   setupStatus: () => request<SetupStatus>("/api/setup/status"),
   setupStart: () => request<void>("/api/setup/start", { method: "POST" }),
   setupDone: () => request<void>("/api/setup/done", { method: "POST" }),

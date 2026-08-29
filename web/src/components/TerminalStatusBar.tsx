@@ -51,6 +51,10 @@ export function TerminalStatusBar({ project }: { project: string }) {
   const { data, error } = usePolled(() => api.projectStats(project), 4000, [
     project,
   ]);
+  // Broker credentials are user-wide and materialized into every project, so
+  // the count is "what's synced into this VM". Polled slowly — it rarely moves.
+  const { data: creds } = usePolled(() => api.credentials(), 30000);
+  const credCount = creds?.items.length ?? 0;
 
   const base =
     "flex h-7 shrink-0 items-center gap-3 overflow-x-auto border-t border-border bg-accent-soft px-3 text-[11px] text-on-accent-soft [scrollbar-width:none]";
@@ -103,6 +107,17 @@ export function TerminalStatusBar({ project }: { project: string }) {
         value={fmtUptime(data.uptimeSeconds)}
         title="VM uptime"
       />
+      {creds && (
+        <Stat
+          label="creds"
+          value={credCount > 0 ? `${credCount} synced` : "none"}
+          title={
+            credCount > 0
+              ? `${credCount} credentials synced from the broker: ${creds.items.map((i) => i.name).join(", ")}`
+              : "no credentials synced yet — finish setup"
+          }
+        />
+      )}
     </div>
   );
 }

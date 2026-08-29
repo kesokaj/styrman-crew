@@ -287,6 +287,7 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("POST /api/settings/credentials/import", s.importCredentials)
 	mux.HandleFunc("POST /api/settings/credentials/token", s.putTokenCredential)
 	mux.HandleFunc("DELETE /api/settings/credentials/{kind}/{name}", s.deleteCredential)
+	mux.HandleFunc("GET /api/settings/credentials/{kind}/{id}/content", s.credentialContent)
 	mux.HandleFunc("POST /api/settings/users", s.addUser)
 	mux.HandleFunc("DELETE /api/settings/users/{email}", s.removeUser)
 	mux.HandleFunc("GET /api/setup/status", s.getSetupStatus)

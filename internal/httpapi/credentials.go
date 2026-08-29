@@ -7,10 +7,61 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/kesokaj/styrman-crew/internal/credstore"
+	"github.com/kesokaj/styrman-crew/internal/identity"
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 )
+
+// credentialContent returns a stored credential's readable content for the
+// Settings "click to read" view. It reveals the operator's OWN secret on the
+// admin-only settings surface — the same value the broker already materializes
+// into every project's home. Files return their text (binary flagged);
+// env/git return the value/token.
+func (s *Server) credentialContent(w http.ResponseWriter, r *http.Request) {
+	u := identity.FromContext(r.Context())
+	if s.creds == nil {
+		writeErr(w, http.StatusServiceUnavailable, errors.New("credential broker disabled"))
+		return
+	}
+	kind := r.PathValue("kind")
+	id := r.PathValue("id")
+	switch kind {
+	case "file":
+		files, err := s.creds.AllFiles(u.Username)
+		if err == nil {
+			for _, f := range files {
+				if f.ID == id {
+					if !utf8.Valid(f.Data) {
+						writeJSON(w, http.StatusOK, map[string]any{"path": f.Path, "binary": true})
+						return
+					}
+					writeJSON(w, http.StatusOK, map[string]any{"content": string(f.Data), "path": f.Path})
+					return
+				}
+			}
+		}
+	case "env":
+		env, err := s.creds.AllEnv(u.Username)
+		if err == nil {
+			if v, ok := env[id]; ok {
+				writeJSON(w, http.StatusOK, map[string]any{"content": v, "path": id})
+				return
+			}
+		}
+	case "git":
+		if c, err := s.creds.GetGit(u.Username, id); err == nil {
+			writeJSON(w, http.StatusOK, map[string]any{"content": c.Token, "path": c.Host + " (" + c.Username + ")"})
+			return
+		}
+	case "keyring":
+		// The secret is opaque bytes — don't pretend it's readable text.
+		writeJSON(w, http.StatusOK, map[string]any{"path": id, "binary": true})
+		return
+	}
+	writeErr(w, http.StatusNotFound, errors.New("credential not found"))
+}
 
 // This file is the credential-broker onboarding + management surface (ADR-032):
 // the store holds the single live copy of each of a user's credentials and the

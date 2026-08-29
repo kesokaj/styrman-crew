@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { api, tryUI, type ToolInfo } from "../lib/api";
+import { api, tryUI, type CredItem, type ToolInfo } from "../lib/api";
 import { usePolled, useTheme, type ThemePref } from "../lib/hooks";
 import { toast } from "../lib/toast";
+
+const CodeEditor = lazy(() => import("../components/CodeEditor"));
 
 export const Route = createFileRoute("/settings")({ component: SettingsPage });
 
@@ -162,6 +164,7 @@ function CredentialsSection() {
   const [busy, setBusy] = useState(false);
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
+  const [viewing, setViewing] = useState<CredItem | null>(null);
 
   const items = data?.items ?? [];
   const brokerOff = data?.brokerEnabled === false;
@@ -218,21 +221,27 @@ function CredentialsSection() {
           token or file already materialized in it.
         </span>
       </Row>
-      <Row label="Shared now">
+      <Row label={`Shared now${items.length ? ` (${items.length})` : ""}`}>
         {items.length === 0 ? (
           <span className="text-text-dim">
-            None yet — import from a project you've signed into.
+            None yet — finish setup, or import from a project you've signed into.
           </span>
         ) : (
           <div className="flex flex-col gap-1 py-1">
             {items.map((it) => (
               <div
                 key={`${it.kind}:${it.name}`}
-                className="flex items-center gap-2"
+                className="group flex items-center gap-2"
               >
-                <span className="h-2 w-2 rounded-full bg-ok" />
-                <span className="font-mono">{it.name}</span>
-                <span className="rounded bg-bg px-1.5 py-0.5 text-[10px] text-text-dim">
+                <span className="h-2 w-2 shrink-0 rounded-full bg-ok" />
+                <button
+                  onClick={() => setViewing(it)}
+                  className="min-w-0 truncate text-left font-mono hover:text-accent hover:underline"
+                  title="Click to read this credential"
+                >
+                  {it.name}
+                </button>
+                <span className="shrink-0 rounded bg-bg px-1.5 py-0.5 text-[10px] text-text-dim">
                   {kindLabel[it.kind] ?? it.kind}
                 </span>
                 <button
@@ -242,7 +251,7 @@ function CredentialsSection() {
                       refresh();
                     })
                   }
-                  className="ml-auto text-[10px] text-text-dim hover:text-danger"
+                  className="ml-auto shrink-0 text-[10px] text-text-dim opacity-0 hover:text-danger group-hover:opacity-100"
                 >
                   remove
                 </button>
@@ -278,44 +287,138 @@ function CredentialsSection() {
               {busy ? "Importing…" : "Import"}
             </button>
             <span className="text-[10px] text-text-dim">
-              reads gh · claude · gcloud · ssh · npm · agy
+              optional — setup already auto-syncs; use this to refresh/add from a
+              project (gh · claude · gcloud · ssh · npm · agy)
             </span>
           </div>
         )}
       </Row>
-      <Row label="Add a token">
-        <div className="flex flex-wrap items-center gap-2 py-1">
-          <input
-            value={key}
-            onChange={(e) => setKey(e.target.value)}
-            placeholder="NPM_TOKEN"
-            className="w-36 rounded border border-border bg-bg px-2 py-1 font-mono"
-          />
-          <input
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            placeholder="value"
-            type="password"
-            className="w-48 rounded border border-border bg-bg px-2 py-1 font-mono"
-          />
-          <button
-            onClick={() =>
-              tryUI(async () => {
-                if (!key.trim() || !value.trim()) return;
-                await api.putCredentialToken(key.trim(), value);
-                setKey("");
-                setValue("");
-                toast("success", "Token stored");
-                refresh();
-              })
-            }
-            className="rounded bg-accent-soft px-2 py-1 text-on-accent-soft hover:brightness-110"
-          >
-            Store
-          </button>
+      <Row label="Add a variable">
+        <div className="flex flex-col gap-1 py-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={key}
+              onChange={(e) => setKey(e.target.value.toUpperCase())}
+              placeholder="MY_VARIABLE"
+              className="w-40 rounded border border-border bg-bg px-2 py-1 font-mono"
+            />
+            <input
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="value"
+              type="password"
+              className="w-52 rounded border border-border bg-bg px-2 py-1 font-mono"
+            />
+            <button
+              onClick={() =>
+                tryUI(async () => {
+                  if (!key.trim() || !value.trim()) return;
+                  await api.putCredentialToken(key.trim(), value);
+                  setKey("");
+                  setValue("");
+                  toast("success", "Variable stored");
+                  refresh();
+                })
+              }
+              className="rounded bg-accent-soft px-2 py-1 text-on-accent-soft hover:brightness-110"
+            >
+              Store
+            </button>
+          </div>
+          <span className="text-[10px] text-text-dim">
+            Any custom env variable (e.g. NPM_TOKEN, DATABASE_URL) — exported as a
+            shell var in every project. Storing the same name again updates it.
+          </span>
         </div>
       </Row>
+      {viewing && (
+        <CredViewer item={viewing} onClose={() => setViewing(null)} />
+      )}
     </Section>
+  );
+}
+
+/**
+ * Read-only viewer for one stored credential — the operator's own secret, the
+ * exact value the broker materializes into each project. Files show their text
+ * (syntax-highlighted); env/git show the value; binary secrets are described,
+ * not dumped.
+ */
+function CredViewer({
+  item,
+  onClose,
+}: {
+  item: CredItem;
+  onClose: () => void;
+}) {
+  const [data, setData] = useState<{
+    content?: string;
+    path?: string;
+    binary?: boolean;
+  } | null>(null);
+  const [error, setError] = useState<string>();
+  const { resolved } = useTheme();
+  useEffect(() => {
+    let stale = false;
+    api
+      .credentialContent(item.kind, item.id)
+      .then((d) => !stale && setData(d))
+      .catch((e: Error) => !stale && setError(e.message));
+    return () => {
+      stale = true;
+    };
+  }, [item]);
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 md:p-8"
+      onClick={onClose}
+    >
+      <div
+        className="flex h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-bg-raised shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs">
+          <span className="truncate font-mono font-medium">
+            {data?.path || item.name}
+          </span>
+          <span className="shrink-0 rounded bg-warn/20 px-1.5 py-0.5 text-[10px] text-warn">
+            read-only · secret
+          </span>
+          <button
+            onClick={onClose}
+            className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-lg text-text-dim hover:bg-bg-hover hover:text-text"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+        {error ? (
+          <p className="p-4 text-xs text-danger">{error}</p>
+        ) : !data ? (
+          <p className="p-4 text-xs text-text-dim">Loading…</p>
+        ) : data.binary ? (
+          <p className="p-4 text-xs text-text-dim">
+            Binary secret — not shown as text. It's materialized into every
+            project's home as {item.name}.
+          </p>
+        ) : (
+          <Suspense
+            fallback={
+              <p className="p-4 text-xs text-text-dim">Loading editor…</p>
+            }
+          >
+            <CodeEditor
+              value={data.content ?? ""}
+              filename={data.path ?? item.name}
+              dark={resolved === "dark"}
+              readOnly
+              onChange={() => {}}
+              onSave={() => {}}
+            />
+          </Suspense>
+        )}
+      </div>
+    </div>
   );
 }
 
