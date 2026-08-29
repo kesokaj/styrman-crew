@@ -406,10 +406,44 @@ function FileViewer({
   onSaved: () => void;
 }) {
   const [text, setText] = useState(file.content);
+  // The last SAVED content is the dirty baseline — so Save can leave the editor
+  // open (it no longer closes) and the button correctly re-disables until the
+  // next edit.
+  const [savedContent, setSavedContent] = useState(file.content);
   const [saving, setSaving] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const { resolved } = useTheme();
-  const dirty = text !== file.content;
+  const modalRef = useRef<HTMLDivElement>(null);
+  const dirty = text !== savedContent;
+
+  // The window is resizable (CSS resize handle, bottom-right); remember the
+  // size across opens. Wrapped in try/catch — storage can be unavailable.
+  useEffect(() => {
+    const el = modalRef.current;
+    if (!el) return;
+    try {
+      const raw = localStorage.getItem("styrman-editor-size");
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s.w) el.style.width = `${s.w}px`;
+        if (s.h) el.style.height = `${s.h}px`;
+      }
+    } catch {
+      /* no stored size */
+    }
+    const ro = new ResizeObserver(() => {
+      try {
+        localStorage.setItem(
+          "styrman-editor-size",
+          JSON.stringify({ w: el.offsetWidth, h: el.offsetHeight }),
+        );
+      } catch {
+        /* storage disabled */
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const isMarkdown = /\.(md|markdown)$/i.test(file.path);
   const isJSON = /\.json$/i.test(file.path);
@@ -456,8 +490,9 @@ function FileViewer({
       setSaving(true);
       try {
         await api.saveFile(scope, file.path, text);
-        onSaved();
-        onClose();
+        setSavedContent(text); // new baseline; the editor stays open
+        onSaved(); // refresh the listing (size/mtime)
+        toast("success", "Saved");
       } finally {
         setSaving(false);
       }
@@ -476,7 +511,15 @@ function FileViewer({
       onClick={tryClose}
     >
       <div
-        className="flex h-full w-full max-w-4xl flex-col rounded-2xl bg-bg-raised shadow-2xl"
+        ref={modalRef}
+        className="flex max-h-[95vh] max-w-[97vw] flex-col overflow-hidden rounded-2xl bg-bg-raised shadow-2xl"
+        style={{
+          width: "min(56rem, 92vw)",
+          height: "80vh",
+          resize: "both",
+          minWidth: "22rem",
+          minHeight: "14rem",
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs">

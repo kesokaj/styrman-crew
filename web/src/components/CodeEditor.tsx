@@ -17,7 +17,9 @@ const legacy = (load: Promise<{ [k: string]: unknown }>, name: string) =>
   load.then(
     (m) =>
       new LanguageSupport(
-        StreamLanguage.define(m[name] as Parameters<typeof StreamLanguage.define>[0]),
+        StreamLanguage.define(
+          m[name] as Parameters<typeof StreamLanguage.define>[0],
+        ),
       ),
   );
 const LANGUAGES = [
@@ -33,6 +35,42 @@ const LANGUAGES = [
     name: "Go",
     extensions: ["go"],
     load: () => import("@codemirror/lang-go").then((m) => m.go()),
+  }),
+  LanguageDescription.of({
+    name: "Java",
+    extensions: ["java"],
+    load: () => import("@codemirror/lang-java").then((m) => m.java()),
+  }),
+  LanguageDescription.of({
+    name: "C/C++",
+    extensions: ["c", "h", "cc", "cpp", "cxx", "hpp", "hh", "hxx"],
+    load: () => import("@codemirror/lang-cpp").then((m) => m.cpp()),
+  }),
+  LanguageDescription.of({
+    name: "Rust",
+    extensions: ["rs"],
+    load: () => import("@codemirror/lang-rust").then((m) => m.rust()),
+  }),
+  LanguageDescription.of({
+    name: "PHP",
+    extensions: ["php"],
+    load: () => import("@codemirror/lang-php").then((m) => m.php()),
+  }),
+  LanguageDescription.of({
+    name: "SQL",
+    extensions: ["sql"],
+    load: () => import("@codemirror/lang-sql").then((m) => m.sql()),
+  }),
+  LanguageDescription.of({
+    name: "XML",
+    extensions: ["xml", "svg", "xsd", "xsl", "plist"],
+    load: () => import("@codemirror/lang-xml").then((m) => m.xml()),
+  }),
+  LanguageDescription.of({
+    name: "Terraform",
+    // HCL covers Terraform (.tf/.tfvars) and other HashiCorp configs (.hcl).
+    extensions: ["tf", "tfvars", "hcl"],
+    load: () => import("codemirror-lang-hcl").then((m) => m.hcl()),
   }),
   LanguageDescription.of({
     name: "Python",
