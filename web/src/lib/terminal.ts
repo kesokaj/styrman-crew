@@ -177,7 +177,13 @@ export function createTerminal(
     if (ev.type !== "keydown") return true;
     if (!(ev.ctrlKey || ev.metaKey)) return true;
     if (ev.code === "KeyC") {
-      if (!term.hasSelection()) return true; // SIGINT / browser default
+      // Ctrl+C MUST interrupt (SIGINT) — a lingering selection used to make it
+      // copy instead, so you couldn't ^C out of e.g. ping. Copy-on-select
+      // already puts selections on the clipboard, and Cmd+C (mac) still copies
+      // explicitly. So: plain Ctrl+C always passes through as ^C; only Cmd+C
+      // (metaKey, not ctrlKey) copies.
+      if (ev.ctrlKey) return true; // ^C / SIGINT
+      if (!term.hasSelection()) return true;
       if (typeof navigator.clipboard?.writeText !== "function") return true;
       ev.preventDefault();
       copyText(term.getSelection());

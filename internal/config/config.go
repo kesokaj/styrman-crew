@@ -3,6 +3,8 @@
 package config
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -354,6 +356,16 @@ func ContainerName(projectID string) string { return "styrman-" + projectID }
 
 // NetworkName returns its bridge network name.
 func NetworkName(projectID string) string { return "sdb-" + projectID }
+
+// BridgeNameFor is the Linux bridge INTERFACE name for a styrman network. Docker
+// would otherwise auto-name it br-<hash> — which the project→host/LAN isolation
+// firewall (matching `-i sdb-+`) cannot target — and interface names are capped
+// at 15 chars, so the full NetworkName is too long. A short sha1-derived
+// `sdb-<11hex>` (15 chars) keeps both the firewall match and uniqueness.
+func BridgeNameFor(netName string) string {
+	sum := sha1.Sum([]byte(netName))
+	return "sdb-" + hex.EncodeToString(sum[:])[:11]
+}
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {

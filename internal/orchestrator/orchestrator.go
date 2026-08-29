@@ -669,7 +669,7 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 		if !errdefs.IsNotFound(err) {
 			return "", fmt.Errorf("inspect network %s: %w", netName, err)
 		}
-		if _, err := o.docker.NetworkCreate(ctx, netName, network.CreateOptions{Driver: "bridge"}); err != nil {
+		if _, err := o.docker.NetworkCreate(ctx, netName, network.CreateOptions{Driver: "bridge", Options: map[string]string{"com.docker.network.bridge.name": config.BridgeNameFor(netName)}}); err != nil {
 			return "", fmt.Errorf("create network %s: %w", netName, err)
 		}
 	}
@@ -945,7 +945,7 @@ func (o *Orchestrator) recreateMissingNetwork(ctx context.Context, containerID, 
 		return false // network exists; the start failure was something else
 	}
 	o.logger.Warn("project network missing — recreating", "network", netName)
-	if _, err := o.docker.NetworkCreate(ctx, netName, network.CreateOptions{Driver: "bridge"}); err != nil {
+	if _, err := o.docker.NetworkCreate(ctx, netName, network.CreateOptions{Driver: "bridge", Options: map[string]string{"com.docker.network.bridge.name": config.BridgeNameFor(netName)}}); err != nil {
 		o.logger.Error("network recreate failed", "network", netName, "error", err)
 		return false
 	}

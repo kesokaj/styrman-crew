@@ -121,21 +121,31 @@ else
     log "daemon.json already correct — not restarting docker"
 fi
 
-# ─── 3b. Project→host isolation (R12, ADR-029) ──────────────────────────────
-# Docker's per-bridge rules already stop project↔project traffic (the FORWARD
-# path). But a project VM's default gateway IS the host, so without this a
-# project could reach anything the host listens on (SSH, Caddy) — the INPUT
-# path, which Docker never guards. Drop traffic from any project bridge
-# (sdb-*) addressed to the host itself. Internet egress is unaffected (that's
-# routed/NAT'd in FORWARD, never INPUT); the port-preview proxy is unaffected
-# (server↔project is same-bridge L2). Installed as a systemd oneshot so it
-# re-applies after every reboot and after any Docker restart (Docker rebuilds
-# its own chains but never touches INPUT).
+# ─── 3b. Project→host + project→LAN isolation (R12, ADR-029) ────────────────
+# A project microVM must reach the INTERNET but nothing private: not the host,
+# not the LAN, not other projects, not cloud metadata. Two paths guard this:
+#   INPUT       — traffic addressed to the host itself (its gateway IS the host).
+#   DOCKER-USER — traffic ROUTED onward (FORWARD) to a private network; runs
+#                 first in FORWARD and survives Docker restarts.
+# Both match `-i sdb-+`, the bridge INTERFACE name — styrman names project
+# bridges sdb-<hash> (config.BridgeNameFor) precisely so this matches; Docker's
+# default br-<hash> names would slip past it (the 2026-08-29 leak: full host +
+# LAN reachable). Return traffic (into the bridge, -o sdb-+) and the port-preview
+# proxy (server→project) are unaffected; the broker is same-bridge L2.
 cat > /usr/local/sbin/styrman-firewall.sh <<'FWEOF'
 #!/usr/bin/env bash
-# Project microVMs may reach the internet and NOTHING on the host (R12/ADR-029).
+# Project microVMs (bridges sdb-*) reach the internet but NOT the host, the LAN,
+# other projects, or cloud metadata (R12/ADR-029).
 set -eu
+# Host itself (INPUT).
 iptables -C INPUT -i sdb-+ -j DROP 2>/dev/null || iptables -I INPUT -i sdb-+ -j DROP
+# Private networks + link-local/metadata, when routed onward (FORWARD/DOCKER-USER).
+# 172.16/12 also covers other project + system bridges (cross-project isolation);
+# a project's own bridge + broker are same-subnet L2, never routed, so allowed.
+for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
+    iptables -C DOCKER-USER -i sdb-+ -d "$net" -j DROP 2>/dev/null \
+        || iptables -I DOCKER-USER -i sdb-+ -d "$net" -j DROP
+done
 FWEOF
 chmod 0755 /usr/local/sbin/styrman-firewall.sh
 cat > /etc/systemd/system/styrman-firewall.service <<'EOF'
