@@ -306,20 +306,6 @@ export function createTerminal(
     }
     if (ev.key === "Dead") {
       const dead = deadDiacritic(ev);
-      // TEMP diagnostic (dead-key presses only): if the mapping is wrong on a
-      // given Mac/browser, this line shows exactly what was sent so we can fix
-      // it. Remove once Nordic dead keys are confirmed working.
-      // eslint-disable-next-line no-console
-      console.log("[styrman kbd] Dead", {
-        code: ev.code,
-        shift: ev.shiftKey,
-        alt: ev.altKey,
-        ctrl: ev.ctrlKey,
-        altGraph:
-          typeof ev.getModifierState === "function" &&
-          ev.getModifierState("AltGraph"),
-        mapped: dead,
-      });
       if (dead !== null) {
         ev.preventDefault();
         pendingDead = dead;

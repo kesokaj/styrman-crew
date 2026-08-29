@@ -41,3 +41,10 @@ Rebuilt bundle (tsc clean) → `styrman-server` 1.8.8, deployed live (healthy, c
 200). Needs a browser hard-refresh. **Operator to verify:** `~ ` ^ ´` (dead key
 then Space) and an accent (e.g. dead `´` then `e` → `é`); if any misbehave, open
 the browser console and paste the `[styrman kbd] Dead` lines.
+
+## Verified + diagnostic removed (v1.8.9)
+
+Operator confirmed all Nordic dead keys work on their Mac — the PC-ISO mapping
+was correct as-is. The temporary `console.log("[styrman kbd] Dead", …)` was
+removed and the server rebuilt + redeployed as **v1.8.9** (healthy, crew 200).
+
