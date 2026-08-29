@@ -207,20 +207,30 @@ export function TerminalPane({
     const resizeObserver = new ResizeObserver(onResize);
     resizeObserver.observe(host);
 
-    // The first fit() runs before the custom terminal font has loaded, so the
-    // cell height is measured from a fallback font. When Google Sans Code loads
-    // and the cell metrics change, the row count is stale — the last row clips
-    // (the visible "wrong bottom margin"). Refit once fonts are ready and tell
-    // the server if the row count changed.
-    void document.fonts?.ready.then(() => {
+    // The first render measures the cell size with a FALLBACK font, because the
+    // custom terminal font (Google Sans Code) may still be loading. xterm caches
+    // that cell height, and fit() reuses it — so the row count stays wrong once
+    // the real (taller) font lands, and the last row clips at some window sizes.
+    // fit() alone does NOT re-measure; reassigning a font option forces xterm's
+    // char-size service to re-measure, and THEN fit() computes the right rows.
+    const remeasureAndFit = () => {
       if (styrRef.current !== styr) return; // terminal was swapped/torn down
+      // Toggle the font option to a different value and back (same frame, no
+      // flash): xterm's options service only re-measures the cell size when the
+      // value actually CHANGES, so a self-assignment would be a no-op. Both
+      // writes differ from the previous, so both fire — the last one restores
+      // the real font and leaves xterm with a freshly measured cell height.
+      const ff = term.options.fontFamily;
+      term.options.fontFamily = "monospace";
+      term.options.fontFamily = ff;
       fit.fit();
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(
           JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
         );
       }
-    });
+    };
+    void document.fonts?.ready.then(remeasureAndFit);
 
     return () => {
       closedForGood = true;

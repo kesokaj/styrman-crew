@@ -127,18 +127,11 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* The pane is the sized container; xterm + the fit addon size .xterm and the
-   viewport to the row grid themselves. Forcing height:100% on .xterm and the
-   viewport (an earlier "fill the pane" attempt) fought that row math: when the
-   grid came out a hair taller than the pane, the last row was clipped instead
-   of leaving an invisible background gap. Size ONLY the host; let xterm fill
-   the width and manage its own height. */
-.term-host {
+/* xterm fills its pane */
+.term-host,
+.term-host .xterm,
+.term-host .xterm .xterm-viewport {
   height: 100%;
-  width: 100%;
-  overflow: hidden;
-}
-.term-host .xterm {
   width: 100%;
 }
 
