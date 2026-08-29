@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"time"
@@ -337,7 +338,17 @@ func (s *Store) saveLocked() error {
 	if err := fh.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path)
+	if err := os.Rename(tmp, s.path); err != nil {
+		return err
+	}
+	// fsync the parent directory too, so the rename itself survives a power cut
+	// — otherwise the "a revoke cannot be lost" guarantee doesn't actually hold
+	// (the temp file's fsync doesn't make the directory entry durable).
+	if d, derr := os.Open(filepath.Dir(s.path)); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 // ValidToken reports whether t has the exact shape Create produces (32 hex),

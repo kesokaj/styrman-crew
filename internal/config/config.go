@@ -44,7 +44,6 @@ const (
 	EnvProject    = "STYRMAN_PROJECT"     // the project UUID (disks, transcript paths)
 	EnvProjectDir = "STYRMAN_PROJECT_DIR" // workspace dir name under ~/projects
 	EnvDockerDisk = "STYRMAN_DOCKER_DISK_GB"
-	EnvKeyringPW  = "STYRMAN_KEYRING_PW"
 	EnvCredBroker = "STYRMAN_CRED_BROKER" // credential broker URL on this bridge (ADR-030)
 )
 
@@ -69,9 +68,10 @@ type Config struct {
 	HomeDir     string // LEGACY single-user home; migrated to HomesDir on boot
 	Image       string // runtime image for project containers
 	Runtime     string // docker runtime (mvm = Kata)
+	VCPUs       int    // per-project vCPU limit, 0 = Kata's default (STYRMAN_VCPUS)
+	MemoryMB    int    // per-project memory MiB, 0 = Kata's default (STYRMAN_MEMORY_MB)
 	Username    string // in-guest username; owns the shared home
 	UID, GID    int    // host uid/gid the guest user must match
-	KeyringPW   string // password for the in-guest gnome-keyring
 
 	// Operator-tunable settings (Settings → Runtime). Env supplies the
 	// defaults; StateDir/settings.json overrides them and PATCH
@@ -118,7 +118,8 @@ func Load() (*Config, error) {
 		StateDir:      envOr("STYRMAN_STATE_DIR", "/var/lib/styrman"),
 		Image:         envOr("STYRMAN_IMAGE", "styrman-runtime:latest"),
 		Runtime:       envOr("STYRMAN_RUNTIME", "mvm"),
-		KeyringPW:     envOr("STYRMAN_KEYRING_PW", "styrman"),
+		VCPUs:         envIntOr("STYRMAN_VCPUS", 0),
+		MemoryMB:      envIntOr("STYRMAN_MEMORY_MB", 0),
 		dockerDisk:    envIntOr("STYRMAN_DOCKER_DISK_GB", 20),
 		idleTimeout:   envDurationOr("STYRMAN_IDLE_TIMEOUT", 24*time.Hour),
 		BrokerAddr:    envOr("STYRMAN_BROKER_ADDR", ":8091"),

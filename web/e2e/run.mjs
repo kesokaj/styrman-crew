@@ -272,14 +272,16 @@ try {
   });
   await shot("06-history");
 
-  // ── Side panel: Git (diff + checkpoints, R13) ───────────────────────────
+  // ── Side panel: Git — a real in-guest client (stage/commit/push), R13 ────
   await check("git tab shows the repo", async () => {
     await panel().getByText("Git", { exact: true }).click();
     await page.waitForSelector("aside >> text=branch");
   });
-  await check("manual checkpoint appears", async () => {
-    await panel().getByRole("button", { name: "Checkpoint now" }).click();
-    await page.waitForSelector("aside >> text=manual");
+  await check("git client controls render", async () => {
+    // Replaces the removed "Checkpoint now" button (checkpoints dropped in
+    // v1.7.0): assert the shipped client — a Push control and a commit box.
+    await page.waitForSelector("aside >> text=Push");
+    await page.waitForSelector('aside textarea[placeholder^="Commit message"]');
   });
   // Clips tab must open without spinning: getClips backs useSyncExternalStore,
   // and an unstable snapshot infinite-loops the SPA (regression guard).

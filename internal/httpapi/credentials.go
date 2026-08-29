@@ -63,10 +63,6 @@ func (s *Server) credentialContent(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"content": c.Token, "path": c.Host + " (" + c.Username + ")"})
 			return
 		}
-	case "keyring":
-		// The secret is opaque bytes — don't pretend it's readable text.
-		writeJSON(w, http.StatusOK, map[string]any{"path": id, "binary": true})
-		return
 	}
 	writeErr(w, http.StatusNotFound, errors.New("credential not found"))
 }
@@ -246,9 +242,15 @@ func (s *Server) harvestCredentials(ctx context.Context, user, containerID, gues
 	// login snippet applies it as `git config --global` (per-repo overrides
 	// still win, unlike GIT_AUTHOR_* env vars).
 	if name, email := s.gitIdentity(user); name != "" && email != "" {
-		_ = s.creds.PutEnv(user, "STYRMAN_GIT_NAME", name)
-		_ = s.creds.PutEnv(user, "STYRMAN_GIT_EMAIL", email)
-		report["git-identity"] = "stored (" + name + ")"
+		err1 := s.creds.PutEnv(user, "STYRMAN_GIT_NAME", name)
+		err2 := s.creds.PutEnv(user, "STYRMAN_GIT_EMAIL", email)
+		if err1 != nil || err2 != nil {
+			// Don't report "stored" when the write failed (low finding).
+			s.logger.Warn("git identity store failed", "user", user, "nameErr", err1, "emailErr", err2)
+			report["git-identity"] = "error"
+		} else {
+			report["git-identity"] = "stored (" + name + ")"
+		}
 	} else {
 		report["git-identity"] = "not found — set git user.name/user.email"
 	}

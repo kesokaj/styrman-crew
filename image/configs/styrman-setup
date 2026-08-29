@@ -116,8 +116,7 @@ else
 fi
 
 step "Optional · Antigravity CLI (agy)"
-if [ -f ~/.gemini/antigravity-cli/antigravity-oauth-token ] \
-    || secret-tool search --all service antigravity 2>/dev/null | grep -q .; then
+if [ -f ~/.gemini/antigravity-cli/antigravity-oauth-token ]; then
     ok "agy: credentials present"
 elif ask_optional "sign in to Antigravity (agy) now?"; then
     todo "agy prints a Google sign-in URL — CLICK it, approve, paste the code back, then quit agy."

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -144,12 +145,25 @@ func (s *Server) guestUserFor(user string) string {
 	return sp.profile.GuestUser()
 }
 
+// userSlugRe matches a DeriveUsername slug: starts with a letter, then only
+// [a-z0-9_-], at most 32 chars. Used to reject a malformed username before it
+// becomes a filesystem path.
+var userSlugRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
 // space returns (lazily creating) a user's stores and home skeleton.
 func (s *Server) space(user string) (*userSpace, error) {
 	s.spacesMu.Lock()
 	defer s.spacesMu.Unlock()
 	if sp, ok := s.spaces[user]; ok {
 		return sp, nil
+	}
+	// Defense in depth: `user` is normally DeriveUsername's slug, but it also
+	// arrives from persisted sources (e.g. Link.Owner) that aren't re-validated
+	// on load — reject anything that isn't a clean slug before it's joined into
+	// a state path, so a hand-edited record can't traverse into another user's
+	// tree (low finding).
+	if !userSlugRe.MatchString(user) {
+		return nil, fmt.Errorf("invalid user slug %q", user)
 	}
 	// Homes are per-project now (ADR-031) and seeded by the image entrypoint,
 	// so space() no longer creates a home — only the user's metadata dir.
@@ -994,12 +1008,16 @@ func (s *Server) deleteAllTerminals(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	// Cheap daemon ping, not a full container Adopt — /api/health is exempt
-	// from auth for the container's own probe, so it must not be an expensive
-	// unauthenticated endpoint a shared-bridge VM could hammer.
-	if err := s.orch.Ping(r.Context()); err != nil {
-		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("docker unavailable: %w", err))
-		return
+	// /api/health is auth-exempt for the container's own probe (the HEALTHCHECK
+	// curls localhost). Only that loopback caller triggers the Docker daemon
+	// ping; an untrusted shared-bridge VM gets a static OK so it can't make the
+	// server hammer dockerd on demand (low finding).
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		if err := s.orch.Ping(r.Context()); err != nil {
+			writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("docker unavailable: %w", err))
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

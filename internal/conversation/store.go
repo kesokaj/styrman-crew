@@ -49,7 +49,14 @@ func NewStore(path string) (*Store, error) {
 		return nil, err
 	}
 	if err := json.Unmarshal(data, &s.byProject); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		// A corrupt store must not 500 every request for this user forever:
+		// quarantine the unparseable file and start empty; the bad file is kept
+		// as .corrupt for recovery (low finding). Terminal records are the least
+		// precious per-user state — tmux sessions in the VM are re-adopted.
+		slog.Error("conversations.json unparseable — quarantined to .corrupt, starting empty", "path", path, "error", err)
+		s.byProject = map[string][]Record{}
+		_ = os.Rename(path, path+".corrupt")
+		return s, nil
 	}
 	for project, recs := range s.byProject {
 		kept := recs[:0]

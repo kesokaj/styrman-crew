@@ -73,7 +73,12 @@ func NewStore(path string) (*Store, error) {
 	}
 	var f storeFile
 	if err := json.Unmarshal(data, &f); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		// A corrupt store must not 500 every request for this user forever:
+		// quarantine the unparseable file and start empty so the account works
+		// again; the bad file is preserved as .corrupt for recovery (low finding).
+		slog.Error("projects.json unparseable — quarantined to .corrupt, starting empty", "path", path, "error", err)
+		_ = os.Rename(path, path+".corrupt")
+		return s, nil
 	}
 	migrated := false
 	var rejected []Project

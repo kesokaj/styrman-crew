@@ -2,7 +2,7 @@
 # styrman-runtime entrypoint — runs as root inside the Kata microVM.
 # Responsibilities: guest tuning, user creation (matching host UID/GID, spike
 # S2), per-project DinD on a loop-mounted ext4 image (ADR-008, spike S3),
-# keyring plumbing for agy (spike S4), then park as a reaped PID-1 child.
+# then park as a reaped PID-1 child.
 set -uo pipefail
 
 USERNAME="${STYRMAN_USER:?STYRMAN_USER not set}"
@@ -16,8 +16,8 @@ HOME_DIR="/home/${USERNAME}"
 log() { echo "[styrman] $*"; }
 
 # /run is NOT a tmpfs in this container — a marker from the previous boot
-# survives docker stop/start and would let waitReady pass while dockerd and
-# the keyring are still coming up (review finding). Clear it first thing.
+# survives docker stop/start and would let waitReady pass while dockerd is
+# still coming up (review finding). Clear it first thing.
 mkdir -p /run/styrman
 rm -f /run/styrman/ready
 
@@ -63,7 +63,7 @@ usermod -aG docker "${USERNAME}" 2>/dev/null || true
 chown "${UID_}:${GID_}" "${HOME_DIR}" 2>/dev/null || true
 
 # Minimal mode (system VMs, e.g. the hidden onboarding container): no
-# workspace, no DinD — just the user, keyring, and a shell.
+# workspace, no DinD — just the user and a shell.
 MINIMAL="${STYRMAN_MINIMAL:-}"
 
 # Standard home dirs — the home is now PER-PROJECT and starts empty
@@ -91,23 +91,14 @@ if [ -d /styrman/skel ]; then
     done
 fi
 
-# ─── Keyring plumbing for agy (spike S4) ────────────────────────────────────
-# The password lands in a root-then-user file; a profile.d snippet starts a
-# session dbus + unlocked gnome-keyring on first login shell.
-mkdir -p /run/styrman
-printf '%s' "${STYRMAN_KEYRING_PW:-styrman}" > /run/styrman/keyring-pw
-chown "${UID_}:${GID_}" /run/styrman/keyring-pw
-chmod 400 /run/styrman/keyring-pw
-unset STYRMAN_KEYRING_PW
-cp /styrman/configs/profile-keyring.sh /etc/profile.d/styrman-keyring.sh
+# ─── Login-shell profile.d snippets ─────────────────────────────────────────
 # zzz- prefix: the MOTD probes ~/.claude/.credentials.json etc., so it must
 # run AFTER zz-styrman-credentials.sh has materialized them (audit finding —
 # it otherwise nags "run styrman-setup" on a fully-onboarded project).
 cp /styrman/configs/profile-motd.sh /etc/profile.d/zzz-styrman-motd.sh
 rm -f /etc/profile.d/styrman-motd.sh
 # Credential materialization (ADR-032): every login shell pulls the current
-# env/file credentials from the broker on this project's bridge. Named to sort
-# AFTER the keyring snippet so the Secret Service is up first.
+# env/file credentials from the broker on this project's bridge.
 cp /styrman/configs/styrman-credentials.sh /etc/profile.d/zz-styrman-credentials.sh
 
 # tmux defaults (hidden status bar, login shells) unless the user has their own.

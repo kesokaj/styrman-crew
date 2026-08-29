@@ -127,7 +127,12 @@ export function FileExplorer({
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 10000);
+    // Skip the poll while the tab is hidden — the guarantee usePolled gives that
+    // this hand-rolled loop otherwise lost (don't hammer the guest exec API for
+    // a panel nobody is looking at).
+    const t = setInterval(() => {
+      if (!document.hidden) load();
+    }, 10000);
     return () => clearInterval(t);
   }, [load]);
 

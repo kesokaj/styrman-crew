@@ -665,12 +665,25 @@ type createSpec struct {
 // create builds a network and container. Caller holds the relevant lock.
 func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, error) {
 	netName := spec.netName
+	createdNetwork := false
 	if _, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{}); err != nil {
 		if !errdefs.IsNotFound(err) {
 			return "", fmt.Errorf("inspect network %s: %w", netName, err)
 		}
 		if _, err := o.docker.NetworkCreate(ctx, netName, network.CreateOptions{Driver: "bridge", Options: map[string]string{"com.docker.network.bridge.name": config.BridgeNameFor(netName)}}); err != nil {
 			return "", fmt.Errorf("create network %s: %w", netName, err)
+		}
+		createdNetwork = true
+	}
+	// On a failed create, tear down the network ONLY if we created it here — an
+	// existing project bridge (e.g. a container re-create on a running project)
+	// must survive — and surface the cleanup error instead of dropping it.
+	removeOurNetwork := func() {
+		if !createdNetwork {
+			return
+		}
+		if err := o.docker.NetworkRemove(context.Background(), netName); err != nil && !errdefs.IsNotFound(err) {
+			o.logger.Warn("cleanup: removing project network failed", "network", netName, "error", err)
 		}
 	}
 
@@ -681,7 +694,6 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 		config.EnvUser + "=" + spec.guestUser,
 		config.EnvUID + "=" + strconv.Itoa(o.cfg.UID),
 		config.EnvGID + "=" + strconv.Itoa(o.cfg.GID),
-		config.EnvKeyringPW + "=" + o.cfg.KeyringPW,
 	}
 	// Credential broker address (ADR-030): a FIXED per-bridge IP (subnet
 	// broadcast-1) the server also binds on attach — identical URL from every
@@ -716,6 +728,14 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 				return b
 			}(),
 			RestartPolicy: restartPolicy(spec.noRestart),
+			// Per-project sizing: 0 leaves Kata's own default (1 vCPU / 2 GB);
+			// the operator can cap/raise it via STYRMAN_VCPUS / STYRMAN_MEMORY_MB
+			// so project VMs aren't silently stuck on the runtime default (low
+			// finding). Kata reads these container limits to size the guest.
+			Resources: container.Resources{
+				NanoCPUs: int64(o.cfg.VCPUs) * 1_000_000_000,
+				Memory:   int64(o.cfg.MemoryMB) * 1024 * 1024,
+			},
 		},
 		&network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{netName: {}},
@@ -724,12 +744,12 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 		name,
 	)
 	if err != nil {
-		_ = o.docker.NetworkRemove(context.Background(), netName)
+		removeOurNetwork()
 		return "", fmt.Errorf("create container %s: %w", name, err)
 	}
 	if err := o.docker.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		_ = o.docker.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
-		_ = o.docker.NetworkRemove(context.Background(), netName)
+		removeOurNetwork()
 		return "", fmt.Errorf("start container %s: %w", name, err)
 	}
 	return resp.ID, nil

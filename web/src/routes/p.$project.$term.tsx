@@ -87,7 +87,10 @@ function TerminalPage() {
         </div>
         <TerminalStatusBar project={project} />
       </div>
-      <SidePanel project={project} term={term} projectName={proj?.name} />
+      {/* key={project}: reset the whole panel subtree on a project switch so no
+          child (e.g. the port-share editor) can carry one project's state — and
+          write it — onto another (M28). */}
+      <SidePanel key={project} project={project} term={term} projectName={proj?.name} />
     </>
   );
 }

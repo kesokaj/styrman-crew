@@ -36,10 +36,9 @@ func (s *Server) userSetupStatus(ctx context.Context, user string) setupStatus {
 		GitHub: files.Exists(h, ".config/gh/hosts.yml"),
 		Gcloud: files.Exists(h, ".config/gcloud/application_default_credentials.json"),
 		Claude: files.Exists(h, ".claude/.credentials.json"),
-		// agy stores its OAuth token in a file (ADR-032a was wrong about the
-		// keyring); keep the keyring as a fallback for older sign-ins.
-		Agy: files.Exists(h, ".gemini/antigravity-cli/antigravity-oauth-token") ||
-			files.Exists(h, ".local/share/keyrings/login.keyring"),
+		// agy persists its OAuth token as a plain file (ADR-038 superseded the
+		// keyring assumption of ADR-032a); readiness keys on that token file.
+		Agy:  files.Exists(h, ".gemini/antigravity-cli/antigravity-oauth-token"),
 		Done: files.Exists(h, setupDoneMarker),
 	}
 	if data, err := files.ReadRaw(h, ".gitconfig", 0); err == nil {
@@ -85,9 +84,9 @@ func (s *Server) finishSetup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Seed the broker from the setup VM BEFORE tearing it down. The setup VM
-	// mounts the user's shared base home (orchestrator.EnsureSetup) with the
-	// keyring unlocked, so finishing setup harvests every credential the user
-	// just signed into straight into the broker store — every later project
+	// mounts the user's shared base home (orchestrator.EnsureSetup), so
+	// finishing setup harvests every credential the user just signed into
+	// straight into the broker store — every later project
 	// then pulls them on login, with no separate "sign in again inside a
 	// project" step. Best-effort: a broker that's disabled or a harvest that
 	// finds nothing must never block completing setup.
@@ -216,16 +215,17 @@ func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
 	}
 	tools = append(tools, claude)
 
-	// agy
+	// agy — readiness keys on its OAuth token file (ADR-038; agy no longer
+	// uses the gnome-keyring the broker once seeded).
 	agy := toolInfo{
 		Name:      "agy",
-		Ready:     files.Exists(h, ".local/share/keyrings/login.keyring"),
+		Ready:     files.Exists(h, ".gemini/antigravity-cli/antigravity-oauth-token"),
 		ConfigDir: "~/.gemini/config",
 		Skills:    listNames(h, ".gemini/config/skills"),
 		Agents:    listNames(h, ".gemini/config/plugins/harness/agents"),
 	}
 	if agy.Ready {
-		agy.Details = []string{"keyring present (Google OAuth token stored)"}
+		agy.Details = []string{"OAuth token stored"}
 	}
 	tools = append(tools, agy)
 
