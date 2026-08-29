@@ -1217,3 +1217,97 @@ sign-in.
 
 Source: internal/httpapi/credentials.go, image/configs/styrman-setup.
 Verification: .agents/docs/changes/2026-08-29-agy-file-tier-v1.5.5.md
+
+---
+
+## ADR-039: Git RCE closed — host-side git is bootstrap-only and hardened; the checkpoint machinery is deleted (2026-08-30)
+
+**Context.** A multi-agent security review (finding C1, critical) found that
+host-side git execution against project workspaces — bind-mounted,
+guest-writable trees (ADR-027) — was a guest→server remote-code-execution
+vector: a project VM (root in its own microVM, ADR-001) could plant a
+`.git/config` with `core.fsmonitor`, `core.hooksPath`, or the `ext::`
+transport pointing at an arbitrary program, and any host-side `git`
+invocation against that tree would execute it as the styrman server
+process. ADR-035 had already moved the interactive git client
+(status/stage/commit/push/diff) to run inside the guest, for identity and
+credential reasons — but left ADR-022's checkpoint machinery
+(`internal/httpapi/checkpoints.go`, `gitrepo`'s snapshot/restore/
+`commit-tree` flow) in the backend as dead-but-present code that still ran
+host-side `git` against the same guest-writable trees: the exact RCE shape,
+just unreachable from the current UI. The residual `gitrepo.IsRepo`/
+`EnsureRepo` (`git rev-parse`, `git init`), used at project creation and the
+boot-time repo sweep (ADR-022), also ran host-side and unhardened against a
+workspace that could already hold an attacker's `.git/config` by the time
+`rev-parse` runs (e.g. after an in-guest `git clone` of a hostile repo).
+
+**Decision.** (1) Deleted the checkpoint machinery outright —
+`internal/httpapi/checkpoints.go` and `gitrepo`'s snapshot/restore/
+commit-tree functions are gone, not merely unused; ADR-022's checkpoint
+refs, private index, and 40-snapshot pruning no longer exist in any form.
+(2) The two host-side git calls that remain by necessity — `git init -b
+main` (new/adopted workspaces) and `git rev-parse --absolute-git-dir`
+(`IsRepo`) — are hardened in `internal/gitrepo/gitrepo.go`: every
+invocation passes `-c core.fsmonitor= -c core.hooksPath=/dev/null -c
+core.pager=cat -c core.editor=false -c protocol.ext.allow=never -c
+uploadpack.packObjectsHook=`, plus `GIT_CONFIG_GLOBAL=/dev/null`/
+`GIT_CONFIG_SYSTEM=/dev/null` so no ambient host config layers in either;
+`init` only ever runs when no repository exists yet, so it can never
+observe an attacker-controlled config. (3) The interactive git client
+(`internal/httpapi/git.go`) stays guest-side per ADR-035, confirmed
+unchanged by this review — direct argv (no shell), executed via
+`orchestrator.Exec` inside the project's own microVM, where a hostile
+config can only exec as that project's own already-untrusted root.
+
+**Consequences.** No git command in the styrman server process ever again
+executes against a workspace whose `.git/config` a guest could control,
+closing C1. This completes ADR-035's move (which addressed the interactive
+client but left the checkpoint code path standing) and supersedes ADR-022's
+checkpoint design entirely — checkpoints are not merely "not called by the
+UI" (ADR-035's phrasing) but deleted; the project's only backup/undo
+mechanism is, as ADR-035 already stated, the still-deferred microVM
+volume-snapshot work (TODO.md) plus whatever the user commits via the
+guest-side git client. The `gitInit` config flag (already noted dead in
+ADR-022) is untouched by this change.
+
+Source: internal/gitrepo/gitrepo.go, internal/httpapi/git.go. Verification:
+.agents/docs/changes/2026-08-30-security-review-remediation-v1.9.0.md
+(commit 0192afd).
+
+---
+
+## ADR-040: Broker keyring tier removed — agy credential delivery is file-tier only (2026-08-30)
+
+**Context.** ADR-032a added a fourth broker tier (`keyring`) to deliver
+agy's OAuth token via a seeded gnome-keyring/Secret Service item
+(`credstore.KeyringCred`/`PutKeyring`, `GET /keyring`, a `secret-tool store`
+step in the login snippet), on the premise that this agy build stores its
+token in the keyring. ADR-038 (2026-08-29) found that premise wrong — this
+agy build never touches the keyring at all; its token is a plain 0600 JSON
+file at `~/.gemini/antigravity-cli/antigravity-oauth-token` — and moved
+agy's harvest/delivery to the broker's existing file tier, but explicitly
+left the now-unused keyring tier's code in place "rather than removed in
+this change... tracked in TODO.md as a dedicated cleanup," since nothing in
+the system had used it since v1.5.5. The security review's low-severity
+backend/script pass picked up that TODO item.
+
+**Decision.** The broker keyring tier is deleted outright:
+`credstore.KeyringCred`/`PutKeyring` and the store's `keyring-<id>.json`
+kind, the broker's `GET /keyring` endpoint, and the `secret-tool store`
+block in the login-shell credential snippet
+(`image/configs/styrman-credentials.sh`) are removed. agy is now,
+unambiguously, a file-tier credential like claude's — there is no dormant
+fourth tier left in the broker.
+
+**Consequences.** ADR-032a is superseded in full: ADR-038 had already
+superseded it "on the agy-storage point specifically," and this ADR removes
+the remaining dormant code that decision deliberately left behind. The
+broker's shape reverts to three tiers in practice — git-helper, env-token,
+file-injection — with no capability regression, since no shipped tool ever
+used the keyring tier. TODO.md's "Remove the now-dormant broker keyring
+tier" item is done and struck.
+
+Source: internal/credstore/, internal/credbroker/,
+image/configs/styrman-credentials.sh. Verification:
+.agents/docs/changes/2026-08-30-security-review-remediation-v1.9.0.md
+(commit 8ca6368).

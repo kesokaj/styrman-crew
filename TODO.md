@@ -32,7 +32,11 @@ Deferred work items. Not blocking current work, but should be addressed later.
       from the operator — the old devbox `.env` is not on this machine (added 2026-08-26)
 - [ ] Backup: implement microVM **volume snapshots** of `/var/lib/styrman` (operator decision 2026-08-29, replacing the git auto-checkpoints removed in v1.7.0). Host-infra dependent — the FS must support snapshots (LVM/ZFS/btrfs) or use scheduled restic/borg to GCS; `/var/lib/styrman/{homes,projects,users}` is the whole state, ADR-027 source lives under projects/ (added 2026-08-26, updated 2026-08-29)
 - [ ] Update the clean-reinstall procedure doc (`.agents/docs/changes/2026-08-28-clean-reinstall.md` or wherever it's canonicalized next) to explicitly call out "restart the server after scrubbing StateDir/users" as a required step, not an implicit one — its omission caused the v1.5.2 first-login 400 fixed in v1.5.3 (ADR-033) (added 2026-08-29)
-- [ ] Remove the now-dormant broker keyring tier: with agy moved to the file tier in v1.5.5 (`~/.gemini/antigravity-cli/antigravity-oauth-token`), nothing uses `credstore.KeyringCred`/`PutKeyring`, the broker `GET /keyring` endpoint, or the `secret-tool store` block in `styrman-credentials.sh`. Left dormant in v1.5.5 to keep the change small; delete as a separate cleanup — ADR-032a is superseded on the agy-storage point by ADR-038 (added 2026-08-29)
+- [x] ~~Remove the now-dormant broker keyring tier~~ — done in the 2026-08-30
+      security review remediation (v1.9.0, commit 8ca6368): `credstore.
+      KeyringCred`/`PutKeyring`, `GET /keyring`, and the `secret-tool store`
+      snippet block are all deleted, not just unused. See ADR-040 (added
+      2026-08-29, closed 2026-08-30)
 - [ ] Broker-sync the gcloud ACCOUNT login (`gcloud auth login`, `~/.config/gcloud/`),
       not just ADC — today only `gcloud auth application-default login` (ADC) syncs
       via the broker's file tier (covers terraform + client libraries); per-project
@@ -44,6 +48,16 @@ Deferred work items. Not blocking current work, but should be addressed later.
 - [ ] Transcript rotation for ~/.styrman/logs (unbounded today) (added 2026-08-26)
 - [ ] Ops panel: per-project disk/memory usage, container logs. (v1.3 dashboard covers live terminal tails; resource stats still missing) (added 2026-08-26)
 - [ ] Git status badges in the sidebar (added 2026-08-26)
+- [ ] Split `web/src/components/SidePanel.tsx` into `components/panel/*` — see
+      the fuller item under "Deferred from the 2026-08-28 full audit"; deferred
+      again in the 2026-08-30 security review remediation (v1.9.0) as a pure
+      maintainability refactor, no security/correctness impact (added 2026-08-30)
+- [ ] Move `(*Server).harvestCredentials` (`internal/httpapi/credentials.go`)
+      out of the `httpapi` package into a dedicated location (e.g. alongside
+      `credstore`/`credbroker`) — credential extraction/parsing logic
+      currently lives mixed in with HTTP request handlers. Deferred in the
+      2026-08-30 security review remediation (v1.9.0) as a pure
+      maintainability refactor, no security/correctness impact (added 2026-08-30)
 
 - [ ] Makefile target for Artifact Registry push if styrman ever leaves this host (added 2026-08-26)
 
@@ -103,9 +117,13 @@ Deferred work items. Not blocking current work, but should be addressed later.
 - [ ] UI: make the primary rows (Sidebar project, TerminalList terminal,
       FileExplorer entry) keyboard-reachable (`role="button"`/tabIndex or real
       buttons).
-- [ ] UI: split the 770-line `SidePanel.tsx` into `components/panel/*`;
-      dedupe the "first terminal or create" navigation helper; `PublicLinks`'
-      sticky poll override; `useMediaQuery` for the panel's 1280px breakpoint.
+- [ ] UI: split the `SidePanel.tsx` into `components/panel/*`; dedupe the
+      "first terminal or create" navigation helper; `PublicLinks`' sticky
+      poll override; `useMediaQuery` for the panel's 1280px breakpoint.
+      Flagged again (still open, ~969 lines now vs. 770 at the 2026-08-28
+      audit) as a deliberately-deferred pure-maintainability item in the
+      2026-08-30 security review remediation (v1.9.0) — no security or
+      correctness impact, split out to keep that remediation reviewable.
 - [ ] UI: surface `usePolled` errors at the remaining call sites
       (NotificationBell, SidePanel tabs, terminal route) — dashboard, sidebar,
       settings, and SetupBanner were fixed in the audit.

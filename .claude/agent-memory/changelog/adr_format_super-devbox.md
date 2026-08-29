@@ -5,11 +5,23 @@ metadata:
   type: project
 ---
 
-super-devbox's `architecture/DECISIONS.md` ADRs (through ADR-038,
-2026-08-29) follow a consistent local style, slightly different per era but
-converged by ADR-022+. Latest entry as of 2026-08-29 is **ADR-038**; confirm
+super-devbox's `architecture/DECISIONS.md` ADRs (through ADR-040,
+2026-08-30) follow a consistent local style, slightly different per era but
+converged by ADR-022+. Latest entry as of 2026-08-30 is **ADR-040**; confirm
 the next-free number by reading the file's tail before appending — it has
-been renumbered upward multiple sessions in a row (025→034→038).
+been renumbered upward multiple sessions in a row (025→034→038→040).
+
+**Tool-access note (2026-08-30):** the changelog subagent has sometimes run
+in a harness with only Read/Grep/Glob/Edit/Write — no Bash/git tool, so
+`git show <hash>` is not available even when a task cites specific commit
+hashes as "source of truth." Workaround that worked well: treat the task
+description's per-commit summary as the lead, then spot-verify claims by
+grepping the CURRENT (post-merge) source tree for the finding IDs the review
+used (e.g. "H2", "M17", "M21" as inline code-comment tags) — this codebase's
+convention of citing finding IDs directly in comments next to the fix (see
+[[changelog_format_super-devbox]]) makes this surprisingly reliable; most
+claimed fixes in the 2026-08-30 security-review changelog/ADR-039/ADR-040
+were confirmed this way rather than via a real diff.
 
 - Heading: `## ADR-NNN: <Title> (YYYY-MM-DD)` — sequential, no gaps. Earlier
   entries (ADR-001–021) put `**Date:** ... · **Status:** accepted (...)` on
