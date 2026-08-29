@@ -205,6 +205,8 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("POST /api/projects/{project}/git/discard", s.gitDiscard)
 	mux.HandleFunc("POST /api/projects/{project}/git/commit", s.gitCommit)
 	mux.HandleFunc("POST /api/projects/{project}/git/push", s.gitPush)
+	// Format a file with its language's real CLI formatter, in the guest VM.
+	mux.HandleFunc("POST /api/projects/{project}/format", s.formatFile)
 	// Terminals: durable records, one tmux session each (ADR-016).
 	mux.HandleFunc("GET /api/projects/{project}/terminals", s.listTerminals)
 	mux.HandleFunc("POST /api/projects/{project}/terminals", s.createTerminal)

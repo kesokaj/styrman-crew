@@ -342,6 +342,12 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ content }),
     }),
+  // Format content with the language's real CLI formatter in the project VM.
+  formatFile: (project: string, path: string, content: string) =>
+    request<{ content: string }>(`/api/projects/${project}/format`, {
+      method: "POST",
+      body: JSON.stringify({ path, content }),
+    }),
   deleteFile: (scope: Scope, path: string) =>
     request<void>(`${scopeBase(scope)}/file?path=${encodeURIComponent(path)}`, {
       method: "DELETE",

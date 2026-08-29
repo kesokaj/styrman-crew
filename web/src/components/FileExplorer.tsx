@@ -32,6 +32,39 @@ import {
 
 // CodeMirror is heavy — load it only when a file is actually opened.
 const CodeEditor = lazy(() => import("./CodeEditor"));
+import type { CodeEditorHandle } from "./CodeEditor";
+
+// File extensions the server can format (its real CLI formatter runs in the
+// project VM); JSON is also handled locally. Keep in sync with format.go.
+const FORMATTABLE = new Set([
+  "go",
+  "tf",
+  "tfvars",
+  "hcl",
+  "rs",
+  "py",
+  "sh",
+  "bash",
+  "js",
+  "jsx",
+  "ts",
+  "tsx",
+  "mjs",
+  "cjs",
+  "json",
+  "css",
+  "scss",
+  "less",
+  "html",
+  "htm",
+  "md",
+  "markdown",
+  "yaml",
+  "yml",
+  "vue",
+  "graphql",
+]);
+const extOf = (p: string) => p.split(".").pop()?.toLowerCase() ?? "";
 
 const fmtSize = (n: number) =>
   n < 1024
@@ -476,11 +509,34 @@ function FileViewer({
     };
   }, [previewing, isMarkdown, text]);
 
-  const formatJSON = () => {
+  const editorRef = useRef<CodeEditorHandle>(null);
+  const [formatting, setFormatting] = useState(false);
+  const canFormat =
+    !file.binary && !file.truncated && FORMATTABLE.has(extOf(file.path));
+
+  // JSON formats locally (instant, offline); every other type runs the real CLI
+  // formatter (gofmt, prettier, terraform fmt, …) in the project VM. Both push
+  // the result through the editor's imperative setContent so the VIEW updates
+  // (and onChange flows it back to `text` → dirty).
+  const doFormat = async () => {
+    if (isJSON) {
+      try {
+        editorRef.current?.setContent(
+          JSON.stringify(JSON.parse(text), null, 2) + "\n",
+        );
+      } catch (e) {
+        toast("error", `Not valid JSON: ${(e as Error).message}`);
+      }
+      return;
+    }
+    setFormatting(true);
     try {
-      setText(JSON.stringify(JSON.parse(text), null, 2) + "\n");
+      const { content } = await api.formatFile(scope.project, file.path, text);
+      editorRef.current?.setContent(content);
     } catch (e) {
-      toast("error", `Not valid JSON: ${(e as Error).message}`);
+      toast("error", (e as Error).message);
+    } finally {
+      setFormatting(false);
     }
   };
 
@@ -549,13 +605,18 @@ function FileViewer({
                 ))}
               </div>
             )}
-            {isJSON && !file.binary && !file.truncated && (
+            {canFormat && (
               <button
-                onClick={formatJSON}
-                className="inline-flex h-7 items-center rounded-lg px-2 text-text-dim hover:bg-bg-hover hover:text-accent"
-                title="Pretty-print (2-space indent); Save to keep it"
+                onClick={doFormat}
+                disabled={formatting}
+                className="inline-flex h-7 items-center rounded-lg px-2 text-text-dim hover:bg-bg-hover hover:text-accent disabled:opacity-40"
+                title={
+                  isJSON
+                    ? "Pretty-print JSON (local); Save to keep it"
+                    : "Format with the language's formatter, run in the project VM; Save to keep it"
+                }
               >
-                Format
+                {formatting ? "Formatting…" : "Format"}
               </button>
             )}
             <a
@@ -597,6 +658,7 @@ function FileViewer({
             }
           >
             <CodeEditor
+              ref={editorRef}
               value={text}
               filename={file.path}
               dark={resolved === "dark"}

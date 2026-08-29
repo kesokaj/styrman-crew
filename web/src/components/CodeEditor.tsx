@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { EditorView, basicSetup } from "codemirror";
 import { Compartment, EditorState, StateEffect } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
@@ -121,32 +121,46 @@ const LANGUAGES = [
   }),
 ];
 
+/** Imperative handle: replace the whole document (used by Format). */
+export interface CodeEditorHandle {
+  setContent: (text: string) => void;
+}
+
 /**
  * CodeMirror 6 editor for the file viewer: syntax highlighting (language
  * picked by filename, grammar lazy-loaded), line numbers, search (Ctrl+F),
  * bracket matching, tab indent, Ctrl+S to save — deliberately nothing more.
  */
-export default function CodeEditor({
-  value,
-  filename,
-  dark,
-  readOnly,
-  onChange,
-  onSave,
-}: {
-  value: string;
-  filename: string;
-  dark: boolean;
-  readOnly: boolean;
-  onChange: (text: string) => void;
-  onSave: () => void;
-}) {
+const CodeEditor = forwardRef<
+  CodeEditorHandle,
+  {
+    value: string;
+    filename: string;
+    dark: boolean;
+    readOnly: boolean;
+    onChange: (text: string) => void;
+    onSave: () => void;
+  }
+>(function CodeEditor({ value, filename, dark, readOnly, onChange, onSave }, ref) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const themeComp = useRef(new Compartment());
   // Refs so the mount-once editor always calls the latest callbacks.
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
+
+  // Replace the document from outside (Format). The updateListener fires with
+  // docChanged, so onChange flows the new text back to the parent's state.
+  useImperativeHandle(ref, () => ({
+    setContent: (text: string) => {
+      const v = viewRef.current;
+      if (v) {
+        v.dispatch({
+          changes: { from: 0, to: v.state.doc.length, insert: text },
+        });
+      }
+    },
+  }), []);
   useEffect(() => {
     onChangeRef.current = onChange;
     onSaveRef.current = onSave;
@@ -209,4 +223,6 @@ export default function CodeEditor({
   }, [dark]);
 
   return <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden" />;
-}
+});
+
+export default CodeEditor;
