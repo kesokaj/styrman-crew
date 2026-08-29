@@ -174,11 +174,12 @@ export interface CredItem {
 export type CredImportReport = Record<string, string>;
 
 export interface SetupStatus {
-  gitIdentity: boolean;
-  sshKey: boolean;
-  github: boolean;
-  claude: boolean;
-  keyring: boolean;
+  gitIdentity: boolean; // required
+  sshKey: boolean; // required
+  github: boolean; // optional
+  gcloud: boolean; // optional
+  claude: boolean; // optional
+  agy: boolean; // optional
   done: boolean;
   vmRunning: boolean;
 }

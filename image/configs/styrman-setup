@@ -1,20 +1,29 @@
 #!/usr/bin/env bash
 # styrman-setup — one-time-per-user onboarding, run in the first-run setup VM
-# (also re-runnable in any project to check status). Walks through every
-# credential styrman needs; each lands in the home it runs in. Finishing setup
-# harvests them into the broker, which then keeps every project (current and
-# future) signed in automatically — no manual Import step (R3/ADR-032/ADR-034).
-# Idempotent: shows status and only prompts for what's missing.
+# (also re-runnable in any project to check status or sign in to more tools).
+# REQUIRED: git identity + ssh key. Everything else (GitHub, Google Cloud,
+# Claude, Antigravity) is OPTIONAL — skip it and rerun styrman-setup whenever.
+# Finishing setup harvests whatever is signed in into the broker, which keeps
+# every project current automatically (R3/ADR-032/ADR-034). Idempotent.
 set -uo pipefail
 
-BOLD=$'\033[1m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RESET=$'\033[0m'
+BOLD=$'\033[1m'; DIM=$'\033[2m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RESET=$'\033[0m'
 ok()   { echo "  ${GREEN}✔${RESET} $*"; }
 todo() { echo "  ${YELLOW}➜${RESET} $*"; }
 step() { echo; echo "${BOLD}$*${RESET}"; }
+# ask_optional PROMPT → 0 if the user says yes. Non-interactive (a harvest or a
+# piped run) always skips, so it never blocks.
+ask_optional() {
+    [ -t 0 ] || return 1
+    local ans; read -rp "  ${1} [y/N] " ans
+    case "${ans}" in [yY]*) return 0 ;; *) return 1 ;; esac
+}
 
 echo "${BOLD}styrman setup — sign in once, use everywhere${RESET}"
+echo "${DIM}Required: git identity + ssh key. GitHub, Google Cloud, Claude and"
+echo "agy are optional — skip any of them and rerun styrman-setup later.${RESET}"
 
-step "1/5 Git identity"
+step "Required · Git identity"
 if git config --global user.email >/dev/null 2>&1; then
     ok "git: $(git config --global user.name) <$(git config --global user.email)>"
 else
@@ -36,17 +45,13 @@ else
     fi
 fi
 
-step "2/5 SSH key (for git over ssh)"
+step "Required · SSH key (for git over ssh)"
 # The key is YOURS — comment it with your identity, not the platform's.
 KEY_COMMENT="$(git config --global user.email 2>/dev/null || true)"
 [ -n "${KEY_COMMENT}" ] || KEY_COMMENT="$(whoami)@styrman"
 if [ -f ~/.ssh/id_ed25519 ]; then
-    # The comment is everything between the fingerprint and the "(ED25519)"
-    # type — not just the first word (a multi-word or empty comment broke the
-    # old `awk '{print $3}'`).
     CURRENT_COMMENT=$(ssh-keygen -l -f ~/.ssh/id_ed25519.pub 2>/dev/null | sed -E 's/^[0-9]+ [^ ]+ //; s/ \([A-Z0-9]+\)$//')
     if [ "${CURRENT_COMMENT}" = "styrman" ]; then
-        # ssh-keygen -c rewrites both the private key and the .pub in place.
         if ssh-keygen -c -C "${KEY_COMMENT}" -f ~/.ssh/id_ed25519 >/dev/null 2>&1; then
             ok "key comment updated to ${KEY_COMMENT}"
         else
@@ -62,37 +67,67 @@ fi
 echo "  public key (add to https://github.com/settings/keys if not done):"
 echo "    $(cat ~/.ssh/id_ed25519.pub)"
 
-step "3/5 GitHub CLI"
+step "Optional · GitHub CLI (gh)"
 if gh auth status >/dev/null 2>&1; then
     ok "gh: logged in as $(gh api user --jq .login 2>/dev/null || echo '?')"
-else
-    todo "A one-time code and a URL will appear below."
-    echo "     → CLICK the URL (it opens github.com/login/device), enter the code, authorize."
-    # --web = device flow; the terminal makes the printed URL clickable, so no
-    # local browser is needed. --git-protocol ssh skips the protocol prompt.
+elif ask_optional "sign in to GitHub now?"; then
+    todo "A one-time code and a URL appear below — CLICK the URL, enter the code, authorize."
     gh auth login --hostname github.com --git-protocol ssh --web \
         || todo "gh login skipped/failed — rerun styrman-setup anytime"
+else
+    todo "skipped — rerun styrman-setup anytime"
 fi
 
-step "4/5 Claude Code"
+step "Optional · Google Cloud (gcloud)"
+if ! command -v gcloud >/dev/null 2>&1; then
+    todo "gcloud not installed in this project — skipping"
+else
+    GACCT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -1)"
+    if [ -n "${GACCT}" ]; then
+        ok "gcloud account: ${GACCT}"
+    elif ask_optional "sign in to Google Cloud (gcloud auth login) now?"; then
+        todo "gcloud prints a URL — CLICK it, approve, paste the verification code back."
+        gcloud auth login --no-launch-browser \
+            || todo "gcloud login skipped/failed — rerun styrman-setup anytime"
+    else
+        todo "gcloud account skipped — rerun styrman-setup anytime"
+    fi
+    # Application Default Credentials — separate from the account; this is what
+    # terraform and the client libraries use, and what the broker syncs.
+    if gcloud auth application-default print-access-token >/dev/null 2>&1; then
+        ok "gcloud ADC: present (terraform + client libraries)"
+    elif ask_optional "set up Application Default Credentials (gcloud auth application-default login) now?"; then
+        todo "another URL appears — CLICK it, approve, paste the code back."
+        gcloud auth application-default login --no-launch-browser \
+            || todo "ADC login skipped/failed — rerun styrman-setup anytime"
+    else
+        todo "ADC skipped — rerun styrman-setup anytime"
+    fi
+fi
+
+step "Optional · Claude Code"
 if [ -f ~/.claude/.credentials.json ] || claude auth status 2>/dev/null | grep -qi 'logged in'; then
     ok "claude: credentials present (~/.claude)"
-else
-    todo "claude will print a sign-in URL — CLICK it, approve, then paste the code back here; /exit when done."
+elif ask_optional "sign in to Claude now?"; then
+    todo "claude prints a sign-in URL — CLICK it, approve, paste the code back; /exit when done."
     claude || true
+else
+    todo "skipped — rerun styrman-setup anytime"
 fi
 
-step "5/5 Antigravity CLI (agy)"
-if secret-tool search --all service antigravity 2>/dev/null | grep -q .; then
-    ok "agy: keyring credentials present"
-else
-    todo "agy will print a Google sign-in URL — CLICK it, approve, paste the code back, then quit agy."
+step "Optional · Antigravity CLI (agy)"
+if [ -f ~/.gemini/antigravity-cli/antigravity-oauth-token ] \
+    || secret-tool search --all service antigravity 2>/dev/null | grep -q .; then
+    ok "agy: credentials present"
+elif ask_optional "sign in to Antigravity (agy) now?"; then
+    todo "agy prints a Google sign-in URL — CLICK it, approve, paste the code back, then quit agy."
     agy || true
+else
+    todo "skipped — rerun styrman-setup anytime"
 fi
 
 step "Done"
-echo "Your tools are signed in. When setup closes, these credentials are shared"
-echo "with every project — current and future — automatically through the broker:"
-echo "no manual import, no signing in again."
-echo "Rerun ${BOLD}styrman-setup${RESET} anytime to check status;"
+echo "Git and ssh are set up; any optional tools you signed in to are shared with"
+echo "every project — current and future — automatically through the broker."
+echo "Rerun ${BOLD}styrman-setup${RESET} anytime to check status or sign in to the rest;"
 echo "${BOLD}Settings → Credentials${RESET} shows what's shared and can re-import."

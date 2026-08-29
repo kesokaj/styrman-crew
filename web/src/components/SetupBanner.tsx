@@ -9,7 +9,11 @@ export function SetupBanner() {
   const onSetupPage = useRouterState({
     select: (s) => s.location.pathname === "/setup",
   });
-  const { data: st, refresh, error } = usePolled(() => api.setupStatus(), 10000);
+  const {
+    data: st,
+    refresh,
+    error,
+  } = usePolled(() => api.setupStatus(), 10000);
   const [confirming, setConfirming] = useState(false);
 
   // A failed probe hides the banner but must not pretend setup is done —
@@ -23,12 +27,15 @@ export function SetupBanner() {
     );
   if (!st || st.done) return null;
 
-  const items: Array<[string, boolean]> = [
+  const required: Array<[string, boolean]> = [
     ["git", st.gitIdentity],
     ["ssh", st.sshKey],
+  ];
+  const optional: Array<[string, boolean]> = [
     ["gh", st.github],
+    ["gcloud", st.gcloud],
     ["claude", st.claude],
-    ["keyring", st.keyring],
+    ["agy", st.agy],
   ];
 
   const markDone = () =>
@@ -41,12 +48,27 @@ export function SetupBanner() {
   return (
     <div className="mx-2 mb-1 rounded-md border border-warn/30 bg-warn/10 p-2.5 text-xs">
       <div className="mb-1.5 font-medium">First-time setup</div>
-      <div className="mb-2 flex flex-wrap gap-x-2 gap-y-0.5 text-text-dim">
-        {items.map(([label, ok]) => (
-          <span key={label} className={ok ? "text-ok" : ""}>
-            {ok ? "✓" : "○"} {label}
+      <div className="mb-2 space-y-0.5 text-text-dim">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          {required.map(([label, ok]) => (
+            <span key={label} className={ok ? "text-ok" : "text-warn"}>
+              {ok ? "✓" : "○"} {label}
+            </span>
+          ))}
+          <span className="text-[10px] uppercase tracking-wide opacity-60">
+            required
           </span>
-        ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+          {optional.map(([label, ok]) => (
+            <span key={label} className={ok ? "text-ok" : ""}>
+              {ok ? "✓" : "○"} {label}
+            </span>
+          ))}
+          <span className="text-[10px] uppercase tracking-wide opacity-60">
+            optional
+          </span>
+        </div>
       </div>
       <div className="flex gap-1.5">
         <button

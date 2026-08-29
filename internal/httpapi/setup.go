@@ -15,11 +15,12 @@ import (
 // Probed host-side (the server owns the homes), so it works with every
 // microVM stopped.
 type setupStatus struct {
-	GitIdentity bool `json:"gitIdentity"`
-	SSHKey      bool `json:"sshKey"`
-	GitHub      bool `json:"github"`
-	Claude      bool `json:"claude"`
-	Keyring     bool `json:"keyring"`
+	GitIdentity bool `json:"gitIdentity"` // required
+	SSHKey      bool `json:"sshKey"`      // required
+	GitHub      bool `json:"github"`      // optional
+	Gcloud      bool `json:"gcloud"`      // optional (ADC)
+	Claude      bool `json:"claude"`      // optional
+	Agy         bool `json:"agy"`         // optional (Antigravity)
 	Done        bool `json:"done"`
 	VMRunning   bool `json:"vmRunning"`
 }
@@ -31,11 +32,15 @@ func (s *Server) userSetupStatus(ctx context.Context, user string) setupStatus {
 	// symlink pointing at another tenant's file is refused, not followed.
 	h := s.cfg.UserHome(user)
 	st := setupStatus{
-		SSHKey:  files.Exists(h, ".ssh/id_ed25519"),
-		GitHub:  files.Exists(h, ".config/gh/hosts.yml"),
-		Claude:  files.Exists(h, ".claude/.credentials.json"),
-		Keyring: files.Exists(h, ".local/share/keyrings/login.keyring"),
-		Done:    files.Exists(h, setupDoneMarker),
+		SSHKey: files.Exists(h, ".ssh/id_ed25519"),
+		GitHub: files.Exists(h, ".config/gh/hosts.yml"),
+		Gcloud: files.Exists(h, ".config/gcloud/application_default_credentials.json"),
+		Claude: files.Exists(h, ".claude/.credentials.json"),
+		// agy stores its OAuth token in a file (ADR-032a was wrong about the
+		// keyring); keep the keyring as a fallback for older sign-ins.
+		Agy: files.Exists(h, ".gemini/antigravity-cli/antigravity-oauth-token") ||
+			files.Exists(h, ".local/share/keyrings/login.keyring"),
+		Done: files.Exists(h, setupDoneMarker),
 	}
 	if data, err := files.ReadRaw(h, ".gitconfig", 0); err == nil {
 		st.GitIdentity = strings.Contains(string(data), "email")
