@@ -1039,3 +1039,181 @@ working tree's git history.
 Source: internal/httpapi/setup.go, internal/httpapi/credentials.go,
 internal/terminal/bridge.go, web/src/routes/setup.tsx. Verification:
 .agents/docs/changes/2026-08-29-setup-seeds-broker-v1.5.4.md
+
+---
+
+## ADR-035: Volume-snapshot backups replace git auto-checkpoints (2026-08-29)
+
+**Context:** ADR-022 made checkpoints (periodic 10-min loop + event-driven
+snapshots on project stop / terminal pause / close / close-all, via a private
+index and `commit-tree` refs) the project's backup/undo mechanism. The
+operator decided project backups should instead come from **microVM volume
+snapshots** of `/var/lib/styrman` (host-infra: LVM/ZFS/btrfs, or scheduled
+restic/borg to GCS — still TODO, filesystem-dependent), and separately wanted
+the Git side panel to become a genuinely usable git client (status, stage,
+commit, push, diff) rather than existing only to power the checkpoint
+machinery.
+
+**Decision:** Removed `RunCheckpointLoop` and the event-driven snapshot
+triggers, plus the now-unused `Server.snapshot` helper
+(`cmd/styrman/main.go`, `internal/httpapi/server.go`,
+`internal/httpapi/checkpoints.go`); the manual checkpoint list/create/restore
+endpoints from ADR-022 remain in the backend but are no longer called by the
+UI. In their place, `internal/httpapi/git.go` became a real git client whose
+commands run INSIDE the guest VM (not host-side against the bind-mounted
+workspace) via direct argv, no shell — running in-guest is what lets a commit
+carry the user's real git identity and a push authenticate through the
+broker's credential helper (ADR-030). Commit author is injected host-side
+from the shared-home `.gitconfig` via `-c user.name/user.email`, since
+per-project homes (ADR-031) carry no identity by default.
+
+**Consequences:** Until microVM volume snapshots land, there is no automatic
+backup/undo mechanism at all for project state — only whatever git history
+the user commits themselves. `git commit` typed directly in a project
+terminal still lacked identity at ship time (only the git UI injected it
+host-side) — closed two releases later by v1.7.1
+(`STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL` env creds applied via
+`git config --global` on each login shell).
+
+Source: internal/httpapi/git.go, internal/httpapi/checkpoints.go,
+internal/httpapi/server.go, cmd/styrman/main.go,
+web/src/components/SidePanel.tsx, web/src/lib/api.ts. Verification:
+.agents/docs/changes/2026-08-29-git-ui-remove-autocheckpoints-v1.7.0.md,
+.agents/docs/changes/2026-08-29-git-identity-in-terminal-v1.7.1.md
+
+---
+
+## ADR-036: Project network isolation made effective — bridge naming + egress firewall + self-heal (2026-08-29)
+
+**Context:** ADR-029 shipped a host-INPUT `DROP` rule matching bridge
+interface `sdb-+`, verified live at the time. Live re-verification (operator
+report) found it inert: Docker names the bridge NETWORK `sdb-<uuid>` but the
+bridge INTERFACE itself `br-<hash>` — `-i sdb-+` matched nothing, so a
+project VM could in fact reach the host's SSH (:22), the LAN, and cloud
+metadata, confirmed live. ADR-029 also only ever guarded the host's own
+INPUT chain, never the FORWARD path for routed traffic to other private
+ranges (LAN, other projects' subnets, 169.254/16 metadata) — a real gap
+beyond what it addressed. Whatever fix followed also needed to survive a
+Docker daemon restart, a firewall-manager reload, or a manual flush, not
+just a reboot.
+
+**Decision:** Three parts. (1) Name bridge interfaces so the isolation rule
+can match them: `config.BridgeNameFor` derives a `sdb-<hash>` interface name
+(sha1-derived, ≤15 chars — the kernel's `IFNAMSIZ` cap), set via
+`com.docker.network.bridge.name` at both `NetworkCreate` call sites
+(`internal/config/config.go`, `internal/orchestrator/orchestrator.go`). (2)
+Add real egress filtering: `deploy/host-setup.sh`'s `styrman-firewall.sh`
+keeps the existing `INPUT -i sdb-+ DROP` (host) and adds `DOCKER-USER -i
+sdb-+ -d <range> DROP` for each RFC1918 range plus 169.254/16, covering the
+FORWARD path Docker's own chains never guarded. (3) Self-healing:
+`styrman-firewall.service` became a plain (non-`RemainAfterExit`) oneshot,
+re-triggered every minute by a new `styrman-firewall.timer`
+(`OnBootSec=15s`, `OnUnitActiveSec=60s`); the script switched from `-C ||
+-I` to unconditional delete-then-insert per rule, because `iptables-nft -C`
+false-positives against the `sdb-+` wildcard (reports a missing rule as
+present, silently skipping the insert).
+
+**Consequences:** This completes/hardens ADR-029's stated invariant ("a
+project may reach the internet and nothing else") rather than replacing
+it — the intent was always full isolation; the bridge-naming mismatch meant
+it was never actually enforced. Networks created before this fix needed
+manual recreation to pick up the new bridge name (done for the two live
+projects at the time); new projects get it automatically. Any firewall
+flush now self-heals within about a minute instead of requiring a reboot or
+manual re-run.
+
+Source: internal/config/config.go, internal/orchestrator/orchestrator.go,
+deploy/host-setup.sh. Verification:
+.agents/docs/changes/2026-08-29-network-isolation-fix-ctrlc-v1.8.3.md,
+.agents/docs/changes/2026-08-29-firewall-selfheal-timer-v1.8.4.md
+
+---
+
+## ADR-037: Deterministic Caddy upstream selection for the multi-homed server (2026-08-29)
+
+**Context:** The styrman server container is multi-homed by design —
+attached to `styrman-ingress` plus every active project's bridge (self-attach
+for the port-preview proxy and the same-bridge credential broker, ADR-015 /
+ADR-030 / ADR-032). Caddy's ingress plugin (`extractContainerIP` in
+`deploy/caddy/ingress/watcher.go`) discovered the upstream IP by iterating
+the container's Docker networks map and returning the first entry — Go map
+iteration order is randomized per process, so which IP came out was
+effectively arbitrary. It happened to return the ingress IP until the
+ADR-036 firewall fix recreated both project networks and reattached the
+server, at which point re-discovery picked a project-bridge broadcast
+address instead. Result: Caddy proxied `crew.styrman.xyz` to an unreachable
+project-bridge IP, producing a 502 whose plain-text error body the browser
+saved as `document.txt` instead of rendering — live-reported by the operator
+as a broken/blank site.
+
+**Decision:** `extractContainerIP` now selects deterministically instead of
+taking the map's first entry: (1) prefer the `styrman-ingress` network's IP
+if present; (2) else prefer any network that is not a project bridge
+(`sdb-*`); (3) else fall back to whatever network exists — the case for a
+single-homed preview VM, correctly reached via its own `sdb-*` IP. Locked in
+by a regression test (`watcher_ip_test.go`, `TestExtractContainerIP`): a
+server on ingress + two `sdb-*` bridges resolves to the ingress IP across
+100 iterations (ruling out map-order flakiness); a preview VM on a single
+`sdb-*` bridge resolves to its own IP; host-network resolves to `127.0.0.1`;
+no networks resolves empty.
+
+**Consequences:** Caddy's upstream selection for any multi-homed container
+is now stable and independent of Go map iteration order or
+network-(re)attachment order — this class of bug (silent, order-dependent
+upstream drift after a network recreate) cannot recur for the
+ingress/project-bridge split as currently shaped. Caddy-image-only fix; no
+styrman-server rebuild required.
+
+Source: deploy/caddy/ingress/watcher.go,
+deploy/caddy/ingress/watcher_ip_test.go. Verification:
+.agents/docs/changes/2026-08-29-caddy-ingress-ip-selection-v1.8.5.md
+
+---
+
+## ADR-038: agy credential storage is file-based, not keyring — amends ADR-032a (2026-08-29)
+
+**Context:** ADR-032a modelled agy's OAuth credential as a gnome-keyring
+(Secret Service) item — inferred from `strings` on the agy binary showing it
+vendors `zalando/go-keyring`, and from `styrman-setup`'s own probe keying on
+`service antigravity` — and built a whole broker tier around that
+assumption (`keyring-<id>.json` store, `GET /keyring`, a `secret-tool store`
+step in the login snippet). It left one explicit open item: confirm against
+a real (not synthetic) token that agy stores exactly one item under
+`service antigravity`. Investigating that gap live — the v1.5.4 harvest had
+reported agy "not found," blamed at the time on the minimal-mode setup VM
+not running a keyring daemon — found the real cause instead: this agy build
+does not put its token in the keyring at all. A signed-in home's
+`~/.local/share/keyrings/login.keyring` is only 719 bytes, far too small to
+hold a token, while `~/.gemini/antigravity-cli/antigravity-oauth-token` is a
+498-byte, mode-0600 JSON file (`{token: {access_token, token_type,
+refresh_token, expiry}, auth_method: "consumer"}`) — a standard, portable
+OAuth2 credential with a refresh token. `secret-tool search service
+antigravity` finds nothing on this build regardless of whether a keyring
+daemon is running: ADR-032a's premise was simply wrong for this agy build.
+
+**Decision:** agy moves to the broker's existing FILE tier (ADR-032),
+exactly like claude's credentials file: `harvestCredentials`
+(`internal/httpapi/credentials.go`) now reads
+`~/.gemini/antigravity-cli/antigravity-oauth-token` as a 0600 file
+credential instead of running the two-step `secret-tool search`/`lookup`
+keyring path. This also fixes harvesting from the minimal-mode setup VM for
+free — a plain file read needs no Secret Service/keyring daemon, where the
+keyring path structurally could never have worked there. The broker's
+keyring tier (`credstore.KeyringCred`/`PutKeyring`, `GET /keyring`, the
+login snippet's `secret-tool store` block) is left in place, unused by any
+tool, rather than removed in this change — tracked in TODO.md as a
+dedicated cleanup.
+
+**Consequences:** ADR-032a's open verification (real-token check) is
+closed, but its answer inverts the ADR's premise — agy was never a keyring
+credential for this build, so **ADR-032a is superseded on the
+agy-storage point specifically** (the four-tier broker shape it generalized
+— env / file / git-helper / keyring — remains valid; the keyring tier
+itself just currently has zero consumers and is dormant/dead code pending
+removal). Every tool the platform ships is now confirmed broker-delivered
+end to end, live-verified with a real account: git/gh/ssh/claude/agy all
+materialized in a fresh project's first login shell with zero manual
+sign-in.
+
+Source: internal/httpapi/credentials.go, image/configs/styrman-setup.
+Verification: .agents/docs/changes/2026-08-29-agy-file-tier-v1.5.5.md

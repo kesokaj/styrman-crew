@@ -60,8 +60,10 @@ bash web/e2e/run.sh                                # 35 Playwright checks (self-
   `~/projects/<dir>`; the project home holds everything else.
 - Credential broker (ADR-030/032): a bridge-only listener (`:8091`) serves
   the CURRENT git/env/file credentials to each project (caller = bridge IP);
-  a login-shell snippet materializes them. Onboard once via Settings →
-  Credentials → Import. Only `agy` still needs per-project sign-in.
+  a login-shell snippet materializes them. Setup completion auto-harvests them
+  into the broker, so every brokered tool (git/gh/ssh/claude/agy/gcloud) is
+  signed in on every project — no per-project sign-in. Manage/add via Settings →
+  Credentials (status-colored: green synced / grey not-set / red set-not-synced).
 - Terminals: durable records over tmux sessions; transcripts piped to
   `~/.styrman/logs/<projectId>/`. WS protocol: binary = PTY bytes, JSON
   text = resize, close 4000 = exited, 4001 = replaced.

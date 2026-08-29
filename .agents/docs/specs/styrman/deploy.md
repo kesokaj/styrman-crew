@@ -146,6 +146,75 @@ header-auth matrix (401 no header / 403 unauthorized / 200 authorized /
 health open) against the live state dir. The remaining untested step is the
 Google OAuth handshake itself, which needs the real client + domain.
 
+## Project→host/LAN network isolation (R12, ADR-029, self-healing since v1.8.4)
+
+Every project's Docker bridge is named `sdb-<projectID>` (`config.NetworkName`),
+but Docker's actual Linux bridge INTERFACE would default to `br-<hash>` unless
+told otherwise — and the isolation firewall matches on the interface name, not
+the Docker network name. `config.BridgeNameFor` derives a short (≤15 char,
+interface names are capped), sha1-based `sdb-<11hex>` interface name from the
+network name; both `NetworkCreate` call sites (`internal/orchestrator/
+orchestrator.go` — initial project creation and the missing-network recreate
+path) pass it as `Options: {"com.docker.network.bridge.name": ...}`. Until
+this was fixed (v1.8.3) the isolation rules matched nothing and a project VM
+could reach the host, the LAN, and cloud metadata — confirmed live before the
+fix landed; existing projects' networks had to be recreated once to pick up
+the named bridge.
+
+`deploy/host-setup.sh` installs `/usr/local/sbin/styrman-firewall.sh`, which
+adds, on every `sdb-+` bridge interface:
+- `iptables -I INPUT -i sdb-+ -j DROP` — blocks traffic addressed to the host
+  itself (its gateway IS the host, so this is the only path that matters for
+  host access).
+- `iptables -I DOCKER-USER -i sdb-+ -d <private> -j DROP` for each of
+  `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16` — blocks
+  traffic Docker routes onward (FORWARD) to the LAN, other project/system
+  bridges, or cloud metadata. `DOCKER-USER` runs first in FORWARD and survives
+  Docker restarts; `INPUT` alone doesn't cover routed traffic, which is why
+  both are needed.
+
+Public internet, return traffic (`-o sdb-+`), the port-preview proxy
+(server↔project is same-bridge L2, not routed), and the same-bridge broker are
+all unaffected.
+
+Rules are applied idempotently via **delete-then-insert**, not `-C || -I`:
+`iptables-nft`'s `-C` existence check is unreliable against the `sdb-+`
+wildcard (it can report a missing rule as present and skip the insert), so the
+script always deletes any existing copy first, then inserts fresh.
+
+Self-healing: `styrman-firewall.service` (a plain oneshot, NOT
+`RemainAfterExit` — so it can be re-triggered) is re-run by
+`styrman-firewall.timer` (`OnBootSec=15s`, `OnUnitActiveSec=60s`) every
+minute, so a Docker daemon restart, a firewall-manager reload, or a manual
+flush is undone within ~1 min rather than surviving until the next reboot.
+The `sdb-+` wildcard means new project bridges are covered automatically, no
+per-network rule needed.
+
+## Caddy ingress upstream selection (multi-homed server)
+
+The `styrman-server` container is attached to **three** Docker networks in a
+typical deploy: `styrman-ingress` (Caddy → server), plus two project bridges
+(`sdb-*`, joined for the credential broker and the port-preview proxy). Go
+map iteration over a container's networks is random-order, so naively picking
+"the first IP" (`deploy/caddy/ingress/watcher.go`'s `extractContainerIP`) can
+return a dead project-bridge IP instead of the reachable ingress IP — this
+happened live (v1.8.5): Caddy proxied `crew.<domain>` to a `sdb-*` bridge
+address, which timed out, producing a 502 the browser saved as a bare
+`document.txt` (no content-type on the error body). It surfaced after the
+v1.8.3 network recreation reshuffled the map; the bug was latent since the
+server first became multi-homed.
+
+Fixed to select deterministically, in order:
+1. The `styrman-ingress` network's IP, if the container is on it (the normal
+   case for `styrman-server`).
+2. Otherwise any network NOT named `sdb-*` (avoids project bridges).
+3. Otherwise whatever's there — a **preview VM** legitimately has only its own
+   `sdb-*` network, and that IS the correct target for it.
+
+Host-network containers still resolve to `127.0.0.1` (a prior, unrelated
+branch). Locked in by `TestExtractContainerIP`
+(`deploy/caddy/ingress/watcher_ip_test.go`).
+
 ## Credential broker (ADR-030/032)
 
 The containerized server runs a second, credential-only listener
@@ -160,9 +229,13 @@ does not expose it).
 On-disk: the broker's store lives at `<state>/credentials/<user>/` (0600
 JSON files — git tokens, env tokens, injected files). **Back it up** with
 the rest of the state dir; deleting a file revokes that credential for new
-sessions. Onboarding: sign the tools in inside any running project, then
-`Settings → Credentials → Import from a project` (or
-`POST /api/settings/credentials/import`).
+sessions. Onboarding is now automatic (ADR-034, v1.5.4): finishing first-run
+`styrman-setup` harvests every credential the user just signed into — from
+the setup VM's shared home — straight into the broker, so every project
+created afterwards is current with zero re-auth. `Settings → Credentials →
+Import from a project` (`POST /api/settings/credentials/import`) still
+exists as a supplementary/refresh path — for rotated tokens, or a tool the
+user signed into inside a project instead of at setup time.
 
 Per-project homes (ADR-031) live at `<state>/homes/<user>/p/<uuid>` —
 each mounted as that project's `$HOME`; `homes/<user>` itself is only the

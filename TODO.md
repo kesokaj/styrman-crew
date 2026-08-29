@@ -12,8 +12,11 @@ Deferred work items. Not blocking current work, but should be addressed later.
 - [ ] UI: reduce poll amplification (Sidebar + dashboard each poll listProjects; hoist to one shared source). Partially mitigated in v1.3: usePolled pauses in hidden tabs; dashboard terminal polls calmed to 30s (added 2026-08-26)
 - [x] ~~UI: replace two-stage delete confirm()s with a dialog~~ — v1.3 phase 2 removed ALL native popups (2026-08-28)
 
-- [ ] Complete claude + agy first-run sign-in in the demo projects (operator's browser
-      needed once; agy's remote-OAuth code flow works through the web terminal) (added 2026-08-26)
+- [x] ~~Complete claude + agy first-run sign-in in the demo projects~~ — superseded:
+      the credential broker now pulls every tool, agy included, into every project's
+      first login shell automatically (v1.5.4 setup-seeds-broker; v1.5.5 moved agy
+      from the dead keyring-tier assumption to the file tier, ADR-038). No manual
+      per-project sign-in remains (added 2026-08-26, closed 2026-08-29)
 - [ ] agy native resume: find its session/store mechanism and wire into paneCommand (ADR-011) (added 2026-08-26)
 - [ ] Conversation auto-titles from claude transcript summaries (~/.claude/projects) (added 2026-08-26)
 - [ ] Integration check for agent-path keyring (DBUS in agent conversations, not just
@@ -29,7 +32,12 @@ Deferred work items. Not blocking current work, but should be addressed later.
       from the operator — the old devbox `.env` is not on this machine (added 2026-08-26)
 - [ ] Backup: implement microVM **volume snapshots** of `/var/lib/styrman` (operator decision 2026-08-29, replacing the git auto-checkpoints removed in v1.7.0). Host-infra dependent — the FS must support snapshots (LVM/ZFS/btrfs) or use scheduled restic/borg to GCS; `/var/lib/styrman/{homes,projects,users}` is the whole state, ADR-027 source lives under projects/ (added 2026-08-26, updated 2026-08-29)
 - [ ] Update the clean-reinstall procedure doc (`.agents/docs/changes/2026-08-28-clean-reinstall.md` or wherever it's canonicalized next) to explicitly call out "restart the server after scrubbing StateDir/users" as a required step, not an implicit one — its omission caused the v1.5.2 first-login 400 fixed in v1.5.3 (ADR-033) (added 2026-08-29)
-- [ ] Remove the now-dormant broker keyring tier: with agy moved to the file tier in v1.5.5 (`~/.gemini/antigravity-cli/antigravity-oauth-token`), nothing uses `credstore.KeyringCred`/`PutKeyring`, the broker `GET /keyring` endpoint, or the `secret-tool store` block in `styrman-credentials.sh`. Left dormant in v1.5.5 to keep the change small; delete as a separate cleanup and note ADR-032a is superseded on the agy-storage point (added 2026-08-29)
+- [ ] Remove the now-dormant broker keyring tier: with agy moved to the file tier in v1.5.5 (`~/.gemini/antigravity-cli/antigravity-oauth-token`), nothing uses `credstore.KeyringCred`/`PutKeyring`, the broker `GET /keyring` endpoint, or the `secret-tool store` block in `styrman-credentials.sh`. Left dormant in v1.5.5 to keep the change small; delete as a separate cleanup — ADR-032a is superseded on the agy-storage point by ADR-038 (added 2026-08-29)
+- [ ] Broker-sync the gcloud ACCOUNT login (`gcloud auth login`, `~/.config/gcloud/`),
+      not just ADC — today only `gcloud auth application-default login` (ADC) syncs
+      via the broker's file tier (covers terraform + client libraries); per-project
+      `gcloud` CLI commands still need a manual, per-project account sign-in (noted
+      in v1.8.0's setup-optional-gcloud change) (added 2026-08-29)
 
 ## Low Priority
 

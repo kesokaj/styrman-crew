@@ -30,9 +30,45 @@ path — up to a few seconds; the HTTP upgrade completes only after readiness).
 
 There are no other text messages; unknown control types are ignored.
 
-The client intercepts Ctrl/Cmd+C only when a selection exists (copies it;
-otherwise the byte passes through as SIGINT), and Ctrl/Cmd+V / Ctrl+Shift+V
-paste via the clipboard API.
+The client intercepts Ctrl/Cmd+V / Ctrl+Shift+V paste via the clipboard API,
+and Cmd+C to copy a selection explicitly. Plain Ctrl+C is handled specially —
+see Browser-side keyboard handling below.
+
+## Browser-side keyboard handling
+
+The wire protocol above is unchanged; these are `web/src/lib/terminal.ts`
+key-event interceptors that decide what bytes get sent, ahead of xterm's own
+handling (xterm supports exactly one custom key handler; this module chains
+several via an internal `keyHandlers` array, first `false` wins).
+
+- **Ctrl+C always interrupts.** Copy-on-select (the terminal copies the
+  moment a selection is highlighted) leaves a lingering highlight, and the
+  BROWSER's own copy-on-Ctrl+C swallowed the keydown before xterm ever saw
+  it — so `^C` never reached the shell (couldn't kill e.g. `ping`), even
+  though the guest PTY delivers SIGINT correctly once the byte arrives.
+  Fixed: plain Ctrl+C sends ETX (`\x03`) explicitly via `term.input()` and
+  calls `preventDefault()`, so neither the browser's copy nor xterm's
+  default can intercept it; any lingering selection is cleared. Only Cmd+C
+  (`metaKey`) still copies (v1.8.3, hardened v1.8.6).
+- **AltGr / Option compose** non-US symbols (`@ $ { } [ ] \ € …`) instead of
+  acting as Meta. xterm otherwise mistakes the modifier for Meta and sends
+  `ESC <key>`, which readline renders as `(arg: N)` instead of typing the
+  character. Detected per platform: Windows/Linux via the `AltGraph`
+  modifier state or (Chrome) `ctrlKey && altKey` together; macOS via `altKey`
+  alone (`macOptionIsMeta` is deliberately kept off so Option types symbols —
+  Nordic Mac `@` is Option+2). When the OS has already composed a printable
+  single character into `ev.key`, that exact character is typed and xterm is
+  stopped; left-Alt-only (real Meta, e.g. readline `Alt+b`) and Option+Arrow/
+  F-keys/dead keys are left untouched (v1.8.6 Windows/Linux, v1.8.7 macOS).
+- **Nordic/Swedish dead keys** (`~ \` ^ ´ ¨`) are intercepted ahead of
+  xterm's browser-IME-based composition, which is buggy for these layouts
+  (xterm.js #2151/#2479). On a dead keydown (`ev.key === "Dead"`), the
+  physical key (`ev.code`, layout-independent) + modifiers resolve to a
+  pending spacing diacritic; the next keystroke resolves it — Space emits
+  the bare diacritic, a vowel in the precompose table emits the accented
+  letter (é, ã, ô, …), anything else emits the bare diacritic and falls
+  through. Inert on layouts where those keys aren't dead (e.g. US), and
+  falls through untouched for dead keys it doesn't map (v1.8.8/v1.8.9).
 
 ## Close codes
 

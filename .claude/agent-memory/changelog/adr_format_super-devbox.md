@@ -5,9 +5,11 @@ metadata:
   type: project
 ---
 
-super-devbox's `architecture/DECISIONS.md` ADRs (through ADR-025,
-2026-08-27) follow a consistent local style, slightly different per era but
-converged by ADR-022+:
+super-devbox's `architecture/DECISIONS.md` ADRs (through ADR-038,
+2026-08-29) follow a consistent local style, slightly different per era but
+converged by ADR-022+. Latest entry as of 2026-08-29 is **ADR-038**; confirm
+the next-free number by reading the file's tail before appending — it has
+been renumbered upward multiple sessions in a row (025→034→038).
 
 - Heading: `## ADR-NNN: <Title> (YYYY-MM-DD)` — sequential, no gaps. Earlier
   entries (ADR-001–021) put `**Date:** ... · **Status:** accepted (...)` on
@@ -47,3 +49,14 @@ against the code and (if one exists) the changelog entry that shipped the
 feature before writing — don't take a task description's claims on faith.
 See also [[changelog_format_super-devbox]] for the sibling changes/
 convention.
+
+**Amendments/reversals are NEW sequential ADRs, never edits to the old
+one** (the file is append-only). Precedent: ADR-032a ("amends ADR-032") and
+ADR-038 ("amends ADR-032a") are both separate numbered entries whose
+`**Context:**` paragraph names the ADR they revise and says what changed;
+the old ADR's own text is left untouched (a task may ask to add a note
+"under" the old ADR — translate that into a new trailing entry that
+references it, not an in-place edit). Use the phrase "superseded on the
+`<specific point>`" when only part of an old ADR is wrong (e.g. ADR-032a's
+broker-tier shape stayed valid; only its agy-storage assumption was wrong),
+rather than declaring the whole prior ADR dead when it isn't.

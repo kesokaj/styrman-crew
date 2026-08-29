@@ -18,6 +18,26 @@ names are display-only.
 | `PATCH /api/projects/{id}`                | Rename (friendly name only): `{"name"}`. The workspace dir (`dir`) never moves.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `DELETE /api/projects/{id}[?wipe=true]`   | Destroy the microVM + records. Returns **202 immediately**; the destroy runs detached (a Kata teardown can take minutes) and the project reports `state:"deleting"` until its record disappears from the list. Repeated DELETEs while in flight are idempotent 202s; boot paths (start, terminal attach) refuse while a destroy is in flight so a reconnecting terminal can't resurrect the container. On failure the record stays, `deleteError` carries the message in the list/get views, and the delete can be retried. `wipe` also deletes workspace, `~/.dockerd/<id>.img`, and transcripts — the UI requires typing "delete".                                                                                        |
 | `POST /api/projects/{id}/start` · `/stop` | Boot / stop the microVM.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `GET /api/projects/{id}/stats`            | Live resource snapshot of the running microVM, behind the terminal status bar: CPU %, vCPU count, 1-min load, memory used/total, disk used/total (`df` of the guest `$HOME`, a host-backed mount — shown as a % to stay meaningful), process count, uptime, guest hostname, bridge IP (resolved host-side). Sampled in ONE guest pass with a non-login shell so it never triggers the per-login credential pull. Stopped/absent project → `{state}` only, no numbers; an exec failure returns zeros rather than erroring.                                                                                                                                                                                            |
+
+## Git (real client)
+
+Every git command in the Git side panel runs INSIDE the project's guest VM —
+where the user's git identity and the broker's credential helper live, so
+commits carry the right author and push authenticates — as direct argv,
+never a shell, so client-supplied paths can never be interpreted as shell.
+The project must be running: `status`/`diff` degrade to `{state:"stopped"}`;
+every mutating route 409s `"start the project to use git"` instead.
+
+| Method & path                                            | Purpose                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/projects/{id}/git/status`                       | Branch, upstream, ahead/behind, and every changed path from `git status --porcelain=v2`: `{state, repo, branch, upstream, ahead, behind, clean, files:[{path, staged, unstaged, untracked, origPath}]}`. Not a repo (or git failed) → `repo:false, clean:true` — reported cleanly, not an error. |
+| `GET /api/projects/{id}/git/diff?path=&staged=&untracked=` | Diff for one path (worktree by default; `staged=true` reads the index) or the whole tree with no `path`. `untracked=true` diffs an untracked file against `/dev/null` via `git diff --no-index`.                                                                                               |
+| `POST /api/projects/{id}/git/stage`                        | `{"path"}` or `{"all":true}` → `git add`.                                                                                                                                                                                                                                                        |
+| `POST /api/projects/{id}/git/unstage`                      | `{"path"}` or `{"all":true}` → `git reset`.                                                                                                                                                                                                                                                      |
+| `POST /api/projects/{id}/git/discard`                      | `{"path","untracked"?}` → `git checkout --` (or `git clean -fd --` for an untracked path). Destructive; confirmed in the UI.                                                                                                                                                                    |
+| `POST /api/projects/{id}/git/commit`                       | `{"message"}` → commits staged changes. Author is injected via `-c user.name/user.email` read from the user's SHARED-home `.gitconfig` (per-project homes carry no identity — the broker syncs the auth token, not the identity); falls back to git's own "who are you" error if none is set. `409` with git's first output line on failure (e.g. nothing staged). |
+| `POST /api/projects/{id}/git/push`                         | Pushes the current branch; sets upstream (`push -u origin <branch>`) on first push. `409` "no commits yet — make a commit first" if `HEAD` doesn't resolve; `502` with git's error line on push failure.                                                                                       |
 
 ## Terminals (durable, ADR-016)
 
@@ -83,6 +103,12 @@ stopped. Traversal and symlink escapes refused.
 | `POST .../upload?path=`      | Multipart upload into a directory (drag & drop; ≤512 MB).                                                                                                |
 | `GET .../download?path=`     | Raw download.                                                                                                                                            |
 
+## Format (server-side)
+
+| Method & path                    | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/projects/{id}/format` | `{"path","content"}` → runs that file's real CLI formatter INSIDE the guest VM (where the toolchain lives) and returns `{"content"}` reformatted. Picked by extension: `gofmt` (go); `terraform fmt` falling back to `tofu fmt` (tf/tfvars/hcl); `rustfmt` (rs); `black` falling back to `ruff format` (py); `shfmt` (sh/bash); `prettier` (js/jsx/ts/tsx/mjs/cjs/json/css/scss/less/html/htm/md/markdown/yaml/yml/vue/graphql). Content round-trips through a guest temp file, base64-in so it's never shell-interpolated. `400` for an unsupported extension, `409` if the project isn't running, `422` with the formatter's own first output line if the tool is missing ("command not found") or rejects the input. The editor's own JSON Format button still formats locally/offline instead of calling this. |
+
 ## History & diff (ADR-017)
 
 | Method & path                    | Purpose                                                                                                                               |
@@ -92,14 +118,18 @@ stopped. Traversal and symlink escapes refused.
 | `GET .../history/{session}`      | Transcript text, ANSI-stripped, tail-capped (`?bytes=`, clamped to 4 MiB).                                                            |
 | `GET /api/projects/{id}/diff`    | `{repo, branch, status, diff}` from git in the workspace. Every workspace is a git repo (R13), so this never 404s for a missing repo. |
 
-## Checkpoints (ADR-022)
+## Checkpoints (ADR-022, backend only — automation removed in v1.7.0)
 
-Automatic whole-tree snapshots of the workspace (tracked + untracked files;
-`.gitignore`d files excluded), stored under `refs/styrman/checkpoints/*` via
-a private index — never on the user's branches, never pushed, invisible to
-`git log`. Capped at 40 (oldest pruned). Auto-triggers: project stop,
-terminal pause/close/close-all, and before every restore; manual via the
-Git tab's "Checkpoint now" button or the POST below.
+The automatic checkpoint mechanism (a 10-min loop plus snapshots on project
+stop / terminal pause / terminal close / all-terminals-closed) was REMOVED:
+the Git side panel became a real git client (above — status/stage/commit/
+push/diff) and the operator's chosen backup story is microVM volume
+snapshots of `/var/lib/styrman` instead (host infra — LVM/ZFS/restic;
+tracked in `TODO.md`, not yet built). The endpoints below still exist in the
+backend (whole-tree snapshots of tracked + untracked files, `.gitignore`d
+files excluded, stored under `refs/styrman/checkpoints/*` via a private
+index — never on the user's branches, never pushed, invisible to `git log`;
+capped at 40, oldest pruned) but nothing in the current UI calls them.
 
 | Method & path                         | Purpose                                                                                                                                                                                                                                     |
 | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -115,21 +145,26 @@ Git tab's "Checkpoint now" button or the POST below.
 | `POST /api/settings/profile`                                      | Set `{"terminalUsername"}` — the in-guest username; applies to microVMs started afterwards. Empty resets to the identity slug.                          |
 | `GET /api/settings/tools`                                         | Per-tool cards from the SETUP VM's home (`homes/<user>` — projects have their own homes since ADR-031): git/ssh/github/claude/agy — ready state, details, and claude/agy skills, subagents, commands.                      |
 | `PATCH /api/settings/runtime` | **Admin only.** Operator tunables `{"dockerDiskGB","idleTimeout"}` — disk 5-500 GB (new project VMs only), idle a Go duration ≥10m or `0s` = never (applies to the reaper immediately). Persisted in `StateDir/settings.json`, overriding the env defaults across restarts. |
-| `GET /api/settings/credentials` | List what the user has onboarded into the broker (ADR-032), value-free: `{"items":[{"kind":"git\|env\|file\|keyring","id","name"}]}`. `id` is the delete key (host / KEY / file id); `name` is the label (host / KEY / path). Never returns the secret. |
-| `POST /api/settings/credentials/import` | Onboard everything from one running reference project in a single pass (ADR-032): `{"project":"<running id>"}`. Extracts gh (keyring → `GH_TOKEN` + git helper), claude (`~/.claude/.credentials.json`), gcloud ADC, the first `~/.ssh/id_*`, an npm authToken, and agy's keyring item (`service antigravity`, ADR-032a) — each best-effort, returned as `{"report":{tool: status}}`. |
+| `GET /api/settings/credentials` | List what the user has onboarded into the broker (ADR-032), value-free: `{"items":[{"kind":"git\|env\|file\|keyring","id","name"}]}`. `id` is the delete key (host / KEY / file id); `name` is the label (host / KEY / path). Never returns the secret. The `keyring` kind is dormant since v1.5.5 — nothing currently harvests into it (agy moved to the `file` tier; see runtime-image.md). |
+| `POST /api/settings/credentials/import` | Onboard everything from one running reference project in a single pass (`harvestCredentials`, ADR-032/034 — the same helper `POST /api/setup/done` calls against the setup VM): `{"project":"<running id>"}`. Extracts gh (`gh auth token` → `GH_TOKEN` + git helper), the user's git identity from their shared-home `.gitconfig` (env creds `STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL`), claude (`~/.claude/.credentials.json`), gcloud ADC, the first `~/.ssh/id_*`, an npm authToken, and agy's OAuth token file (`~/.gemini/antigravity-cli/antigravity-oauth-token`, file tier — NOT the keyring; ADR-032a's keyring assumption didn't match this agy build) — each best-effort, returned as `{"report":{tool: status}}`. Since v1.5.4 this is largely a supplementary/refresh path: finishing first-run setup already seeds the broker automatically (ADR-034). |
 | `POST /api/settings/credentials/git` | Git-only subset of `/import` (ADR-030): `{"project":"<running id>","host"?}` → the `gh` token as the git helper credential. |
-| `POST /api/settings/credentials/token` | Store a pasted env-token credential (ADR-032): `{"key":"NPM_TOKEN","value":"…"}`. `key` must be a shell identifier. Exported into every project's login shells. |
+| `POST /api/settings/credentials/token` | Store/update ANY custom env-var credential — an npm token, a database URL, an API key, etc. (ADR-032): `{"key":"NPM_TOKEN","value":"…"}`. `key` must be a shell identifier (upper-cased by the UI); re-storing a name updates it. Exported into every project's login shells. |
 | `DELETE /api/settings/credentials/{kind}/{name}` | Remove one credential (ADR-032). `kind` ∈ `git\|env\|file\|keyring`; `name` is the `id` from the list (host / KEY / file id). `204`, or `404` if absent. |
+| `GET /api/settings/credentials/{kind}/{id}/content` | Read one stored credential's value — the "click to read" viewer on the admin-only Settings surface, the exact value the broker materializes into every project. `file` returns `{"content","path"}` (or `{"path","binary":true}` for non-UTF8 data); `env` returns `{"content","path"}` (the value); `git` returns `{"content","path"}` (the token, path = `"<host> (<username>)"`); `keyring` returns `{"path","binary":true}` (opaque, never dumped). `503` if the broker is disabled, `404` if the id isn't found. |
 | `POST /api/settings/users` · `DELETE /api/settings/users/{email}` | **Admin only** (env-provided accounts). Manage who may sign in; each user gets their own isolated space. API-only since v1.3 (operator Q4): the Settings UI card was removed and `allowedUsers` no longer appears in `GET /api/settings`. |
 
 ## Setup (first-time onboarding, per user)
 
-| Method & path           | Purpose                                                                     |
-| ----------------------- | --------------------------------------------------------------------------- |
-| `GET /api/setup/status` | Probe of the user's home: git/ssh/github/claude/keyring + done + vmRunning. |
-| `POST /api/setup/start` | Boot the user's hidden minimal VM (~1 s).                                   |
-| `POST /api/setup/done`  | Write `~/.styrman/setup-done`, destroy the VM.                              |
-| `DELETE /api/setup`     | Destroy the VM without marking done.                                        |
+Only git identity + an ssh key are REQUIRED (v1.8.0); GitHub, Google Cloud,
+Claude and agy are optional, each skippable and re-runnable later via
+`styrman-setup`.
+
+| Method & path           | Purpose                                                                                                                                                                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /api/setup/status` | Probe of the user's home: `{gitIdentity, sshKey, github, gcloud, claude, agy, done, vmRunning}`. `gitIdentity`/`sshKey` are required; the rest optional. `gcloud` checks for ADC; `agy` checks its OAuth token file first, the legacy keyring as fallback. |
+| `POST /api/setup/start` | Boot the user's hidden minimal VM (~1 s).                                                                                                                                                                                                    |
+| `POST /api/setup/done`  | Seeds the credential broker from the setup VM's shared home first — best-effort, never blocks completion (ADR-034; same `harvestCredentials` helper as `/import` above) — then writes `~/.styrman/setup-done` and destroys the VM. The terminal itself now closes automatically when `styrman-setup` exits (v1.5.4), no manual "Done" click. |
+| `DELETE /api/setup`     | Destroy the VM without marking done.                                                                                                                                                                                                        |
 
 ## Misc
 

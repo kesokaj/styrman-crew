@@ -32,10 +32,10 @@
    installs, history) leaks between them. The ONLY thing shared across a user's
    projects is credentials, delivered by the credential broker (ADR-032): git via
    per-op credential helper (nothing stored in the VM); gh/npm/claude via env
-   tokens; gcloud ADC + the ssh key via file injection; agy via the keyring
-   tier (its go-keyring Secret Service item, `service antigravity`, seeded
-   into each project's unlocked keyring — ADR-032a) — all pulled current on
-   every login shell. docker→registry creds: planned (no adapter yet). Sign in
+   tokens; gcloud ADC + the ssh key via file injection; agy via file injection
+   of its OAuth token (`~/.gemini/antigravity-cli/antigravity-oauth-token`;
+   ADR-032a amended 2026-08-29 — the earlier keyring tier is dormant) — all
+   pulled current on every login shell. docker→registry creds: planned (no adapter yet). Sign in
    to each brokered tool **once**; a refresh in any project propagates to all;
    destroying and recreating any container must lose nothing outside that
    container's runtime state.
@@ -69,15 +69,18 @@
     proxy but has `ip_forward=0` so it can never route between projects. Host
     networking is for the Caddy ingress ONLY, never for projects. Verified
     adversarially (a project with NET_ADMIN adding a manual route through the
-    server stays blocked). See ADR-015.
+    server stays blocked). Enforced by naming the bridge interface `sdb-<hash>`
+    (so the firewall matches), DOCKER-USER egress drops to RFC1918 + metadata,
+    and a self-healing firewall timer (ADR-036). See ADR-015.
 
 13. **R13 — Git is the substrate** (operator directive 2026-08-27): every
     project workspace IS a git repository, without exception — initialized
     (or cloned) at creation, re-initialized by a boot-time sweep if ever
-    missing. Git powers the diff view and checkpoints: automatic whole-tree
-    snapshots stored under `refs/styrman/checkpoints/*` — never on the
-    user's branches, never pushed, restorable from the UI (and every restore
-    first checkpoints the current state, so it is itself undoable).
+    missing. Git powers the diff view and the git side panel — a real in-guest
+    client (status / stage / unstage / discard / commit / push, correct author
+    identity + broker push auth). Automatic checkpoints under
+    `refs/styrman/checkpoints/*` were REMOVED 2026-08-29 (ADR-035); durable
+    backups are now microVM VOLUME snapshots (host infra, planned).
 
 ## Constraints
 

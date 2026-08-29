@@ -18,11 +18,15 @@ containers disposable always.
 - **The agent CLI is the interface.** No custom chat UI to maintain — the
   terminal is the surface, organized like a conversation app: projects →
   terminals in the sidebar, project context (files, ports, history, git)
-  in the side panel.
+  in the side panel. A thin status bar under every terminal shows live
+  CPU/mem/disk/IP/uptime and how many credentials are synced into it.
 - **Every project is a git repo, always.** Initialized (or cloned) at
-  creation, no exceptions. Automatic checkpoints snapshot the whole working
-  tree on key events AND every 10 minutes while you work, restorable with
-  one click from the Git tab.
+  creation, no exceptions. The **Git tab is a real client**: status, stage/
+  unstage, commit (author auto-injected), push, and per-file diffs, running
+  inside the project's own VM so the right identity and credentials apply.
+  Server-side **Format** reformats a file with its real CLI formatter
+  (`gofmt`, `prettier`, `black`, `rustfmt`, `shfmt`, `terraform fmt`, …), also
+  run inside the VM.
 - **Per-project everything.** Each project owns its **home** (ADR-031) and
   its workspace storage (ADR-027), its Docker daemon and disk, its network —
   and its apt packages: what you `apt install` is captured at shutdown and
@@ -32,8 +36,10 @@ containers disposable always.
   an optional autostart command (start your dev server or a container the
   moment the session opens).
 - **Hard isolation.** 1 project = 1 microVM (own kernel, own dockerd, own
-  network, own home — projects can never reach each other). Users never see
-  each other's worlds.
+  network, own home — projects can never reach each other, nor the host or
+  the LAN). Enforced by a host firewall that a self-healing systemd timer
+  re-applies every 60s, so a Docker restart or a manual flush can't leave it
+  open for long (ADR-029). Users never see each other's worlds.
 - **Share previews, not access.** A project owner can grant specific Google
   emails access to ONE exposed port's preview — never the terminal, files,
   dashboard, or other ports. Sharing mints a stable **private link** on its
@@ -41,13 +47,16 @@ containers disposable always.
   a public, expiring link (`1h`/`24h`/`7d`, no login, revocable) lives on
   `*.public` (ADR-025). The hostname tells you the auth model. All
   least-privilege by construction.
-- **Credentials once, everywhere.** Sign in to a tool once in any project,
-  import it, and a **credential broker** (ADR-030/032) keeps the single live
-  copy and delivers the current one to every project — git (per-op helper,
-  nothing stored in the VM), gh/npm/claude tokens (exported into each login
-  shell), gcloud ADC + ssh key (written into each home), and agy (its keyring
-  item seeded into each project's keyring, ADR-032a). A refresh anywhere
-  propagates; new projects are current with no re-auth.
+- **Credentials once, everywhere.** Sign in during first-run setup (git/ssh
+  required; GitHub, Google Cloud, Claude and agy optional and skippable) and
+  a **credential broker** (ADR-030/032/034) auto-seeds itself and keeps the
+  single live copy current for every project — git (per-op helper, nothing
+  stored in the VM), gh/npm/claude/git-identity tokens (exported into each
+  login shell), gcloud ADC + ssh key + claude + agy's OAuth token (written
+  into each home). A refresh anywhere propagates; new projects are current
+  with no re-auth. Settings → Credentials shows a status-colored view
+  (signed in & synced / not set up / signed in but not synced) with a
+  click-to-read viewer for each stored value.
 
 ## Architecture
 
@@ -80,23 +89,32 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.5.0**, deployed: https://crew.styrman.xyz (Google sign-in). Verified by
-3 suites (unit + race, 62 integration checks against real Kata, 35
-self-hosted Playwright browser checks) plus a live post-deploy battery.
-v1.5 completes the **credential broker** (ADR-030/032/032a): every shipped
-tool — agy included — is shared once and kept current across a user's
-projects via one pull-on-login mechanism (git helper / env / files /
-keyring), with a
-Settings **Credentials** panel and one-pass import from a running project. It
-builds on v1.4's **per-project homes** (ADR-031) — each project fully
-individual, credentials the only shared thing. v1.3 brought the full UI
-redesign (Material 3 tokens, Google Sans Flex + Google Sans Code self-hosted,
-light/dark/system themes, crew branding), a dashboard with live terminal
-tails, full-text history search, markdown preview, dynamic runtime settings,
-per-project workspace storage (ADR-027), per-terminal autostart, and apt
-persistence (ADR-028). Earlier: per-port preview sharing (ADR-024), public TTL
-links (ADR-025), private email-gated links (ADR-026). The living documentation
-is `.agents/docs/specs/styrman/guide.md`; per-release notes live in
+**v1.8.9**, deployed: https://crew.styrman.xyz (Google sign-in). Verified by
+3 suites (unit + race, 62 integration checks against real Kata, self-hosted
+Playwright browser checks) plus a live post-deploy battery on every release.
+v1.5 completed the **credential broker** (ADR-030/032/032a/034): finishing
+first-run setup now auto-seeds it — sign in once (git/ssh required, the rest
+optional and skippable), no manual import step — and agy syncs via a plain
+OAuth token file rather than the keyring tier ADR-032a originally assumed
+(now dormant). v1.7 replaced automatic git checkpoints with a **real git
+client** in the side panel (status/stage/commit/push/diff, running inside
+the project VM so identity and auth apply) and added server-side code
+**Format**ting via each language's real CLI formatter. v1.8 hardened project
+network isolation with a self-healing firewall (re-applies every 60s, so a
+Docker restart can't leave a project reachable from the host/LAN, ADR-029),
+fixed a Caddy multi-homing bug that could 502 the whole app, consolidated
+Settings into one status-colored **Credentials** view, added a live terminal
+status bar, and improved terminal keyboard handling (Ctrl+C, AltGr/Option
+symbol compose, Nordic dead keys) for non-US layouts. It builds on v1.4's
+**per-project homes** (ADR-031) — each project fully individual, credentials
+the only shared thing — and v1.3's UI redesign (Material 3 tokens, Google
+Sans Flex + Google Sans Code self-hosted, light/dark/system themes, crew
+branding), a dashboard with live terminal tails, full-text history search,
+markdown preview, dynamic runtime settings, per-project workspace storage
+(ADR-027), per-terminal autostart, and apt persistence (ADR-028). Earlier:
+per-port preview sharing (ADR-024), public TTL links (ADR-025), private
+email-gated links (ADR-026). The living documentation is
+`.agents/docs/specs/styrman/guide.md`; per-release notes live in
 `.agents/docs/changes/`.
 
 ## Requirements
@@ -116,7 +134,7 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) 
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
 
 # Production (Google OAuth, HTTPS, reboot-safe; stamp the version you deploy):
-vi deploy/.env && STYRMAN_VERSION=1.5.0 docker compose -f deploy/docker-compose.yml up -d --build
+vi deploy/.env && STYRMAN_VERSION=1.8.9 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 Full walkthrough, operations, and troubleshooting:

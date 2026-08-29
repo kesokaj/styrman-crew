@@ -27,7 +27,8 @@ Load-bearing ideas:
    storage dir (`/var/lib/styrman/projects/<user>/<uuid>`, ADR-027),
    bind-mounted at `~/projects/<dir>`. The ONLY thing shared across a
    user's projects is credentials, via the broker (ADR-030/032): sign in
-   once in any project, import, and every project stays current. Containers
+   once during first-run setup (or in any project) and every project stays
+   current automatically, no separate import step (ADR-034). Containers
    stay disposable; users never see each other's worlds. Access is managed
    via `STYRMAN_ALLOWED_EMAILS` (+ admin-only API endpoints — the runtime
    user-management UI was removed in v1.3, operator Q4).
@@ -40,9 +41,19 @@ Load-bearing ideas:
    ends, record + transcript stay) and closed, singly or all at once. The shell
    exiting is presented the same way: a **Paused** state with a **Resume**
    action, not a dead terminal. Everything printed in them is transcribed to
-   the home (ADR-017): the History tab. Copy is Ctrl/Cmd+C when a selection
-   exists (otherwise it passes through as SIGINT); paste is Ctrl/Cmd+V or
-   Ctrl+Shift+V via the clipboard API. A sidebar notification bell (badge,
+   the home (ADR-017): the History tab. A thin **status bar** sits under every
+   terminal (`GET /api/projects/{id}/stats`, polled every 4s): CPU %, mem,
+   disk, process count, IP, uptime, and a `creds N synced` count with a
+   tooltip of what the broker has provisioned into this project (v1.6.0/
+   v1.8.1). Plain **Ctrl+C always sends SIGINT** (explicit `\x03`, bypassing
+   both the browser's own copy-on-Ctrl+C and xterm's default so a lingering
+   copy-on-select highlight can no longer swallow it); Cmd+C copies
+   explicitly; paste is Ctrl/Cmd+V or Ctrl+Shift+V via the clipboard API.
+   AltGr (Windows/Linux) and Option (macOS) compose non-US symbols (`@ $ {
+   } [ ] € …`) instead of acting as Meta, and Nordic/Swedish dead keys (`~
+   \` ^ ´ ¨`) are resolved directly rather than through xterm's buggy
+   browser-IME path — see terminal-protocol.md's keyboard-handling section.
+   A sidebar notification bell (badge,
    linking to the terminals waiting for input) surfaces terminals whose tmux
    window rang its bell while unattended — tmux clears the flag once the
    session is viewed. The terminal (`web/src/lib/terminal.ts`) copies on
@@ -59,18 +70,24 @@ Load-bearing ideas:
    copy-on-select could capture a secret typed during setup (ADR-023).
 4. **The side panel is project context**: Files (workspace + home; create/
    rename/delete files and folders; view + edit via a lazy-loaded
-   CodeMirror 6 editor with syntax highlighting and Ctrl+S to save;
-   markdown opens as a RENDERED preview with an Edit toggle; JSON gets a
-   Format button; upload by drag, download; destructive operations on
-   platform-managed home paths are refused), Ports (what's
+   CodeMirror 6 editor with syntax highlighting for ~20 languages including
+   Java/C/C++/Rust/PHP/SQL/XML/Terraform (v1.7.2) — the editor window is
+   resizable (size remembered in localStorage) and saving no longer closes
+   it, just re-disables Save until the next edit (v1.7.2); markdown opens as
+   a RENDERED preview with an Edit toggle; a **Format** button reformats with
+   the file's real CLI formatter running INSIDE the project VM — `gofmt`,
+   `prettier`, `black`/`ruff`, `rustfmt`, `shfmt`, `terraform fmt`/`tofu fmt`
+   — except JSON, which still formats locally/offline (v1.7.3); upload by
+   drag, download; destructive operations on platform-managed home paths are
+   refused), Ports (what's
    listening, with process / inner-docker image, shareable
    `/p/<id>/<t>/port/<port>/` links; per-port sharing — adding a Google
    email mints a stable **private link** `https://<token>.private.…/`
    requiring sign-in + membership in the share list, ADR-026 — and public
    TTL links on `https://<token>.public.…/`, ADR-025), History
    (transcripts under their terminal's friendly name + FULL-TEXT SEARCH
-   across all of them — everything you and the agents typed or saw), Git
-   (working-tree diff + branch, and checkpoints — see below), Clipboard
+   across all of them — everything you and the agents typed or saw), **Git**
+   — a real git client (v1.7.0, see below), Clipboard
    (session-scoped — see above). The HOME surface is a dashboard: project
    cards with live transcript tails per running terminal (15s refresh,
    click to jump in); polling pauses app-wide in hidden browser tabs.
@@ -79,15 +96,19 @@ Load-bearing ideas:
    creation, or a clone runs in-guest instead (new project dialog's "Clone a
    repo" option, so the user's ssh key/gh credentials apply; falls back to
    an empty repo on failure), and a boot-time sweep initializes any
-   repo-less workspace it finds (adopted pre-R13 projects). Checkpoints are
-   automatic whole-tree snapshots (tracked + untracked; ignored files
-   excluded) taken via a private index and stored under
-   `refs/styrman/checkpoints/*` — never on the user's branches, never
-   pushed, invisible to `git log`, capped at 40. Triggers: project stop,
-   terminal pause/close/close-all, and before every restore (so restores
-   are undoable); manual via the Git tab's "Checkpoint now" button. Restore
-   rewrites the working tree to that exact snapshot (later files deleted;
-   ignored files survive; the user's branches/commits untouched).
+   repo-less workspace it finds (adopted pre-R13 projects). The Git side
+   panel tab is a real git client (v1.7.0): branch + ahead/behind, Push, a
+   commit-message box, "Staged"/"Changes" file groups with per-file stage/
+   unstage/discard, and a colored per-file diff viewer — every command runs
+   inside the guest VM so the user's identity and the broker's credential
+   helper apply, and commits are authored correctly (`git commit` in a
+   terminal works too as of v1.7.1 — the broker syncs the git identity, not
+   just the auth token). The AUTOMATIC checkpoint mechanism this section
+   used to describe (a 10-min loop + snapshots on stop/pause/close) was
+   REMOVED in v1.7.0 — backups are now expected to come from microVM volume
+   snapshots of `/var/lib/styrman` (host infra: LVM/ZFS/restic — tracked in
+   `TODO.md`, not yet built). The manual checkpoint API still exists
+   backend-side but nothing in the UI calls it (api.md).
 
 ## 2. Architecture
 
@@ -121,32 +142,49 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
 - **Project creation is async**: the API returns instantly
   (`state:"creating"`); the microVM boots in the background (~3 s) and the
   first terminal attach waits on readiness.
-- **Isolation** (R12): per-project bridges shared only with the server,
-  which runs `ip_forward=0`; the server joins project networks in the
-  background (a live join can drop in-flight connections — the preview
-  proxy 307s once instead when it must join on demand). A project reaches
-  the **internet and nothing else**: not another project (separate bridges
-  + Docker's inter-bridge DROP), and not the host itself — `host-setup.sh`
-  installs `styrman-firewall.service`, an `iptables -I INPUT -i sdb-+ -j
-  DROP` that blocks every project bridge from the host's own ports (SSH,
-  Caddy, …) while leaving NAT egress untouched (ADR-029).
+- **Isolation** (R12): per-project bridges (`sdb-<uuid>`, named
+  `sdb-<11hex>` at the Linux interface level via `config.BridgeNameFor` —
+  Docker's default `br-<hash>` interface name would slip past the firewall
+  match, which is exactly what happened until v1.8.3, see deploy.md) shared
+  only with the server, which runs `ip_forward=0`; the server joins project
+  networks in the background (a live join can drop in-flight connections —
+  the preview proxy 307s once instead when it must join on demand). A
+  project reaches the **internet and nothing else**: not another project
+  (separate bridges + Docker's inter-bridge DROP + a DOCKER-USER rule
+  dropping private-range FORWARD traffic — LAN, other bridges, cloud
+  metadata), and not the host itself (an INPUT drop). Installed by
+  `host-setup.sh`'s `styrman-firewall.sh` and kept applied by a self-healing
+  `styrman-firewall.timer` (re-runs every 60s; delete-then-insert so a
+  Docker restart or manual flush is undone within a minute) (ADR-029,
+  hardened v1.8.3/v1.8.4).
 - **Credential broker** (ADR-030/032): a credential-only listener (`:8091`,
   bridge-only, never published to the host) hands each project the CURRENT
   credential for a tool, identified by its bridge source IP — so a refresh in
-  the one broker store propagates to every project. Three tiers: `GET /git`
+  the one broker store propagates to every project. Tiers: `GET /git`
   (a system git helper pulls per-op, nothing stored in the project);
-  `GET /env` (shell vars — `GH_TOKEN`, `NPM_TOKEN`, `CLAUDE_*` — exported by a
-  login-shell snippet, `/etc/profile.d/zz-styrman-credentials.sh`); and
-  `GET /files` (files — gcloud ADC, ssh key — written into the home by the
-  same snippet); and `GET /keyring` (Secret Service items — agy's OAuth —
-  secret-tool-stored into each project's unlocked keyring, ADR-032a). Sign
-  in once in any project, then
-  `POST /api/settings/credentials/import {project}` pulls gh/claude/gcloud/
-  ssh/npm/agy into the store in one pass; every project (new ones included)
-  is then current with no re-auth. Manage from the Settings **Credentials**
-  panel.
+  `GET /env` (shell vars — `GH_TOKEN`, `NPM_TOKEN`, `STYRMAN_GIT_NAME`/
+  `STYRMAN_GIT_EMAIL` — exported/applied by a login-shell snippet,
+  `/etc/profile.d/zz-styrman-credentials.sh`, which also jq-merges claude's
+  `hasCompletedOnboarding` flag so a materialized token doesn't re-trigger
+  first-run login, v1.5.6); and `GET /files` (files — gcloud ADC, ssh key,
+  claude's `.credentials.json`, and agy's OAuth token file — written into
+  the home by the same snippet). The `GET /keyring` tier (agy's OAuth via
+  Secret Service, ADR-032a) is now **dormant**: agy's real build stores its
+  token in a plain file, not the keyring — file tier since v1.5.5. Finishing
+  first-run setup now seeds the broker automatically from whatever the user
+  just signed into (ADR-034, v1.5.4) — no separate import step required;
+  `POST /api/settings/credentials/import {project}` remains as a
+  supplementary/refresh path. Manage from the Settings **Credentials**
+  panel (consolidated status-colored view, v1.8.2 — see below).
 - **Idle lifecycle**: terminal traffic timestamps the project; idle ones
   stop after `STYRMAN_IDLE_TIMEOUT` (24h); reopening boots on connect.
+- **Caddy's ingress upstream is chosen deterministically**: the server
+  container is multi-homed (the ingress network plus each project's `sdb-*`
+  bridge, for the broker + preview proxy), so a naive "first network" pick
+  is random-order and can resolve to a dead project-bridge IP — this caused
+  a live 502 (v1.8.5). `extractContainerIP` now prefers `styrman-ingress`,
+  then any non-`sdb-*` network, falling back to whatever's there (correct
+  for a preview VM, which has only its own `sdb-*` network) — see deploy.md.
 - **Auth is two-layer** (R8): the ingress proves identity via Google OAuth
   (`X-Caddy-Email`) and a shared, constant-time-compared `X-Styrman-Ingress`
   token proves the request actually came through Caddy — a project VM on
@@ -186,12 +224,18 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 First use per user: the sidebar shows a **First-time setup** banner →
 "Open setup" boots a hidden minimal microVM running the guided
-`styrman-setup` (git identity → SSH key → gh → claude → agy). The generated
-SSH key's comment is the user's git email (fallback `user@styrman` if none
-is set), not "styrman". Everything lands in the VM's own home — then run
-Settings → Credentials → **Import from this project** so the broker shares
-it with every project, current and future (ADR-032). The same script works
-in any project terminal.
+`styrman-setup`. Only git identity and an ssh key are REQUIRED; GitHub,
+Google Cloud (account login + separately Application Default Credentials),
+Claude, and agy are each OPTIONAL — `[y/N]` prompts, skip any and rerun
+`styrman-setup` anytime, in the setup VM or any project terminal, to pick up
+where you left off (v1.8.0). The generated SSH key's comment is the user's
+git email (fallback `user@styrman` if none is set), not "styrman". Closing
+the setup terminal (typing `exit`, or letting the script finish)
+auto-closes the VM and seeds the credential broker from whatever was just
+signed into — every project, current and future, is current with zero
+re-auth, no manual import step (ADR-034, v1.5.4). Settings → Credentials →
+**Import from a project** still exists as an optional refresh path (a
+rotated token, or a tool signed into inside a project instead of at setup).
 
 ## 4. Operating it
 
@@ -200,20 +244,28 @@ in any project terminal.
   terminal; type `claude` or `agy`. Every workspace is a git repo from
   creation, no exceptions (R13). Rename any time (⋯ → Rename); delete via
   the type-"delete" dialog (wipe checkbox controls files).
-- **Checkpoints**: the Git tab lists automatic snapshots (taken on stop,
-  terminal pause/close, before restores, and every 10 minutes while a
-  project has terminal activity) plus a "Checkpoint now" button; Restore (confirmation required) rewrites the working tree to that
-  point and always checkpoints the current state first, so it's undoable.
+- **Git**: the Git tab is a real client (v1.7.0) — branch bar with Push, a
+  commit-message box, "Staged"/"Changes" file lists with per-file stage/
+  unstage/discard, and a colored per-file diff viewer. (Automatic
+  checkpoint snapshots were REMOVED in v1.7.0 — see §1 idea 5. Back up via
+  microVM volume snapshots instead, once that host tooling exists.)
 - **Terminals**: sidebar, per project; generated friendly names; ⏸ pause /
   ✕ delete / close all; per-terminal autostart command (pencil → dialog;
   runs at session creation, then drops to the shell); transcripts land in
-  History regardless.
-- **Settings**: account + terminal username, per-tool credential cards
-  (incl. claude/agy skills & subagents), theme (Light / Dark / System),
-  and — admins only — LIVE runtime tunables: idle-stop timeout (applies to
-  the reaper immediately) and docker disk size for new project VMs,
-  persisted in `StateDir/settings.json` over the env defaults. (The
-  user-access card was removed in v1.3 — access = env + admin API.)
+  History regardless; a status bar under the terminal shows live CPU/mem/
+  disk/IP/uptime and synced-credential count (v1.6.0/v1.8.1).
+- **Settings**: account + terminal username, a single status-colored
+  **Credentials** view (v1.8.2, replacing the old separate "Tools &
+  credentials" cards) — GREEN = signed in and synced to the broker, GREY =
+  not set up, RED = signed in locally but not yet synced; each row is
+  clickable to read its stored value (v1.8.1); an "Add a variable" row
+  stores any custom env var (NPM_TOKEN, DATABASE_URL, …); "Import from a
+  project" is marked optional (setup already auto-syncs, ADR-034) — theme
+  (Light / Dark / System), and — admins only — LIVE runtime tunables:
+  idle-stop timeout (applies to the reaper immediately) and docker disk
+  size for new project VMs, persisted in `StateDir/settings.json` over the
+  env defaults. (The user-access card was removed in v1.3 — access = env +
+  admin API.)
 - **Where things live** on the host:
 
 | Path | What |
@@ -243,7 +295,8 @@ re-import it.
 | `invalid namespace type` starting any microVM | Docker ≥29.5 time-namespaces vs Kata ≤3.31 — host-setup sets the daemon.json feature flag (ADR-009). |
 | Site unreachable but server fine | Check DNS first — a "newly registered domain" blocklist (NextDNS et al.) sinkholed styrman.xyz once (`dig` for 0.0.0.0 answers). |
 | dockerd inside a project uses `vfs` | Loop mount of `~/.dockerd/<uuid>.img` failed; see container logs (ADR-008 fallback). |
-| agy re-asks for login | Keyring didn't start (login shells source `/etc/profile.d/styrman-keyring.sh`); fallback `GEMINI_API_KEY` in `~/.bash_secrets`. |
+| agy/claude ask to sign in despite a synced credential | A tool's TOKEN can sync while its per-project CLIENT STATE doesn't (e.g. claude's `hasCompletedOnboarding` — fixed for new logins since v1.5.6). If it's an OLDER project VM, recreate it to pick up a runtime-image fix; a running container keeps the rootfs it booted with until stopped. |
+| `git commit` in a terminal fails "who are you" | The user's git identity hasn't reached the broker yet — rerun `styrman-setup` (or `Settings → Credentials → Import`) so `STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL` get harvested, then open a fresh login shell (v1.7.1). |
 | Terminal shows "replaced" | Same terminal opened in another tab (close 4001) — one attach each, by design. |
 | First port-preview 307s or drops once | The server just joined that project's network; the redirect/retry lands. |
 | Project won't start | `docker logs styrman-<uuid>` — the entrypoint logs every step. |
