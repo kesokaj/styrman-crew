@@ -168,21 +168,51 @@ export function createTerminal(
     return true;
   });
 
-  // Clipboard keys. ev.preventDefault() is required — xterm discards this
-  // handler's return before its own preventDefault, so without it the
-  // browser's native paste fires too (double paste). Falls back to the
-  // native path when the async clipboard API is unavailable. ev.code keeps
-  // this keyboard-layout-stable.
+  // AltGr (Right Alt, and mac Option) composes characters like @ $ { } [ ] \ €
+  // on Nordic and other non-US layouts. Browsers report it as the AltGraph
+  // modifier state — or, in Chrome on Windows/Linux, as ctrlKey+altKey together
+  // — and xterm then mistakes it for Meta and sends ESC+key, which readline
+  // renders as "(arg: 2)" and never yields the "@". When the OS has already
+  // composed a printable single character into ev.key, type exactly that and
+  // stop xterm. Left-Alt-only (true Meta, e.g. readline Alt+b) is untouched.
+  keyHandlers.push((ev) => {
+    if (ev.type !== "keydown" || ev.metaKey) return true;
+    const altGr =
+      (typeof ev.getModifierState === "function" &&
+        ev.getModifierState("AltGraph")) ||
+      (ev.ctrlKey && ev.altKey);
+    if (
+      altGr &&
+      ev.key &&
+      ev.key.length === 1 &&
+      (ev.key.codePointAt(0) ?? 0) >= 0x20
+    ) {
+      ev.preventDefault();
+      term.input(ev.key);
+      return false;
+    }
+    return true;
+  });
+
+  // Clipboard + interrupt keys. ev.preventDefault() is required — xterm discards
+  // this handler's return before its own preventDefault, so without it the
+  // browser's native copy/paste fires too. Falls back to the native path when
+  // the async clipboard API is unavailable. ev.code keeps this layout-stable.
   keyHandlers.push((ev) => {
     if (ev.type !== "keydown") return true;
     if (!(ev.ctrlKey || ev.metaKey)) return true;
     if (ev.code === "KeyC") {
-      // Ctrl+C MUST interrupt (SIGINT) — a lingering selection used to make it
-      // copy instead, so you couldn't ^C out of e.g. ping. Copy-on-select
-      // already puts selections on the clipboard, and Cmd+C (mac) still copies
-      // explicitly. So: plain Ctrl+C always passes through as ^C; only Cmd+C
-      // (metaKey, not ctrlKey) copies.
-      if (ev.ctrlKey) return true; // ^C / SIGINT
+      // Ctrl+C MUST interrupt (SIGINT). A lingering copy-on-select highlight let
+      // the BROWSER copy and swallow the keydown, so ^C never reached the shell
+      // (couldn't kill e.g. ping). Send ETX (\x03) ourselves and preventDefault
+      // so nothing — browser or xterm default — can intercept it. Copy-on-select
+      // already puts selections on the clipboard; only Cmd+C (metaKey) copies.
+      if (ev.ctrlKey && !ev.altKey) {
+        ev.preventDefault();
+        term.input("\x03");
+        if (term.hasSelection()) term.clearSelection();
+        return false;
+      }
       if (!term.hasSelection()) return true;
       if (typeof navigator.clipboard?.writeText !== "function") return true;
       ev.preventDefault();
