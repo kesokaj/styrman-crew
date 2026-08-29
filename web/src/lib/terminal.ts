@@ -168,21 +168,31 @@ export function createTerminal(
     return true;
   });
 
-  // AltGr (Right Alt, and mac Option) composes characters like @ $ { } [ ] \ €
-  // on Nordic and other non-US layouts. Browsers report it as the AltGraph
-  // modifier state — or, in Chrome on Windows/Linux, as ctrlKey+altKey together
-  // — and xterm then mistakes it for Meta and sends ESC+key, which readline
-  // renders as "(arg: 2)" and never yields the "@". When the OS has already
-  // composed a printable single character into ev.key, type exactly that and
-  // stop xterm. Left-Alt-only (true Meta, e.g. readline Alt+b) is untouched.
+  // Typing @ $ { } [ ] \ € etc. on Nordic and other non-US layouts uses a
+  // "compose" modifier that yields a special character rather than a Meta/ESC
+  // sequence. xterm otherwise mistakes it for Meta and sends ESC+key, which
+  // readline renders as "(arg: 2)" and never yields the "@". The modifier
+  // differs by platform:
+  //   - Windows/Linux: AltGr (Right Alt) — reported as the AltGraph modifier
+  //     state, or in Chrome as ctrlKey+altKey together. Left-Alt-only is real
+  //     Meta (readline Alt+b) and stays untouched.
+  //   - mac: Option (Left or Right Alt) composes, because we keep
+  //     macOptionIsMeta off so Option types symbols (Swedish @ = Option+2).
+  // When the OS has already composed a printable single character into ev.key,
+  // type exactly that and stop xterm. The length-1 guard skips Alt/Option+Arrow
+  // word-nav, F-keys and dead keys, so those keep their Meta behavior.
+  const isMac =
+    typeof navigator !== "undefined" &&
+    /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || "");
   keyHandlers.push((ev) => {
     if (ev.type !== "keydown" || ev.metaKey) return true;
-    const altGr =
+    const compose =
       (typeof ev.getModifierState === "function" &&
         ev.getModifierState("AltGraph")) ||
-      (ev.ctrlKey && ev.altKey);
+      (ev.ctrlKey && ev.altKey) ||
+      (isMac && ev.altKey && !ev.ctrlKey);
     if (
-      altGr &&
+      compose &&
       ev.key &&
       ev.key.length === 1 &&
       (ev.key.codePointAt(0) ?? 0) >= 0x20
