@@ -135,37 +135,58 @@ fi
 cat > /usr/local/sbin/styrman-firewall.sh <<'FWEOF'
 #!/usr/bin/env bash
 # Project microVMs (bridges sdb-*) reach the internet but NOT the host, the LAN,
-# other projects, or cloud metadata (R12/ADR-029).
+# other projects, or cloud metadata (R12/ADR-029). Idempotent via delete-then-
+# insert: iptables-nft's `-C` check is unreliable with the `sdb-+` wildcard (it
+# can report a missing rule as present), so we never rely on it. Safe to re-run,
+# which the self-heal timer does every 60s.
 set -eu
-# Host itself (INPUT).
-iptables -C INPUT -i sdb-+ -j DROP 2>/dev/null || iptables -I INPUT -i sdb-+ -j DROP
-# Private networks + link-local/metadata, when routed onward (FORWARD/DOCKER-USER).
-# 172.16/12 also covers other project + system bridges (cross-project isolation);
-# a project's own bridge + broker are same-subnet L2, never routed, so allowed.
+add() {  # chain, then rule spec — delete any existing copy, then (re)insert.
+    local chain="$1"; shift
+    iptables -D "$chain" "$@" 2>/dev/null || true
+    iptables -I "$chain" "$@"
+}
+# Host itself (INPUT), then private networks + link-local/metadata routed onward
+# (FORWARD via DOCKER-USER). 172.16/12 also covers other project/system bridges
+# (cross-project isolation); a project's own bridge + broker are same-subnet L2,
+# never routed, so allowed.
+add INPUT -i sdb-+ -j DROP
 for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
-    iptables -C DOCKER-USER -i sdb-+ -d "$net" -j DROP 2>/dev/null \
-        || iptables -I DOCKER-USER -i sdb-+ -d "$net" -j DROP
+    add DOCKER-USER -i sdb-+ -d "$net" -j DROP
 done
 FWEOF
 chmod 0755 /usr/local/sbin/styrman-firewall.sh
 cat > /etc/systemd/system/styrman-firewall.service <<'EOF'
 [Unit]
-Description=styrman project→host network isolation (R12/ADR-029)
+Description=styrman project→host/LAN network isolation (R12/ADR-029)
 After=docker.service
-Requires=docker.service
+Wants=docker.service
 
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/styrman-firewall.sh
-RemainAfterExit=yes
+EOF
+# A timer re-applies the (idempotent) rules every minute — self-healing, so a
+# Docker daemon restart, a firewall-manager reload, or a manual flush can't leave
+# the VMs exposed for more than ~1 min. The rules use the `sdb-+` wildcard, so
+# NEW project bridges are covered without any per-network rule.
+cat > /etc/systemd/system/styrman-firewall.timer <<'EOF'
+[Unit]
+Description=Re-apply styrman network isolation rules (self-heal)
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=60s
+AccuracySec=5s
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=timers.target
 EOF
 systemctl daemon-reload
-systemctl enable --now styrman-firewall.service 2>/dev/null \
-    && log "project→host isolation rule active (styrman-firewall.service)" \
-    || log "WARN: could not enable styrman-firewall.service — apply /usr/local/sbin/styrman-firewall.sh manually"
+# Apply once immediately, then let the timer keep it applied.
+systemctl start styrman-firewall.service 2>/dev/null || true
+systemctl enable --now styrman-firewall.timer 2>/dev/null \
+    && log "project isolation active + self-healing (styrman-firewall.timer, 60s)" \
+    || log "WARN: could not enable styrman-firewall.timer — apply /usr/local/sbin/styrman-firewall.sh manually"
 
 # ─── 4. Host tuning: KSM (merges identical microVM pages) ───────────────────
 if [[ -w /sys/kernel/mm/ksm/run ]]; then
