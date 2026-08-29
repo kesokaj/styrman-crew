@@ -252,7 +252,6 @@ func (w *Watcher) reloadCaddy(ctx context.Context, caddyfile string) error {
 
 // extractContainerIP returns the IP address to use for proxying to a container.
 // For host-network containers, returns 127.0.0.1 (Caddy is also on host).
-// For bridge containers, returns the first available bridge IP.
 func extractContainerIP(inspect types.ContainerJSON) string {
 	if inspect.NetworkSettings == nil {
 		return ""
@@ -262,9 +261,25 @@ func extractContainerIP(inspect types.ContainerJSON) string {
 	if inspect.HostConfig != nil && inspect.HostConfig.NetworkMode == "host" {
 		return "127.0.0.1"
 	}
-	for _, network := range inspect.NetworkSettings.Networks {
-		if network.IPAddress != "" {
-			return network.IPAddress
+	nets := inspect.NetworkSettings.Networks
+	// Prefer the ingress network. The styrman SERVER is ALSO attached to project
+	// bridges (sdb-*, for the broker + preview proxy) whose IPs Caddy can't
+	// reliably reach; a bare map iteration is random-order, so after a project
+	// network was recreated it began returning a project-bridge IP → the app was
+	// proxied to a dead address (502s on crew.styrman.xyz).
+	if n, ok := nets["styrman-ingress"]; ok && n != nil && n.IPAddress != "" {
+		return n.IPAddress
+	}
+	// Otherwise avoid project bridges (sdb-*); prefer any other network.
+	for name, n := range nets {
+		if n != nil && n.IPAddress != "" && !strings.HasPrefix(name, "sdb-") {
+			return n.IPAddress
+		}
+	}
+	// Last resort — a preview VM has only its own sdb-* network, which is right.
+	for _, n := range nets {
+		if n != nil && n.IPAddress != "" {
+			return n.IPAddress
 		}
 	}
 	return ""
