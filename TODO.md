@@ -2,6 +2,13 @@
 
 Deferred work items. Not blocking current work, but should be addressed later.
 
+> **State (2026-08-30):** the full `/code-review ultra` remediation is complete
+> and deployed (v1.9.1) — see `.agents/docs/changes/2026-08-30-security-review-
+> remediation-v1.9.0.md` and ADR-039/040. Nothing below is review debt; these
+> are intentional future features/infra (volume snapshots, ops panel, warm VM
+> pool, MCP server, docker-SDK migration, gcloud account-login sync, agy resume)
+> plus minor, non-urgent polish. Items marked done here reflect that remediation.
+
 ## High Priority
 
 - [ ] Rename the project directory `~/workspace/super-devbox` → `~/workspace/styrman`
@@ -19,17 +26,21 @@ Deferred work items. Not blocking current work, but should be addressed later.
       per-project sign-in remains (added 2026-08-26, closed 2026-08-29)
 - [ ] agy native resume: find its session/store mechanism and wire into paneCommand (ADR-011) (added 2026-08-26)
 - [ ] Conversation auto-titles from claude transcript summaries (~/.claude/projects) (added 2026-08-26)
-- [ ] Integration check for agent-path keyring (DBUS in agent conversations, not just
-      kind=shell) — the Phase 1 suite missed a real bug there (added 2026-08-26)
+- [x] ~~Integration check for agent-path keyring (DBUS in agent conversations)~~ —
+      moot: the keyring tier was removed entirely (v1.9.0, ADR-040); credentials
+      flow via env/file/git-helper tiers, no keyring (2026-08-30)
 - [x] ~~createProject synchronous~~ — async since ADR-021 (2026-08-26)
 - [ ] Migrate docker SDK from pinned docker/docker v28 to the renamed moby modules (added 2026-08-26)
 - [ ] Exercise the entrypoint's vfs fallback path (loop-mount failure) in a test (added 2026-08-26)
 
 - [x] ~~systemd unit~~ — superseded: compose restart-unless-stopped covers reboots (2026-08-26)
 - [x] ~~Pin + verify SHA-256 of the Kata release tarball in host-setup.sh~~ — done (host-setup.sh verifies; confirmed by the 2026-08-28 audit)
-- [ ] Keyring password visible via docker inspect (container env); move to one-shot exec injection (added 2026-08-26)
-- [ ] Phase 3 needs Google OAuth client ID/secret, Cloudflare API token, and BASE_DOMAIN
-      from the operator — the old devbox `.env` is not on this machine (added 2026-08-26)
+- [x] ~~Keyring password visible via docker inspect (container env)~~ — moot:
+      the keyring tier was removed entirely (v1.9.0, ADR-040), so STYRMAN_KEYRING_PW
+      is no longer set on project containers at all (2026-08-30)
+- [x] ~~Phase 3 needs Google OAuth client ID/secret, Cloudflare API token, BASE_DOMAIN~~
+      — provided; crew.styrman.xyz is live behind Google OAuth + Cloudflare
+      (deploy/.env configured, secrets rotated in the 2026-08-28 reinstall)
 - [ ] Backup: implement microVM **volume snapshots** of `/var/lib/styrman` (operator decision 2026-08-29, replacing the git auto-checkpoints removed in v1.7.0). Host-infra dependent — the FS must support snapshots (LVM/ZFS/btrfs) or use scheduled restic/borg to GCS; `/var/lib/styrman/{homes,projects,users}` is the whole state, ADR-027 source lives under projects/ (added 2026-08-26, updated 2026-08-29)
 - [ ] Update the clean-reinstall procedure doc (`.agents/docs/changes/2026-08-28-clean-reinstall.md` or wherever it's canonicalized next) to explicitly call out "restart the server after scrubbing StateDir/users" as a required step, not an implicit one — its omission caused the v1.5.2 first-login 400 fixed in v1.5.3 (ADR-033) (added 2026-08-29)
 - [x] ~~Remove the now-dormant broker keyring tier~~ — done in the 2026-08-30
@@ -88,9 +99,10 @@ Deferred work items. Not blocking current work, but should be addressed later.
     access; `:ro` bind doesn't restrict socket connect). Needs a
     `docker-socket-proxy` sidecar + careful live-ingress test — do in a
     dedicated session like the JWT-key change.
-  - **I13 (partial)** OpenTofu `--skip-verify` + unpinned Go/claude/node/yq in
-    image/Dockerfile — pin versions + drop skip-verify, validating the image
-    still builds. (Kata tarball checksum: DONE in host-setup.sh.)
+  - **I13 (skip-verify part DONE 2026-08-30, v1.9.0):** OpenTofu `--skip-verify`
+    dropped so its signature is checked (image rebuilds cleanly). Version-pinning
+    Go/claude/node/yq stays declined (WON'T DO below — dev env ships current
+    tools). Docker itself is now pinned via `DOCKER_VERSION` in host-setup.sh.
   - **I15** — DONE for the parts that still exist (2026-08-28): host-setup
     builds the runtime image (version-stamped) and prints the compose command;
     home-init/ensureHome were removed by ADR-031 (image seeds homes).
@@ -131,9 +143,10 @@ Deferred work items. Not blocking current work, but should be addressed later.
       `IPAddress` ignores `user`; `SetOperator` holds its lock across fsync;
       dedupe `NewUUID` (project/conversation) and `usernameFromEmail`.
 - [ ] Go: unbounded (tiny) maps never pruned: `projLocks`, `ipCache`,
-      `wsLocks`, checkpoint-loop `snapped` — fine at current scale.
-- [ ] Image: `--skip-verify` on the OpenTofu installer (supply-chain; needs
-      cosign in the build env to drop).
+      `wsLocks` — fine at current scale. (The checkpoint-loop `snapped` map is
+      gone — the checkpoint loop was removed in v1.7.0.)
+- [x] ~~Image: `--skip-verify` on the OpenTofu installer~~ — dropped in v1.9.0
+      (2026-08-30); the installer now verifies its signature (gnupg is present).
 - [ ] Deploy: compose hands Caddy the whole `.env` (`env_file`) — narrow to
       an explicit `environment:` list (it only needs OAuth/CF/JWT/domains).
 - [ ] SPA hydration mismatch (React #418) — see above; still open.

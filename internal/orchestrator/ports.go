@@ -13,7 +13,7 @@ import (
 
 // IPAddress returns the project container's IP on its bridge network, or ""
 // if not running.
-func (o *Orchestrator) IPAddress(ctx context.Context, user, project string) (string, error) {
+func (o *Orchestrator) IPAddress(ctx context.Context, project string) (string, error) {
 	insp, err := o.docker.ContainerInspect(ctx, config.ContainerName(project))
 	if err != nil {
 		if errdefs.IsNotFound(err) {

@@ -6,14 +6,15 @@ FROM debian:trixie
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TERM=xterm-256color
 
-# Base tools + everything the entrypoint needs (dbus/gnome-keyring for agy's
-# Secret Service, e2fsprogs for the per-project ext4 docker image, tini as the
-# PID-1 reaper).
+# Base tools + everything the entrypoint needs (e2fsprogs for the per-project
+# ext4 docker image, tini as the PID-1 reaper). The keyring packages
+# (dbus/gnome-keyring/libsecret-tools) were dropped with the broker keyring tier
+# (ADR-040) — every credential is env/file/git-helper now.
 RUN apt-get update && apt-get install --no-install-recommends -y \
     ca-certificates curl wget gnupg lsb-release locales sudo tini procps psmisc \
     git jq ripgrep fd-find bat tmux htop btop less vim nano unzip zip tree \
     openssh-client rsync make build-essential python3 python3-venv python3-pip \
-    python-is-python3 dbus gnome-keyring libsecret-tools e2fsprogs \
+    python-is-python3 e2fsprogs \
     iproute2 iputils-ping dnsutils netcat-openbsd \
     bash-completion lsof mtr-tiny traceroute net-tools gettext-base openssl \
     && rm -rf /var/lib/apt/lists/* \

@@ -37,9 +37,10 @@ containers disposable always.
   moment the session opens).
 - **Hard isolation.** 1 project = 1 microVM (own kernel, own dockerd, own
   network, own home — projects can never reach each other, nor the host or
-  the LAN). Enforced by a host firewall that a self-healing systemd timer
-  re-applies every 60s, so a Docker restart or a manual flush can't leave it
-  open for long (ADR-029). Users never see each other's worlds.
+  the LAN). Enforced by a host firewall (dedicated iptables chains,
+  insert-if-missing so there's no unprotected window) that a self-healing
+  systemd timer re-applies every 60s (ADR-029). Users never see each other's
+  worlds.
 - **Share previews, not access.** A project owner can grant specific Google
   emails access to ONE exposed port's preview — never the terminal, files,
   dashboard, or other ports. Sharing mints a stable **private link** on its
@@ -89,14 +90,24 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.8.9**, deployed: https://crew.styrman.xyz (Google sign-in). Verified by
-3 suites (unit + race, 62 integration checks against real Kata, self-hosted
+**v1.9.1**, deployed: https://crew.styrman.xyz (Google sign-in). Verified by
+3 suites (unit + race, 56 integration checks against real Kata, self-hosted
 Playwright browser checks) plus a live post-deploy battery on every release.
-v1.5 completed the **credential broker** (ADR-030/032/032a/034): finishing
-first-run setup now auto-seeds it — sign in once (git/ssh required, the rest
-optional and skippable), no manual import step — and agy syncs via a plain
-OAuth token file rather than the keyring tier ADR-032a originally assumed
-(now dormant). v1.7 replaced automatic git checkpoints with a **real git
+v1.9.0 shipped a full security-review remediation (62 findings, 1 critical):
+closed a host-side git RCE by deleting the checkpoint machinery outright and
+hardening the two host-side git calls that remain (`git init`/`rev-parse`)
+against a guest-controlled `.git/config` — the Git tab's own client already
+ran everything else inside the guest VM (ADR-039); deleted the dormant broker
+keyring tier entirely, so agy's OAuth token is unambiguously a `file`
+credential now, not a fourth "dormant" tier (ADR-040); made every auth
+misconfiguration fail closed at startup instead of at request time; capped
+guest exec output in memory (a project VM is untrusted root in its own
+microVM); and reworked the project-isolation firewall onto dedicated
+insert-if-missing iptables chains so there's no self-heal window where
+isolation is briefly absent. v1.5 completed the **credential broker**
+(ADR-030/032/034): finishing first-run setup auto-seeds it — sign in once
+(git/ssh required, the rest optional and skippable), no manual import step.
+v1.7 replaced automatic git checkpoints with a **real git
 client** in the side panel (status/stage/commit/push/diff, running inside
 the project VM so identity and auth apply) and added server-side code
 **Format**ting via each language's real CLI formatter. v1.8 hardened project
@@ -134,7 +145,7 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) 
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
 
 # Production (Google OAuth, HTTPS, reboot-safe; stamp the version you deploy):
-vi deploy/.env && STYRMAN_VERSION=1.8.9 docker compose -f deploy/docker-compose.yml up -d --build
+vi deploy/.env && STYRMAN_VERSION=1.9.1 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 Full walkthrough, operations, and troubleshooting:

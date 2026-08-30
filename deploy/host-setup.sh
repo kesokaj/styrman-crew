@@ -286,9 +286,6 @@ if [[ ! -f "${SCRIPT_DIR}/.env" && -f "${SCRIPT_DIR}/.env.example" ]]; then
     OP_GID=$(id -g "${OPERATOR}")
     DOCKER_GID=$(getent group docker | cut -d: -f3)
     [[ -n "${DOCKER_GID}" ]] || { echo "FATAL: docker group not found — is Docker installed?"; exit 1; }
-    # Generate a real keyring password instead of shipping the literal default,
-    # which would leave every user's agy OAuth token unprotected at rest (R10).
-    KEYRING_PW=$(openssl rand -base64 24 2>/dev/null || head -c18 /dev/urandom | base64)
     # Ingress origin secret (URL-safe: no +/= that need shell/sed escaping).
     INGRESS_TOKEN=$(openssl rand -hex 32 2>/dev/null || head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n')
     JWT_KEY=$(openssl rand -hex 32 2>/dev/null || head -c32 /dev/urandom | od -An -tx1 | tr -d " \n")
@@ -296,7 +293,6 @@ if [[ ! -f "${SCRIPT_DIR}/.env" && -f "${SCRIPT_DIR}/.env.example" ]]; then
         -e "s/^STYRMAN_GID=.*/STYRMAN_GID=${OP_GID}/" \
         -e "s/^DOCKER_GID=.*/DOCKER_GID=${DOCKER_GID}/" \
         -e "s/^STYRMAN_USER=.*/STYRMAN_USER=${OPERATOR}/" \
-        -e "s#^STYRMAN_KEYRING_PW=.*#STYRMAN_KEYRING_PW=${KEYRING_PW}#" \
         -e "s/^STYRMAN_INGRESS_TOKEN=.*/STYRMAN_INGRESS_TOKEN=${INGRESS_TOKEN}/" \
         -e "s/^STYRMAN_JWT_KEY=.*/STYRMAN_JWT_KEY=${JWT_KEY}/" \
         "${SCRIPT_DIR}/.env.example" > "${SCRIPT_DIR}/.env"
@@ -337,8 +333,7 @@ cat <<NEXT
 ==> host setup complete. To bring styrman up (production, Caddy + OAuth):
     1. Edit ${SCRIPT_DIR}/.env — fill GOOGLE_CLIENT_ID/SECRET, CLOUDFLARE_API_TOKEN,
        STYRMAN_ALLOWED_EMAILS, BASE_DOMAIN. (Identity + secrets like
-       STYRMAN_INGRESS_TOKEN / STYRMAN_JWT_KEY / STYRMAN_KEYRING_PW are already
-       generated.)
+       STYRMAN_INGRESS_TOKEN / STYRMAN_JWT_KEY are already generated.)
     2. cd ${SCRIPT_DIR} && docker compose up -d --build
 
     For local testing without OAuth (no ingress): run the integration suite

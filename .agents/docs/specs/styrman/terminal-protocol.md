@@ -34,6 +34,15 @@ The client intercepts Ctrl/Cmd+V / Ctrl+Shift+V paste via the clipboard API,
 and Cmd+C to copy a selection explicitly. Plain Ctrl+C is handled specially —
 see Browser-side keyboard handling below.
 
+OSC 52 (an escape sequence the guest PTY can emit to read/write the system
+clipboard) is **write-only**: tmux/TUI copy (yank in vim, tmux copy-mode)
+still lands on the system clipboard, but a guest-originated OSC 52 **read**
+query (`\x1b]52;c;?`) is hard-denied — the xterm clipboard addon's `readText`
+always returns empty. The (untrusted) guest is root in its own VM; honoring
+an OSC 52 read would have handed it the user's real browser clipboard,
+including anything just copied from the credential viewer (H8,
+`web/src/lib/terminal.ts`).
+
 ## Browser-side keyboard handling
 
 The wire protocol above is unchanged; these are `web/src/lib/terminal.ts`

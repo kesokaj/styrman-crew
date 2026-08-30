@@ -105,10 +105,15 @@ Load-bearing ideas:
    terminal works too as of v1.7.1 — the broker syncs the git identity, not
    just the auth token). The AUTOMATIC checkpoint mechanism this section
    used to describe (a 10-min loop + snapshots on stop/pause/close) was
-   REMOVED in v1.7.0 — backups are now expected to come from microVM volume
-   snapshots of `/var/lib/styrman` (host infra: LVM/ZFS/restic — tracked in
-   `TODO.md`, not yet built). The manual checkpoint API still exists
-   backend-side but nothing in the UI calls it (api.md).
+   REMOVED in v1.7.0; the MANUAL checkpoint API that survived that change was
+   then deleted outright in the 2026-08-30 security review (ADR-039) — it,
+   and the standalone host-side `/diff` route, ran host-side `git` against a
+   bind-mounted, guest-writable workspace, a guest→server RCE. All that
+   remains host-side is a hardened `git init`/`git rev-parse`
+   (`internal/gitrepo`), run with config overrides that neutralize a
+   guest-controlled `.git/config`. Backups are now expected to come from
+   microVM volume snapshots of `/var/lib/styrman` (host infra: LVM/ZFS/
+   restic — tracked in `TODO.md`, not yet built).
 
 ## 2. Architecture
 
@@ -152,11 +157,15 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   project reaches the **internet and nothing else**: not another project
   (separate bridges + Docker's inter-bridge DROP + a DOCKER-USER rule
   dropping private-range FORWARD traffic — LAN, other bridges, cloud
-  metadata), and not the host itself (an INPUT drop). Installed by
-  `host-setup.sh`'s `styrman-firewall.sh` and kept applied by a self-healing
-  `styrman-firewall.timer` (re-runs every 60s; delete-then-insert so a
-  Docker restart or manual flush is undone within a minute) (ADR-029,
-  hardened v1.8.3/v1.8.4).
+  metadata), and not the host itself (an INPUT drop) — plus a `physdev
+  --physdev-is-bridged` exemption so a project can still reach the
+  credential broker and port-preview proxy on its OWN bridge (same-bridge L2
+  traffic otherwise also traverses the isolation chain). Installed by
+  `host-setup.sh`'s `styrman-firewall.sh` into dedicated `STYRMAN-IN`/
+  `STYRMAN-FWD` chains, kept applied by a self-healing `styrman-firewall.timer`
+  (re-runs every 60s; INSERT-IF-MISSING, never delete-then-insert, so there is
+  no window where isolation is briefly absent) (ADR-029, reworked 2026-08-30
+  — see deploy.md).
 - **Credential broker** (ADR-030/032): a credential-only listener (`:8091`,
   bridge-only, never published to the host) hands each project the CURRENT
   credential for a tool, identified by its bridge source IP — so a refresh in
@@ -168,9 +177,11 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   `hasCompletedOnboarding` flag so a materialized token doesn't re-trigger
   first-run login, v1.5.6); and `GET /files` (files — gcloud ADC, ssh key,
   claude's `.credentials.json`, and agy's OAuth token file — written into
-  the home by the same snippet). The `GET /keyring` tier (agy's OAuth via
-  Secret Service, ADR-032a) is now **dormant**: agy's real build stores its
-  token in a plain file, not the keyring — file tier since v1.5.5. Finishing
+  the home by the same snippet). That's all three tiers: the fourth
+  `GET /keyring` tier ADR-032a added for agy (Secret Service) turned out to
+  not match agy's real build (a plain file, ADR-038) and was left dormant,
+  then deleted outright in the 2026-08-30 security review (ADR-040) — no
+  broker code, store kind, or shell step references it anymore. Finishing
   first-run setup now seeds the broker automatically from whatever the user
   just signed into (ADR-034, v1.5.4) — no separate import step required;
   `POST /api/settings/credentials/import {project}` remains as a
@@ -192,7 +203,24 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   the server then re-checks the email against its own userstore. Production
   runs no auth-bypass dev listener (`STYRMAN_DEV_ADDR` is opt-in, must bind
   loopback, and is unset in the compose deploy — 2026-08-27 security
-  review).
+  review). Every auth misconfiguration fails CLOSED at startup, not just at
+  request time: `config.Load` refuses to start with `STYRMAN_AUTH=header` and
+  an empty `STYRMAN_INGRESS_TOKEN`, and refuses any `STYRMAN_AUTH` value
+  other than `none`/`header` outright (2026-08-30 security review, H2/M16).
+- **Host-side git is bootstrap-only** (ADR-039): the server process itself
+  only ever runs `git init`/`git rev-parse` (`internal/gitrepo`), both
+  hardened against a guest-controlled `.git/config` (fsmonitor/hooksPath/ext
+  transport all neutralized). Everything else git — status, diff, stage,
+  commit, push — runs INSIDE the project's own guest VM (ADR-035); the
+  former host-side checkpoint machinery, which ran unhardened host-side git
+  against the same bind-mounted, guest-writable trees, is deleted outright,
+  not merely unused.
+- **Guest exec output is bounded** (H4/H7): `Orchestrator.Exec` (readiness
+  probes, tmux bookkeeping, git status/diff, stats, format) caps a guest
+  command's combined stdout/stderr at 2 MiB in memory — the guest is
+  untrusted root in its own VM and otherwise controls how much the shared
+  server holds — and guarantees a 30s deadline when the caller passes none,
+  so a wedged guest command can't pin a goroutine forever.
 - **File ops are confined** (`internal/files`, `os.Root`): every
   home-relative read/write is rooted at the user's home and refuses any
   symlink that would leave it, atomically at every path component — the
@@ -221,6 +249,10 @@ vi deploy/.env    # BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET, CLOUDFLARE_API_TOKEN,
 docker compose -f deploy/docker-compose.yml up -d --build
 # DNS records + certs are automatic → https://<STYRMAN_HOSTNAME>.<domain>
 ```
+
+`host-setup.sh` installs a pinned Docker CE version and Kata release with a
+fail-closed SHA256 check before extracting it as root — see deploy.md for
+the exact pins and the `daemon.json` keys it sets.
 
 First use per user: the sidebar shows a **First-time setup** banner →
 "Open setup" boots a hidden minimal microVM running the guided
@@ -305,8 +337,8 @@ re-import it.
 
 ```bash
 go test ./...                                        # unit (stores, guards, routing)
-bash .agents/docs/testing/styrman/integration.sh     # 62 checks vs real Kata
-bash web/e2e/run.sh                                  # 35 browser checks (Playwright, self-hosted)
+bash .agents/docs/testing/styrman/integration.sh     # 56 checks vs real Kata
+bash web/e2e/run.sh                                  # 34 browser checks (Playwright, self-hosted)
 cd web && npm run build                              # UI → dist/client (committed)
 ```
 

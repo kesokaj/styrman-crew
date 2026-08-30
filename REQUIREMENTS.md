@@ -34,8 +34,8 @@
    per-op credential helper (nothing stored in the VM); gh/npm/claude via env
    tokens; gcloud ADC + the ssh key via file injection; agy via file injection
    of its OAuth token (`~/.gemini/antigravity-cli/antigravity-oauth-token`;
-   ADR-032a amended 2026-08-29 — the earlier keyring tier is dormant) — all
-   pulled current on every login shell. docker→registry creds: planned (no adapter yet). Sign in
+   ADR-032a superseded — the earlier keyring tier was REMOVED outright, ADR-040)
+   — all pulled current on every login shell. docker→registry creds: planned (no adapter yet). Sign in
    to each brokered tool **once**; a refresh in any project propagates to all;
    destroying and recreating any container must lose nothing outside that
    container's runtime state.

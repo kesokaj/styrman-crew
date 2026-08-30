@@ -6,14 +6,16 @@ No mocks in the orchestrator path.
 ## Tiers
 
 1. **Unit** — `go test ./...` (store, validation; fast, no Docker).
-2. **Integration (62 checks)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
+2. **Integration (56 checks)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
    (default `styrman-runtime:dev`). Isolated server (own state dir, port
    18080) through the full lifecycle: legacy-layout migration, async create
    → microVM boot, terminals (records, rename, pause, close-all),
    WS I/O + reattach, transcripts, file explorer (incl. traversal guards),
-   ports + all preview URL shapes, git diff + checkpoints (R13), settings,
-   persistence across container destruction, UUID identity + friendly
-   rename, wipe. Safe next to a real install.
+   ports + all preview URL shapes, the in-guest git client (status + diff),
+   settings, persistence across container destruction, UUID identity +
+   friendly rename, wipe. Safe next to a real install. (The old host-side
+   `/diff` + checkpoint checks were replaced with `/git/status` + `/git/diff`
+   checks when those routes were removed in the git-RCE fix, ADR-039.)
 3. **Manual / UX** — things scripts can't judge:
    - `go run ./cmd/styrman/` → http://127.0.0.1:8080/ in a browser
    - create a project each for claude and agy; complete each agent's first-run
@@ -39,7 +41,7 @@ go test ./... && bash .agents/docs/testing/styrman/integration.sh
 Image changes: rebuild the image first; the integration script always creates
 fresh containers so it picks the new image up automatically.
 
-## Tier 4 — Browser e2e (Playwright, 35 checks)
+## Tier 4 — Browser e2e (Playwright, 34 checks)
 
 `bash web/e2e/run.sh [image-tag]` — self-hosts: builds the server and starts
 its own instance on a host loopback port with an isolated state dir, then
@@ -51,7 +53,7 @@ Drives the real UI in headless Chromium against that server: project
 creation (boots a microVM), agent + shell terminals (xterm's DOM renderer
 makes terminal text assertable, plus copy-on-select),
 typing into the microVM, the Files/Ports/History/Git/Clipboard side-panel tabs,
-rename/delete, deep links, setup page, theme, and full cleanup — 35 checks +
+rename/delete, deep links, setup page, theme, and full cleanup — 34 checks +
 screenshots.
 Prereq: `cd web && npm i && npx playwright install chromium` (once).
 Self-cleaning: deletes any leftover `e2e-ui` project at start.

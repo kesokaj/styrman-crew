@@ -76,7 +76,7 @@ func (s *Server) projectStats(w http.ResponseWriter, r *http.Request) {
 		parseStats(out, &view)
 	}
 	// IP is resolved host-side (authoritative) rather than from the guest.
-	if ip, err := s.orch.IPAddress(ctx, u.Username, p.ID); err == nil {
+	if ip, err := s.orch.IPAddress(ctx, p.ID); err == nil {
 		view.IP = ip
 	}
 	writeJSON(w, http.StatusOK, view)

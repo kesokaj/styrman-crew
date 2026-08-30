@@ -39,8 +39,8 @@ STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/
 STYRMAN_VERSION=<x.y.z> docker compose -f deploy/docker-compose.yml up -d --build
 
 # Test suites
-bash .agents/docs/testing/styrman/integration.sh   # 62 checks vs real Kata
-bash web/e2e/run.sh                                # 35 Playwright checks (self-hosted)
+bash .agents/docs/testing/styrman/integration.sh   # 56 checks vs real Kata
+bash web/e2e/run.sh                                # 34 Playwright checks (self-hosted)
 ```
 
 ## Architecture
@@ -88,7 +88,7 @@ bash web/e2e/run.sh                                # 35 Playwright checks (self-
 - Local-first on this machine (Kata runtime `mvm` required — already configured).
 - Integration scripts + guides in `.agents/docs/testing/styrman/`.
 - Browser e2e: `bash web/e2e/run.sh` (self-hosts its own server on host
-  loopback with an isolated state dir, then runs `web/e2e/run.mjs`'s 35
+  loopback with an isolated state dir, then runs `web/e2e/run.mjs`'s 34
   Playwright checks against it — production has no auth-bypass listener to
   test against instead; prereq `npx playwright install chromium`).
 - Spike results (Phase 0) in `.agents/docs/testing/spikes/`.
@@ -103,7 +103,8 @@ bash web/e2e/run.sh                                # 35 Playwright checks (self-
 | `internal/terminal/` | exec↔WebSocket terminal bridge |
 | `internal/project/` | Per-user project store (UUID identity) |
 | `internal/conversation/` | Terminal records + tmux session manager |
-| `internal/files/`, `internal/history/` | File explorer, transcripts + git diff |
+| `internal/files/`, `internal/history/` | File explorer, transcripts (full-text search) |
+| `internal/gitrepo/` | Hardened bootstrap-only host-side git (`init`/`rev-parse`); the interactive Git client itself runs in-guest (`internal/httpapi/git.go`) |
 | `internal/httpapi/` | REST/WS routing, auth guard, settings, proxy |
 | `internal/userstore/` | Allowlist + admin flags |
 | `internal/links/` | Public/private preview-link store |

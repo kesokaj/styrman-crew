@@ -79,7 +79,7 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request, ownerUser, p
 		http.Redirect(w, r, redirectTo, http.StatusTemporaryRedirect)
 		return
 	}
-	ip, err := s.orch.IPAddress(r.Context(), ownerUser, projectID)
+	ip, err := s.orch.IPAddress(r.Context(), projectID)
 	if err != nil {
 		s.logger.Error("preview: ip lookup failed", "project", projectID, "error", err)
 		writeErr(w, http.StatusBadGateway, fmt.Errorf("preview is not available right now"))

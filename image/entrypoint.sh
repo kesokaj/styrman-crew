@@ -73,7 +73,7 @@ if [ -z "${MINIMAL}" ]; then
     runuser -u "${USERNAME}" -- mkdir -p \
         "${HOME_DIR}/projects/${PROJECT_DIR}" "${HOME_DIR}/.dockerd" \
         "${HOME_DIR}/.config" "${HOME_DIR}/.cache" "${HOME_DIR}/.local/bin" \
-        "${HOME_DIR}/.local/share/keyrings" 2>/dev/null || true
+        2>/dev/null || true
 fi
 runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/.ssh" 2>/dev/null || true
 chmod 700 "${HOME_DIR}/.ssh" 2>/dev/null || true

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # styrman integration test — exercises the full lifecycle against real
 # Docker + Kata: create project → terminals → WebSocket I/O → transcripts →
-# file explorer → ports/preview → diff → persistence → cleanup.
+# file explorer → ports/preview → git → persistence → cleanup.
 #
 # Prereqs: styrman-runtime image built (image/), Kata runtime 'mvm' working.
 # Uses an isolated state dir and port; safe to run alongside a real install.
@@ -150,27 +150,15 @@ check "revoke deletes the link" \
 check "revoked link no longer serves" \
     "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/link/${LINK_TOK}/i.html) = 404 ]"
 
-say "git diff"
-check "diff reports the repo" "curl -fsS ${API}/api/projects/${ID}/diff | grep -q '\"repo\":true'"
-check "diff sees the new file" "curl -fsS ${API}/api/projects/${ID}/diff | grep -q 'note.txt'"
-
-say "checkpoints (R13)"
-CP_ID=$(curl -fsS -X POST "${API}/api/projects/${ID}/checkpoints" -d '{"label":"itest"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])' 2>/dev/null || true)
-check "checkpoint created" "[ -n \"${CP_ID}\" ]"
-check "checkpoint listed" "curl -fsS ${API}/api/projects/${ID}/checkpoints | grep -q '${CP_ID}'"
-check "identical tree dedups" \
-    "curl -fsS -X POST ${API}/api/projects/${ID}/checkpoints -d '{\"label\":\"dup\"}' | grep -q '\"created\":false'"
-# Prove restore actually reverts: damage the tree, restore, check the file is back.
-"${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/1" \
-    -send "echo DAMAGED > ~/projects/itest/note.txt\r" -wait 2s >/dev/null || true
-check "restore succeeds and reports a safety checkpoint" \
-    "curl -fsS -X POST ${API}/api/projects/${ID}/checkpoints/${CP_ID}/restore | grep -q '\"safetyId\"'"
-check "restore reverted the file to the checkpoint content" \
-    "! grep -q DAMAGED '${STATE}/projects/${ME}/${ID}/note.txt'"
-check "restore of malformed id → 400" \
-    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X POST ${API}/api/projects/${ID}/checkpoints/nope/restore) = 400 ]"
-check "restore of absent id → 404" \
-    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X POST ${API}/api/projects/${ID}/checkpoints/20260101T000000.000000000Z-deadbeef/restore) = 404 ]"
+# Git side panel is a real in-guest client now (the host-side /diff route and the
+# checkpoint machinery were removed as a guest→server RCE vector — ADR-039).
+say "git (in-guest client)"
+check "git status reports the running repo" \
+    "curl -fsS ${API}/api/projects/${ID}/git/status | grep -q '\"repo\":true'"
+check "git status sees the new file (untracked)" \
+    "curl -fsS ${API}/api/projects/${ID}/git/status | grep -q 'note.txt'"
+check "git diff of the untracked file shows its content" \
+    "curl -fsS \"${API}/api/projects/${ID}/git/diff?path=note.txt&untracked=true\" | grep -q 'note'"
 
 say "settings"
 check "settings served" "curl -fsS ${API}/api/settings | grep -q '\"authMode\"'"

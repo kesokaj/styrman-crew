@@ -191,7 +191,7 @@ endpoint names. Key facts for next time:
   this session — up from 56 at the 2026-08-27 review, so it does grow;
   recount, don't trust memory.
 
-Files touched this session: `api.md` (new "## Git (real client)" and
+Files touched that session: `api.md` (new "## Git (real client)" and
 "## Format (server-side)" sections, `stats` row, rewrote "## Checkpoints" to
 mark it backend-only, updated credentials import/setup-status rows, new
 credential-content row), `deploy.md` (two new sections: network isolation +
@@ -202,5 +202,100 @@ onboarding" and "Credentials materialized per project" table),
 `guide.md` (load-bearing ideas #2/#3/#4/#5 rewritten, several Architecture
 bullets, install/operating-it sections, two troubleshooting rows), root
 `README.md` (Why bullets, Status paragraph, quick-start version stamp).
+
+**2026-08-30 session — v1.9.0/v1.9.1 security-review-remediation doc sync**
+(read `.agents/docs/changes/2026-08-30-security-review-remediation-v1.9.0.md`
++ ADR-039/ADR-040 first — 62 findings, 5 commits, terse per-finding prose;
+don't re-derive from git log). Key facts for next time:
+- **Host-side git checkpoint machinery is DELETED, not just unused**
+  (ADR-039, the C1 critical RCE fix): `internal/httpapi/checkpoints.go` and
+  `gitrepo`'s snapshot/restore/commit-tree functions are GONE from the repo
+  — this is a step change from the 2026-08-29 state where they were
+  "backend-only, dormant." The standalone `GET /api/projects/{id}/diff`
+  route is also gone. `internal/gitrepo/gitrepo.go` now only has
+  `IsRepo`/`EnsureRepo` (`git rev-parse`/`git init`), hardened with `-c`
+  overrides + `GIT_CONFIG_GLOBAL=/dev/null`. Removed the whole "##
+  Checkpoints" section from `api.md` (don't re-add it) — folded a short
+  removal note into "## Git (real client)" instead.
+- **Broker keyring tier DELETED outright** (ADR-040, supersedes the
+  2026-08-29 "dormant" state): no `credstore.KeyringCred`/`PutKeyring`, no
+  `GET /keyring` on the broker, no `secret-tool store` step in
+  `image/configs/styrman-credentials.sh`. `image/configs/profile-keyring.sh`
+  no longer exists as a file. agy is a plain `file`-tier credential, full
+  stop — say "deleted", not "dormant", from this point forward.
+- **STYRMAN_KEYRING_PW is a live discrepancy, not yet cleaned up**:
+  `internal/config/config.go` has NO field for it (confirmed by reading the
+  whole file) — but `deploy/docker-compose.yml` still has
+  `${STYRMAN_KEYRING_PW:?...}` on the server env, `deploy/.env.example`
+  still lists it, and `deploy/host-setup.sh` still generates+writes it. This
+  is real vestigial deploy-script state (not a doc error) — documented as
+  such in `deploy.md`'s "Required secrets" section rather than silently
+  dropped or silently kept as if load-bearing. Flagged for a deploy-script
+  cleanup in the final report; did not touch the scripts themselves (out of
+  a documentation subagent's lane).
+- **Firewall reworked to dedicated chains** (H5, applied by the operator
+  separately from the 5 remediation commits — needs root, live iptables):
+  `STYRMAN-IN`/`STYRMAN-FWD` chains, INSERT-IF-MISSING (not
+  delete-then-insert — that had a per-60s window with no isolation), a
+  `physdev --physdev-is-bridged RETURN` exemption so a project can still
+  reach the broker/proxy on its OWN bridge, plus IPv6
+  `disable_ipv6`/mirrored `ip6tables` drops. Rewrote `deploy.md`'s whole
+  network-isolation section and the matching `guide.md` Architecture bullet
+  — the old "delete-then-insert self-heal" description is now wrong.
+- **Test count correction, this time verified precisely**: `web/e2e/run.mjs`
+  has exactly 34 `await check(...)` calls (counted every call site, not just
+  a regex total) — the docs said 35 in `guide.md`, `AGENTS.md`, and
+  `.agents/docs/testing/styrman/README.md` (twice); fixed all four spots.
+  `integration.sh` is still 62 (`grep '^check '`), unchanged and reverified.
+- **`.agents/docs/testing/styrman/integration.sh` (NOT edited — out of a
+  documentation subagent's lane, it's a test script) still contains ~9
+  `check "..."` calls against the deleted `/diff` and `/checkpoints[/restore]`
+  endpoints — they will 404 at runtime now. Flagged prominently in
+  `testing/styrman/README.md` and in the handoff report; belongs to whoever
+  owns test-script maintenance (the `testing` subagent) to fix.
+- **REQUIREMENTS.md R3 now contradicts the code**: it says "the earlier
+  keyring tier is dormant" — should say "deleted" per ADR-040. Did not edit
+  REQUIREMENTS.md (approval-gated); reported the exact line in the handoff.
+- Frontend `web/src/lib/api.ts`'s `CredItem.kind` TS union still includes
+  `"keyring"` even though the backend can never send it anymore — noted as a
+  minor stale artifact in the report, not fixed (frontend code, not docs).
+- `image/Dockerfile` still installs `dbus gnome-keyring libsecret-tools`
+  (comment still attributes them to "agy's Secret Service") — these are now
+  genuinely unused (no keyring daemon starts at login, `entrypoint.sh` has
+  no keyring step). Documented as "installed, harmless, unused" in
+  `runtime-image.md` rather than silently dropped from the "Contents" list.
+
+Files touched this session: `api.md` (Git section rewritten with the RCE-fix
+paragraph, Format section stdin/413 fix, History section — dropped `/diff`
+row, deleted the whole Checkpoints section, credentials endpoints —
+`keyring` stripped from every kind union, setup/status row, server-env table
+— dropped `STYRMAN_KEYRING_PW`, added `STYRMAN_VCPUS`/`STYRMAN_MEMORY_MB`,
+`STYRMAN_INGRESS_TOKEN`/`STYRMAN_AUTH` rows note fail-closed startup),
+`deploy.md` (auth fail-closed paragraph, Required-secrets list + the
+STYRMAN_KEYRING_PW vestige note, new VCPUS/MEMORY_MB note, new "What
+host-setup.sh pins/verifies" section, ingress composition bullet — sanitize
++ picture_extractor/caddy-l4 removal, full network-isolation section
+rewrite), `runtime-image.md` (Contents — keyring packages marked unused,
+OpenTofu verification note, entrypoint env table — dropped
+STYRMAN_KEYRING_PW, steps 5/6/6b/6c rewritten, Credentials table — agy row
+kept + keyring row replaced with a removal paragraph, Invariants — dropped
+the STYRMAN_KEYRING_PW bullet, credential-materialization env applies now),
+`guide.md` (§1 idea 5 git-substrate rewritten, §2 Architecture — isolation
+bullet rewritten for chains/physdev/IPv6, credential-broker bullet — keyring
+now "deleted" not "dormant", new "Host-side git is bootstrap-only" bullet,
+new "Guest exec output is bounded" bullet, auth bullet gets a fail-closed
+sentence, §3 install gets a host-setup.sh pins pointer, §6 test count
+35→34), `terminal-protocol.md` (new OSC 52 write-only paragraph after the
+Frames section, H8), root `README.md` (Status paragraph rewritten for
+v1.9.0/v1.9.1, isolation Why-bullet reworded for chains, version stamps
+v1.8.9→v1.9.1 in two places), `AGENTS.md` (test count 35→34 in two spots,
+Key Files table — dropped the false "git diff" attribution to
+`internal/history`, added an `internal/gitrepo` row), `.agents/docs/testing/
+styrman/README.md` (test count 35→34 in two spots, tier-2 description drops
+the false "git diff + checkpoints" claim and gains a "Known gap" callout
+about the stale checks). REQUIREMENTS.md and `.agents/docs/changes/`/
+DECISIONS.md/TODO.md were NOT touched (approval-gated / another subagent's
+lane) — see the handoff report for the exact REQUIREMENTS.md R3 wording that
+now contradicts the code.
 
 See [[feedback-styrman-doc-edits]] for edit-process lessons.

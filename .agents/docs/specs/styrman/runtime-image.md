@@ -11,10 +11,17 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> image/
 
 - Base: git, gh, tmux, jq, ripgrep, fd, bat, build-essential, python3, vim/nano
 - Docker CE + buildx + compose (per-project DinD, ADR-004)
-- gcloud + gke-gcloud-auth-plugin + kubectl, helm, opentofu, yq
+- gcloud + gke-gcloud-auth-plugin + kubectl, helm, yq
+- OpenTofu, via the official `get.opentofu.org` installer script
+  (`--install-method standalone`), which verifies the release signature
+  itself before installing (M32)
 - Go (latest stable at build time), Node 22
 - Agents: `claude` (npm `@anthropic-ai/claude-code`), `agy` (official installer → `/usr/local/bin/agy`)
-- Keyring stack for agy: dbus, gnome-keyring, libsecret-tools (spike S4)
+- dbus, gnome-keyring, libsecret-tools — originally installed for agy's Secret
+  Service (spike S4, ADR-032a); **unused since v1.5.5/ADR-040**: agy's real
+  build never touched the keyring, and the broker's keyring tier that would
+  have populated it is deleted outright. Still installed (harmless), no
+  keyring daemon is started at login (no `profile-keyring.sh` step remains)
 - e2fsprogs (project docker.img), tini (PID-1 reaper)
 - `/etc/styrman-base-packages`: dpkg snapshot — the DIFF BASE for apt persistence (ADR-028: user-installed packages are captured vs this at shutdown and replayed on boot), and still useful for drift debugging
 
@@ -30,7 +37,6 @@ Inputs (env, set by the orchestrator):
 | `STYRMAN_MINIMAL` | System VMs (onboarding): skip workspace + DinD |
 | `STYRMAN_DOCKER_DISK_GB` | Size for a newly created docker.img |
 | `STYRMAN_CRED_BROKER` | Credential broker URL on this project's bridge (ADR-030/032); consumed by the git helper + login-shell snippet. Empty = broker off. |
-| `STYRMAN_KEYRING_PW` | Written to `/run/styrman/keyring-pw` (0400, user-owned), then unset |
 
 Steps, in order:
 
@@ -42,22 +48,37 @@ Steps, in order:
    reserved name (root, daemon, …) that already exists at a different uid is
    rejected — the boot fails loudly instead of every `docker exec` silently
    running as the wrong uid on a home it doesn't own (I11).
-5. `~/projects/<dir>` and `~/.dockerd` (as the user; skipped in minimal mode).
-6. Keyring plumbing: password file + `/etc/profile.d/styrman-keyring.sh`
-   (starts session dbus + unlocked gnome-keyring on first login shell; keyring
-   files persist at `~/.local/share/keyrings` in the PER-PROJECT home). Still
-   installed, but the broker's keyring tier is dormant (see 6c) — agy does
-   not use the guest keyring for its OAuth token (see Credentials below).
-6b. Seed the per-project home (ADR-031) write-once from the image: shell
-    dotfiles from `image/skel/` (`~/.bashrc`, `~/.profile`, `~/.bash_*`, and
-    `~/.npmrc` — the last referencing `${NPM_TOKEN}` from the broker) and the
-    agent harness from `image/harness/`.
-6c. Credential materialization (ADR-032): install
-    `/etc/profile.d/zz-styrman-credentials.sh` (sorts after the keyring
-    snippet). On every login shell it pulls the CURRENT credentials for this
-    project's user from the broker on the project bridge (`$STYRMAN_CRED_BROKER`)
-    — `GET /env` → `export` each var, `GET /files` → write each file at its
-    mode under `$HOME`. The same snippet also, after materializing:
+5. `~/projects/<dir>`, `~/.dockerd`, `~/.config`, `~/.cache`, `~/.local/bin`,
+   and `~/.local/share/keyrings` (as the user; skipped in minimal mode) —
+   the last is a vestige of the removed keyring plumbing (nothing writes to
+   it anymore, kept only because removing the mkdir isn't worth the churn).
+   `~/.ssh` (mode 700) is created unconditionally, even in minimal mode.
+6. Seed the per-project home (ADR-031) write-once from the image: shell
+   dotfiles from `image/skel/` (`~/.bashrc`, `~/.profile`, `~/.bash_*`, and
+   `~/.npmrc` — the last referencing `${NPM_TOKEN}` from the broker) and the
+   agent harness from `image/harness/`.
+6b. Login-shell `/etc/profile.d` snippets: `zzz-styrman-motd.sh` (zzz- so it
+    runs LAST, after credentials are materialized — it probes
+    `~/.claude/.credentials.json` etc. and would otherwise nag "run
+    styrman-setup" on a fully-onboarded project) and
+    `zz-styrman-credentials.sh` (ADR-032, credential materialization, below).
+    **There is no keyring snippet anymore** — the former
+    `styrman-keyring.sh`/`profile-keyring.sh` step (session dbus + gnome-keyring
+    unlock) is deleted outright (ADR-040); no keyring daemon is started at
+    login.
+6c. Credential materialization (`zz-styrman-credentials.sh`, ADR-032). Skipped
+    entirely if `STYRMAN_SKIP_CRED_PULL` is set (the harvest/import exec sets
+    this so it reads the guest's REAL current files instead of the broker's
+    own copy — H6). Otherwise, on every login shell:
+    - Derives the broker's address from the VM's OWN current IP (broadcast−1
+      of its `/16`) rather than trusting `$STYRMAN_CRED_BROKER` baked into the
+      container env at creation time — a network recreation can hand the
+      bridge a new subnet, which would otherwise strand the project on a
+      stale broker IP (M17). Falls back to the injected value if its own
+      address can't be read.
+    - `GET /env` → `export` each var. `GET /files` → writes each file under
+      `$HOME` at its mode, via an `umask 077` temp file + atomic rename (never
+      a torn or briefly-world-readable credential file).
     - applies `STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL` (env creds) as
       `git config --global user.name/user.email` — per-project homes carry no
       git identity by default (only the auth token is a broker tier), so
@@ -66,14 +87,14 @@ Steps, in order:
       config, not `GIT_AUTHOR_*` env, so a per-repo `user.name` still wins.
     - when `~/.claude/.credentials.json` is present, jq-merges
       `hasCompletedOnboarding: true` into `~/.claude.json` (creating a
-      minimal file if absent) — a fresh per-project home otherwise has the
-      flag unset even with a valid token, so interactive `claude` re-runs
-      first-run onboarding and prompts for login despite already being
-      signed in (`claude -p` is unaffected — it skips onboarding) (v1.5.6).
-    - `GET /keyring` → `secret-tool store` each Secret Service item is still
-      present but is now **dormant**: nothing currently harvests into the
-      keyring tier (see agy below). Left in place, harmless, rather than
-      ripped out; a future cleanup may remove it.
+      minimal file if absent), writing atomically via a temp file + rename so
+      a concurrent `claude` never reads a torn file — a fresh per-project home
+      otherwise has the flag unset even with a valid token, so interactive
+      `claude` re-runs first-run onboarding and prompts for login despite
+      already being signed in (`claude -p` is unaffected — it skips
+      onboarding) (v1.5.6).
+    - There is no `GET /keyring` step — that broker tier and this snippet's
+      former `secret-tool store` block are both deleted (ADR-040).
 7. Default `~/.tmux.conf` if the user has none (status off, login shells,
    `mouse off` — mouse mode steals selection from the browser terminal, so
    it's off so xterm.js can select natively and copy-on-select works).
@@ -127,7 +148,7 @@ section.
 
 | Tool | Broker tier | Source in the shared/setup home | Notes |
 |---|---|---|---|
-| git (push/pull auth) | git helper (per-op; nothing stored in the project) | `gh auth token --hostname github.com` | A system git credential helper calls the broker per operation |
+| git (push/pull auth) | git helper (per-op; nothing stored in the project) | `gh auth token --hostname github.com` | A system git credential helper (`image/configs/styrman-git-credential`) calls the broker per operation; parses the JSON response with `jq` (base image has it), falling back to a `sed` extraction only right for simple unescaped tokens |
 | gh (`GH_TOKEN`) | env | `gh auth token` | Same token as git, exported as a shell var |
 | git identity | env (`STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL`) | shared-home `.gitconfig` | Applied as `git config --global user.name/user.email` on login (v1.7.1) — per-repo identity still overrides it |
 | claude | file (`~/.claude/.credentials.json`) | same path | Carries a refresh_token; login-shell snippet also jq-merges the onboarding flag (v1.5.6, see entrypoint step 6c) |
@@ -135,7 +156,12 @@ section.
 | ssh | file — first of `id_ed25519` / `id_rsa` / `id_ecdsa` | `~/.ssh/` | Kata blocks agent-socket forwarding, so the private key itself is materialized into each project |
 | npm | env (`NPM_TOKEN`) | `~/.npmrc`'s `_authToken` | `image/skel/.npmrc` references `${NPM_TOKEN}` |
 | agy | file (`~/.gemini/antigravity-cli/antigravity-oauth-token`, 0600) | same path | **v1.5.5**: ADR-032a originally modelled this as a keyring (Secret Service) credential — wrong for this agy build, which persists a portable `{access_token, token_type, refresh_token, expiry}` JSON file, not a keyring item. Moved to the file tier, which also works from the minimal setup VM (no keyring daemon runs there) |
-| — | keyring — **dormant** | — | The broker's keyring tier (`credstore.KeyringCred`, `GET /keyring`, the login snippet's `secret-tool store` block) is unused by any tool as of v1.5.5. Left in place, harmless, rather than ripped out; removal is a separate future cleanup |
+
+There is no keyring tier: the broker's keyring tier (`credstore.KeyringCred`/
+`PutKeyring`, `GET /keyring`, the login snippet's `secret-tool store` block)
+was left in place as dormant code after the v1.5.5 agy move, then **deleted
+outright** in the 2026-08-30 security review (ADR-040) — no store kind,
+broker endpoint, or shell step references it anymore.
 
 ## Invariants
 
@@ -146,6 +172,7 @@ section.
   (v1.5 review fix). Running containers keep their rootfs until stopped. The
   apt manifest (ADR-028) replays what the user installed.
 - Agent conversations are exec'd as `bash -lc 'exec <agent>'` so
-  `/etc/profile.d` (keyring env) always applies.
-- The image never contains secrets; `STYRMAN_KEYRING_PW` arrives via env and
-  is unset after being written to the tmpfs file.
+  `/etc/profile.d` (the credential-materialization snippet) always applies.
+- The image never contains secrets; credentials arrive over the broker on
+  the project's own bridge at each login (ADR-030/032) — never baked into
+  the image, never passed to the guest via container env.
