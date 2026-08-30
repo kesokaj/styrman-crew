@@ -202,6 +202,18 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   process isn't a plain shell (a detached build, claude still working),
   blocks the stop and resets the idle clock. Reopening a terminal boots on
   connect.
+- **Per-project backups** (v1.13.0, ADR-044): the sidebar ⋯ menu's
+  **Backup** snapshots the workspace + project home (docker disk excluded —
+  reproducible cache) into a server-side tar.gz; works while running
+  (crash-consistent). **Settings → Backups** lists them all with
+  restore/delete: restore replaces the STOPPED project's files
+  transactionally (current state is quarantined and renamed back if the
+  extraction fails — root-assisted via the server's own container where
+  dockerd stubs or guest-`sudo` files are root-owned). A deleted project's
+  backups survive and can seed a new project: **"From backup"** in the
+  create dialog clones workspace + home + the source's project env vars.
+  Host-level snapshots of the whole state dir (TODO) remain the
+  disaster-recovery layer; this is per-project lifecycle.
 - **Stop is sticky** (v1.11.0): the sidebar Stop button (and the idle
   reaper) marks the project deliberately stopped; open terminal tabs show
   "Project stopped" instead of auto-reconnecting — an automatic reconnect

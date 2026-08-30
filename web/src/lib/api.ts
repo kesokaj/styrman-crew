@@ -159,6 +159,15 @@ export interface CredItem {
 /** Per-tool result of an import-from-project pass. */
 export type CredImportReport = Record<string, string>;
 
+/** One per-project backup archive (ADR-044). */
+export interface BackupMeta {
+  id: string;
+  projectId: string;
+  projectName: string;
+  createdAt: string;
+  sizeBytes: number;
+}
+
 export interface SetupStatus {
   gitIdentity: boolean; // required
   sshKey: boolean; // required
@@ -225,7 +234,13 @@ export const api = {
   listProjects: () => request<{ projects: Project[] }>("/api/projects"),
   createProject: (
     name: string,
-    opts: { github?: "none" | "private" | "public"; cloneUrl?: string } = {},
+    opts: {
+      github?: "none" | "private" | "public";
+      cloneUrl?: string;
+      // Seed workspace + home + project env vars from an existing backup
+      // (mutually exclusive with cloneUrl/github).
+      fromBackup?: { project: string; id: string };
+    } = {},
   ) =>
     request<Project>("/api/projects", {
       method: "POST",
@@ -233,6 +248,7 @@ export const api = {
         name,
         github: opts.github ?? "none",
         cloneUrl: opts.cloneUrl ?? "",
+        fromBackup: opts.fromBackup,
       }),
     }),
   getProject: (id: string) => request<Project>(`/api/projects/${id}`),
@@ -459,6 +475,23 @@ export const api = {
     request<{ content?: string; path?: string; binary?: boolean }>(
       `/api/settings/credentials/${kind}/${encodeURIComponent(id)}/content`,
     ),
+  // Per-project backups (ADR-044): workspace + home minus the docker disk.
+  createBackup: (project: string) =>
+    request<BackupMeta>(`/api/projects/${project}/backups`, { method: "POST" }),
+  listBackups: (project: string) =>
+    request<{ backups: BackupMeta[] }>(`/api/projects/${project}/backups`),
+  listAllBackups: () =>
+    request<{ backups: BackupMeta[] }>("/api/settings/backups"),
+  // Under /api/settings: a backup may outlive its project (still restorable
+  // into a new one), so deleting must not require the project record.
+  deleteBackup: (project: string, id: string) =>
+    request<void>(`/api/settings/backups/${project}/${id}`, {
+      method: "DELETE",
+    }),
+  restoreBackup: (project: string, id: string) =>
+    request<void>(`/api/projects/${project}/backups/${id}/restore`, {
+      method: "POST",
+    }),
   // Project-scoped env variables (SidePanel Env tab) — delivered only to this
   // project's NEW login shells; a project value wins over a same-named global.
   projectEnv: (project: string) =>

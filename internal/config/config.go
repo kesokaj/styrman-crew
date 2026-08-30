@@ -334,6 +334,17 @@ func (c *Config) ProjectWorkspace(user, projectID string) string {
 	return filepath.Join(c.StateDir, "projects", user, projectID)
 }
 
+// ProjectBackups is where one project's backup archives live (ADR-044):
+// server-controlled, never mounted into any guest.
+func (c *Config) ProjectBackups(user, projectID string) string {
+	return filepath.Join(c.StateDir, "backups", user, projectID)
+}
+
+// UserBackups is the per-user backups root (parent of every ProjectBackups).
+func (c *Config) UserBackups(user string) string {
+	return filepath.Join(c.StateDir, "backups", user)
+}
+
 // UserStateDir returns where a user's metadata stores live.
 func (c *Config) UserStateDir(user string) string {
 	return filepath.Join(c.StateDir, "users", user)

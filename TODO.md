@@ -41,7 +41,7 @@ Deferred work items. Not blocking current work, but should be addressed later.
 - [x] ~~Phase 3 needs Google OAuth client ID/secret, Cloudflare API token, BASE_DOMAIN~~
       — provided; crew.styrman.xyz is live behind Google OAuth + Cloudflare
       (deploy/.env configured, secrets rotated in the 2026-08-28 reinstall)
-- [ ] Backup: implement microVM **volume snapshots** of `/var/lib/styrman` (operator decision 2026-08-29, replacing the git auto-checkpoints removed in v1.7.0). Host-infra dependent — the FS must support snapshots (LVM/ZFS/btrfs) or use scheduled restic/borg to GCS; `/var/lib/styrman/{homes,projects,users}` is the whole state, ADR-027 source lives under projects/ (added 2026-08-26, updated 2026-08-29)
+- [ ] Backup, host layer: implement whole-state **volume snapshots** of `/var/lib/styrman` (operator decision 2026-08-29). Host-infra dependent — the root FS is plain ext4 without LVM (verified 2026-08-30), so this means scheduled restic/borg to GCS; `/var/lib/styrman/{homes,projects,users,backups,credentials}` is the whole state. The USER layer shipped separately in v1.13.0 (per-project backup/restore in-app, ADR-044) — this item is the disaster-recovery complement, not superseded (added 2026-08-26, updated 2026-08-30)
 - [ ] Update the clean-reinstall procedure doc (`.agents/docs/changes/2026-08-28-clean-reinstall.md` or wherever it's canonicalized next) to explicitly call out "restart the server after scrubbing StateDir/users" as a required step, not an implicit one — its omission caused the v1.5.2 first-login 400 fixed in v1.5.3 (ADR-033) (added 2026-08-29)
 - [x] ~~Remove the now-dormant broker keyring tier~~ — done in the 2026-08-30
       security review remediation (v1.9.0, commit 8ca6368): `credstore.

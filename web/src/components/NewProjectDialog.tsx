@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "../lib/toast";
-import { api, projectNameError } from "../lib/api";
+import { api, projectNameError, type BackupMeta } from "../lib/api";
 
-type Repo = "local" | "private" | "public" | "clone";
+type Repo = "local" | "private" | "public" | "clone" | "backup";
 
 export function NewProjectDialog({
   onClose,
@@ -18,27 +18,43 @@ export function NewProjectDialog({
   const [ghReady, setGhReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [backups, setBackups] = useState<BackupMeta[]>([]);
+  // "projectId/backupId" of the chosen source backup.
+  const [fromBackup, setFromBackup] = useState("");
 
-  // GitHub options only make sense once gh is signed in (styrman-setup).
+  // GitHub options only make sense once gh is signed in (styrman-setup);
+  // the From-backup option only once a backup exists (ADR-044).
   useEffect(() => {
     api
       .setupStatus()
       .then((s) => setGhReady(s.github))
+      .catch(() => {});
+    api
+      .listAllBackups()
+      .then((b) => setBackups(b.backups))
       .catch(() => {});
   }, []);
 
   const nameValid = !projectNameError(name);
   // Mirror the server's cloneURLRe so the client rejects the same shapes.
   const cloneValid = /^(https:\/\/|ssh:\/\/|git@)[\w.@:/~+-]+$/.test(cloneUrl);
-  const valid = nameValid && (repo !== "clone" || cloneValid);
+  const valid =
+    nameValid &&
+    (repo !== "clone" || cloneValid) &&
+    (repo !== "backup" || fromBackup !== "");
 
   const create = async () => {
     setBusy(true);
     setError(undefined);
     try {
+      const [srcProject, srcBackup] = fromBackup.split("/");
       const p = await api.createProject(name, {
         github: repo === "private" || repo === "public" ? repo : "none",
         cloneUrl: repo === "clone" ? cloneUrl.trim() : undefined,
+        fromBackup:
+          repo === "backup" && srcProject && srcBackup
+            ? { project: srcProject, id: srcBackup }
+            : undefined,
       });
       // The project EXISTS from here on. A failed first-terminal create must
       // not present as "creation failed" — retrying would then hit "name
@@ -62,6 +78,7 @@ export function NewProjectDialog({
     ["private", "GitHub · private", !ghReady],
     ["public", "GitHub · public", !ghReady],
     ["clone", "Clone a repo", false],
+    ["backup", "From backup", backups.length === 0],
   ];
 
   // Portal: a transformed ancestor (the sidebar drawer) would otherwise
@@ -110,12 +127,34 @@ export function NewProjectDialog({
                   ? "border-accent bg-accent-soft text-on-accent-soft"
                   : "border-border hover:bg-bg-hover"
               } disabled:cursor-not-allowed disabled:opacity-35`}
-              title={disabled ? "Sign in to GitHub first (styrman-setup)" : undefined}
+              title={
+                !disabled
+                  ? undefined
+                  : value === "backup"
+                    ? "No backups yet — create one from a project's ⋯ menu"
+                    : "Sign in to GitHub first (styrman-setup)"
+              }
             >
               {label}
             </button>
           ))}
         </div>
+        {repo === "backup" && (
+          <select
+            aria-label="Backup to restore from"
+            value={fromBackup}
+            onChange={(e) => setFromBackup(e.target.value)}
+            className="mb-3 w-full rounded-md border border-border bg-bg px-2 py-1.5 text-xs outline-none focus:border-accent"
+          >
+            <option value="">Choose a backup…</option>
+            {backups.map((b) => (
+              <option key={b.projectId + b.id} value={`${b.projectId}/${b.id}`}>
+                {b.projectName} — {new Date(b.createdAt).toLocaleString()} (
+                {(b.sizeBytes / 1024 / 1024).toFixed(1)} MB)
+              </option>
+            ))}
+          </select>
+        )}
         {repo === "clone" && (
           <input
             aria-label="Repository URL to clone"

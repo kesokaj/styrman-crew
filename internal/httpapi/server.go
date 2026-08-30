@@ -82,6 +82,10 @@ type Server struct {
 	deletingMu sync.Mutex
 	deleting   map[string]bool
 	deleteErrs map[string]string
+	// restoring (same mutex, same key) marks an in-flight backup restore —
+	// boot paths refuse while set, or the booting guest and the extraction
+	// would write the same tree concurrently (ADR-044).
+	restoring map[string]bool
 }
 
 // New creates the Server.
@@ -95,6 +99,7 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		spaces:     map[string]*userSpace{},
 		deleting:   map[string]bool{},
 		deleteErrs: map[string]string{},
+		restoring:  map[string]bool{},
 	}
 	// Public preview-link store (best-effort: a load failure degrades to
 	// no-links, never blocks server start).
@@ -122,6 +127,9 @@ func (s *Server) ensureFor(ctx context.Context, user, projectID string) (contain
 	// leave an orphan microVM with no project record.
 	if inFlight, _ := s.deletingState(user, projectID); inFlight {
 		return "", "", "", fmt.Errorf("project is being deleted")
+	}
+	if s.restoringState(user, projectID) {
+		return "", "", "", fmt.Errorf("project is being restored from a backup")
 	}
 	sp, err := s.space(user)
 	if err != nil {
@@ -211,6 +219,12 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("POST /api/projects/{project}/start", s.startProject)
 	mux.HandleFunc("POST /api/projects/{project}/stop", s.stopProject)
 	mux.HandleFunc("GET /api/projects/{project}/stats", s.projectStats)
+	// Per-project backups (ADR-044) — sidebar lifecycle menu + Settings list.
+	mux.HandleFunc("POST /api/projects/{project}/backups", s.createBackup)
+	mux.HandleFunc("GET /api/projects/{project}/backups", s.listBackups)
+	mux.HandleFunc("POST /api/projects/{project}/backups/{backup}/restore", s.restoreBackup)
+	mux.HandleFunc("GET /api/settings/backups", s.listAllBackups)
+	mux.HandleFunc("DELETE /api/settings/backups/{project}/{backup}", s.deleteBackup)
 	// Project-scoped env variables (ADR-043) — SidePanel Env tab.
 	mux.HandleFunc("GET /api/projects/{project}/env", s.listProjectEnv)
 	mux.HandleFunc("PUT /api/projects/{project}/env", s.putProjectEnv)
@@ -532,7 +546,17 @@ type createProjectRequest struct {
 	// CloneURL: clone an existing repository as the workspace instead of
 	// initializing an empty one. Mutually exclusive with GitHub.
 	CloneURL string `json:"cloneUrl"`
+	// FromBackup: seed the new project from an existing backup (ADR-044) —
+	// workspace + home + project env vars of the source. Mutually exclusive
+	// with CloneURL/GitHub.
+	FromBackup *struct {
+		Project string `json:"project"` // source project id (backup owner)
+		ID      string `json:"id"`      // backup id (timestamp)
+	} `json:"fromBackup"`
 }
+
+// projectIDRe: a project UUID as it appears in backup paths.
+var projectIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // cloneURLRe accepts the common remote shapes and nothing that could read
 // as a git option or shell metacharacter. The clone itself passes the URL
@@ -569,6 +593,21 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid clone URL"))
 		return
 	}
+	if req.FromBackup != nil {
+		if req.CloneURL != "" || (req.GitHub != "" && req.GitHub != "none") {
+			writeErr(w, http.StatusBadRequest, errors.New("fromBackup is mutually exclusive with cloneUrl/github"))
+			return
+		}
+		if !projectIDRe.MatchString(req.FromBackup.Project) || !backupIDRe.MatchString(req.FromBackup.ID) {
+			writeErr(w, http.StatusBadRequest, errors.New("invalid backup reference"))
+			return
+		}
+		// The source path is user-scoped by construction; just confirm it exists.
+		if _, err := os.Stat(filepath.Join(s.cfg.ProjectBackups(u.Username, req.FromBackup.Project), req.FromBackup.ID+".tar.gz")); err != nil {
+			writeErr(w, http.StatusNotFound, errors.New("no such backup"))
+			return
+		}
+	}
 	p, err := sp.projects.Add(project.Project{Name: req.Name, GitInit: true, CreatedAt: time.Now().UTC()})
 	if err != nil {
 		writeErr(w, http.StatusConflict, err)
@@ -588,6 +627,18 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		_ = sp.projects.Remove(p.ID)
 		writeErr(w, http.StatusInternalServerError, errors.New("cannot create project home"))
 		return
+	}
+	// Create-from-backup (ADR-044): extract the source archive over the fresh
+	// dirs BEFORE the boot — the archive carries the workspace's .git (R13
+	// holds; the boot-time sweep re-inits if a pre-R13 backup lacked one) and
+	// the per-project home; the source's scoped env vars are copied too.
+	if req.FromBackup != nil {
+		if err := s.seedFromBackup(r.Context(), u.Username, p.ID, req.FromBackup.Project, req.FromBackup.ID); err != nil {
+			_ = sp.projects.Remove(p.ID)
+			s.logger.Error("create-from-backup failed", "project", p.Name, "error", err)
+			writeErr(w, http.StatusInternalServerError, errors.New("could not seed the project from the backup"))
+			return
+		}
 	}
 	// R13: the workspace is a git repo from second zero. A clone fills the
 	// (still empty) directory in the background boot instead.
@@ -771,7 +822,18 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 				s.cfg.ProjectHome(u.Username, p.ID),
 				s.cfg.ProjectWorkspace(u.Username, p.ID),
 			} {
-				if err := os.RemoveAll(dir); err != nil {
+				err := os.RemoveAll(dir)
+				if err != nil {
+					// Pre-v1.11.1 homes carry ROOT-owned bind-mount stubs the
+					// unprivileged server can't delete — empty the dir as root
+					// via the server's own container, then retry (ADR-044).
+					if rerr := s.orch.RootRemoveContents(ctx, dir); rerr == nil {
+						err = os.Remove(dir)
+					} else {
+						s.logger.Warn("root-assisted wipe unavailable", "path", dir, "error", rerr)
+					}
+				}
+				if err != nil && !os.IsNotExist(err) {
 					s.logger.Error("wipe failed", "project", p.ID, "path", dir, "error", err)
 					wipeFailed = true
 				}
@@ -830,6 +892,10 @@ func (s *Server) startProject(w http.ResponseWriter, r *http.Request) {
 	// Same resurrection guard as ensureFor.
 	if inFlight, _ := s.deletingState(u.Username, p.ID); inFlight {
 		writeErr(w, http.StatusConflict, errors.New("project is being deleted"))
+		return
+	}
+	if s.restoringState(u.Username, p.ID) {
+		writeErr(w, http.StatusConflict, errors.New("project is being restored from a backup"))
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)

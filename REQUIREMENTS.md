@@ -80,7 +80,9 @@
     client (status / stage / unstage / discard / commit / push, correct author
     identity + broker push auth). Automatic checkpoints under
     `refs/styrman/checkpoints/*` were REMOVED 2026-08-29 (ADR-035); durable
-    backups are now microVM VOLUME snapshots (host infra, planned).
+    backup is two layers (operator directive 2026-08-30): per-project
+    user-triggered backup/restore in-app (workspace + home tar.gz, ADR-044,
+    shipped v1.13.0) and whole-state volume snapshots (host infra, planned).
 
 ## Constraints
 

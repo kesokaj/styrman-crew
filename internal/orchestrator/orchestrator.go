@@ -887,6 +887,66 @@ func (o *Orchestrator) stopIfIdle(ctx context.Context, user, project string, idl
 	return o.stopLocked(ctx, project)
 }
 
+// RootRemoveContents empties dir using root inside the server's OWN container
+// (docker exec -u 0 on SelfContainer, which mounts the state dir). The server
+// runs unprivileged (uid 1000), but pre-v1.11.1 homes carry ROOT-owned
+// bind-mount stubs dockerd created (e.g. <phome>/projects/<dir>) that an
+// unprivileged RemoveAll can never delete — and the server legitimately holds
+// the docker socket, so this is not an escalation it doesn't already have.
+// Guard: only paths under StateDir, and only when containerized.
+func (o *Orchestrator) RootRemoveContents(ctx context.Context, dir string) error {
+	if o.cfg.SelfContainer == "" {
+		return fmt.Errorf("root remove unavailable outside the containerized server")
+	}
+	clean := filepath.Clean(dir)
+	if !strings.HasPrefix(clean, filepath.Clean(o.cfg.StateDir)+string(os.PathSeparator)) {
+		return fmt.Errorf("root remove refused outside the state dir: %s", dir)
+	}
+	rctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	code, out, err := o.Exec(rctx, o.cfg.SelfContainer, ExecSpec{
+		User: "0",
+		Cmd:  []string{"find", clean, "-mindepth", "1", "-delete"},
+	})
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("root remove exited %d: %s", code, strings.TrimSpace(out))
+	}
+	return nil
+}
+
+// RootRename moves from → to as root inside the server's own container.
+// Renaming a DIRECTORY into a different parent rewrites its ".." entry, which
+// requires write permission ON THE DIRECTORY ITSELF — impossible for the
+// unprivileged server when the entry is root-owned (dockerd mount stubs, or
+// files the guest created via sudo, which virtiofs maps to host root). Same
+// guard as RootRemoveContents: both paths must live under StateDir.
+func (o *Orchestrator) RootRename(ctx context.Context, from, to string) error {
+	if o.cfg.SelfContainer == "" {
+		return fmt.Errorf("root rename unavailable outside the containerized server")
+	}
+	root := filepath.Clean(o.cfg.StateDir) + string(os.PathSeparator)
+	cf, ct := filepath.Clean(from), filepath.Clean(to)
+	if !strings.HasPrefix(cf, root) || !strings.HasPrefix(ct, root) {
+		return fmt.Errorf("root rename refused outside the state dir")
+	}
+	rctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	code, out, err := o.Exec(rctx, o.cfg.SelfContainer, ExecSpec{
+		User: "0",
+		Cmd:  []string{"mv", "-T", cf, ct},
+	})
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("root rename exited %d: %s", code, strings.TrimSpace(out))
+	}
+	return nil
+}
+
 // busyProbeScript runs in the guest as root: prints "docker" if any DinD
 // container is running, "term:<cmd>" for each tmux pane whose foreground
 // process isn't a plain shell. Empty output = genuinely idle.

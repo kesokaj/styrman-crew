@@ -1462,3 +1462,52 @@ internal/httpapi/projectenv.go, internal/httpapi/server.go,
 web/src/components/SidePanelEnv.tsx, web/src/components/SidePanel.tsx,
 web/src/lib/api.ts, web/src/routes/settings.tsx. Verification:
 .agents/docs/changes/2026-08-30-project-env-vars-v1.12.0.md
+
+## ADR-044: Per-project backup/restore as server-side tar.gz + root-assisted file ops via the server's own container (2026-08-30)
+
+**Context.** ADR-035 removed git auto-checkpoints; R13 deferred durable
+backup to host-level volume snapshots. The operator now wants a per-project
+lifecycle: a Backup button, restore, and creating a new project from a
+backup. The host FS is plain ext4 without LVM (verified), so native
+snapshots are unavailable; the docker disk (`~/.dockerd`, up to tens of GB,
+reproducible from the apt manifest + registry) dominates a naive archive.
+Complication discovered live: the hardened server runs UNPRIVILEGED
+(uid 1000), while homes accumulate ROOT-owned entries — dockerd's
+bind-mount target stubs (pre-v1.11.1) and anything the guest creates via
+passwordless sudo (virtiofs maps guest root to host root). An unprivileged
+RemoveAll cannot delete those, and a plain rename cannot even MOVE a
+root-owned directory to a new parent (the ".." rewrite needs write on the
+directory itself).
+
+**Decision.** A `internal/backup` package archives `workspace/` + `home/`
+prefixes into tar.gz, excluding `~/.dockerd`; extraction is defensive
+(no absolute/`..` paths, only files/dirs/symlinks, best-effort Lchown).
+Archives live under `StateDir/backups/<user>/<projectID>/` with a meta
+sidecar, survive project deletion, and back three flows: restore-in-place
+(stopped projects only, guarded by a `restoring` map every boot path
+checks), create-from-backup (seeds workspace + home + the source's scoped
+env vars pre-boot), and deletion by raw ids under /api/settings. Restore is
+TRANSACTIONAL: current state is quarantined by rename and renamed back on
+extraction failure — never deleted first. For root-owned entries the
+quarantine, its cleanup, and wipe-delete escalate through the server's own
+container: `docker exec -u 0` on SelfContainer running `mv` /
+`find -delete`, path-guarded to StateDir. This grants nothing the server
+lacks — it already holds the docker socket (root-equivalent); it makes the
+existing power explicit, auditable, and confined.
+
+**Consequences.** Backups are crash-consistent (file-level, allowed while
+running) and small (docker disk excluded; a rebuilt project repopulates its
+cache). A failed restore leaves the project exactly as it was — proven live
+when the first two attempts failed on the root-ownership traps and rolled
+back intact. Restore requires the project stopped, composing with ADR-042's
+sticky-stop. Backups of deleted projects remain restorable into new
+projects. The host-level whole-state snapshot plan (TODO) is unchanged —
+this is the user layer, that is disaster recovery. Root-assisted ops exist
+ONLY for StateDir paths via the two guarded helpers; any new caller must
+keep that boundary.
+
+Source: internal/backup/, internal/httpapi/backups.go,
+internal/httpapi/server.go, internal/orchestrator/orchestrator.go,
+web/src/components/Sidebar.tsx, web/src/components/NewProjectDialog.tsx,
+web/src/routes/settings.tsx, web/src/lib/api.ts. Verification:
+.agents/docs/changes/2026-08-30-project-backups-v1.13.0.md
