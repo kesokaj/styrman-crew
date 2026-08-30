@@ -68,6 +68,8 @@ services:
       - STYRMAN_IMAGE=${STYRMAN_IMAGE:-styrman-runtime:latest}
       - STYRMAN_IDLE_TIMEOUT=${STYRMAN_IDLE_TIMEOUT:-8h}
       - STYRMAN_TRANSCRIPT_TTL=${STYRMAN_TRANSCRIPT_TTL:-720h}
+      - STYRMAN_BACKUP_CADENCE=${STYRMAN_BACKUP_CADENCE:-24h}
+      - STYRMAN_BACKUP_KEEP=${STYRMAN_BACKUP_KEEP:-5}
       - HOME=/var/lib/styrman # user.Current() needs a home for uid lookups
       - STYRMAN_SELF_CONTAINER=styrman-server
       # Optional: when set (and injected by the Caddy ingress as

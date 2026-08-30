@@ -94,6 +94,7 @@ func main() {
 	go transcriptJanitor(ctx, cfg, logger)
 
 	api := httpapi.New(cfg, users, orch, logger)
+	go api.RunBackupCadence(ctx) // automatic per-project backups (ADR-044 layer 2)
 
 	// Credential broker (ADR-030): a bridge-only, credential-only listener,
 	// separate from the ingress-gated main API. Never published to the host.

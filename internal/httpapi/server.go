@@ -815,6 +815,21 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		// destroy and strand container-gone/record-present state.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
+		// Pre-wipe safety net (v1.14.0, operator-approved): a wipe-delete is
+		// the one irreversible action, so it snapshots the project FIRST —
+		// and FAILS CLOSED: if the safety backup can't be taken, the wipe is
+		// aborted (record stays with the error; a plain non-wipe delete
+		// keeps the files anyway and needs no net). Backups survive project
+		// deletion by design (restorable via create-from-backup).
+		if wipe {
+			if _, err := s.doBackup(u.Username, p.ID, p.Name, true); err != nil {
+				s.logger.Error("pre-wipe safety backup failed — wipe aborted", "project", p.Name, "error", err)
+				s.deletingMu.Lock()
+				s.deleteErrs[key] = "pre-wipe safety backup failed — nothing deleted; retry"
+				s.deletingMu.Unlock()
+				return
+			}
+		}
 		if err := s.orch.Destroy(ctx, u.Username, p.ID); err != nil {
 			// Record stays; the project reappears in the list (flagged with
 			// deleteError) and the user can retry.

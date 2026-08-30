@@ -217,8 +217,12 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   store at creation time, so they only transfer while the source project
   still exists (deleting a project wipes its scoped env set too); a
   deleted project's backup restores workspace + home with zero scoped
-  vars. Host-level snapshots of the whole state dir (TODO) remain the
-  disaster-recovery layer; this is per-project lifecycle.
+  vars. Since v1.14.0 backups are also AUTOMATIC: a cadence pass backs up
+  every project each `STYRMAN_BACKUP_CADENCE` (default 24h) keeping the
+  newest `STYRMAN_BACKUP_KEEP` (5) per project, and a wipe-delete takes
+  a pre-wipe safety backup FIRST, aborting the wipe if it fails. The
+  disaster-recovery layer is live too: daily whole-state restic
+  snapshots to GCS Stockholm (see deploy.md's Host-layer backups).
 - **Stop is sticky** (v1.11.0): the sidebar Stop button (and the idle
   reaper) marks the project deliberately stopped; open terminal tabs show
   "Project stopped" instead of auto-reconnecting — an automatic reconnect

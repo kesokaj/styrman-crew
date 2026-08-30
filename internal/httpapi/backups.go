@@ -62,46 +62,44 @@ func (s *Server) tryAcquire(m map[string]bool, user, projectID string) (release 
 	}, true
 }
 
-// createBackup archives the project now and responds with its metadata.
-// Single-flighted per project (two same-second requests would compute the
-// SAME timestamp id and interleave writes into one archive) and mutually
-// exclusive with an in-flight restore/delete mutating the same tree.
-func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
-	u, _, p, err := s.getProjectFor(r)
-	if err != nil {
-		writeErr(w, http.StatusNotFound, err)
-		return
-	}
-	release, ok := s.tryAcquire(s.backingUp, u.Username, p.ID)
+// errBackupBusy: the project's trees are being mutated (or another backup of
+// it is running) — retry later.
+var errBackupBusy = errors.New("backup busy")
+
+// doBackup archives one project now: single-flighted per project (two
+// same-second runs would compute the SAME timestamp id and interleave writes
+// into one archive) and mutually exclusive with an in-flight restore.
+// allowDeleting lets the pre-wipe safety net run while the deleting flag is
+// already set (its whole point); every other caller refuses mid-delete.
+// After a successful backup, retention prunes the oldest archives beyond
+// cfg.BackupKeep. Shared by the API handler, the cadence scheduler, and the
+// pre-wipe safety net (v1.14.0).
+func (s *Server) doBackup(user, projectID, projectName string, allowDeleting bool) (backupMeta, error) {
+	release, ok := s.tryAcquire(s.backingUp, user, projectID)
 	if !ok {
-		writeErr(w, http.StatusConflict, errors.New("a backup of this project is already running"))
-		return
+		return backupMeta{}, fmt.Errorf("%w: a backup of this project is already running", errBackupBusy)
 	}
 	defer release()
-	if s.restoringState(u.Username, p.ID) {
-		writeErr(w, http.StatusConflict, errors.New("project is being restored"))
-		return
+	if s.restoringState(user, projectID) {
+		return backupMeta{}, fmt.Errorf("%w: project is being restored", errBackupBusy)
 	}
-	if inFlight, _ := s.deletingState(u.Username, p.ID); inFlight {
-		writeErr(w, http.StatusConflict, errors.New("project is being deleted"))
-		return
+	if inFlight, _ := s.deletingState(user, projectID); inFlight && !allowDeleting {
+		return backupMeta{}, fmt.Errorf("%w: project is being deleted", errBackupBusy)
 	}
-	dir := s.cfg.ProjectBackups(u.Username, p.ID)
+	dir := s.cfg.ProjectBackups(user, projectID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		writeErr(w, http.StatusInternalServerError, errors.New("cannot create backup dir"))
-		return
+		return backupMeta{}, errors.New("cannot create backup dir")
 	}
 	id := time.Now().UTC().Format("20060102T150405Z")
 	// Unique temp name (CreateTemp) — belt to the single-flight's braces.
 	f, err := os.CreateTemp(dir, id+".tmp-*")
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, errors.New("cannot create backup file"))
-		return
+		return backupMeta{}, errors.New("cannot create backup file")
 	}
 	tmp := f.Name()
 	cerr := backup.Create(f, map[string]string{
-		"workspace": s.cfg.ProjectWorkspace(u.Username, p.ID),
-		"home":      s.cfg.ProjectHome(u.Username, p.ID),
+		"workspace": s.cfg.ProjectWorkspace(user, projectID),
+		"home":      s.cfg.ProjectHome(user, projectID),
 	})
 	if serr := f.Sync(); cerr == nil {
 		cerr = serr
@@ -111,36 +109,116 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	if cerr != nil {
 		os.Remove(tmp)
-		s.logger.Error("backup failed", "user", u.Username, "project", p.ID, "error", cerr)
-		writeErr(w, http.StatusInternalServerError, errors.New("backup failed"))
-		return
+		s.logger.Error("backup failed", "user", user, "project", projectID, "error", cerr)
+		return backupMeta{}, errors.New("backup failed")
 	}
 	final := filepath.Join(dir, id+".tar.gz")
 	if err := os.Rename(tmp, final); err != nil {
 		os.Remove(tmp)
-		writeErr(w, http.StatusInternalServerError, errors.New("backup failed"))
-		return
+		return backupMeta{}, errors.New("backup failed")
 	}
 	fi, err := os.Stat(final)
 	if err != nil {
 		// Never dereference a nil FileInfo (audit: this was a panic path);
 		// the archive exists — report it with an unknown size.
-		s.logger.Warn("backup stat failed", "project", p.ID, "backup", id, "error", err)
+		s.logger.Warn("backup stat failed", "project", projectID, "backup", id, "error", err)
 	}
 	var size int64
 	if fi != nil {
 		size = fi.Size()
 	}
 	meta := backupMeta{
-		ID: id, ProjectID: p.ID, ProjectName: p.Name,
+		ID: id, ProjectID: projectID, ProjectName: projectName,
 		CreatedAt: time.Now().UTC(), SizeBytes: size,
 	}
 	mb, _ := json.MarshalIndent(meta, "", "  ")
 	if err := os.WriteFile(filepath.Join(dir, id+".json"), append(mb, '\n'), 0o600); err != nil {
-		s.logger.Warn("backup meta write failed", "project", p.ID, "error", err)
+		s.logger.Warn("backup meta write failed", "project", projectID, "error", err)
 	}
-	s.logger.Info("backup created", "user", u.Username, "project", p.ID, "backup", id, "bytes", meta.SizeBytes)
+	s.logger.Info("backup created", "user", user, "project", projectID, "backup", id, "bytes", meta.SizeBytes)
+	// Retention: keep the newest cfg.BackupKeep archives (manual and
+	// automatic share the pool); prune the rest, meta first so a half-pruned
+	// pair never lists as restorable.
+	if keep := s.cfg.BackupKeep(); keep > 0 {
+		all := readBackups(dir)
+		for i := keep; i < len(all); i++ {
+			os.Remove(filepath.Join(dir, all[i].ID+".json"))
+			os.Remove(filepath.Join(dir, all[i].ID+".tar.gz"))
+			s.logger.Info("backup retention pruned", "user", user, "project", projectID, "backup", all[i].ID)
+		}
+	}
+	return meta, nil
+}
+
+// createBackup archives the project now and responds with its metadata.
+func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
+	u, _, p, err := s.getProjectFor(r)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	meta, err := s.doBackup(u.Username, p.ID, p.Name, false)
+	if err != nil {
+		if errors.Is(err, errBackupBusy) {
+			writeErr(w, http.StatusConflict, err)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, meta)
+}
+
+// RunBackupCadence backs up every project of every user on a fixed interval
+// (cfg.BackupCadence, 0 = off) — the automatic layer the operator asked for
+// on top of manual sidebar backups; retention in doBackup keeps the pool
+// bounded. First pass ~1 min after boot (not at the tick) so a restarted
+// server with an overdue cadence still backs up promptly.
+func (s *Server) RunBackupCadence(ctx context.Context) {
+	every := s.cfg.BackupCadence()
+	if every <= 0 {
+		return
+	}
+	timer := time.NewTimer(time.Minute)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		s.backupAllProjects()
+		timer.Reset(every)
+	}
+}
+
+func (s *Server) backupAllProjects() {
+	users, err := os.ReadDir(filepath.Join(s.cfg.StateDir, "users"))
+	if err != nil {
+		return
+	}
+	var n int
+	for _, u := range users {
+		if !u.IsDir() {
+			continue
+		}
+		sp, err := s.space(u.Name())
+		if err != nil {
+			continue
+		}
+		for _, p := range sp.projects.List() {
+			if _, err := s.doBackup(u.Name(), p.ID, p.Name, false); err != nil {
+				if !errors.Is(err, errBackupBusy) {
+					s.logger.Warn("cadence backup failed", "user", u.Name(), "project", p.ID, "error", err)
+				}
+				continue
+			}
+			n++
+		}
+	}
+	if n > 0 {
+		s.logger.Info("cadence backup pass complete", "projects", n)
+	}
 }
 
 // readBackups lists one project-backups dir (newest first).

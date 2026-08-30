@@ -186,6 +186,35 @@ header-auth matrix (401 no header / 403 unauthorized / 200 authorized /
 health open) against the live state dir. The remaining untested step is the
 Google OAuth handshake itself, which needs the real client + domain.
 
+## Host-layer backups (disaster recovery, v1.14.0)
+
+Whole-state restic backup of `/var/lib/styrman` to GCS (operator decision
+2026-08-29/30; the layer ABOVE the in-app per-project backups, ADR-044):
+
+- Bucket `gs://styrman-crew-backups-driven-eft-h4it`, **europe-north2
+  (Stockholm), Nearline**, uniform access; dedicated service account
+  `styrman-backup@…` with `objectAdmin` on that bucket only.
+- Host files (root-only): `/etc/styrman/backup-sa.json` (SA key),
+  `/etc/styrman/restic-pw` (repo password — ALSO stored in the operator's
+  password manager; without it the backups are unreadable),
+  `/usr/local/bin/styrman-host-backup` (the script),
+  `systemd` units `styrman-backup.{service,timer}` (daily 03:00 ±15m,
+  Persistent=true).
+- Excludes: per-project docker disks (`homes/*/p/*/.dockerd`, reproducible)
+  and `StateDir/backups` (their sources are in the same snapshot).
+  Retention: 7 daily / 4 weekly / 6 monthly + prune.
+- Verified 2026-08-30: first snapshot pushed AND restored back
+  (`restic restore --include …/users` round-trip).
+- Manual run: `sudo styrman-host-backup`; list:
+  `sudo env $(grep -v '^#' /usr/local/bin/styrman-host-backup | grep export | sed 's/export //') restic snapshots`
+  (or read the env from the script).
+
+The IN-APP layer (ADR-044) additionally runs an automatic per-project
+backup every `STYRMAN_BACKUP_CADENCE` (default 24h, 0 = off) keeping the
+newest `STYRMAN_BACKUP_KEEP` (default 5) archives per project, and a
+wipe-delete always takes a pre-wipe safety backup first — failing CLOSED
+(nothing is deleted if the safety backup fails).
+
 ## Clean reinstall (virgin state)
 
 Long form: `.agents/docs/changes/2026-08-28-clean-reinstall.md`. Short form:
