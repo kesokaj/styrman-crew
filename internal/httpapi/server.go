@@ -225,6 +225,7 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("POST /api/projects/{project}/start", s.startProject)
 	mux.HandleFunc("POST /api/projects/{project}/stop", s.stopProject)
 	mux.HandleFunc("GET /api/projects/{project}/stats", s.projectStats)
+	mux.HandleFunc("GET /api/projects/{project}/logs", s.projectLogs)
 	// Per-project backups (ADR-044) — sidebar lifecycle menu + Settings list.
 	mux.HandleFunc("POST /api/projects/{project}/backups", s.createBackup)
 	mux.HandleFunc("GET /api/projects/{project}/backups", s.listBackups)

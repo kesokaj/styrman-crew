@@ -19,6 +19,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
@@ -1171,4 +1172,46 @@ func (o *Orchestrator) ReapSetupVMs(ctx context.Context, maxAge time.Duration) {
 		o.logger.Info("reaping abandoned setup VM", "id", c.ID[:12], "age", time.Since(started))
 		_ = o.docker.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true})
 	}
+}
+
+// Logs returns the tail of a project container's logs (the microVM console:
+// entrypoint boot steps, dockerd, kernel messages) — the ops-panel "what is
+// this VM doing" view (v1.14.0). Output is demuxed and capped at 256 KiB.
+func (o *Orchestrator) Logs(ctx context.Context, project string, tail int) (string, error) {
+	if tail <= 0 || tail > 2000 {
+		tail = 300
+	}
+	rc, err := o.docker.ContainerLogs(ctx, config.ContainerName(project), container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Tail:       strconv.Itoa(tail),
+	})
+	if err != nil {
+		return "", err
+	}
+	defer rc.Close()
+	var buf strings.Builder
+	// Docker multiplexes stdout/stderr into one stream; demux and interleave.
+	lw := &cappedWriter{b: &buf, max: 256 << 10}
+	_, _ = stdcopy.StdCopy(lw, lw, rc)
+	return buf.String(), nil
+}
+
+// cappedWriter drops writes beyond max (keeps the FIRST max bytes — the tail
+// option already bounds the window server-side).
+type cappedWriter struct {
+	b   *strings.Builder
+	max int
+}
+
+func (w *cappedWriter) Write(p []byte) (int, error) {
+	if w.b.Len() < w.max {
+		room := w.max - w.b.Len()
+		if len(p) > room {
+			w.b.Write(p[:room])
+		} else {
+			w.b.Write(p)
+		}
+	}
+	return len(p), nil
 }

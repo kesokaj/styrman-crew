@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { api, tryUI, type Project, type Terminal } from "../lib/api";
 import { usePolled } from "../lib/hooks";
 import { CrewMark } from "../components/icons";
+import { Dialog } from "../components/ui";
 
 export const Route = createFileRoute("/")({ component: Home });
 
@@ -99,6 +101,7 @@ function ProjectCard({ project: p }: { project: Project }) {
         </span>
         <span className="shrink-0 text-[11px] text-text-dim">{p.state}</span>
       </button>
+      <CardOps project={p.id} running={running} />
       {running && terminals.length > 0 && (
         <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
           {terminals.map((t) => (
@@ -117,6 +120,82 @@ function ProjectCard({ project: p }: { project: Project }) {
         </p>
       )}
     </div>
+  );
+}
+
+/** Ops row (v1.14.0): live CPU/mem/disk chips for a running project + a Logs
+ *  button (microVM console tail). Polls GENTLY — one stats exec per running
+ *  card per 15s. */
+function CardOps({ project, running }: { project: string; running: boolean }) {
+  const [logsOpen, setLogsOpen] = useState(false);
+  const { data: st } = usePolled(
+    () => (running ? api.projectStats(project) : Promise.resolve(undefined)),
+    15000,
+    [project, running],
+  );
+  if (!running) return null;
+  const gb = (b: number) => (b / 1024 / 1024 / 1024).toFixed(1);
+  const pct = (used: number, total: number) =>
+    total > 0 ? Math.round((used / total) * 100) : 0;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-dim">
+      {st && st.state === "running" ? (
+        <>
+          <span title={`${st.cpuCount} vCPU, load ${st.load1}`}>
+            cpu {st.cpuPercent}%
+          </span>
+          <span title={`${gb(st.memUsedBytes)} / ${gb(st.memTotalBytes)} GB`}>
+            mem {pct(st.memUsedBytes, st.memTotalBytes)}%
+          </span>
+          <span title={`${gb(st.diskUsedBytes)} / ${gb(st.diskTotalBytes)} GB`}>
+            disk {pct(st.diskUsedBytes, st.diskTotalBytes)}%
+          </span>
+          <span>{st.processes} procs</span>
+        </>
+      ) : (
+        <span>…</span>
+      )}
+      <button
+        onClick={() => setLogsOpen(true)}
+        className="ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium text-accent hover:bg-bg"
+        title="MicroVM console logs (entrypoint, dockerd)"
+      >
+        logs
+      </button>
+      {logsOpen && (
+        <LogsDialog project={project} onClose={() => setLogsOpen(false)} />
+      )}
+    </div>
+  );
+}
+
+function LogsDialog({
+  project,
+  onClose,
+}: {
+  project: string;
+  onClose: () => void;
+}) {
+  const { data, refresh } = usePolled(
+    () => api.projectLogs(project, 300),
+    30000,
+    [project],
+  );
+  return (
+    <Dialog title="MicroVM logs" onClose={onClose} width="w-[46rem]">
+      <div className="mb-2 flex items-center gap-2 text-[11px] text-text-dim">
+        <span>Console tail (entrypoint, dockerd, kernel) — newest last.</span>
+        <button
+          onClick={refresh}
+          className="ml-auto rounded bg-accent-soft px-2 py-0.5 text-on-accent-soft hover:brightness-110"
+        >
+          Refresh
+        </button>
+      </div>
+      <pre className="max-h-[60vh] overflow-auto rounded-lg bg-bg p-2 font-mono text-[11px] leading-snug">
+        {data ? data.logs || "(no output)" : "Loading…"}
+      </pre>
+    </Dialog>
   );
 }
 

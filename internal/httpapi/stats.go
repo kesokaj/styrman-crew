@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -113,4 +114,22 @@ func parseStats(out string, v *projectStatsView) {
 			v.Host = strings.TrimSpace(val)
 		}
 	}
+}
+
+// projectLogs returns the tail of the project's microVM console logs
+// (entrypoint boot, dockerd, kernel) — the ops-panel logs view (v1.14.0).
+// Owner-scoped like every project route; ?tail=N caps at 2000 (default 300).
+func (s *Server) projectLogs(w http.ResponseWriter, r *http.Request) {
+	_, _, p, err := s.getProjectFor(r)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
+	out, err := s.orch.Logs(r.Context(), p.ID, tail)
+	if err != nil {
+		writeErr(w, http.StatusConflict, errors.New("no logs — is the project created?"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"logs": out})
 }

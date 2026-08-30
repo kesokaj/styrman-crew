@@ -258,6 +258,9 @@ export const api = {
   getProject: (id: string) => request<Project>(`/api/projects/${id}`),
   projectStats: (id: string) =>
     request<ProjectStats>(`/api/projects/${id}/stats`),
+  // Ops panel (v1.14.0): the microVM's console log tail (entrypoint, dockerd).
+  projectLogs: (id: string, tail = 300) =>
+    request<{ logs: string }>(`/api/projects/${id}/logs?tail=${tail}`),
   renameProject: (id: string, name: string) =>
     request<void>(`/api/projects/${id}`, {
       method: "PATCH",
