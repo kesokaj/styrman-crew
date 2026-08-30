@@ -1,13 +1,11 @@
 package conversation
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"sync"
@@ -16,18 +14,18 @@ import (
 
 // Record is a durable terminal (ADR-016): it outlives tmux sessions,
 // containers, and reboots, carrying the title shown in the sidebar.
-// AgentSession is a stable UUID reserved for agent-session pinning
-// (parked with ADR-014; see ADR-011 for what it was used for).
+// (The former AgentSession UUID was removed in v1.14.0: native agent resume
+// via --continue superseded the parked ADR-011/014 pinning idea, and the
+// field was written but never read.)
 // Command is the optional autostart (operator Q8, 2026-08-28): it runs when
 // the terminal's tmux SESSION is created — first open, and every re-open
 // after a pause or VM restart — then drops to the login shell.
 type Record struct {
-	ID           string    `json:"id"`
-	Title        string    `json:"title"`
-	Command      string    `json:"command,omitempty"`
-	AgentSession string    `json:"agentSession,omitempty"`
-	CreatedAt    time.Time `json:"createdAt"`
-	LastOpened   time.Time `json:"lastOpened"`
+	ID         string    `json:"id"`
+	Title      string    `json:"title"`
+	Command    string    `json:"command,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	LastOpened time.Time `json:"lastOpened"`
 }
 
 // Store persists terminal records per project (single JSON file, atomic
@@ -68,19 +66,12 @@ func NewStore(path string) (*Store, error) {
 				slog.Warn("skipping invalid terminal record", "project", project, "id", r.ID)
 				continue
 			}
-			if r.AgentSession != "" && !sessionRe.MatchString(r.AgentSession) {
-				slog.Warn("skipping terminal with invalid agentSession", "project", project, "id", r.ID)
-				continue
-			}
 			kept = append(kept, r)
 		}
 		s.byProject[project] = kept
 	}
 	return s, nil
 }
-
-// sessionRe: lowercase UUIDv4 shape, as produced by newUUID.
-var sessionRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // Create allocates the next numeric id for the project and persists a record.
 func (s *Store) Create(project, title string) (Record, error) {
@@ -103,11 +94,10 @@ func (s *Store) Create(project, title string) (Record, error) {
 		title = friendlyName(titles, id)
 	}
 	rec := Record{
-		ID:           id,
-		Title:        title,
-		AgentSession: newUUID(),
-		CreatedAt:    time.Now().UTC(),
-		LastOpened:   time.Now().UTC(),
+		ID:         id,
+		Title:      title,
+		CreatedAt:  time.Now().UTC(),
+		LastOpened: time.Now().UTC(),
 	}
 	s.byProject[project] = append(s.byProject[project], rec)
 	if err := s.save(); err != nil {
@@ -261,13 +251,3 @@ func (s *Store) save() error {
 	return os.Rename(tmp, s.path)
 }
 
-// newUUID returns a random v4 UUID (stdlib-only).
-func newUUID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
