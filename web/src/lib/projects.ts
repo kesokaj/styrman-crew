@@ -1,0 +1,56 @@
+import { useEffect, useState } from "react";
+import { api, type Project } from "./api";
+
+/**
+ * ONE app-wide listProjects poll (poll de-amplification, operator item,
+ * v1.14.0): Sidebar, dashboard, and Settings previously each ran their own
+ * interval against the same endpoint. All subscribers now share a single 5s
+ * tick that pauses in hidden tabs and stops with the last subscriber; any
+ * mutation calls refreshProjects() and every surface updates at once.
+ */
+type ProjectsState = { data?: { projects: Project[] }; error?: string };
+
+let state: ProjectsState = {};
+const subs = new Set<(s: ProjectsState) => void>();
+let timer: ReturnType<typeof setInterval> | undefined;
+let inFlight = false;
+
+async function tick() {
+  if (typeof document !== "undefined" && document.hidden) return;
+  if (inFlight) return;
+  inFlight = true;
+  try {
+    state = { data: await api.listProjects() };
+  } catch (e) {
+    // Keep the last good data; surface the error alongside it.
+    state = { ...state, error: (e as Error).message };
+  } finally {
+    inFlight = false;
+  }
+  subs.forEach((fn) => fn(state));
+}
+
+/** Force an immediate refresh (after create/delete/stop/start/rename). */
+export function refreshProjects() {
+  void tick();
+}
+
+export function useProjects(): ProjectsState & { refresh: () => void } {
+  const [s, setS] = useState<ProjectsState>(state);
+  useEffect(() => {
+    subs.add(setS);
+    setS(state);
+    if (!timer) {
+      void tick();
+      timer = setInterval(tick, 5000);
+    }
+    return () => {
+      subs.delete(setS);
+      if (subs.size === 0 && timer) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+    };
+  }, []);
+  return { ...s, refresh: refreshProjects };
+}

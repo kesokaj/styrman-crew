@@ -393,3 +393,47 @@ func firstLine(s string) string {
 	}
 	return s
 }
+
+// gitSummaryItem backs one sidebar git badge.
+type gitSummaryItem struct {
+	ProjectID string `json:"projectId"`
+	Branch    string `json:"branch,omitempty"`
+	Dirty     int    `json:"dirty"`
+	Ahead     int    `json:"ahead,omitempty"`
+	Behind    int    `json:"behind,omitempty"`
+}
+
+// gitSummary returns branch + dirty count for every RUNNING project in ONE
+// call — the sidebar's git badges (operator item, v1.14.0). Batched
+// deliberately: N per-project polls would multiply guest execs (the same
+// poll-amplification the shared projects store removes client-side). Stopped
+// projects are skipped, not booted.
+func (s *Server) gitSummary(w http.ResponseWriter, r *http.Request) {
+	u, sp, err := s.who(r)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	guest := sp.profile.GuestUser()
+	items := []gitSummaryItem{}
+	for _, p := range sp.projects.List() {
+		st, serr := s.orch.Status(r.Context(), u.Username, p.ID)
+		if serr != nil || st.State != "running" {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		code, out, gerr := s.gitExec(ctx, st.ContainerID, guest, "/home/"+guest+"/projects/"+p.Dir,
+			"status", "--porcelain=v2", "--branch", "--untracked-files=all")
+		cancel()
+		if gerr != nil || code != 0 {
+			continue // not a repo / VM busy — no badge beats a wrong badge
+		}
+		v := gitStatusView{Files: []gitFile{}}
+		parseGitStatus(out, &v)
+		items = append(items, gitSummaryItem{
+			ProjectID: p.ID, Branch: v.Branch, Dirty: len(v.Files),
+			Ahead: v.Ahead, Behind: v.Behind,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}

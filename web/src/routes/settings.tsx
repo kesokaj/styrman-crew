@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { api, tryUI, type CredItem } from "../lib/api";
 import { usePolled, useTheme, type ThemePref } from "../lib/hooks";
+import { useProjects } from "../lib/projects";
 import { toast } from "../lib/toast";
 
 const CodeEditor = lazy(() => import("../components/CodeEditor"));
@@ -127,7 +128,7 @@ function CredentialsSection() {
     20000,
   );
   const { data: toolData } = usePolled(() => api.tools(), 20000);
-  const { data: projData } = usePolled(() => api.listProjects(), 15000);
+  const { data: projData } = useProjects();
   const running = (projData?.projects ?? []).filter(
     (p) => p.state === "running",
   );
@@ -716,10 +717,7 @@ function CredViewer({
  */
 function BackupsSection() {
   const { data, refresh } = usePolled(() => api.listAllBackups(), 30000);
-  const { data: projData, refresh: refreshProjects } = usePolled(
-    () => api.listProjects(),
-    30000,
-  );
+  const { data: projData, refresh: refreshProjects } = useProjects();
   const [busy, setBusy] = useState<string | null>(null);
   const backups = data?.backups ?? [];
   const projects = projData?.projects ?? [];

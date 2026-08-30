@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { api, projectNameError, tryUI, type Project } from "../lib/api";
+import { useProjects } from "../lib/projects";
 import { toast } from "../lib/toast";
 import {
   useMediaQuery,
@@ -61,7 +62,10 @@ export function Sidebar({
     project?: string;
     term?: string;
   };
-  const { data, refresh, error } = usePolled(() => api.listProjects(), 5000);
+  const { data, refresh, error } = useProjects();
+  // ONE batched git poll for every badge (server iterates running projects).
+  const { data: gitData } = usePolled(() => api.gitSummary(), 30000);
+  const gitOf = (id: string) => gitData?.items.find((g) => g.projectId === id);
   const { pref, setPref } = useTheme();
   // Off-screen ≠ gone: without inert, keyboard/screen-reader users tab into
   // the translated-away drawer on mobile.
@@ -241,6 +245,20 @@ export function Sidebar({
                 title={pending[p.id] ?? p.state}
               />
               <span className="min-w-0 flex-1 truncate">{p.name}</span>
+              {(() => {
+                const g = gitOf(p.id);
+                if (!g || p.state !== "running") return null;
+                return (
+                  <span
+                    className={`shrink-0 font-mono text-[10px] ${g.dirty ? "text-warn" : "text-text-dim"}`}
+                    title={`${g.branch || "?"} — ${g.dirty ? `${g.dirty} changed` : "clean"}${g.ahead ? `, ↑${g.ahead}` : ""}${g.behind ? `, ↓${g.behind}` : ""}`}
+                  >
+                    {g.branch}
+                    {g.dirty ? `±${g.dirty}` : ""}
+                    {g.ahead ? `↑${g.ahead}` : ""}
+                  </span>
+                );
+              })()}
               {pending[p.id] && (
                 <span className="shrink-0 text-[10px] text-text-dim">
                   {pending[p.id]}…

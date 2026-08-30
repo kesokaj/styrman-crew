@@ -2,6 +2,7 @@ import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { api, tryUI, type Project, type Terminal } from "../lib/api";
 import { usePolled } from "../lib/hooks";
+import { useProjects } from "../lib/projects";
 import { CrewMark } from "../components/icons";
 import { Dialog } from "../components/ui";
 
@@ -13,7 +14,7 @@ export const Route = createFileRoute("/")({ component: Home });
  * live transcript tail (operator item 15), click to jump straight in.
  */
 function Home() {
-  const { data, error } = usePolled(() => api.listProjects(), 5000);
+  const { data, error } = useProjects();
   const projects = data?.projects ?? [];
 
   // A failed load must say so — a permanently blank dashboard reads as

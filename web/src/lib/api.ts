@@ -277,6 +277,18 @@ export const api = {
   getProject: (id: string) => request<Project>(`/api/projects/${id}`),
   projectStats: (id: string) =>
     request<ProjectStats>(`/api/projects/${id}/stats`),
+  // Sidebar git badges (v1.14.0): branch + dirty count for every RUNNING
+  // project in one batched call.
+  gitSummary: () =>
+    request<{
+      items: {
+        projectId: string;
+        branch?: string;
+        dirty: number;
+        ahead?: number;
+        behind?: number;
+      }[];
+    }>("/api/git/summary"),
   // Ops panel (v1.14.0): the microVM's console log tail (entrypoint, dockerd).
   projectLogs: (id: string, tail = 300) =>
     request<{ logs: string }>(`/api/projects/${id}/logs?tail=${tail}`),
