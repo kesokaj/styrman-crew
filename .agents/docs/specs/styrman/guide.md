@@ -283,23 +283,31 @@ Baremetal Debian 13 or a GCP VM with nested virtualization.
 
 ```bash
 git clone <repo> styrman && cd styrman
-sudo bash deploy/host-setup.sh --user $USER   # Docker, Kata "mvm", daemon cfg, dirs, seeds deploy/.env
-docker build -t styrman-runtime:dev image/    # runtime image (~10 min first time)
+sudo bash deploy/host-setup.sh --user $USER   # Docker, Kata "mvm", daemon cfg, dirs, the
+                                              # isolation firewall + backup systemd units,
+                                              # builds styrman-runtime:latest (the tag
+                                              # production compose uses), seeds deploy/.env
+docker build -t styrman-runtime:dev image/    # separate tag, for the loopback dev run only
 
-# Dev (no auth, loopback):
+# Dev (no auth, loopback; needs a Go 1.25+ toolchain — host-setup.sh does NOT install one):
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
 
-# Production (Google OAuth + HTTPS + reboot-safe):
+# Production (Google OAuth + HTTPS + reboot-safe; needs neither Go nor Node —
+# runs the :latest image host-setup.sh already built):
 vi deploy/.env    # BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET, CLOUDFLARE_API_TOKEN,
-                  # ADMIN_EMAIL, STYRMAN_ALLOWED_EMAILS (redirect URI:
+                  # ADMIN_EMAIL, STYRMAN_ALLOWED_EMAILS, STYRMAN_HOSTNAME (default
+                  # styrman; the live deploy uses crew) (redirect URI:
                   # https://auth.<domain>/oauth2/google/authorization-code-callback)
-docker compose -f deploy/docker-compose.yml up -d --build
+STYRMAN_VERSION=$(git describe --tags --always) \
+  docker compose -f deploy/docker-compose.yml up -d --build
 # DNS records + certs are automatic → https://<STYRMAN_HOSTNAME>.<domain>
 ```
 
 `host-setup.sh` installs a pinned Docker CE version and Kata release with a
 fail-closed SHA256 check before extracting it as root — see deploy.md for
-the exact pins and the `daemon.json` keys it sets.
+the exact pins and the `daemon.json` keys it sets. Node 22+ is needed only
+to rebuild the frontend (`cd web && npm run build`; `web/dist` ships
+committed) — neither path above requires it to just run.
 
 First use per user: the sidebar shows a **First-time setup** banner →
 "Open setup" boots a hidden minimal microVM running the guided
@@ -379,8 +387,11 @@ rotated token, or a tool signed into inside a project instead of at setup).
 | `…/homes/<user>/p/<uuid>/.dockerd/<uuid>.img` | Per-project Docker disk (sparse) |
 | `…/homes/<user>/p/<uuid>/.styrman/logs/<uuid>/` | Terminal transcripts |
 | `/var/lib/styrman/credentials/<user>/` | The broker's credential store (ADR-032, 0600) — back up |
+| `/var/lib/styrman/backups/<user>/<uuid>/` | In-app per-project backup archives (ADR-044) — a DELETED project's only surviving copy; in the host-layer restic snapshot too — back up |
 | `/var/lib/styrman/users/<user>/*.json` | Project/terminal/profile metadata |
 | `/var/lib/styrman/users.json` | Runtime-added accounts (admins are env-only) |
+| `/var/lib/styrman/links.json` | Public/private preview share-link tokens (ADR-025/026) |
+| `/var/lib/styrman/settings.json` | Admin-set runtime tunables (idle timeout, docker disk size) overriding env defaults |
 | containers `styrman-<uuid>`, networks `sdb-<uuid>` | Disposable runtime state |
 
 Deleting a project WITHOUT "wipe files" keeps its workspace dir under
@@ -389,8 +400,11 @@ UI lists it anymore — reclaim disk by removing it manually if you never
 re-import it.
 
 - **Reboots**: containers restart themselves (`unless-stopped`); the server
-  re-adopts from labels. **Disaster recovery**: fresh host → host-setup →
-  restore `/var/lib/styrman` → rebuild images.
+  re-adopts from labels. **Disaster recovery**: see deploy.md's "Restore on
+  a new host" runbook — `host-setup.sh` seeds a FRESH `deploy/.env`, so the
+  OAuth/Cloudflare/domain secrets must be reconstructed after restoring
+  `/var/lib/styrman` from the daily restic→GCS snapshot, before bringing
+  the stack back up.
 
 ## 5. Troubleshooting
 
@@ -409,7 +423,7 @@ re-import it.
 
 ```bash
 go test ./...                                        # unit (stores, guards, routing)
-bash .agents/docs/testing/styrman/integration.sh     # 56 checks vs real Kata
+bash .agents/docs/testing/styrman/integration.sh     # 60 checks vs real Kata (3 auto-skip on firewall-hardened hosts)
 bash web/e2e/run.sh                                  # 34 browser checks (Playwright, self-hosted)
 cd web && npm run build                              # UI → dist/client (committed)
 ```

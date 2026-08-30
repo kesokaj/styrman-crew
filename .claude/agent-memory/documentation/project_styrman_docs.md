@@ -412,4 +412,85 @@ documentation's — touched here only because the task explicitly named exact
 of explicit, narrow instruction as the exception, not a precedent for
 reaching into TODO.md unprompted.
 
+**2026-08-30 session — v1.14.0/v1.14.1 fresh-reader fixes to `deploy.md` +
+`guide.md` only** (task pre-verified 16 findings against code before
+handing them off; still re-verified every claim against source before
+writing — grep/read, not trust). Key facts for next time:
+- **Host-layer disaster-recovery backups are now real** (R11, v1.14.0/
+  v1.14.1): `deploy/backup/styrman-host-backup` + `styrman-backup.
+  {service,timer}` (committed in the repo, installed by `host-setup.sh`'s
+  step 8b) push a daily whole-state restic snapshot of `/var/lib/styrman`
+  to `gs://styrman-crew-backups-driven-eft-h4it` (GCP project
+  `driven-eft-h4it`, europe-north2/Stockholm, Nearline). `deploy.md` gained
+  a full "Restore on a new host (disaster recovery)" runbook (6 numbered
+  steps) plus a "Provisioning order" paragraph and explicit copy-paste env
+  blocks — this was previously just a hand-wave ("restic init (env in the
+  script)") with a grep-scraping one-liner to list snapshots.
+- **Restic excludes changed**: `StateDir/backups` (the in-app per-project
+  archives, ADR-044) is now INCLUDED in the host snapshot — a 2026-08-30
+  reader review found excluding it broke "backups outlive their project"
+  for a DELETED project (its in-app archive is the only surviving copy).
+  Only `homes/*/p/*/.dockerd` (reproducible docker disks) stays excluded.
+  Verify this against `deploy/backup/styrman-host-backup`'s own comment
+  before repeating either the include or exclude claim — it changes.
+- **`STYRMAN_PREVIEW_DOMAIN` never existed as a real env var** — that was
+  always two separate vars, `STYRMAN_PUBLIC_DOMAIN` (ADR-025, public TTL
+  links) and `STYRMAN_PRIVATE_DOMAIN` (ADR-026, email-gated links). One
+  stale mention of the old single-var name survived in deploy.md's
+  Bring-up `.env` fill-in comment years after the split — fixed. Grep the
+  actual code (`deploy/.env.example`, `docker-compose.yml`) rather than
+  trusting an inline comment if this resurfaces.
+- **`guide.md`'s §7 Roadmap is now a pointer, not a list** (ADR-045,
+  operator directive 2026-08-30: "I want nothing in todo and roadmap").
+  Don't add a roadmap item list back to guide.md — TODO.md's Inbox is the
+  only place open items belong now; guide.md just cites ADR-045 +
+  `.agents/docs/changes/`.
+- **State-root files** (top-level under `/var/lib/styrman`, sibling to the
+  `{homes,projects,users,credentials,backups}` dirs): `users.json`
+  (runtime-added accounts), `links.json` (share-link tokens, `internal/
+  links`), `settings.json` (admin runtime tunables, `internal/config`).
+  All three must be wiped for a truly virgin reinstall — the existing
+  clean-reinstall doc/section only wiped the dirs, not these files quoted;
+  fixed in `deploy.md`'s Clean reinstall section and added rows for
+  `backups/`, `links.json`, `settings.json` to `guide.md`'s "Where things
+  live" table (only `users.json` had a row before).
+- **Integration check count re-verified at 60** (`grep -c 'check "'
+  .agents/docs/testing/styrman/integration.sh` = 60; 3 `skip(...)` call
+  sites for firewall-hardened hosts) — `.agents/docs/testing/styrman/
+  README.md` already said this, but `guide.md`'s §6 dev-loop comment was
+  still stuck at the old "56 checks" from the 2026-08-27 security review
+  era. This is the same "recount, don't trust a remembered number" trap
+  flagged in the 2026-08-30 v1.9.0 sync entry above — it keeps resurfacing
+  because different docs get touched in different sessions.
+- **`host-setup.sh` does a lot more than "Docker, Kata, dirs, seeds .env"**:
+  it also installs the isolation firewall script + timer, installs the
+  backup script + systemd units (8b), and BUILDS `styrman-runtime:latest`
+  by default (`RUNTIME_IMAGE="${STYRMAN_IMAGE:-styrman-runtime:latest}"`) —
+  the tag production `docker compose` uses. `guide.md`'s §3 install
+  one-liner annotation for that command was years stale; expanded it and
+  added the dev-path prereqs it does NOT cover (Go 1.25+ toolchain; Node
+  22+ only to rebuild `web/`, `web/dist` ships committed so neither runtime
+  path needs it). `README.md`'s Quick start section (top-level, not this
+  subagent's usual file, but read for reference) had ALREADY been kept
+  current with these exact facts including the `STYRMAN_VERSION=$(git
+  describe --tags --always)` prefix convention — when guide.md's
+  bring-up/install commands drift from README's, README is usually the
+  more recently touched one; diff against it before re-deriving from
+  scratch.
+
+Files touched this session: `deploy.md` (Bring-up section — OAuth/
+Cloudflare prereqs moved before the code block, `STYRMAN_PREVIEW_DOMAIN` →
+`STYRMAN_PUBLIC_DOMAIN`/`STYRMAN_PRIVATE_DOMAIN`; Host-layer backups
+section — excludes rewritten, new "Provisioning order" paragraph + env
+block, new "### Restore on a new host" subsection; Clean reinstall section
+— wipe list gained the three state-root files, final command fully
+qualified with `-f deploy/docker-compose.yml`), `guide.md` (§1 idea 5
+backup sentence, §4 git bullet backup pointer, §7 Roadmap fully rewritten,
+§3 install code block + prose expanded, DR line in §4 rewritten to point
+at the new runbook, "Where things live" table gained 3 rows, §6 check
+count 56→60). Neither file's OTHER content was touched (task scoped to
+exactly these two files) — `api.md`, `runtime-image.md`,
+`terminal-protocol.md`, root `README.md`, `AGENTS.md`, REQUIREMENTS.md,
+TODO.md, DECISIONS.md were read for verification only, not edited.
+
 See [[feedback-styrman-doc-edits]] for edit-process lessons.
