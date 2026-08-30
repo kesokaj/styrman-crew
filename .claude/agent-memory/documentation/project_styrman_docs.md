@@ -346,4 +346,70 @@ its Ctrl+C-cancels-current-step behavior). REQUIREMENTS.md, changes/,
 DECISIONS.md, TODO.md were NOT touched (approval-gated / changelog
 subagent's lane).
 
+**2026-08-30 session — adversarial-audit doc corrections (v1.9.1→v1.13.1
+catch-up + 6 stale-fact fixes).** A separate audit pass (not the security
+review) found the durable docs had drifted from code in specific, narrow
+ways even though `api.md`/`guide.md` already documented v1.10–v1.13 features
+in depth — only root `README.md` and `.agents/docs/testing/styrman/README.md`
+were stuck citing v1.9.1/56 checks; fixed both (v1.13.1, 60 integration
+checks, new Status paragraphs for v1.10/ADR-041, v1.11/ADR-042, v1.12/
+ADR-043, v1.13/ADR-044). Six more corrections, each verified against code
+before editing (grep, not memory):
+- `deploy.md`'s `STYRMAN_KEYRING_PW` paragraph was itself stale — a PRIOR
+  session (2026-08-30 security remediation) had documented it as a live
+  vestige still required by compose/host-setup.sh; by this session compose,
+  `.env.example`, and `host-setup.sh` had actually been cleaned up (zero
+  `KEYRING` references — confirmed by grep, only a stray line in the
+  gitignored live `deploy/.env` remains). **Lesson: a "vestige pending
+  cleanup" note has a shelf life — re-verify it wasn't quietly fixed before
+  repeating the claim.**
+- `runtime-image.md`'s dbus/gnome-keyring/libsecret-tools bullet said
+  "still installed (harmless)" — wrong, `image/Dockerfile` had dropped them
+  entirely (its own comment says so). Doc now says "removed... with
+  ADR-040", kept as a historical note under Contents rather than deleted
+  outright (matches how other removed-feature notes read elsewhere in this
+  doc set).
+- `api.md`: `GET /api/settings/credentials` response shape gained
+  `brokerEnabled:bool` (false+empty items when the broker is disabled —
+  not an error, `internal/httpapi/credentials.go`'s `credentialsList`);
+  history search softened from "ALL... transcripts" to the real
+  `searchMaxFiles=50` newest-first bound (`internal/history/history.go`);
+  stopped-project `stats` corrected from "`{state}` only" to "full object,
+  State set, every numeric metric zeroed (no `omitempty` on those fields)"
+  — verified by reading `projectStatsView`'s struct tags directly.
+- `terminal-protocol.md` + `guide.md`: Ctrl+Shift+C copies a selection too,
+  not just Cmd+C (`web/src/lib/terminal.ts`'s keydown handler checks
+  `(ev.ctrlKey && ev.shiftKey) || (ev.metaKey && !ev.ctrlKey)`) — fixed in
+  both the close bullet AND the earlier Frames-section mention in
+  terminal-protocol.md (same stale claim appeared twice in that file).
+- `TODO.md`: the "Checkpoints incl. ~/.claude" post-v1.3 roadmap item
+  closed as substantially shipped by v1.13.0 backups (ADR-044, whole
+  per-project home archived); the "Idle-reaper auto-snapshot" closed item's
+  rationale (which cited the REMOVED v1.3 checkpoint loop — a stale
+  self-reference, since that loop was deleted in v1.7.0 per the earlier
+  git-client sync) repointed at ADR-042 (busy-guarded, non-destructive idle
+  stop) + ADR-044 (manual backups) instead.
+- `guide.md`'s Per-project backups bullet: backup archives do NOT contain
+  project-scoped env vars — `seedFromBackup`
+  (`internal/httpapi/backups.go`) copies them live from the SOURCE
+  project's broker-side credstore at creation time
+  (`s.creds.ProjectEnv(user, srcProjectID)`), and deleting a project wipes
+  its scoped env set (`DeleteProjectAll`, called from the project-delete
+  handler) — so a deleted project's backup restores workspace+home with
+  zero scoped vars. This is a real behavioral gotcha (silent env-var loss
+  on restore from a deleted project), worth remembering if it resurfaces.
+- `deploy/.env.example` gained commented `STYRMAN_BROKER_ADDR` (matches
+  compose's `${STYRMAN_BROKER_ADDR:-:8091}`) and a note that
+  `STYRMAN_VERSION` is a compose command-line arg, not a `.env` var — the
+  task's suggested default value ("0.0.0.0") was wrong, compose's actual
+  fallback is `${STYRMAN_VERSION:-0.0.0}`; verified against
+  `deploy/docker-compose.yml` before writing the comment rather than
+  copying the task's number verbatim.
+
+**Process note**: `TODO.md` is normally the `changelog` subagent's lane, not
+documentation's — touched here only because the task explicitly named exact
+`TODO.md` line ranges with pre-verified replacement content. Flag this kind
+of explicit, narrow instruction as the exception, not a precedent for
+reaching into TODO.md unprompted.
+
 See [[feedback-styrman-doc-edits]] for edit-process lessons.
