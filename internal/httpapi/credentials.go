@@ -204,6 +204,9 @@ func (s *Server) importCredentials(w http.ResponseWriter, r *http.Request) {
 	guest := s.guestUserFor(u.Username)
 	report := s.harvestCredentials(r.Context(), u.Username, st.ContainerID, guest)
 	s.logger.Info("credential import complete", "user", u.Username, "from", p.ID)
+	// Fan the fresh file-tier creds out to every running project right away
+	// (already-open terminals see them on the tools' next invocation).
+	s.pushCredsToRunningProjects(u.Username, guest)
 	writeJSON(w, http.StatusOK, map[string]any{"report": report})
 }
 

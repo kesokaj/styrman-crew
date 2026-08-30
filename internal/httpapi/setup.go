@@ -91,6 +91,10 @@ func (s *Server) seedBrokerFromSetup(user string) map[string]string {
 	defer hcancel()
 	report := s.harvestCredentials(hctx, user, config.SetupContainer(user), s.guestUserFor(user))
 	s.logger.Info("setup seeded the credential broker", "user", user, "report", report)
+	// Immediately re-materialize the file-tier creds into every RUNNING
+	// project — without this, already-open terminals keep failing ("I signed
+	// in but nothing happened in the project") until a brand-new shell.
+	s.pushCredsToRunningProjects(user, s.guestUserFor(user))
 	return report
 }
 

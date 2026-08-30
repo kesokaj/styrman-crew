@@ -518,7 +518,12 @@ function ManageCredsModal({
         );
         if (stored) {
           setAdded((a) => new Set(a).add(tool));
-          toast("success", `${SETUP_TOOL_LABEL[tool] ?? tool} signed in`);
+          // File creds are pushed into every RUNNING project immediately
+          // (v1.13.2) — no new terminal needed for gcloud/claude/ssh/agy.
+          toast(
+            "success",
+            `${SETUP_TOOL_LABEL[tool] ?? tool} signed in — live in all projects`,
+          );
         } else {
           toast(
             "info",

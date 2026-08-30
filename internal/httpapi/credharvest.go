@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"strings"
+	"time"
 
 	"github.com/kesokaj/styrman-crew/internal/credstore"
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
@@ -182,4 +183,52 @@ func (s *Server) importGuestFile(ctx context.Context, user, containerID, guest, 
 // shellQuote single-quotes a path for safe interpolation into a shell command.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// pushCredsToRunningProjects re-materializes freshly harvested credentials
+// into every RUNNING project of the user, immediately. Mechanism: exec a
+// NO-OP LOGIN shell in each guest — /etc/profile.d's credential snippet
+// (ADR-032) pulls from the broker and writes the file-tier credentials into
+// the home. FILE creds (gcloud, claude, ssh, agy) are read per-invocation by
+// their tools, so even shells opened long ago start working the moment the
+// files land; only env-tier creds still need a new shell. Without this, "I
+// signed in but nothing happened in the project" was the default experience
+// for every already-open terminal (operator report, 2026-08-30). Async and
+// best-effort by design — a wedged guest must never block the harvest reply.
+func (s *Server) pushCredsToRunningProjects(user, guest string) {
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				s.logger.Error("credential push panicked", "user", user, "panic", rec)
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		statuses, err := s.orch.Adopt(ctx)
+		if err != nil {
+			s.logger.Warn("credential push: list failed", "user", user, "error", err)
+			return
+		}
+		n := 0
+		for _, st := range statuses {
+			if st.User != user || st.State != "running" || st.ContainerID == "" {
+				continue
+			}
+			ectx, ecancel := context.WithTimeout(ctx, 30*time.Second)
+			// A login shell that does nothing — profile.d does the work.
+			_, _, err := s.orch.Exec(ectx, st.ContainerID, orchestrator.ExecSpec{
+				User: guest,
+				Cmd:  []string{"bash", "-lc", ":"},
+			})
+			ecancel()
+			if err != nil {
+				s.logger.Warn("credential push failed", "user", user, "project", st.Project, "error", err)
+				continue
+			}
+			n++
+		}
+		if n > 0 {
+			s.logger.Info("credentials pushed to running projects", "user", user, "projects", n)
+		}
+	}()
 }
