@@ -71,13 +71,31 @@ func (s *Server) harvestCredentials(ctx context.Context, user, containerID, gues
 		report["claude"] = "not found — run `claude` and sign in"
 	}
 
-	// gcloud → Application Default Credentials (covers terraform, client
-	// libraries, and gcloud with ADC). File-injection tier.
+	// gcloud → Application Default Credentials (terraform, client libraries).
+	// File-injection tier.
 	if s.importGuestFile(ctx, user, containerID, guest,
 		"gcloud-adc", "~/.config/gcloud/application_default_credentials.json", "0600") {
-		report["gcloud"] = "stored (ADC)"
+		report["gcloud-adc"] = "stored (ADC)"
 	} else {
-		report["gcloud"] = "not found — run `gcloud auth application-default login`"
+		report["gcloud-adc"] = "not found — run `gcloud auth application-default login`"
+	}
+
+	// gcloud CLI account login → `gcloud auth login` (distinct from ADC) keeps
+	// the account + refresh token in credentials.db and the active account/
+	// project in the config; without these, `gcloud <command>` in a project has
+	// no active account. File-injection tier: credentials.db is the credential;
+	// active_config + configurations/config_default set the active account (the
+	// DEFAULT config — a named config isn't covered). access_tokens.db is a
+	// cache gcloud regenerates, so it's intentionally not synced.
+	if s.importGuestFile(ctx, user, containerID, guest,
+		"gcloud-credentials-db", "~/.config/gcloud/credentials.db", "0600") {
+		s.importGuestFile(ctx, user, containerID, guest,
+			"gcloud-active-config", "~/.config/gcloud/active_config", "0644")
+		s.importGuestFile(ctx, user, containerID, guest,
+			"gcloud-config-default", "~/.config/gcloud/configurations/config_default", "0644")
+		report["gcloud-cli"] = "stored (account login)"
+	} else {
+		report["gcloud-cli"] = "not found — run `gcloud auth login`"
 	}
 
 	// ssh → the first private key found. File-injection tier (Kata blocks

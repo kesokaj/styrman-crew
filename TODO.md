@@ -48,11 +48,12 @@ Deferred work items. Not blocking current work, but should be addressed later.
       KeyringCred`/`PutKeyring`, `GET /keyring`, and the `secret-tool store`
       snippet block are all deleted, not just unused. See ADR-040 (added
       2026-08-29, closed 2026-08-30)
-- [ ] Broker-sync the gcloud ACCOUNT login (`gcloud auth login`, `~/.config/gcloud/`),
-      not just ADC — today only `gcloud auth application-default login` (ADC) syncs
-      via the broker's file tier (covers terraform + client libraries); per-project
-      `gcloud` CLI commands still need a manual, per-project account sign-in (noted
-      in v1.8.0's setup-optional-gcloud change) (added 2026-08-29)
+- [x] ~~Broker-sync the gcloud ACCOUNT login (`gcloud auth login`)~~ — DONE
+      2026-08-30 (v1.9.3): harvestCredentials now also grabs `credentials.db` +
+      `active_config` + `configurations/config_default`, so `gcloud <command>` is
+      authenticated in every project, not just ADC. Re-seed once (re-run setup,
+      or Settings → Import from a gcloud-signed-in project). Named (non-default)
+      gcloud configs aren't covered (added 2026-08-29, closed 2026-08-30)
 
 ## Low Priority
 

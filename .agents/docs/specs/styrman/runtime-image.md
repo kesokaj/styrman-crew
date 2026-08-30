@@ -152,7 +152,8 @@ section.
 | gh (`GH_TOKEN`) | env | `gh auth token` | Same token as git, exported as a shell var |
 | git identity | env (`STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL`) | shared-home `.gitconfig` | Applied as `git config --global user.name/user.email` on login (v1.7.1) — per-repo identity still overrides it |
 | claude | file (`~/.claude/.credentials.json`) | same path | Carries a refresh_token; login-shell snippet also jq-merges the onboarding flag (v1.5.6, see entrypoint step 6c) |
-| gcloud ADC | file (`~/.config/gcloud/application_default_credentials.json`) | same path | The `gcloud auth login` account login is NOT yet broker-synced |
+| gcloud ADC | file (`~/.config/gcloud/application_default_credentials.json`) | same path | Application-default creds — terraform + client libraries |
+| gcloud CLI (account) | file (`~/.config/gcloud/credentials.db` + `active_config` + `configurations/config_default`) | same paths | `gcloud auth login` account + active config, so `gcloud <command>` is authenticated in every project (v1.9.3). Only the DEFAULT config is synced; `access_tokens.db` is a cache gcloud regenerates and is intentionally not synced |
 | ssh | file — first of `id_ed25519` / `id_rsa` / `id_ecdsa` | `~/.ssh/` | Kata blocks agent-socket forwarding, so the private key itself is materialized into each project |
 | npm | env (`NPM_TOKEN`) | `~/.npmrc`'s `_authToken` | `image/skel/.npmrc` references `${NPM_TOKEN}` |
 | agy | file (`~/.gemini/antigravity-cli/antigravity-oauth-token`, 0600) | same path | **v1.5.5**: ADR-032a originally modelled this as a keyring (Secret Service) credential — wrong for this agy build, which persists a portable `{access_token, token_type, refresh_token, expiry}` JSON file, not a keyring item. Moved to the file tier, which also works from the minimal setup VM (no keyring daemon runs there) |

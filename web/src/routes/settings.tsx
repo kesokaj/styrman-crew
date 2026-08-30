@@ -186,11 +186,18 @@ function CredentialsSection() {
       detail: detailOf("github"),
     },
     {
-      label: "gcloud",
+      label: "gcloud (ADC)",
       set: !!st?.gcloud,
       item: find((i) => i.id === "gcloud-adc"),
       synced: !!find((i) => i.id === "gcloud-adc"),
-      detail: "ADC (terraform + client libraries)",
+      detail: "application-default — terraform + client libraries",
+    },
+    {
+      label: "gcloud CLI",
+      set: !!find((i) => i.id === "gcloud-credentials-db"),
+      item: find((i) => i.id === "gcloud-credentials-db"),
+      synced: !!find((i) => i.id === "gcloud-credentials-db"),
+      detail: "account login — `gcloud` commands",
     },
     {
       label: "claude",
