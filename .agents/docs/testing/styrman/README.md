@@ -6,7 +6,7 @@ No mocks in the orchestrator path.
 ## Tiers
 
 1. **Unit** — `go test ./...` (store, validation; fast, no Docker).
-2. **Integration (60 checks)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
+2. **Integration (60 checks; 3 auto-SKIP on firewall-hardened hosts)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
    (default `styrman-runtime:dev`). Isolated server (own state dir, port
    18080) through the full lifecycle: legacy-layout migration, async create
    → microVM boot, terminals (records, rename, pause, close-all),
@@ -42,7 +42,7 @@ go test ./... && bash .agents/docs/testing/styrman/integration.sh
 Image changes: rebuild the image first; the integration script always creates
 fresh containers so it picks the new image up automatically.
 
-## Tier 4 — Browser e2e (Playwright, 34 checks)
+## Tier 4 — Browser e2e (Playwright, 36 checks; 2 auto-SKIP on firewall-hardened hosts)
 
 `bash web/e2e/run.sh [image-tag]` — self-hosts: builds the server and starts
 its own instance on a host loopback port with an isolated state dir, then

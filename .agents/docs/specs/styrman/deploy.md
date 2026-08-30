@@ -194,6 +194,10 @@ Whole-state restic backup of `/var/lib/styrman` to GCS (operator decision
 - Bucket `gs://styrman-crew-backups-driven-eft-h4it`, **europe-north2
   (Stockholm), Nearline**, uniform access; dedicated service account
   `styrman-backup@…` with `objectAdmin` on that bucket only.
+- IN THE REPO (R11, v1.14.1): `deploy/backup/` holds the script + both
+  systemd units; `host-setup.sh` installs them and enables the timer once
+  the secrets below exist (else it prints provisioning instructions).
+  Non-default bucket/project: override via `/etc/styrman/backup.env`.
 - Host files (root-only): `/etc/styrman/backup-sa.json` (SA key),
   `/etc/styrman/restic-pw` (repo password — ALSO stored in the operator's
   password manager; without it the backups are unreadable),
