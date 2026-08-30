@@ -204,6 +204,21 @@ export class ApiError extends Error {
   }
 }
 
+// reAuthOnce: session-expiry handling (2026-08-30 audit item). The OAuth
+// ingress answers an expired session with a REDIRECT to the auth portal (an
+// XHR can't complete it), and the server itself can 401. Either way the only
+// fix is a full page load so the OAuth flow can run — do it once, with a
+// toast, instead of every poll surfacing cryptic errors forever.
+let reAuthTriggered = false;
+function reAuthOnce() {
+  if (reAuthTriggered) return;
+  reAuthTriggered = true;
+  import("./toast").then(({ toast }) =>
+    toast("info", "Session expired — signing you back in…"),
+  );
+  setTimeout(() => window.location.reload(), 1200);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -212,6 +227,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     signal: init?.signal ?? AbortSignal.timeout(20000),
     ...init,
   });
+  if (res.status === 401 || (res.redirected && res.url.includes("/oauth2/"))) {
+    reAuthOnce();
+    throw new ApiError("session expired — reloading to sign in", res.status || 401);
+  }
   if (res.status === 204) return undefined as T;
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {

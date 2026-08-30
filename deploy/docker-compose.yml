@@ -22,8 +22,18 @@ services:
       - caddy_data:/data
       - caddy_config:/config
       - ./caddy/Caddyfile.base:/etc/caddy/Caddyfile.base:ro
-    env_file: .env
+    # Explicit env list, NOT env_file (2026-08-30 audit item): the ingress is
+    # internet-facing, so it gets ONLY what it reads — never the whole .env
+    # (styrman-only knobs and any future secrets stay out of its process env).
     environment:
+      - BASE_DOMAIN=${BASE_DOMAIN}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - SUPERADMINS=${SUPERADMINS:-}
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - STYRMAN_JWT_KEY=${STYRMAN_JWT_KEY}
+      - STYRMAN_INGRESS_TOKEN=${STYRMAN_INGRESS_TOKEN:-}
       - CADDYFILE_BASE_PATH=/etc/caddy/Caddyfile.base
       # Public preview links (1.1): when set, the ingress adds a *.PREVIEW_DOMAIN
       # public wildcard → the server, plus its DNS + cert. Empty = feature off.
