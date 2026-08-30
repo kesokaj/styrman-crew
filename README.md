@@ -90,7 +90,7 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.13.1**, deployed: https://crew.styrman.xyz (Google sign-in). Verified by
+**v1.14.0**, deployed: https://crew.styrman.xyz (Google sign-in). Verified by
 3 suites (unit + race, 60 integration checks against real Kata, self-hosted
 Playwright browser checks) plus a live post-deploy battery on every release.
 v1.13 added per-project **backup/restore** — snapshot a project's workspace +

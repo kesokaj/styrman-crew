@@ -96,7 +96,12 @@ Load-bearing ideas:
    **Git** — a real git client (v1.7.0, see below), Clipboard
    (session-scoped — see above). The HOME surface is a dashboard: project
    cards with live transcript tails per running terminal (15s refresh,
-   click to jump in); polling pauses app-wide in hidden browser tabs.
+   click to jump in), plus an OPS ROW per running card (v1.14.0):
+   cpu/mem/disk/procs chips and a Logs dialog with the microVM console
+   tail. The sidebar shows per-project GIT BADGES (branch, amber ±N when
+   dirty — one batched /api/git/summary call). One shared listProjects
+   poll feeds every surface; polling pauses app-wide in hidden tabs, and
+   an expired session triggers one toast + reload into the OAuth flow.
 5. **Git is the substrate** (R13, ADR-022): every project workspace IS a git
    repository, no exceptions — `git init -b main` runs synchronously at
    creation, or a clone runs in-guest instead (new project dialog's "Clone a
@@ -332,6 +337,8 @@ rotated token, or a tool signed into inside a project instead of at setup).
   microVM volume snapshots instead, once that host tooling exists.)
 - **Terminals**: sidebar, per project; generated friendly names; ⏸ pause /
   ✕ delete / close all; per-terminal autostart command (pencil → dialog;
+  a BARE `claude`/`agy` autostart natively RESUMES its most recent
+  conversation on session re-creation — `--continue || fresh`, v1.14.0;
   runs at session creation, then drops to the shell); transcripts land in
   History regardless; a status bar under the terminal shows live CPU/mem/
   disk/IP/uptime and synced-credential count (v1.6.0/v1.8.1).

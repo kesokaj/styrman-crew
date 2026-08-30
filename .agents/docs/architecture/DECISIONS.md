@@ -1511,3 +1511,70 @@ internal/httpapi/server.go, internal/orchestrator/orchestrator.go,
 web/src/components/Sidebar.tsx, web/src/components/NewProjectDialog.tsx,
 web/src/routes/settings.tsx, web/src/lib/api.ts. Verification:
 .agents/docs/changes/2026-08-30-project-backups-v1.13.0.md
+
+## ADR-045: Roadmap reset — everything shipped or explicitly retired (2026-08-30)
+
+**Context.** After the v1.9–v1.13 remediation-and-feature burst the operator
+directed: "I want nothing in todo and roadmap. This work should be to clean
+it up so I can start fresh with new things." Every open item was therefore
+either BUILT (v1.14.0, one marathon session) or RETIRED here, append-only,
+so TODO.md can be an empty inbox without losing any decision.
+
+**Shipped in v1.14.0** (details in the changelog): credential push to
+running projects; firewall-aware integration skips; transcript janitor
+(STYRMAN_TRANSCRIPT_TTL); clean-reinstall doc; vestige sweep; host-layer
+restic→GCS backups (europe-north2/Nearline, daily systemd timer, restore
+round-trip verified) + in-app backup cadence/retention/pre-wipe safety net;
+ops panel (dashboard CPU/mem/disk chips + microVM console logs endpoint);
+central session-expiry reload + Caddy explicit env allowlist; poll
+de-amplification (one shared listProjects store) + batched git badges;
+modal a11y core (focus trap/restore, topmost-Escape) across every overlay;
+keyboard-reachable primary rows; poll-error surfacing; nav-helper dedupe;
+responsive side-panel default; preview-proxy residuals (attach + owner
+memos, path.Clean + Location rewrite, S10 expiry-bounded streams, fail-loud
+public-link mint, concurrent LiveIn notifications scan, aliveFromProbe
+extraction); agent NATIVE RESUME (bare `claude`/`agy` autostarts run
+`--continue || fresh`, unparking ADR-011; the never-read AgentSession UUID
+removed).
+
+**Retired, with reasons** (operator-ratified 2026-08-30):
+
+- **Warm VM pool of 1** — the runtime image is prebuilt; a pool would only
+  hide the ~5–10s Kata cold boot, which the operator judged fast enough.
+  If boot latency ever matters, optimize the boot path, don't juggle
+  standby VMs.
+- **Platform API as an MCP server** — would let in-project agents manage
+  styrman itself (ports/backups/restarts); no current need, real new attack
+  surface. Reintroduce as a first-class feature if wanted.
+- **Auto-titles from claude transcripts** — structurally unreliable: claude
+  sessions key on the project CWD, not the terminal, and several terminals
+  share one slug dir, so terminal↔session mapping cannot be made truthful.
+  The dashboard's live transcript tails already answer "what is this
+  terminal doing" better than a stale title would.
+- **moby SDK migration** — pinned docker/docker v27 works; churn with zero
+  user value. Revisit only when an upstream break forces it.
+- **Artifact Registry Makefile target** — conditional on styrman ever
+  leaving this host; resurrect then.
+- **Pruning the tiny in-memory maps** (projLocks/ipCache/wsLocks) — bounded
+  in practice at single-operator scale; documented at the declarations.
+- **Exercising the entrypoint's vfs fallback in a test** — the fallback has
+  never fired in production; revisit if it ever does.
+- **SPA hydration warning (React #418)** — carried from the 2026-08-27 e2e:
+  recoverable by design (React re-renders), all client-only state already
+  flows through useSyncExternalStore with server snapshots, and the e2e
+  harness reports it if it ever regresses into something real. Closed as
+  known-benign rather than tracked forever.
+
+**Standing WON'T DO** (operator decisions 2026-08-27, moved from TODO.md so
+they stay on record): I14 docker-socket read-only proxy for Caddy —
+declined; I13 version-pinning Go/Node/claude/yq in the runtime image —
+declined (the terminal is a dev environment and intentionally ships current
+tools; the Kata tarball checksum in host-setup.sh stays — that is
+supply-chain verification, not version pinning).
+
+**Consequences.** TODO.md is an empty inbox: anything that matters next is
+a NEW decision, not archaeology. Retired items are not forgotten — they are
+here, with the reasoning to revisit against.
+
+Source: the v1.14.0 commits (e043765..HEAD). Verification:
+.agents/docs/changes/2026-08-30-roadmap-clearing-v1.14.0.md
