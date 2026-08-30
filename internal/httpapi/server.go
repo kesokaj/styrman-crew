@@ -91,6 +91,20 @@ type Server struct {
 	// same-second backups otherwise computed the SAME id and interleaved
 	// writes into one archive (audit 2026-08-30).
 	backingUp map[string]bool
+
+	// previewOwners memoizes projectID→owner for the preview proxy's
+	// cross-owner resolution (hits are re-validated against the live record;
+	// see previewAccess).
+	previewOwners sync.Map
+	// notifCache memoizes each user's notifications scan for a few seconds
+	// (see listNotifications).
+	notifCache sync.Map
+}
+
+// notifCacheEntry is one user's memoized notifications payload.
+type notifCacheEntry struct {
+	at    time.Time
+	items []notification
 }
 
 // New creates the Server.

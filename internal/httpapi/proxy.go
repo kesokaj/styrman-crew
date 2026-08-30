@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -141,10 +142,21 @@ func (s *Server) proxyFor(ip string, port int, prefix string, sandbox bool) *htt
 			pr.SetURL(target)
 			// Strip the /proxy/{p}/{port} prefix so in-guest apps see
 			// root-relative paths.
-			pr.Out.URL.Path = strings.TrimPrefix(pr.In.URL.Path, prefix)
-			if pr.Out.URL.Path == "" {
-				pr.Out.URL.Path = "/"
+			// Normalize with path.Clean (v1.14.0 polish: no "../" sequences
+			// reach the guest app) — trailing slash preserved, RawPath dropped
+			// so the outbound URL is re-encoded from the cleaned Path, never a
+			// smuggled encoding.
+			p0 := strings.TrimPrefix(pr.In.URL.Path, prefix)
+			if p0 == "" {
+				p0 = "/"
 			}
+			trail := strings.HasSuffix(p0, "/") && p0 != "/"
+			p0 = path.Clean(p0)
+			if trail && p0 != "/" {
+				p0 += "/"
+			}
+			pr.Out.URL.Path = p0
+			pr.Out.URL.RawPath = ""
 			pr.SetXForwarded()
 			// N22: never hand the user's styrman session/identity to a
 			// project's app — code in a VM could capture the caddy-security
@@ -166,6 +178,20 @@ func (s *Server) proxyFor(ip string, port int, prefix string, sandbox bool) *htt
 			// The token / session lives in the URL and cookies — never let the
 			// previewed app leak the capability URL via Referer (S3).
 			resp.Header.Set("Referrer-Policy", "no-referrer")
+			// The guest app sees Host <ip>:<port>, so its ABSOLUTE redirects
+			// point at the raw guest address — unreachable (and topology-
+			// leaking) for the visitor. Rewrite them back under the preview
+			// prefix (v1.14.0 polish).
+			if loc := resp.Header.Get("Location"); loc != "" {
+				if lu, lerr := url.Parse(loc); lerr == nil && lu.Host == target.Host {
+					lu.Scheme, lu.Host = "", ""
+					if !strings.HasPrefix(lu.Path, "/") {
+						lu.Path = "/" + lu.Path
+					}
+					lu.Path = prefix + lu.Path
+					resp.Header.Set("Location", lu.String())
+				}
+			}
 			// S1: a previewed app must not set a cookie scoped to a parent
 			// domain (Domain=styrman.xyz) — that would toss a cookie onto every
 			// styrman host (session fixation). Force every app cookie host-only

@@ -42,6 +42,20 @@ func (s *Server) allUsers() []string {
 // whether the requester may reach the preview of THIS port. found is false when
 // no such project exists anywhere.
 func (s *Server) previewAccess(projectID string, port int, u identity.User) (owner string, p project.Project, allowed, found bool) {
+	// projectID→owner memo (v1.14.0 polish): the cross-owner scan walked
+	// every user dir per proxied REQUEST. A cache hit is re-validated with a
+	// direct Get in the remembered owner's space (authz always re-reads the
+	// live record — the memo only skips the scan, never the check), so a
+	// deleted/moved project falls through to a fresh scan.
+	if v, ok := s.previewOwners.Load(projectID); ok {
+		user := v.(string)
+		if sp, err := s.space(user); err == nil {
+			if pr, err := sp.projects.Get(projectID); err == nil {
+				return user, pr, previewAllowed(u, user, pr.SharedPorts[port]), true
+			}
+		}
+		s.previewOwners.Delete(projectID)
+	}
 	for _, user := range s.allUsers() {
 		sp, err := s.space(user)
 		if err != nil {
@@ -51,6 +65,7 @@ func (s *Server) previewAccess(projectID string, port int, u identity.User) (own
 		if err != nil {
 			continue
 		}
+		s.previewOwners.Store(projectID, user)
 		return user, pr, previewAllowed(u, user, pr.SharedPorts[port]), true
 	}
 	return "", project.Project{}, false, false

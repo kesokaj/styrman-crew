@@ -60,7 +60,26 @@ func (m *Manager) liveSessions(ctx context.Context, user, project, guest, prefix
 	if st.State != "running" {
 		return []Live{}, nil
 	}
-	code, out, err := m.orch.Exec(ctx, st.ContainerID, orchestrator.ExecSpec{
+	return m.liveIn(ctx, st.ContainerID, guest, prefix)
+}
+
+// LiveIn is Live for a container the caller ALREADY knows is running —
+// skips the redundant Status inspect (the notifications scan resolves state
+// itself, once, and fans out concurrently; v1.14.0 polish).
+func (m *Manager) LiveIn(ctx context.Context, containerID, guest string) (map[string]Live, error) {
+	lives, err := m.liveIn(ctx, containerID, guest, Prefix)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]Live{}
+	for _, l := range lives {
+		out[l.ID] = l
+	}
+	return out, nil
+}
+
+func (m *Manager) liveIn(ctx context.Context, containerID, guest, prefix string) ([]Live, error) {
+	code, out, err := m.orch.Exec(ctx, containerID, orchestrator.ExecSpec{
 		User: guest,
 		// Trailing ':' pins exit 0 — a failing list-windows (e.g. the last
 		// session dying between the two commands) must not discard a good

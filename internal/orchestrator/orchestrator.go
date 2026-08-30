@@ -19,10 +19,10 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
+	"github.com/docker/docker/pkg/stdcopy"
 
 	"github.com/kesokaj/styrman-crew/internal/config"
 )
@@ -41,6 +41,9 @@ type Orchestrator struct {
 	// (that made Stop un-stick whenever a tab was open); any intentional boot
 	// (EnsureRunning) clears it. Key: key(user, project).
 	stopped sync.Map
+	// selfAttached memoizes EnsureSelfAttached per project (TTL) so the
+	// per-request preview proxy doesn't hit the Docker API every time.
+	selfAttached sync.Map
 
 	// ipCache memoizes broker source-IP → (user,project) resolution for a
 	// short TTL, so a project calling the broker per git op can't drive
@@ -458,6 +461,15 @@ func (o *Orchestrator) EnsureSelfAttached(user, project string) bool {
 	if o.cfg.SelfContainer == "" {
 		return false
 	}
+	// TTL cache (v1.14.0 polish): the preview proxy calls this per REQUEST,
+	// and each miss costs a NetworkInspect + NetworkConnect round-trip that
+	// almost always answers "already attached". A 60s memo keeps steady-state
+	// previews Docker-API-free; Destroy invalidates so a recreated network
+	// re-attaches promptly.
+	if v, ok := o.selfAttached.Load(project); ok && time.Since(v.(time.Time)) < time.Minute {
+		return false
+	}
+	defer o.selfAttached.Store(project, time.Now())
 	// Detached context: this must complete even if the triggering client
 	// gives up (a canceled attach left the network unreachable for the
 	// next request too — same failure class as the delete-handler bug).
@@ -1028,6 +1040,7 @@ func (o *Orchestrator) Destroy(ctx context.Context, user, project string) error 
 	}
 	o.activity.Delete(key(user, project))
 	o.stopped.Delete(key(user, project))
+	o.selfAttached.Delete(project) // a recreated network must re-attach
 	return nil
 }
 

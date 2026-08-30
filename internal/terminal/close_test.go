@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/coder/websocket"
@@ -30,3 +31,19 @@ func TestCloseDecision(t *testing.T) {
 		})
 	}
 }
+
+// aliveFromProbe: exec error = unprobed (fail toward reconnect, I2);
+// exit 0 = alive; non-zero = exited.
+func TestAliveFromProbe(t *testing.T) {
+	if a, p := aliveFromProbe(0, nil); !a || !p {
+		t.Fatalf("exit 0 = %v,%v want alive+probed", a, p)
+	}
+	if a, p := aliveFromProbe(1, nil); a || !p {
+		t.Fatalf("exit 1 = %v,%v want dead+probed", a, p)
+	}
+	if a, p := aliveFromProbe(0, errProbe); a || p {
+		t.Fatalf("err = %v,%v want unprobed", a, p)
+	}
+}
+
+var errProbe = errors.New("exec failed")

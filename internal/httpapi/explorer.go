@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kesokaj/styrman-crew/internal/conversation"
@@ -21,6 +22,7 @@ import (
 	"github.com/kesokaj/styrman-crew/internal/history"
 	"github.com/kesokaj/styrman-crew/internal/identity"
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
+	"github.com/kesokaj/styrman-crew/internal/project"
 )
 
 // scopeFor resolves the file-explorer scope for a project route. Both roots
@@ -592,34 +594,53 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
 	defer cancel()
 	guest := sp.profile.GuestUser()
-	out := []notification{}
-	for _, p := range sp.projects.List() {
-		st, err := s.orch.Status(ctx, u.Username, p.ID)
-		if err != nil {
-			s.logger.Warn("notifications: status failed", "project", p.ID, "error", err)
-			continue
-		}
-		if st.State != "running" {
-			continue
-		}
-		live, err := s.tmux.Live(ctx, u.Username, p.ID, guest)
-		if err != nil {
-			s.logger.Warn("notifications: tmux scan failed", "project", p.ID, "error", err)
-			continue
-		}
-		for id, l := range live {
-			if !l.Bell {
-				continue
-			}
-			title := "Terminal " + id
-			if rec, ok := sp.terms.Get(p.ID, id); ok {
-				title = rec.Title
-			}
-			out = append(out, notification{
-				ProjectID: p.ID, ProjectName: p.Name, TerminalID: id, Title: title,
-			})
+	// 5s memo per user: several UI surfaces poll this, and each scan execs
+	// into every running microVM (v1.14.0 polish).
+	if v, ok := s.notifCache.Load(u.Username); ok {
+		if c := v.(notifCacheEntry); time.Since(c.at) < 5*time.Second {
+			writeJSON(w, http.StatusOK, map[string]any{"notifications": c.items})
+			return
 		}
 	}
+	out := []notification{}
+	// Concurrent fan-out (one goroutine per project, LiveIn skips the
+	// redundant per-scan Status) instead of the old sequential exec chain.
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, p := range sp.projects.List() {
+		wg.Add(1)
+		go func(p project.Project) {
+			defer wg.Done()
+			st, err := s.orch.Status(ctx, u.Username, p.ID)
+			if err != nil {
+				s.logger.Warn("notifications: status failed", "project", p.ID, "error", err)
+				return
+			}
+			if st.State != "running" {
+				return
+			}
+			live, err := s.tmux.LiveIn(ctx, st.ContainerID, guest)
+			if err != nil {
+				s.logger.Warn("notifications: tmux scan failed", "project", p.ID, "error", err)
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			for id, l := range live {
+				if !l.Bell {
+					continue
+				}
+				title := "Terminal " + id
+				if rec, ok := sp.terms.Get(p.ID, id); ok {
+					title = rec.Title
+				}
+				out = append(out, notification{
+					ProjectID: p.ID, ProjectName: p.Name, TerminalID: id, Title: title,
+				})
+			}
+		}(p)
+	}
+	wg.Wait()
 	// Map iteration order is random — keep the dropdown stable across polls.
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].ProjectName != out[j].ProjectName {
@@ -627,5 +648,6 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 		}
 		return out[i].TerminalID < out[j].TerminalID
 	})
+	s.notifCache.Store(u.Username, notifCacheEntry{at: time.Now(), items: out})
 	writeJSON(w, http.StatusOK, map[string]any{"notifications": out})
 }

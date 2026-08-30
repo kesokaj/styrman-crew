@@ -453,6 +453,16 @@ func (b *Bridge) sessionAlive(s session) (alive, probed bool) {
 	})
 	if err != nil {
 		b.logger.Warn("has-session probe failed", "session", s.key, "error", err)
+	}
+	return aliveFromProbe(code, err)
+}
+
+// aliveFromProbe maps a has-session exec result to (alive, probed) — pure so
+// the close-decision path is unit-testable end to end with close_test.go:
+// an exec ERROR means the probe never answered (probed=false → the caller
+// fails toward reconnect, I2); exit 0 = session alive, non-zero = gone.
+func aliveFromProbe(code int, err error) (alive, probed bool) {
+	if err != nil {
 		return false, false
 	}
 	return code == 0, true

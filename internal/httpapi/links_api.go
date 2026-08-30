@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -50,6 +51,16 @@ func (s *Server) linkJSON(l links.Link) map[string]any {
 func (s *Server) createLink(w http.ResponseWriter, r *http.Request) {
 	if s.links == nil {
 		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("public links unavailable"))
+		return
+	}
+	// Fail loudly instead of minting a lie (v1.14.0 polish): without a
+	// public wildcard host, the path-form /link/<token> on the MAIN host
+	// sits behind the ingress OAuth gate in header mode — the "public" link
+	// would silently require a Google login. Dev (auth none) keeps the
+	// path form, which the server serves directly.
+	if s.cfg.PreviewBase == "" && s.cfg.AuthMode == "header" {
+		writeErr(w, http.StatusServiceUnavailable,
+			fmt.Errorf("public links need STYRMAN_PUBLIC_DOMAIN configured on the ingress"))
 		return
 	}
 	port, err := sharePort(r)
@@ -160,7 +171,13 @@ func (s *Server) serveLink(w http.ResponseWriter, r *http.Request) {
 	// origin, where an unsandboxed app could script the SPA's API (N22).
 	prefix := "/link/" + token
 	_, viaTokenHost := r.Context().Value(origPathKey{}).(string)
-	s.serveProxy(w, r, l.Owner, l.Project, l.Port, prefix, !viaTokenHost)
+	// S10: bound EVERY proxied exchange by the link's expiry — an upgraded
+	// WebSocket otherwise outlives revalidation forever (ReverseProxy only
+	// checks the token at the handshake). The deadline cancels the stream
+	// copy the moment the link expires.
+	ctx, cancel := context.WithDeadline(r.Context(), l.Expires)
+	defer cancel()
+	s.serveProxy(w, r.WithContext(ctx), l.Owner, l.Project, l.Port, prefix, !viaTokenHost)
 }
 
 // serveShared handles /shared/{token}/… — the email-gated share route, reached
@@ -211,7 +228,9 @@ func (s *Server) serveShared(w http.ResponseWriter, r *http.Request) {
 	// csrfGuard both exempt it, so an unsandboxed app there could call
 	// /api/... with the viewer's session (the N22 escalation).
 	_, viaTokenHost := r.Context().Value(origPathKey{}).(string)
-	s.serveProxy(w, r, l.Owner, l.Project, l.Port, prefix, !viaTokenHost)
+	ctx, cancel := context.WithDeadline(r.Context(), l.Expires)
+	defer cancel()
+	s.serveProxy(w, r.WithContext(ctx), l.Owner, l.Project, l.Port, prefix, !viaTokenHost)
 }
 
 // isLinkPath reports whether a path is the public link route (authGuard exempts
