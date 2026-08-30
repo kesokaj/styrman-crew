@@ -29,14 +29,14 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> image/
 
 Inputs (env, set by the orchestrator):
 
-| Env | Meaning |
-|---|---|
-| `STYRMAN_USER` / `STYRMAN_UID` / `STYRMAN_GID` | In-guest account (the user's configurable "terminal username"); uid/gid MUST match the host owner of the homes (spike S2) |
-| `STYRMAN_PROJECT` | Project UUID — keys the docker disk and transcript dir |
-| `STYRMAN_PROJECT_DIR` | Workspace dir name under ~/projects |
-| `STYRMAN_MINIMAL` | System VMs (onboarding): skip workspace + DinD |
-| `STYRMAN_DOCKER_DISK_GB` | Size for a newly created docker.img |
-| `STYRMAN_CRED_BROKER` | Credential broker URL on this project's bridge (ADR-030/032); consumed by the git helper + login-shell snippet. Empty = broker off. |
+| Env                                            | Meaning                                                                                                                             |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `STYRMAN_USER` / `STYRMAN_UID` / `STYRMAN_GID` | In-guest account (the user's configurable "terminal username"); uid/gid MUST match the host owner of the homes (spike S2)           |
+| `STYRMAN_PROJECT`                              | Project UUID — keys the docker disk and transcript dir                                                                              |
+| `STYRMAN_PROJECT_DIR`                          | Workspace dir name under ~/projects                                                                                                 |
+| `STYRMAN_MINIMAL`                              | System VMs (onboarding): skip workspace + DinD                                                                                      |
+| `STYRMAN_DOCKER_DISK_GB`                       | Size for a newly created docker.img                                                                                                 |
+| `STYRMAN_CRED_BROKER`                          | Credential broker URL on this project's bridge (ADR-030/032); consumed by the git helper + login-shell snippet. Empty = broker off. |
 
 Steps, in order:
 
@@ -57,52 +57,52 @@ Steps, in order:
    dotfiles from `image/skel/` (`~/.bashrc`, `~/.profile`, `~/.bash_*`, and
    `~/.npmrc` — the last referencing `${NPM_TOKEN}` from the broker) and the
    agent harness from `image/harness/`.
-6b. Login-shell `/etc/profile.d` snippets: `zzz-styrman-motd.sh` (zzz- so it
-    runs LAST, after credentials are materialized — it probes
-    `~/.claude/.credentials.json` etc. and would otherwise nag "run
-    styrman-setup" on a fully-onboarded project) and
-    `zz-styrman-credentials.sh` (ADR-032, credential materialization, below).
-    **There is no keyring snippet anymore** — the former
-    `styrman-keyring.sh`/`profile-keyring.sh` step (session dbus + gnome-keyring
-    unlock) is deleted outright (ADR-040); no keyring daemon is started at
-    login.
-6c. Credential materialization (`zz-styrman-credentials.sh`, ADR-032). Skipped
-    entirely if `STYRMAN_SKIP_CRED_PULL` is set (the harvest/import exec sets
-    this so it reads the guest's REAL current files instead of the broker's
-    own copy — H6). Otherwise, on every login shell:
-    - Derives the broker's address from the VM's OWN current IP (broadcast−1
-      of its `/16`) rather than trusting `$STYRMAN_CRED_BROKER` baked into the
-      container env at creation time — a network recreation can hand the
-      bridge a new subnet, which would otherwise strand the project on a
-      stale broker IP (M17). Falls back to the injected value if its own
-      address can't be read.
-    - `GET /env` → `export` each var. `GET /files` → writes each file under
-      `$HOME` at its mode, via an `umask 077` temp file + atomic rename (never
-      a torn or briefly-world-readable credential file).
-    - applies `STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL` (env creds) as
-      `git config --global user.name/user.email` — per-project homes carry no
-      git identity by default (only the auth token is a broker tier), so
-      without this a fresh project's `git commit` fails with "who are you"
-      even though push/pull already authenticate (v1.7.1). Set as global
-      config, not `GIT_AUTHOR_*` env, so a per-repo `user.name` still wins.
-    - when `~/.claude/.credentials.json` is present, jq-merges
-      `hasCompletedOnboarding: true` into `~/.claude.json` (creating a
-      minimal file if absent), writing atomically via a temp file + rename so
-      a concurrent `claude` never reads a torn file — a fresh per-project home
-      otherwise has the flag unset even with a valid token, so interactive
-      `claude` re-runs first-run onboarding and prompts for login despite
-      already being signed in (`claude -p` is unaffected — it skips
-      onboarding) (v1.5.6).
-    - There is no `GET /keyring` step — that broker tier and this snippet's
-      former `secret-tool store` block are both deleted (ADR-040).
+   6b. Login-shell `/etc/profile.d` snippets: `zzz-styrman-motd.sh` (zzz- so it
+   runs LAST, after credentials are materialized — it probes
+   `~/.claude/.credentials.json` etc. and would otherwise nag "run
+   styrman-setup" on a fully-onboarded project) and
+   `zz-styrman-credentials.sh` (ADR-032, credential materialization, below).
+   **There is no keyring snippet anymore** — the former
+   `styrman-keyring.sh`/`profile-keyring.sh` step (session dbus + gnome-keyring
+   unlock) is deleted outright (ADR-040); no keyring daemon is started at
+   login.
+   6c. Credential materialization (`zz-styrman-credentials.sh`, ADR-032). Skipped
+   entirely if `STYRMAN_SKIP_CRED_PULL` is set (the harvest/import exec sets
+   this so it reads the guest's REAL current files instead of the broker's
+   own copy — H6). Otherwise, on every login shell:
+   - Derives the broker's address from the VM's OWN current IP (broadcast−1
+     of its `/16`) rather than trusting `$STYRMAN_CRED_BROKER` baked into the
+     container env at creation time — a network recreation can hand the
+     bridge a new subnet, which would otherwise strand the project on a
+     stale broker IP (M17). Falls back to the injected value if its own
+     address can't be read.
+   - `GET /env` → `export` each var. `GET /files` → writes each file under
+     `$HOME` at its mode, via an `umask 077` temp file + atomic rename (never
+     a torn or briefly-world-readable credential file).
+   - applies `STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL` (env creds) as
+     `git config --global user.name/user.email` — per-project homes carry no
+     git identity by default (only the auth token is a broker tier), so
+     without this a fresh project's `git commit` fails with "who are you"
+     even though push/pull already authenticate (v1.7.1). Set as global
+     config, not `GIT_AUTHOR_*` env, so a per-repo `user.name` still wins.
+   - when `~/.claude/.credentials.json` is present, jq-merges
+     `hasCompletedOnboarding: true` into `~/.claude.json` (creating a
+     minimal file if absent), writing atomically via a temp file + rename so
+     a concurrent `claude` never reads a torn file — a fresh per-project home
+     otherwise has the flag unset even with a valid token, so interactive
+     `claude` re-runs first-run onboarding and prompts for login despite
+     already being signed in (`claude -p` is unaffected — it skips
+     onboarding) (v1.5.6).
+   - There is no `GET /keyring` step — that broker tier and this snippet's
+     former `secret-tool store` block are both deleted (ADR-040).
 7. Default `~/.tmux.conf` if the user has none (status off, login shells,
    `mouse off` — mouse mode steals selection from the browser terminal, so
    it's off so xterm.js can select natively and copy-on-select works).
-7b. tmux transcript hook: pipe-pane every session to `~/.styrman/logs/<uuid>/`
-    (ADR-017). The generated `/etc/styrman/tmux-project.conf` also sets
-    `monitor-bell on`, `bell-action any`, `visual-bell off` (unattended-bell
-    notifications) and `set-clipboard on` (OSC 52, so tmux/TUIs can write the
-    browser's clipboard through the terminal's OSC 52 handler).
+   7b. tmux transcript hook: pipe-pane every session to `~/.styrman/logs/<uuid>/`
+   (ADR-017). The generated `/etc/styrman/tmux-project.conf` also sets
+   `monitor-bell on`, `bell-action any`, `visual-bell off` (unattended-bell
+   notifications) and `set-clipboard on` (OSC 52, so tmux/TUIs can write the
+   browser's clipboard through the terminal's OSC 52 handler).
 8. DinD (ADR-008): create sparse ext4 `~/.dockerd/<uuid>.img` if absent,
    loop-mount at `/var/lib/docker-project`, start dockerd with **overlay2**;
    fall back to **vfs** directly on the home if the loop mount fails.
@@ -125,7 +125,7 @@ REQUIRED and OPTIONAL steps (v1.8.0), with two invocation modes (v1.10.0):
 - `styrman-setup` — the full flow: required git identity + ssh key, then
   each optional tool in turn. Unchanged behavior.
 - `styrman-setup <tool>...` — run ONLY the named step(s) (`git|ssh|gh|
-  gcloud|claude|agy`). When the target isn't git/ssh itself, the git
+gcloud|claude|agy`). When the target isn't git/ssh itself, the git
   identity is ensured quietly first (it's the prerequisite for the ssh key
   comment / a usable env). This is what the "add one credential later" flow
   in Settings → Credentials runs, via `GET /ws/setup?tool=<tool>` — see
@@ -135,19 +135,34 @@ REQUIRED and OPTIONAL steps (v1.8.0), with two invocation modes (v1.10.0):
 Previously SIGINT killed the script by signal, and the browser terminal's
 reconnect (`tmux new-session -A`) picked the ended session back up, which
 RESTARTED `styrman-setup` from the top. The trap's `exit 0` now ends the
-pane cleanly instead — the client gets close 4000 like a normal finish, no
-restart.
+pane cleanly instead — and belt-and-braces, the client no longer
+auto-reconnects a setup pane that has been open once (v1.10.1, see
+terminal-protocol.md), so a restart is impossible even when the bridge's
+1 s exit-code poll loses the race and reports a transient close.
+
+**Keep / renew** (v1.10.1): every step is idempotent AND renewable. A
+credential that already exists shows ✔ and offers `renew? [y/N]` — Enter
+keeps it and moves on to the next step, `y` re-runs that sign-in (for the
+ssh key, renewal generates a NEW key and keeps the old pair as
+`id_ed25519.replaced` — the broker only harvests `id_ed25519` itself, and
+the prompt warns the old key must be replaced wherever it's registered).
+All status PROBES (`gh auth status`, `gcloud auth list`, `gcloud auth
+application-default print-access-token`, `claude auth status`) run with
+stdin `</dev/null` so none can swallow the user's typed-ahead answers to
+later prompts (found by a pty test: `claude auth status` ate buffered
+input, stranding the flow at its prompt).
 
 - **Required** — git identity (`git config --global user.name/user.email`,
   prompted if unset) and an ssh key (generates `~/.ssh/id_ed25519` if
   absent; comments it with the user's git email, falling back to
-  `user@styrman`, never the literal "styrman"). Neither can be skipped.
-- **Optional**, each gated behind a `[y/N]` prompt (`ask_optional` — a
+  `user@styrman`, never the literal "styrman"). Neither can be skipped
+  when absent — when present, the keep/renew prompt above applies.
+- **Optional**, each gated behind a `[y/N]` prompt (`ask` — a
   non-interactive run, e.g. exec'd from a harvest, always answers no, so it
   never blocks): GitHub (`gh auth login --hostname github.com --git-protocol
-  ssh --web`); Google Cloud, guarded by `command -v gcloud` (`gcloud auth
-  login` for the account, then SEPARATELY `gcloud auth
-  application-default login` for ADC — the ADC step is what terraform and
+ssh --web`); Google Cloud, guarded by `command -v gcloud` (`gcloud auth
+login` for the account, then SEPARATELY `gcloud auth
+application-default login` for ADC — the ADC step is what terraform and
   the client libraries use, and the one the broker syncs); Claude
   (`claude`); Antigravity (`agy`). Skipping any of them is fine — rerun
   `styrman-setup` anytime to pick up where it left off; the completion
@@ -165,17 +180,17 @@ deploy.md's Credential broker section and api.md's Setup section.
 
 ## Credentials materialized per project (broker tiers)
 
-| Tool | Broker tier | Source in the shared/setup home | Notes |
-|---|---|---|---|
-| git (push/pull auth) | git helper (per-op; nothing stored in the project) | `gh auth token --hostname github.com` | A system git credential helper (`image/configs/styrman-git-credential`) calls the broker per operation; parses the JSON response with `jq` (base image has it), falling back to a `sed` extraction only right for simple unescaped tokens |
-| gh (`GH_TOKEN`) | env | `gh auth token` | Same token as git, exported as a shell var |
-| git identity | env (`STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL`) | shared-home `.gitconfig` | Applied as `git config --global user.name/user.email` on login (v1.7.1) — per-repo identity still overrides it |
-| claude | file (`~/.claude/.credentials.json`) | same path | Carries a refresh_token; login-shell snippet also jq-merges the onboarding flag (v1.5.6, see entrypoint step 6c) |
-| gcloud ADC | file (`~/.config/gcloud/application_default_credentials.json`) | same path | Application-default creds — terraform + client libraries |
-| gcloud CLI (account) | file (`~/.config/gcloud/credentials.db` + `active_config` + `configurations/config_default`) | same paths | `gcloud auth login` account + active config, so `gcloud <command>` is authenticated in every project (v1.9.3). Only the DEFAULT config is synced; `access_tokens.db` is a cache gcloud regenerates and is intentionally not synced |
-| ssh | file — first of `id_ed25519` / `id_rsa` / `id_ecdsa` | `~/.ssh/` | Kata blocks agent-socket forwarding, so the private key itself is materialized into each project |
-| npm | env (`NPM_TOKEN`) | `~/.npmrc`'s `_authToken` | `image/skel/.npmrc` references `${NPM_TOKEN}` |
-| agy | file (`~/.gemini/antigravity-cli/antigravity-oauth-token`, 0600) | same path | **v1.5.5**: ADR-032a originally modelled this as a keyring (Secret Service) credential — wrong for this agy build, which persists a portable `{access_token, token_type, refresh_token, expiry}` JSON file, not a keyring item. Moved to the file tier, which also works from the minimal setup VM (no keyring daemon runs there) |
+| Tool                 | Broker tier                                                                                  | Source in the shared/setup home       | Notes                                                                                                                                                                                                                                                                                                                             |
+| -------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| git (push/pull auth) | git helper (per-op; nothing stored in the project)                                           | `gh auth token --hostname github.com` | A system git credential helper (`image/configs/styrman-git-credential`) calls the broker per operation; parses the JSON response with `jq` (base image has it), falling back to a `sed` extraction only right for simple unescaped tokens                                                                                         |
+| gh (`GH_TOKEN`)      | env                                                                                          | `gh auth token`                       | Same token as git, exported as a shell var                                                                                                                                                                                                                                                                                        |
+| git identity         | env (`STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL`)                                                 | shared-home `.gitconfig`              | Applied as `git config --global user.name/user.email` on login (v1.7.1) — per-repo identity still overrides it                                                                                                                                                                                                                    |
+| claude               | file (`~/.claude/.credentials.json`)                                                         | same path                             | Carries a refresh_token; login-shell snippet also jq-merges the onboarding flag (v1.5.6, see entrypoint step 6c)                                                                                                                                                                                                                  |
+| gcloud ADC           | file (`~/.config/gcloud/application_default_credentials.json`)                               | same path                             | Application-default creds — terraform + client libraries                                                                                                                                                                                                                                                                          |
+| gcloud CLI (account) | file (`~/.config/gcloud/credentials.db` + `active_config` + `configurations/config_default`) | same paths                            | `gcloud auth login` account + active config, so `gcloud <command>` is authenticated in every project (v1.9.3). Only the DEFAULT config is synced; `access_tokens.db` is a cache gcloud regenerates and is intentionally not synced                                                                                                |
+| ssh                  | file — first of `id_ed25519` / `id_rsa` / `id_ecdsa`                                         | `~/.ssh/`                             | Kata blocks agent-socket forwarding, so the private key itself is materialized into each project                                                                                                                                                                                                                                  |
+| npm                  | env (`NPM_TOKEN`)                                                                            | `~/.npmrc`'s `_authToken`             | `image/skel/.npmrc` references `${NPM_TOKEN}`                                                                                                                                                                                                                                                                                     |
+| agy                  | file (`~/.gemini/antigravity-cli/antigravity-oauth-token`, 0600)                             | same path                             | **v1.5.5**: ADR-032a originally modelled this as a keyring (Secret Service) credential — wrong for this agy build, which persists a portable `{access_token, token_type, refresh_token, expiry}` JSON file, not a keyring item. Moved to the file tier, which also works from the minimal setup VM (no keyring daemon runs there) |
 
 There is no keyring tier: the broker's keyring tier (`credstore.KeyringCred`/
 `PutKeyring`, `GET /keyring`, the login snippet's `secret-tool store` block)

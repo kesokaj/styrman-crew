@@ -101,6 +101,16 @@ top. Now the pane simply ends → close **4000**, exactly like the script
 finishing on its own — the frontend finalizes or harvests (api.md's Setup
 section) instead of silently reconnecting into a restarted script.
 
+A setup pane additionally NEVER auto-reconnects once it has been open
+(v1.10.1). The bridge only answers 4000 when dockerd registers the exec's
+exit within its 1 s poll; a finished script can therefore still surface as
+a TRANSIENT close, and a reconnect's `tmux new-session -A` would recreate
+the ended session — restarting the script despite the trap. So the client
+treats ANY post-open close of a setup pane as exited (→ `onExited`, which
+is status-aware); only pre-open failures retry (the VM may still be coming
+up). Ordinary project terminals keep the normal transient-reconnect
+behavior — their panes idle at a shell, so reattaching is always safe.
+
 ## Close codes
 
 | Code | Name | Client behavior |

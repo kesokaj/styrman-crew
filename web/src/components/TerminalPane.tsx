@@ -114,6 +114,14 @@ export function TerminalPane({
     let closedForGood = false;
     let retries = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    // Setup panes must never auto-reconnect once they've been open: the bridge
+    // only answers 4000 when dockerd registers the exec's exit inside a 1 s
+    // poll, so a finished styrman-setup can surface as a TRANSIENT close — and
+    // a reconnect's `tmux new-session -A` would then RECREATE the ended session
+    // and restart the script from the top (the v1.10.0 Ctrl+C-restart bug).
+    // Pre-open retries still happen (the VM may still be coming up); post-open,
+    // any close is final and hands off to onExited (which is status-aware).
+    let everOpened = false;
 
     const connect = () => {
       if (closedForGood) return;
@@ -124,6 +132,7 @@ export function TerminalPane({
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
         retries = 0;
+        everOpened = true;
         setState("connected");
         // The URL size only seeds session *creation*; a reattach needs an
         // explicit resize in case the pane changed size while disconnected.
@@ -144,7 +153,10 @@ export function TerminalPane({
           closedForGood = true; // protocol: never reconnect on 4001
           return;
         }
-        if (ev.code === CLOSE_EXITED) {
+        if (
+          ev.code === CLOSE_EXITED ||
+          (target.kind === "setup" && everOpened)
+        ) {
           setState("exited");
           closedForGood = true;
           onExitedRef.current?.();

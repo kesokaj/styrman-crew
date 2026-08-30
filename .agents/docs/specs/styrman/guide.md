@@ -260,7 +260,10 @@ First use per user: the sidebar shows a **First-time setup** banner →
 Google Cloud (account login + separately Application Default Credentials),
 Claude, and agy are each OPTIONAL — `[y/N]` prompts, skip any and rerun
 `styrman-setup` anytime, in the setup VM or any project terminal, to pick up
-where you left off (v1.8.0). The generated SSH key's comment is the user's
+where you left off (v1.8.0). Already-set credentials just show ✔ with a
+`renew? [y/N]` prompt — Enter keeps and moves to the next step, `y` re-runs
+that sign-in (renew/switch account; a renewed ssh key keeps the old pair as
+`id_ed25519.replaced`) (v1.10.1). The generated SSH key's comment is the user's
 git email (fallback `user@styrman` if none is set), not "styrman". Closing
 the setup terminal (typing `exit`, letting the script finish, or **Ctrl+C** —
 a clean exit as of v1.10.0, no longer a restart) returns to the dashboard and
@@ -303,8 +306,10 @@ rotated token, or a tool signed into inside a project instead of at setup).
   credentials in one sitting without rebooting between them, and Ctrl+C in
   that terminal cancels just the current step and returns to the picker
   (the script's SIGINT trap makes this a clean exit, not a restart — see
-  terminal-protocol.md). "Done" (or clicking outside the modal) tears the VM
-  down. An "Add a variable" row stores any custom env var (NPM_TOKEN,
+  terminal-protocol.md). The picker's green rows are clickable too: an
+  already-signed-in tool re-runs its step with a `renew? [y/N]` prompt —
+  Enter keeps it, `y` re-authenticates (renew / switch account) (v1.10.1).
+  "Done" (or clicking outside the modal) tears the VM down. An "Add a variable" row stores any custom env var (NPM_TOKEN,
   DATABASE_URL, …); "Import from a project" is marked optional (setup
   already auto-syncs, ADR-034) — theme (Light / Dark / System), and —
   admins only — LIVE runtime tunables: idle-stop timeout (applies to the
