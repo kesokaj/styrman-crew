@@ -421,6 +421,17 @@ func ContainerName(projectID string) string { return "styrman-" + projectID }
 // NetworkName returns its bridge network name.
 func NetworkName(projectID string) string { return "sdb-" + projectID }
 
+// ProjectFromNetworkName inverts NetworkName ("" when netName isn't a plain
+// project bridge — e.g. the setup VM's sdb-sys-setup-<user>). Keeps the
+// prefix in exactly one file (2026-08-30 audit).
+func ProjectFromNetworkName(netName string) string {
+	rest, ok := strings.CutPrefix(netName, "sdb-")
+	if !ok || strings.HasPrefix(rest, "sys-setup-") {
+		return ""
+	}
+	return rest
+}
+
 // BridgeNameFor is the Linux bridge INTERFACE name for a styrman network. Docker
 // would otherwise auto-name it br-<hash> — which the project→host/LAN isolation
 // firewall (matching `-i sdb-+`) cannot target — and interface names are capped

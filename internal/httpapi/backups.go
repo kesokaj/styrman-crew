@@ -136,8 +136,11 @@ func (s *Server) doBackup(user, projectID, projectName string, allowDeleting boo
 		// Without the sidecar the archive is invisible to listing, restore,
 		// AND retention — an unprunable orphan (2026-08-30 review). Fail the
 		// backup and remove the archive instead of reporting success.
-		os.Remove(final)
-		s.logger.Error("backup meta write failed — archive removed", "project", projectID, "error", err)
+		if rmErr := os.Remove(final); rmErr != nil {
+			s.logger.Error("backup meta write failed — ORPHAN ARCHIVE LEFT", "path", final, "metaError", err, "removeError", rmErr)
+		} else {
+			s.logger.Error("backup meta write failed — archive removed", "project", projectID, "error", err)
+		}
 		return backupMeta{}, errors.New("backup failed (metadata write)")
 	}
 	s.logger.Info("backup created", "user", user, "project", projectID, "backup", id, "bytes", meta.SizeBytes)

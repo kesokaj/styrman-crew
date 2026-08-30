@@ -5,7 +5,7 @@ No mocks in the orchestrator path.
 
 ## Tiers
 
-1. **Unit** — `go test ./...` (store, validation; fast, no Docker).
+1. **Unit** — `go test -race ./...` (store, validation; fast, no Docker).
 2. **Integration (60 checks; 3 auto-SKIP on firewall-hardened hosts)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
    (default `styrman-runtime:dev`). Isolated server (own state dir, port
    18080) through the full lifecycle: legacy-layout migration, async create
@@ -29,7 +29,7 @@ No mocks in the orchestrator path.
 
 ## Prereqs
 
-- `styrman-runtime` image built: `docker build -t styrman-runtime:dev image/`
+- `styrman-runtime` image built: `docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/`
 - Kata runtime `mvm` working: `docker run --runtime mvm --rm debian:trixie uname -r`
   (host-setup.sh verifies this; if it fails with "invalid namespace type" see
   ADR-009 — the daemon.json time-namespaces flag is missing)
@@ -43,7 +43,7 @@ go test ./... && bash .agents/docs/testing/styrman/integration.sh
 Image changes: rebuild the image first; the integration script always creates
 fresh containers so it picks the new image up automatically.
 
-## Tier 4 — Browser e2e (Playwright, 36 checks; 34 run + 2 auto-SKIP on firewall-hardened hosts)
+## Tier 4 — Browser e2e (Playwright, 36 checks + a final client-error gate; firewall-hardened hosts run 34 + 2 auto-SKIP)
 
 `bash web/e2e/run.sh [image-tag]` — self-hosts: builds the server and starts
 its own instance on a host loopback port with an isolated state dir, then
@@ -55,7 +55,7 @@ Drives the real UI in headless Chromium against that server: project
 creation (boots a microVM), agent + shell terminals (xterm's DOM renderer
 makes terminal text assertable, plus copy-on-select),
 typing into the microVM, the Files/Ports/History/Git/Clipboard side-panel tabs,
-rename/delete, deep links, setup page, theme, and full cleanup — 36 checks (34 run on firewall-hardened hosts) +
+rename/delete, deep links, setup page, theme, and full cleanup — 36 checks (34 on firewall-hardened hosts) plus a final no-client-errors gate +
 screenshots.
 Prereq: `cd web && npm i && npx playwright install chromium` (once).
 Self-cleaning: deletes any leftover `e2e-ui` project at start.

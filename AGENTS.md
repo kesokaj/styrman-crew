@@ -40,7 +40,7 @@ STYRMAN_VERSION=<x.y.z> docker compose -f deploy/docker-compose.yml up -d --buil
 
 # Test suites
 bash .agents/docs/testing/styrman/integration.sh   # 60 checks; counts live in .agents/docs/testing/styrman/README.md vs real Kata
-bash web/e2e/run.sh                                # 34 Playwright checks (self-hosted)
+bash web/e2e/run.sh                                # browser e2e (Playwright, self-hosted; check counts: .agents/docs/testing/styrman/README.md)
 ```
 
 ## Architecture

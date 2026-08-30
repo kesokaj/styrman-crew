@@ -287,7 +287,7 @@ sudo bash deploy/host-setup.sh --user $USER   # Docker, Kata "mvm", daemon cfg, 
                                               # isolation firewall + backup systemd units,
                                               # builds styrman-runtime:latest (the tag
                                               # production compose uses), seeds deploy/.env
-docker build -t styrman-runtime:dev image/    # separate tag, for the loopback dev run only
+docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/  # separate tag for the loopback dev run; the version keys harness re-seeding
 
 # Dev (no auth, loopback; needs a Go 1.25+ toolchain — host-setup.sh does NOT install one):
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
@@ -424,7 +424,7 @@ re-import it.
 ```bash
 go test ./...                                        # unit (stores, guards, routing)
 bash .agents/docs/testing/styrman/integration.sh     # 60 checks vs real Kata (3 auto-skip on firewall-hardened hosts)
-bash web/e2e/run.sh                                  # 34 browser checks (Playwright, self-hosted)
+bash web/e2e/run.sh                                  # browser e2e (Playwright, self-hosted; check counts: .agents/docs/testing/styrman/README.md)
 cd web && npm run build                              # UI → dist/client (committed)
 ```
 

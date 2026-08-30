@@ -21,10 +21,16 @@ let state: ProjectsState = {};
 const subs = new Set<(s: ProjectsState) => void>();
 let timer: ReturnType<typeof setInterval> | undefined;
 let inFlight = false;
+// A refresh requested while a poll is mid-flight must not be swallowed —
+// that in-flight response predates the mutation (audit 2026-08-30).
+let pendingRefresh = false;
 
 async function tick() {
   if (typeof document !== "undefined" && document.hidden) return;
-  if (inFlight) return;
+  if (inFlight) {
+    pendingRefresh = true;
+    return;
+  }
   inFlight = true;
   try {
     state = { data: await api.listProjects() };
@@ -35,6 +41,10 @@ async function tick() {
     inFlight = false;
   }
   subs.forEach((fn) => fn(state));
+  if (pendingRefresh) {
+    pendingRefresh = false;
+    void tick();
+  }
 }
 
 // Catch up immediately when a hidden tab becomes visible (ticks are
@@ -44,7 +54,7 @@ function onVisible() {
 }
 
 /** Force an immediate refresh (after create/delete/stop/start/rename). */
-export function refreshProjects() {
+function refreshProjects() {
   void tick();
 }
 

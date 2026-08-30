@@ -350,7 +350,7 @@ else
     1. Create the GCS bucket + a service account with objectAdmin on that
        bucket only; download its key to /etc/styrman/backup-sa.json
        (root:root 600).
-    2. openssl rand -base64 24 > /etc/styrman/restic-pw; chmod 600 — and
+    2. openssl rand -base64 24 > /etc/styrman/restic-pw && chmod 600 /etc/styrman/restic-pw
        SAVE THAT PASSWORD in a password manager: without it the backups
        are unreadable after host loss.
     3. Initialize the repository (adjust -r for your bucket):

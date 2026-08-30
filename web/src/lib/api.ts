@@ -196,7 +196,7 @@ export async function tryUI(action: () => Promise<void>): Promise<void> {
   }
 }
 
-export class ApiError extends Error {
+class ApiError extends Error {
   readonly status: number;
   constructor(message: string, status: number) {
     super(message);
@@ -210,6 +210,7 @@ export class ApiError extends Error {
 // fix is a full page load so the OAuth flow can run — do it once, with a
 // toast, instead of every poll surfacing cryptic errors forever.
 let reAuthTriggered = false;
+let reAuthCleared = false;
 function reAuthOnce() {
   if (reAuthTriggered) return;
   reAuthTriggered = true;
@@ -230,13 +231,11 @@ function reAuthOnce() {
   } catch {
     /* storage unavailable — fall through with attempts=0 */
   }
-  import("./toast").then(({ toast }) =>
-    toast(
-      attempts >= 2 ? "error" : "info",
-      attempts >= 2
-        ? "Session expired and sign-in keeps failing — reload manually or check the ingress"
-        : "Session expired — signing you back in…",
-    ),
+  toast(
+    attempts >= 2 ? "error" : "info",
+    attempts >= 2
+      ? "Session expired and sign-in keeps failing — reload manually or check the ingress"
+      : "Session expired — signing you back in…",
   );
   if (attempts < 2) setTimeout(() => window.location.reload(), 1200);
 }
@@ -252,6 +251,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (res.status === 401 || (res.redirected && res.url.includes("/oauth2/"))) {
     reAuthOnce();
     throw new ApiError("session expired — reloading to sign in", res.status || 401);
+  }
+  // First healthy response after a reload clears the re-auth counter, so a
+  // GENUINE later expiry gets its automatic reload again (audit 2026-08-30).
+  if (res.ok && !reAuthCleared) {
+    reAuthCleared = true;
+    try {
+      sessionStorage.removeItem("reauth");
+    } catch {
+      /* storage unavailable */
+    }
   }
   if (res.status === 204) return undefined as T;
   const body = await res.json().catch(() => ({}));

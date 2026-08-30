@@ -17,16 +17,21 @@
 # on ANY other host /etc/styrman/backup.env MUST redefine GOOGLE_PROJECT and
 # RESTIC_REPOSITORY=gs:<your-bucket>:/ (it is not optional there).
 set -euo pipefail
-export GOOGLE_PROJECT=driven-eft-h4it
+# Defaults FIRST, then the override file, then self-defaulting exports — so
+# /etc/styrman/backup.env may override ANY of these (2026-08-30 audit; note
+# restic's GCS backend reads GOOGLE_PROJECT_ID, not GOOGLE_PROJECT — it is
+# only consulted when restic must CREATE the bucket).
+export GOOGLE_PROJECT_ID=driven-eft-h4it
 export RESTIC_REPOSITORY=gs:styrman-crew-backups-driven-eft-h4it:/
+STATE_DIR=/var/lib/styrman
 [ -f /etc/styrman/backup.env ] && . /etc/styrman/backup.env
-export GOOGLE_APPLICATION_CREDENTIALS=/etc/styrman/backup-sa.json
-export RESTIC_PASSWORD_FILE=/etc/styrman/restic-pw
+export GOOGLE_APPLICATION_CREDENTIALS="${GOOGLE_APPLICATION_CREDENTIALS:-/etc/styrman/backup-sa.json}"
+export RESTIC_PASSWORD_FILE="${RESTIC_PASSWORD_FILE:-/etc/styrman/restic-pw}"
 # NOTE: StateDir/backups IS included (2026-08-30 reader review): a DELETED
 # project's in-app archives are the ONLY copy of that project — excluding
 # them broke the "backups outlive their project" promise across host loss.
 # Only the reproducible per-project docker disks are excluded.
-restic backup /var/lib/styrman \
-  --exclude '/var/lib/styrman/homes/*/p/*/.dockerd' \
+restic backup "${STATE_DIR}" \
+  --exclude "${STATE_DIR}/homes/*/p/*/.dockerd" \
   --tag styrman-state
 restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune

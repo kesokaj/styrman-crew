@@ -250,4 +250,3 @@ func (s *Store) save() error {
 	}
 	return os.Rename(tmp, s.path)
 }
-

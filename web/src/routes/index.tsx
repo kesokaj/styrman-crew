@@ -189,12 +189,13 @@ function LogsDialog({
           Refresh
         </button>
       </div>
+      {error && (
+        <p className="mb-1 text-[11px] text-danger">
+          Could not refresh logs — retrying… ({error})
+        </p>
+      )}
       <pre className="max-h-[60vh] overflow-auto rounded-lg bg-bg p-2 font-mono text-[11px] leading-snug">
-        {data
-          ? data.logs || "(no output)"
-          : error
-            ? `Could not load logs — retrying… (${error})`
-            : "Loading…"}
+        {data ? data.logs || "(no output)" : "Loading…"}
       </pre>
     </Dialog>
   );

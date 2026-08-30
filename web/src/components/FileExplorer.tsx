@@ -351,7 +351,7 @@ export function FileExplorer({
                 {fmtSize(e.size)}
               </span>
             )}
-            <span className="invisible flex shrink-0 items-center group-hover:visible">
+            <span className="invisible flex shrink-0 items-center group-hover:visible group-focus-within:visible">
               {!e.dir && (
                 <a
                   href={api.downloadUrl(scope, e.path)}

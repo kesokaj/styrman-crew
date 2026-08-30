@@ -289,7 +289,7 @@ export function Sidebar({
                 </span>
               )}
               <button
-                className="invisible inline-flex h-6 w-6 items-center justify-center rounded-md text-text-dim hover:bg-bg-active hover:text-text group-hover:visible"
+                className="invisible inline-flex h-6 w-6 items-center justify-center rounded-md text-text-dim hover:bg-bg-active hover:text-text group-hover:visible group-focus-within:visible"
                 onClick={(e) => {
                   e.stopPropagation();
                   setMenuFor(menuFor === p.id ? null : p.id);

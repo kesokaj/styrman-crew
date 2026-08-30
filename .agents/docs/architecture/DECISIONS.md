@@ -1535,7 +1535,11 @@ memos, path.Clean + Location rewrite, S10 expiry-bounded streams, fail-loud
 public-link mint, concurrent LiveIn notifications scan, aliveFromProbe
 extraction); agent NATIVE RESUME (bare `claude`/`agy` autostarts run
 `--continue || fresh`, unparking ADR-011; the never-read AgentSession UUID
-removed).
+removed). *(Revised same day in v1.14.1: auto-resume REVERTED to
+per-terminal opt-in — all terminals of a project share one cwd, so the
+automatic rewrite made several terminals resume the SAME conversation;
+users now set `claude --continue` / `agy --continue` as the autostart
+themselves. See 2026-08-30-review-remediation-v1.14.1.md.)*
 
 **Retired, with reasons** (operator-ratified 2026-08-30):
 

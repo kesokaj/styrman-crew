@@ -171,10 +171,10 @@ func (s *Server) serveLink(w http.ResponseWriter, r *http.Request) {
 	// origin, where an unsandboxed app could script the SPA's API (N22).
 	prefix := "/link/" + token
 	_, viaTokenHost := r.Context().Value(origPathKey{}).(string)
-	// S10: bound EVERY proxied exchange by the link's expiry — an upgraded
+	// S10: bound every PUBLIC exchange by the link's expiry — an upgraded
 	// WebSocket otherwise outlives revalidation forever (ReverseProxy only
-	// checks the token at the handshake). The deadline cancels the stream
-	// copy the moment the link expires.
+	// checks the token at the handshake). PRIVATE links have no expiry;
+	// their revocation is the share list (see serveShared).
 	// Public links always carry a TTL, but guard the zero case anyway — a
 	// zero Expires fed to WithDeadline is an ALREADY-EXPIRED context (the
 	// bug that killed every PRIVATE preview; see serveShared).

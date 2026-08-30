@@ -203,7 +203,7 @@ Whole-state restic backup of `/var/lib/styrman` to GCS (operator decision
   `/etc/styrman/restic-pw` (repo password — ALSO stored in the operator's
   password manager; without it the backups are unreadable),
   `/usr/local/bin/styrman-host-backup` (the script),
-  `systemd` units `styrman-backup.{service,timer}` (daily 03:00 ±15m,
+  `systemd` units `styrman-backup.{service,timer}` (daily 03:00 + up to 15m random delay,
   Persistent=true).
 - Excludes: only the reproducible per-project docker disks
   (`homes/*/p/*/.dockerd`). `StateDir/backups` — the in-app per-project
@@ -222,7 +222,7 @@ to `/etc/styrman/backup-sa.json` (root:root, `chmod 600`); 3) `openssl rand
 then save that password in the operator's password manager; 4) `restic
 init` against the repo (env block below); 5) `systemctl enable --now
 styrman-backup.timer`. **On any host that isn't the original deployment,
-`/etc/styrman/backup.env` MUST set `GOOGLE_PROJECT` and
+`/etc/styrman/backup.env` MUST set `GOOGLE_PROJECT_ID` and
 `RESTIC_REPOSITORY=gs:<your-bucket>:/` FIRST** — the script's baked-in
 defaults are the original deployment's project/bucket and otherwise point a
 new host's backups at someone else's bucket.
@@ -232,7 +232,7 @@ internally; use this verbatim on the ORIGINAL deployment, or substitute
 `/etc/styrman/backup.env`'s overrides on any other host):
 
 ```bash
-sudo env GOOGLE_PROJECT=driven-eft-h4it \
+sudo env GOOGLE_PROJECT_ID=driven-eft-h4it \
   RESTIC_REPOSITORY=gs:styrman-crew-backups-driven-eft-h4it:/ \
   GOOGLE_APPLICATION_CREDENTIALS=/etc/styrman/backup-sa.json \
   RESTIC_PASSWORD_FILE=/etc/styrman/restic-pw \
@@ -262,14 +262,14 @@ wipe-delete always takes a pre-wipe safety backup first — failing CLOSED
    image.
 3. Restore the state:
    ```bash
-   sudo env GOOGLE_PROJECT=driven-eft-h4it \
+   sudo env GOOGLE_PROJECT_ID=driven-eft-h4it \
      GOOGLE_APPLICATION_CREDENTIALS=/etc/styrman/backup-sa.json \
      RESTIC_PASSWORD_FILE=/etc/styrman/restic-pw \
      restic -r gs:styrman-crew-backups-driven-eft-h4it:/ restore latest --target /
    ```
    writes `/var/lib/styrman` back in place. On a non-original host, set
    `RESTIC_REPOSITORY` (source `/etc/styrman/backup.env`) instead of the
-   inline `GOOGLE_PROJECT` above.
+   inline `GOOGLE_PROJECT_ID` above.
 4. Reconstruct `deploy/.env` — step 1's `host-setup.sh` seeded a fresh one;
    re-fill the OAuth/Cloudflare/domain values (see "Bring-up" above).
    `STYRMAN_UID`/`STYRMAN_GID` must match the uid/gid that OWNS the

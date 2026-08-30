@@ -100,8 +100,10 @@ type Server struct {
 	// (see listNotifications).
 	notifCache sync.Map
 	// credPushing (deletingMu, key user+"/-") single-flights the per-user
-	// credential push into running projects (see credharvest.go).
-	credPushing map[string]bool
+	// credential push into running projects; credPushRerun coalesces pushes
+	// requested while one is in flight (see credharvest.go).
+	credPushing   map[string]bool
+	credPushRerun map[string]bool
 }
 
 // notifCacheEntry is one user's memoized notifications payload.
@@ -113,17 +115,18 @@ type notifCacheEntry struct {
 // New creates the Server.
 func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestrator, logger *slog.Logger) *Server {
 	s := &Server{
-		cfg:        cfg,
-		orch:       orch,
-		tmux:       conversation.NewManager(orch, cfg),
-		users:      users,
-		logger:     logger,
-		spaces:     map[string]*userSpace{},
-		deleting:   map[string]bool{},
-		deleteErrs: map[string]string{},
-		restoring:   map[string]bool{},
-		backingUp:   map[string]bool{},
-		credPushing: map[string]bool{},
+		cfg:           cfg,
+		orch:          orch,
+		tmux:          conversation.NewManager(orch, cfg),
+		users:         users,
+		logger:        logger,
+		spaces:        map[string]*userSpace{},
+		deleting:      map[string]bool{},
+		deleteErrs:    map[string]string{},
+		restoring:     map[string]bool{},
+		backingUp:     map[string]bool{},
+		credPushing:   map[string]bool{},
+		credPushRerun: map[string]bool{},
 	}
 	// Public preview-link store (best-effort: a load failure degrades to
 	// no-links, never blocks server start).
@@ -851,7 +854,9 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 					!errors.Is(berr, errBackupBusy) {
 					break
 				}
-				time.Sleep(10 * time.Second)
+				if attempt < 3 { // no pointless sleep after the final try
+					time.Sleep(10 * time.Second)
+				}
 			}
 			if berr != nil {
 				s.logger.Error("pre-wipe safety backup failed — wipe aborted", "project", p.Name, "error", berr)

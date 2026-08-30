@@ -926,9 +926,12 @@ func (o *Orchestrator) WithProjectLock(user, project string, fn func() error) er
 }
 
 // invalidateSelfAttach drops the self-attach memo for the project owning a
-// bridge (netName is config.NetworkName(project), i.e. "sdb-"+project).
+// bridge; the prefix inversion lives in config (single source of truth,
+// 2026-08-30 audit). No-op for system-VM bridges (never memoized).
 func (o *Orchestrator) invalidateSelfAttach(netName string) {
-	o.selfAttached.Delete(strings.TrimPrefix(netName, "sdb-"))
+	if p := config.ProjectFromNetworkName(netName); p != "" {
+		o.selfAttached.Delete(p)
+	}
 }
 
 // rootOpAllowed confines the root-assisted file ops to server state: StateDir
@@ -1230,10 +1233,16 @@ func (o *Orchestrator) Logs(ctx context.Context, project string, tail int) (stri
 	// the NEWEST lines, the ones a logs view exists for (2026-08-30 review).
 	_, _ = stdcopy.StdCopy(&buf, &buf, rc)
 	out := buf.String()
-	if max := 256 << 10; len(out) > max {
-		out = out[len(out)-max:]
-		if i := strings.IndexByte(out, '\n'); i >= 0 {
-			out = out[i+1:] // start at a line boundary
+	const maxBytes = 256 << 10
+	if len(out) > maxBytes {
+		// Only skip to the next newline when the cut lands MID-line — when it
+		// lands exactly on a line start, that line is complete and kept.
+		cutMidLine := out[len(out)-maxBytes-1] != '\n'
+		out = out[len(out)-maxBytes:]
+		if cutMidLine {
+			if i := strings.IndexByte(out, '\n'); i >= 0 {
+				out = out[i+1:]
+			}
 		}
 		out = "… (older lines truncated) …\n" + out
 	}

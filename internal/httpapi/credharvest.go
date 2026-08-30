@@ -198,17 +198,23 @@ func shellQuote(s string) string {
 func (s *Server) pushCredsToRunningProjects(user, guest string) {
 	// Single-flight per user (2026-08-30 review): repeated harvest clicks
 	// otherwise stack concurrent pushes — several profile.d shells writing
-	// the same guest credential files at once, and Docker-API load scaling
-	// with click rate. A push already in flight covers the new request's
-	// intent (it reads the broker's CURRENT state per exec).
-	if _, ok := s.tryAcquire(s.credPushing, user, "-"); !ok {
+	// the same guest credential files at once. A request landing while a
+	// push is in flight is NOT simply dropped (audit: guests the in-flight
+	// loop already visited would miss the newer harvest): it sets a rerun
+	// flag the in-flight goroutine honors with one more full pass.
+	release, ok := s.tryAcquire(s.credPushing, user, "-")
+	if !ok {
+		s.deletingMu.Lock()
+		s.credPushRerun[user] = true
+		s.deletingMu.Unlock()
 		return
 	}
 	go func() {
+		handedOff := false
 		defer func() {
-			s.deletingMu.Lock()
-			delete(s.credPushing, user+"/-")
-			s.deletingMu.Unlock()
+			if !handedOff {
+				release()
+			}
 			if rec := recover(); rec != nil {
 				s.logger.Error("credential push panicked", "user", user, "panic", rec)
 			}
@@ -241,6 +247,17 @@ func (s *Server) pushCredsToRunningProjects(user, guest string) {
 		}
 		if n > 0 {
 			s.logger.Info("credentials pushed to running projects", "user", user, "projects", n)
+		}
+		// A harvest completed while we were pushing — one more pass so the
+		// guests visited before it still get the newest credentials.
+		s.deletingMu.Lock()
+		rerun := s.credPushRerun[user]
+		delete(s.credPushRerun, user)
+		s.deletingMu.Unlock()
+		if rerun {
+			handedOff = true
+			release() // free the slot BEFORE re-entering (it re-acquires)
+			s.pushCredsToRunningProjects(user, guest)
 		}
 	}()
 }

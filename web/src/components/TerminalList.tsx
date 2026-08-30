@@ -96,7 +96,7 @@ export function TerminalList({
           )}
           {t.live ? (
             <button
-              className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-text-dim hover:text-warn group-hover:visible"
+              className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-text-dim hover:text-warn group-hover:visible group-focus-within:visible"
               onClick={(e) => {
                 e.stopPropagation();
                 pause(t.id);
@@ -115,7 +115,7 @@ export function TerminalList({
             <span className="h-1 w-1 rounded-full bg-ok" title="live session" />
           )}
           <button
-            className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-text-dim hover:text-text group-hover:visible"
+            className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-text-dim hover:text-text group-hover:visible group-focus-within:visible"
             onClick={(e) => {
               e.stopPropagation();
               setRenaming(t);
@@ -126,7 +126,7 @@ export function TerminalList({
             <PencilIcon className="h-3 w-3" />
           </button>
           <button
-            className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-text-dim hover:text-danger group-hover:visible"
+            className="invisible inline-flex h-5 w-5 items-center justify-center rounded text-text-dim hover:text-danger group-hover:visible group-focus-within:visible"
             onClick={(e) => {
               e.stopPropagation();
               setConfirming({ kind: "one", id: t.id, title: t.title });

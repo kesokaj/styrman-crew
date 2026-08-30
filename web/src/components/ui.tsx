@@ -111,17 +111,17 @@ export function useModalA11y(
     const me = Symbol("dialog");
     dialogStack.push(me);
     const opener = document.activeElement as HTMLElement | null;
-    // Move focus into the panel: an explicit [autofocus] child wins (the
-    // ConfirmDialog focuses its Confirm button), else the first focusable,
-    // else the panel itself.
     const panel = panelRef.current;
     if (panel) {
       panel.tabIndex = -1;
-      (
-        panel.querySelector<HTMLElement>("[autofocus]") ??
-        panel.querySelector<HTMLElement>(FOCUSABLE) ??
-        panel
-      ).focus();
+      // React's autoFocus prop focuses imperatively at mount and never
+      // writes the attribute, so [autofocus] queries can't see it (audit):
+      // if something inside the panel ALREADY has focus (React autoFocus,
+      // an input's own autoFocus), leave it alone; else focus the first
+      // focusable, else the panel.
+      if (!panel.contains(document.activeElement)) {
+        (panel.querySelector<HTMLElement>(FOCUSABLE) ?? panel).focus();
+      }
     }
     const onKey = (e: KeyboardEvent) => {
       if (dialogStack[dialogStack.length - 1] !== me) return;
@@ -136,9 +136,9 @@ export function useModalA11y(
         const items = [
           ...panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE),
         ];
-        if (items.length === 0) return;
         const first = items[0];
         const last = items[items.length - 1];
+        if (!first || !last) return; // empty list — nothing to trap
         const active = document.activeElement;
         if (e.shiftKey && (active === first || active === panelRef.current)) {
           e.preventDefault();

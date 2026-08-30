@@ -226,8 +226,12 @@ try {
     await fetch(`http://${ip}:4321/index.html`, {
       signal: AbortSignal.timeout(3000),
     });
-  } catch {
-    hostFW = true;
+  } catch (e) {
+    // Only a TIMEOUT is the firewall's DROP signature; anything else
+    // (bad PID, docker missing, refused) is a real failure, not a skip
+    // (2026-08-30 audit — mirrors integration.sh's exit-28 rule).
+    if (e?.name === "TimeoutError") hostFW = true;
+    else bad(`firewall probe: ${e?.message ?? e} (NOT the firewall)`);
   }
   if (hostFW) {
     skip("port link serves the app from inside the microVM", "host firewall blocks host→bridge; prod unaffected");
@@ -243,7 +247,11 @@ try {
   }
   // Per-port sharing: add an email then remove it (the remove button must be
   // visible + working — it was hover-hidden and undeletable before).
-  await check("share add + remove on a port", async () => {
+  // Split three ways (2026-08-30 audit: the serve assertion needs its own
+  // check/skip line for honest counts, and it must run BETWEEN add and
+  // remove — the revoke kills the link).
+  let sharedUrl = "";
+  await check("share add mints a private link", async () => {
     await page.locator('aside button:has-text("share")').first().click();
     await page.fill('aside input[placeholder*="@"]', "e2e-guest@gmail.com");
     await panel().getByRole("button", { name: "add", exact: true }).click();
@@ -252,21 +260,26 @@ try {
     await page.waitForSelector("aside >> text=copy private link", {
       timeout: 5000,
     });
-    // …and it actually SERVES the app (not just renders a button). NOTE:
-    // auth mode is "none" here, so this exercises the OWNER branch of
-    // previewAllowed — the shared-guest branch is covered by the Go tests.
     const shares = await (
       await page.request.get(`${BASE}/api/projects/${PID}/ports/4321/shares`)
     ).json();
     if (!shares.url?.startsWith("/shared/"))
       throw new Error(`share url missing: ${JSON.stringify(shares)}`);
-    if (!hostFW) {
-      const viaShared = await page.request.get(`${BASE}${shares.url}index.html`);
+    sharedUrl = shares.url;
+  });
+  // …and it actually SERVES the app (not just renders a button). NOTE: auth
+  // mode is "none" here, so this exercises the OWNER branch of
+  // previewAllowed — the shared-guest branch is covered by the Go tests.
+  if (hostFW) {
+    skip("private link serves the app", "host firewall blocks host→bridge");
+  } else {
+    await check("private link serves the app", async () => {
+      const viaShared = await page.request.get(`${BASE}${sharedUrl}index.html`);
       if (!(await viaShared.text()).includes("e2e-app"))
         throw new Error("private link did not serve the app");
-    } else {
-      skip("private link serves the app", "host firewall blocks host→bridge");
-    }
+    });
+  }
+  await check("share remove revokes the link", async () => {
     await panel()
       .getByRole("button", { name: "Remove e2e-guest@gmail.com" })
       .click();
@@ -279,9 +292,7 @@ try {
       state: "detached",
       timeout: 5000,
     });
-    const afterRevoke = await page.request.get(
-      `${BASE}${shares.url}index.html`,
-    );
+    const afterRevoke = await page.request.get(`${BASE}${sharedUrl}index.html`);
     if (afterRevoke.status() !== 404)
       throw new Error(
         `revoked private link still serves: ${afterRevoke.status()}`,

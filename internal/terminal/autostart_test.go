@@ -7,9 +7,9 @@ func TestAutostartPaneCmd(t *testing.T) {
 		// NO automatic --continue rewrite (2026-08-30 review: all terminals
 		// of a project share one cwd, so auto-resume collided across them).
 		// Users opt in per terminal by setting the flag in their autostart.
-		"claude":            "bash -lc 'claude\nexec bash -l'",
-		"agy --continue":    "bash -lc 'agy --continue\nexec bash -l'",
-		"claude -p hi":      "bash -lc 'claude -p hi\nexec bash -l'",
+		"claude":             "bash -lc 'claude\nexec bash -l'",
+		"agy --continue":     "bash -lc 'agy --continue\nexec bash -l'",
+		"claude -p hi":       "bash -lc 'claude -p hi\nexec bash -l'",
 		"docker compose up":  "bash -lc 'docker compose up\nexec bash -l'",
 		"npm run dev &":      "bash -lc 'npm run dev &\nexec bash -l'",
 		"echo hi # note":     "bash -lc 'echo hi # note\nexec bash -l'",
