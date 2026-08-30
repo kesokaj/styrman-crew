@@ -227,15 +227,6 @@ export function Sidebar({
                 params.project === p.id ? "bg-bg-hover" : ""
               } ${p.state === "deleting" ? "pointer-events-none opacity-50" : ""}`}
               onClick={() => p.state !== "deleting" && openProject(p)}
-              // Keyboard parity for the primary row (v1.14.0 polish batch).
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
-                  e.preventDefault();
-                  if (p.state !== "deleting") openProject(p);
-                }
-              }}
             >
               <span
                 className={`h-1.5 w-1.5 shrink-0 rounded-full ${
@@ -249,7 +240,22 @@ export function Sidebar({
                 }`}
                 title={pending[p.id] ?? p.state}
               />
-              <span className="min-w-0 flex-1 truncate">{p.name}</span>
+              {/* The NAME is the keyboard target — putting role=button on
+                  the row nested the real action buttons inside it (axe
+                  nested-interactive, 2026-08-30 review). */}
+              <span
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    if (p.state !== "deleting") openProject(p);
+                  }
+                }}
+                className="min-w-0 flex-1 truncate rounded focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+              >
+                {p.name}
+              </span>
               {(() => {
                 const g = gitOf(p.id);
                 if (!g || p.state !== "running") return null;

@@ -133,7 +133,12 @@ func (s *Server) doBackup(user, projectID, projectName string, allowDeleting boo
 	}
 	mb, _ := json.MarshalIndent(meta, "", "  ")
 	if err := os.WriteFile(filepath.Join(dir, id+".json"), append(mb, '\n'), 0o600); err != nil {
-		s.logger.Warn("backup meta write failed", "project", projectID, "error", err)
+		// Without the sidecar the archive is invisible to listing, restore,
+		// AND retention — an unprunable orphan (2026-08-30 review). Fail the
+		// backup and remove the archive instead of reporting success.
+		os.Remove(final)
+		s.logger.Error("backup meta write failed — archive removed", "project", projectID, "error", err)
+		return backupMeta{}, errors.New("backup failed (metadata write)")
 	}
 	s.logger.Info("backup created", "user", user, "project", projectID, "backup", id, "bytes", meta.SizeBytes)
 	// Retention: keep the newest cfg.BackupKeep archives (manual and
@@ -207,6 +212,17 @@ func (s *Server) backupAllProjects() {
 			continue
 		}
 		for _, p := range sp.projects.List() {
+			// Freshness gate (2026-08-30 review): the boot pass fires ~1min
+			// after EVERY server restart, and keep-N retention shares one pool
+			// with manual backups — N quick restarts (routine during deploys)
+			// would rotate away all older restore points. Skip a project whose
+			// newest archive is younger than the cadence interval.
+			if all := readBackups(s.cfg.ProjectBackups(u.Name(), p.ID)); len(all) > 0 {
+				if t, err := time.Parse("20060102T150405Z", all[0].ID); err == nil &&
+					time.Since(t) < s.cfg.BackupCadence() {
+					continue
+				}
+			}
 			if _, err := s.doBackup(u.Name(), p.ID, p.Name, false); err != nil {
 				if !errors.Is(err, errBackupBusy) {
 					s.logger.Warn("cadence backup failed", "user", u.Name(), "project", p.ID, "error", err)
@@ -519,12 +535,26 @@ func (s *Server) clearTrash(trash string) {
 // seedFromBackup populates a FRESHLY CREATED project from another project's
 // backup (create-from-backup): extract the archive over the new dirs and copy
 // the source project's scoped env variables. Called from createProject before
-// the background boot; the new project's id differs, so nothing collides.
+// the background boot. It participates in the guard machinery (2026-08-30
+// review): the NEW project holds `restoring` so a cadence tick can't archive
+// the half-extracted tree (doBackup refuses) and boot paths 409; the SOURCE
+// holds `backingUp` so retention pruning — which only runs while that slot
+// is held — can't delete the archive mid-read.
 func (s *Server) seedFromBackup(ctx context.Context, user, newProjectID, srcProjectID, backupID string) error {
 	_ = ctx
 	if !backupIDRe.MatchString(backupID) {
 		return errors.New("invalid backup id")
 	}
+	relNew, ok := s.tryAcquire(s.restoring, user, newProjectID)
+	if !ok {
+		return errors.New("project is busy") // can't happen for a fresh id; defensive
+	}
+	defer relNew()
+	relSrc, ok := s.tryAcquire(s.backingUp, user, srcProjectID)
+	if !ok {
+		return errors.New("the source project is being backed up — retry in a moment")
+	}
+	defer relSrc()
 	arch := filepath.Join(s.cfg.ProjectBackups(user, srcProjectID), backupID+".tar.gz")
 	if _, err := os.Stat(arch); err != nil {
 		return errors.New("no such backup")

@@ -196,8 +196,19 @@ func shellQuote(s string) string {
 // for every already-open terminal (operator report, 2026-08-30). Async and
 // best-effort by design — a wedged guest must never block the harvest reply.
 func (s *Server) pushCredsToRunningProjects(user, guest string) {
+	// Single-flight per user (2026-08-30 review): repeated harvest clicks
+	// otherwise stack concurrent pushes — several profile.d shells writing
+	// the same guest credential files at once, and Docker-API load scaling
+	// with click rate. A push already in flight covers the new request's
+	// intent (it reads the broker's CURRENT state per exec).
+	if _, ok := s.tryAcquire(s.credPushing, user, "-"); !ok {
+		return
+	}
 	go func() {
 		defer func() {
+			s.deletingMu.Lock()
+			delete(s.credPushing, user+"/-")
+			s.deletingMu.Unlock()
 			if rec := recover(); rec != nil {
 				s.logger.Error("credential push panicked", "user", user, "panic", rec)
 			}
@@ -218,6 +229,7 @@ func (s *Server) pushCredsToRunningProjects(user, guest string) {
 			// A login shell that does nothing — profile.d does the work.
 			_, _, err := s.orch.Exec(ectx, st.ContainerID, orchestrator.ExecSpec{
 				User: guest,
+				Env:  []string{"HOME=/home/" + guest, "USER=" + guest},
 				Cmd:  []string{"bash", "-lc", ":"},
 			})
 			ecancel()

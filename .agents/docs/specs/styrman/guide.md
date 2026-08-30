@@ -337,8 +337,12 @@ rotated token, or a tool signed into inside a project instead of at setup).
   microVM volume snapshots instead, once that host tooling exists.)
 - **Terminals**: sidebar, per project; generated friendly names; ⏸ pause /
   ✕ delete / close all; per-terminal autostart command (pencil → dialog;
-  a BARE `claude`/`agy` autostart natively RESUMES its most recent
-  conversation on session re-creation — `--continue || fresh`, v1.14.0;
+  set the autostart to `claude --continue` / `agy --continue` and the
+  terminal RESUMES its conversation after a pause/VM restart (both CLIs
+  start fresh when there is nothing to resume). Deliberately OPT-IN per
+  terminal, not automatic: all terminals of a project share one cwd, so an
+  automatic rewrite made several terminals resume the SAME conversation
+  (2026-08-30 review);
   runs at session creation, then drops to the shell); transcripts land in
   History regardless; a status bar under the terminal shows live CPU/mem/
   disk/IP/uptime and synced-credential count (v1.6.0/v1.8.1).

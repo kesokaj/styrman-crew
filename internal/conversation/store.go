@@ -60,7 +60,7 @@ func NewStore(path string) (*Store, error) {
 		kept := recs[:0]
 		for _, r := range recs {
 			// Validate on load: ids flow into tmux session names and the
-			// agentSession UUID into a shell string (bridge.paneCommand), so
+			// autostart command into a shell string (autostartPaneCmd), so
 			// a hand-edited file must not break those invariants.
 			if ValidateID(r.ID) != nil {
 				slog.Warn("skipping invalid terminal record", "project", project, "id", r.ID)

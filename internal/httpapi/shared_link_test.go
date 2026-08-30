@@ -196,7 +196,7 @@ func TestProxySandboxHeader(t *testing.T) {
 	s := &Server{}
 	for _, sandbox := range []bool{true, false} {
 		rec := httptest.NewRecorder()
-		s.proxyFor(host, port, "", sandbox).ServeHTTP(rec, httptest.NewRequest("GET", "http://x/", nil))
+		s.proxyFor(host, port, "", "", sandbox).ServeHTTP(rec, httptest.NewRequest("GET", "http://x/", nil))
 		csp := rec.Header().Get("Content-Security-Policy")
 		if sandbox && !strings.Contains(csp, "sandbox") {
 			t.Errorf("sandbox=true: CSP missing (got %q)", csp)

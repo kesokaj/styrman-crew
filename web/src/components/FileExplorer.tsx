@@ -318,21 +318,6 @@ export function FileExplorer({
                 ? setPath(e.path)
                 : tryUI(async () => setOpen(await api.readFile(scope, e.path)))
             }
-            role="button"
-            tabIndex={0}
-            onKeyDown={(ev) => {
-              if (
-                (ev.key === "Enter" || ev.key === " ") &&
-                ev.target === ev.currentTarget
-              ) {
-                ev.preventDefault();
-                if (e.dir) setPath(e.path);
-                else
-                  void tryUI(async () =>
-                    setOpen(await api.readFile(scope, e.path)),
-                  );
-              }
-            }}
           >
             <span className="shrink-0 text-text-dim">
               {e.dir ? (
@@ -341,8 +326,22 @@ export function FileExplorer({
                 <FileIcon className="h-3.5 w-3.5" />
               )}
             </span>
+            {/* Keyboard target on the NAME, not the row: the row contains
+                real buttons/links (axe nested-interactive, 2026-08-30). */}
             <span
-              className={`min-w-0 flex-1 truncate ${e.dir ? "text-text" : "text-text-dim"}`}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(ev) => {
+                if (ev.key === "Enter" || ev.key === " ") {
+                  ev.preventDefault();
+                  if (e.dir) setPath(e.path);
+                  else
+                    void tryUI(async () =>
+                      setOpen(await api.readFile(scope, e.path)),
+                    );
+                }
+              }}
+              className={`min-w-0 flex-1 truncate rounded focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${e.dir ? "text-text" : "text-text-dim"}`}
             >
               {e.name}
               {e.symlink && <span className="text-accent"> ↗</span>}

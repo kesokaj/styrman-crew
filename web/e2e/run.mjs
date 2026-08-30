@@ -210,10 +210,17 @@ try {
   // checks when blocked — same treatment as integration.sh (v1.14.0).
   let hostFW = false;
   try {
-    const { execSync } = await import("node:child_process");
-    const ip = execSync(
-      `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' styrman-${PID}`,
-    )
+    // No shell (execFileSync) + strict PID shape: PID comes from the
+    // server's JSON, and BASE is caller-controlled — a hostile server must
+    // not get argv-splice command execution (2026-08-30 review).
+    if (!/^[0-9a-f-]{36}$/.test(PID)) throw new Error(`bad project id ${PID}`);
+    const { execFileSync } = await import("node:child_process");
+    const ip = execFileSync("docker", [
+      "inspect",
+      "-f",
+      "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+      `styrman-${PID}`,
+    ])
       .toString()
       .trim();
     await fetch(`http://${ip}:4321/index.html`, {
@@ -257,6 +264,8 @@ try {
       const viaShared = await page.request.get(`${BASE}${shares.url}index.html`);
       if (!(await viaShared.text()).includes("e2e-app"))
         throw new Error("private link did not serve the app");
+    } else {
+      skip("private link serves the app", "host firewall blocks host→bridge");
     }
     await panel()
       .getByRole("button", { name: "Remove e2e-guest@gmail.com" })

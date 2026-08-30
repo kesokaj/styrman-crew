@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
@@ -415,25 +416,40 @@ func (s *Server) gitSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	guest := sp.profile.GuestUser()
+	// Bounded fan-out under ONE overall deadline (2026-08-30 review): the
+	// serial version cost N×8s worst-case with no cap — a wedged VM stalled
+	// every other badge and stacked 30s polls behind it.
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 4)
 	items := []gitSummaryItem{}
 	for _, p := range sp.projects.List() {
-		st, serr := s.orch.Status(r.Context(), u.Username, p.ID)
-		if serr != nil || st.State != "running" {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
-		code, out, gerr := s.gitExec(ctx, st.ContainerID, guest, "/home/"+guest+"/projects/"+p.Dir,
-			"status", "--porcelain=v2", "--branch", "--untracked-files=all")
-		cancel()
-		if gerr != nil || code != 0 {
-			continue // not a repo / VM busy — no badge beats a wrong badge
-		}
-		v := gitStatusView{Files: []gitFile{}}
-		parseGitStatus(out, &v)
-		items = append(items, gitSummaryItem{
-			ProjectID: p.ID, Branch: v.Branch, Dirty: len(v.Files),
-			Ahead: v.Ahead, Behind: v.Behind,
-		})
+		wg.Add(1)
+		go func(p project.Project) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			st, serr := s.orch.Status(ctx, u.Username, p.ID)
+			if serr != nil || st.State != "running" {
+				return
+			}
+			code, out, gerr := s.gitExec(ctx, st.ContainerID, guest, "/home/"+guest+"/projects/"+p.Dir,
+				"status", "--porcelain=v2", "--branch", "--untracked-files=all")
+			if gerr != nil || code != 0 {
+				return // not a repo / VM busy — no badge beats a wrong badge
+			}
+			v := gitStatusView{Files: []gitFile{}}
+			parseGitStatus(out, &v)
+			mu.Lock()
+			items = append(items, gitSummaryItem{
+				ProjectID: p.ID, Branch: v.Branch, Dirty: len(v.Files),
+				Ahead: v.Ahead, Behind: v.Behind,
+			})
+			mu.Unlock()
+		}(p)
 	}
+	wg.Wait()
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }

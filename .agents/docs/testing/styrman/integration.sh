@@ -135,8 +135,21 @@ check "port detected" "curl -fsS ${API}/api/projects/${ID}/ports | grep -q 4100"
 # bridge IP. On a hardened host the v1.9.0 firewall DROPs host→bridge traffic
 # (production is unaffected — its containerized server sits on each bridge),
 # so probe reachability once and SKIP the proxy-path checks when blocked.
-VMIP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${CN}")
-if curl -m 3 -so /dev/null "http://${VMIP}:4100/i.html"; then HOSTFW=""; else HOSTFW=1; fi
+VMIP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${CN}" 2>/dev/null || true)
+HOSTFW=""
+if [ -z "${VMIP}" ]; then
+    bad "firewall probe: could not resolve the VM IP (not a firewall skip)"
+else
+    # NOT a bare statement: under set -e a failing curl outside a condition
+    # aborts the whole suite (it did — the probe's exit 28 killed the run).
+    RC=0
+    curl -m 3 -so /dev/null "http://${VMIP}:4100/i.html" || RC=$?
+    case "${RC}" in
+        0) HOSTFW="" ;;
+        28) HOSTFW=1 ;; # timeout = the v1.9.0 DROP — the only firewall signature
+        *) bad "firewall probe: curl exit ${RC} (in-guest server dead? NOT the firewall)" ;;
+    esac
+fi
 if [ -n "${HOSTFW}" ]; then
     skip "pretty URL proxies to the app (host firewall blocks host→bridge; prod unaffected)"
     skip "legacy proxy URL still works (host firewall)"

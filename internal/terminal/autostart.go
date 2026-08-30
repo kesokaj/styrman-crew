@@ -10,20 +10,14 @@ import "strings"
 // (review finding). Runs as the user in their own VM — quoting is for
 // correctness, not a security boundary.
 func autostartPaneCmd(cmd string) string {
-	// Native agent resume (ADR-011, unparked v1.14.0): the autostart runs on
-	// every session CREATION — including re-creations after a pause or VM
-	// restart — so a bare agent command would start a FRESH conversation and
-	// lose the agent's context each time. Both CLIs ship a --continue that
-	// resumes the most recent conversation for this workspace; fall back to
-	// a fresh start when there is nothing to resume (first open). Only the
-	// EXACT bare command is rewritten — flagged/composed commands are the
-	// user's own business.
-	switch strings.TrimSpace(cmd) {
-	case "claude":
-		cmd = "claude --continue || claude"
-	case "agy":
-		cmd = "agy --continue || agy"
-	}
+	// Native agent resume is DELIBERATELY NOT auto-applied (2026-08-30
+	// review, revising the v1.14.0 change): both CLIs key --continue on the
+	// most recent conversation FOR THE CWD, and every terminal of a project
+	// shares one cwd — an automatic rewrite made two terminals resume the
+	// SAME conversation after a VM restart. Users who want resume set their
+	// autostart to `claude --continue` / `agy --continue` themselves (both
+	// CLIs start fresh, exit 0, when there is nothing to resume — verified
+	// live), choosing per terminal instead of the platform guessing.
 	esc := strings.ReplaceAll(cmd, "'", `'\''`)
 	return "bash -lc '" + esc + "\nexec bash -l'"
 }

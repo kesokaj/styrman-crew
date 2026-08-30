@@ -99,6 +99,9 @@ type Server struct {
 	// notifCache memoizes each user's notifications scan for a few seconds
 	// (see listNotifications).
 	notifCache sync.Map
+	// credPushing (deletingMu, key user+"/-") single-flights the per-user
+	// credential push into running projects (see credharvest.go).
+	credPushing map[string]bool
 }
 
 // notifCacheEntry is one user's memoized notifications payload.
@@ -118,8 +121,9 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		spaces:     map[string]*userSpace{},
 		deleting:   map[string]bool{},
 		deleteErrs: map[string]string{},
-		restoring:  map[string]bool{},
-		backingUp:  map[string]bool{},
+		restoring:   map[string]bool{},
+		backingUp:   map[string]bool{},
+		credPushing: map[string]bool{},
 	}
 	// Public preview-link store (best-effort: a load failure degrades to
 	// no-links, never blocks server start).
@@ -838,8 +842,19 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		// keeps the files anyway and needs no net). Backups survive project
 		// deletion by design (restorable via create-from-backup).
 		if wipe {
-			if _, err := s.doBackup(u.Username, p.ID, p.Name, true); err != nil {
-				s.logger.Error("pre-wipe safety backup failed — wipe aborted", "project", p.Name, "error", err)
+			// A cadence/manual backup mid-tar makes doBackup answer busy — a
+			// pure scheduler collision, so retry briefly before aborting the
+			// wipe (2026-08-30 review). Other failures still fail closed.
+			var berr error
+			for attempt := 0; attempt < 4; attempt++ {
+				if _, berr = s.doBackup(u.Username, p.ID, p.Name, true); berr == nil ||
+					!errors.Is(berr, errBackupBusy) {
+					break
+				}
+				time.Sleep(10 * time.Second)
+			}
+			if berr != nil {
+				s.logger.Error("pre-wipe safety backup failed — wipe aborted", "project", p.Name, "error", berr)
 				s.deletingMu.Lock()
 				s.deleteErrs[key] = "pre-wipe safety backup failed — nothing deleted; retry"
 				s.deletingMu.Unlock()

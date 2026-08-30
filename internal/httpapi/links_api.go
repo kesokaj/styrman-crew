@@ -175,9 +175,20 @@ func (s *Server) serveLink(w http.ResponseWriter, r *http.Request) {
 	// WebSocket otherwise outlives revalidation forever (ReverseProxy only
 	// checks the token at the handshake). The deadline cancels the stream
 	// copy the moment the link expires.
-	ctx, cancel := context.WithDeadline(r.Context(), l.Expires)
-	defer cancel()
-	s.serveProxy(w, r.WithContext(ctx), l.Owner, l.Project, l.Port, prefix, !viaTokenHost)
+	// Public links always carry a TTL, but guard the zero case anyway — a
+	// zero Expires fed to WithDeadline is an ALREADY-EXPIRED context (the
+	// bug that killed every PRIVATE preview; see serveShared).
+	r2 := r
+	if !l.Expires.IsZero() {
+		ctx, cancel := context.WithDeadline(r.Context(), l.Expires)
+		defer cancel()
+		r2 = r.WithContext(ctx)
+	}
+	extPrefix := prefix
+	if viaTokenHost {
+		extPrefix = "" // the token host's visitor URL has no /link|/shared prefix
+	}
+	s.serveProxy(w, r2, l.Owner, l.Project, l.Port, prefix, extPrefix, !viaTokenHost)
 }
 
 // serveShared handles /shared/{token}/… — the email-gated share route, reached
@@ -228,9 +239,22 @@ func (s *Server) serveShared(w http.ResponseWriter, r *http.Request) {
 	// csrfGuard both exempt it, so an unsandboxed app there could call
 	// /api/... with the viewer's session (the N22 escalation).
 	_, viaTokenHost := r.Context().Value(origPathKey{}).(string)
-	ctx, cancel := context.WithDeadline(r.Context(), l.Expires)
-	defer cancel()
-	s.serveProxy(w, r.WithContext(ctx), l.Owner, l.Project, l.Port, prefix, !viaTokenHost)
+	// PRIVATE links have NO expiry — revocation is the share list, not time
+	// (links.EnsurePrivate never sets Expires). Feeding the zero time to
+	// WithDeadline yields an ALREADY-EXPIRED context that 502'd every private
+	// preview (2026-08-30 review, blocking). Bound only when a real expiry
+	// exists (today: never, for this kind — purely defensive).
+	r2 := r
+	if !l.Expires.IsZero() {
+		ctx, cancel := context.WithDeadline(r.Context(), l.Expires)
+		defer cancel()
+		r2 = r.WithContext(ctx)
+	}
+	extPrefix := prefix
+	if viaTokenHost {
+		extPrefix = "" // the token host's visitor URL has no /link|/shared prefix
+	}
+	s.serveProxy(w, r2, l.Owner, l.Project, l.Port, prefix, extPrefix, !viaTokenHost)
 }
 
 // isLinkPath reports whether a path is the public link route (authGuard exempts

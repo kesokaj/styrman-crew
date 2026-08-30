@@ -37,6 +37,12 @@ async function tick() {
   subs.forEach((fn) => fn(state));
 }
 
+// Catch up immediately when a hidden tab becomes visible (ticks are
+// suppressed while hidden), matching usePolled's behavior.
+function onVisible() {
+  if (!document.hidden) void tick();
+}
+
 /** Force an immediate refresh (after create/delete/stop/start/rename). */
 export function refreshProjects() {
   void tick();
@@ -50,12 +56,14 @@ export function useProjects(): ProjectsState & { refresh: () => void } {
     if (!timer) {
       void tick();
       timer = setInterval(tick, 5000);
+      document.addEventListener("visibilitychange", onVisible);
     }
     return () => {
       subs.delete(setS);
       if (subs.size === 0 && timer) {
         clearInterval(timer);
         timer = undefined;
+        document.removeEventListener("visibilitychange", onVisible);
       }
     };
   }, []);

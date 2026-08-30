@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# styrman-host-backup — whole-state restic backup of /var/lib/styrman to GCS
+# (operator decision 2026-08-29/30; the DISASTER-RECOVERY layer above the
+# in-app per-project backups, ADR-044). Committed under deploy/backup/ and
+# installed by host-setup.sh (R11: a reinstall must recreate this layer —
+# 2026-08-30 review, blocking).
+#
+# Prereqs (root-only, NEVER in the repo or inside /var/lib/styrman):
+#   /etc/styrman/backup-sa.json  — GCS service-account key (objectAdmin on
+#                                  the bucket only)
+#   /etc/styrman/restic-pw       — restic repo password (ALSO store it in a
+#                                  password manager: without it the backups
+#                                  are unreadable after host loss)
+# Optional override: /etc/styrman/backup.env may redefine GOOGLE_PROJECT /
+# RESTIC_REPOSITORY for a different bucket/project.
+set -euo pipefail
+export GOOGLE_PROJECT=driven-eft-h4it
+export RESTIC_REPOSITORY=gs:styrman-crew-backups-driven-eft-h4it:/
+[ -f /etc/styrman/backup.env ] && . /etc/styrman/backup.env
+export GOOGLE_APPLICATION_CREDENTIALS=/etc/styrman/backup-sa.json
+export RESTIC_PASSWORD_FILE=/etc/styrman/restic-pw
+restic backup /var/lib/styrman \
+  --exclude '/var/lib/styrman/homes/*/p/*/.dockerd' \
+  --exclude '/var/lib/styrman/backups' \
+  --tag styrman-state
+restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune

@@ -173,7 +173,7 @@ function LogsDialog({
   project: string;
   onClose: () => void;
 }) {
-  const { data, refresh } = usePolled(
+  const { data, refresh, error } = usePolled(
     () => api.projectLogs(project, 300),
     30000,
     [project],
@@ -190,7 +190,11 @@ function LogsDialog({
         </button>
       </div>
       <pre className="max-h-[60vh] overflow-auto rounded-lg bg-bg p-2 font-mono text-[11px] leading-snug">
-        {data ? data.logs || "(no output)" : "Loading…"}
+        {data
+          ? data.logs || "(no output)"
+          : error
+            ? `Could not load logs — retrying… (${error})`
+            : "Loading…"}
       </pre>
     </Dialog>
   );

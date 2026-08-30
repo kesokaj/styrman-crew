@@ -97,23 +97,42 @@ export function useModalA11y(
   panelRef: RefObject<HTMLDivElement | null>,
   onClose: () => void,
 ) {
+  // onClose through a ref: the mount effect below must run EXACTLY ONCE.
+  // Keying it on [onClose] (every caller passes a fresh closure per render)
+  // re-ran the whole effect per keystroke — yanking focus back to the first
+  // control (the file editor was unusable) and re-pushing this modal ABOVE a
+  // nested ConfirmDialog on the stack, deadlocking Escape (2026-08-30
+  // review, both blocking).
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
   useEffect(() => {
     const me = Symbol("dialog");
     dialogStack.push(me);
     const opener = document.activeElement as HTMLElement | null;
-    // Move focus into the panel (itself focusable as a fallback target).
+    // Move focus into the panel: an explicit [autofocus] child wins (the
+    // ConfirmDialog focuses its Confirm button), else the first focusable,
+    // else the panel itself.
     const panel = panelRef.current;
     if (panel) {
       panel.tabIndex = -1;
-      (panel.querySelector<HTMLElement>(FOCUSABLE) ?? panel).focus();
+      (
+        panel.querySelector<HTMLElement>("[autofocus]") ??
+        panel.querySelector<HTMLElement>(FOCUSABLE) ??
+        panel
+      ).focus();
     }
     const onKey = (e: KeyboardEvent) => {
       if (dialogStack[dialogStack.length - 1] !== me) return;
       if (e.key === "Escape") {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key === "Tab" && panelRef.current) {
+        // Leave Tab alone for widgets that consume it themselves (the
+        // embedded terminal: xterm handles + cancels its own keydowns).
+        if ((e.target as HTMLElement | null)?.closest?.(".xterm")) return;
         const items = [
           ...panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE),
         ];
@@ -136,8 +155,9 @@ export function useModalA11y(
       removeEventListener("keydown", onKey);
       opener?.focus?.();
     };
+    // Mount-only BY DESIGN (see onCloseRef above).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onClose]);
+  }, []);
 }
 
 /**

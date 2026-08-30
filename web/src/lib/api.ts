@@ -213,10 +213,32 @@ let reAuthTriggered = false;
 function reAuthOnce() {
   if (reAuthTriggered) return;
   reAuthTriggered = true;
+  // Cross-reload cap (2026-08-30 review): the module flag resets on reload,
+  // so a persistently broken auth path would loop forever. Two attempts in
+  // a minute → stop reloading and tell the user instead.
+  let attempts = 0;
+  try {
+    const raw = sessionStorage.getItem("reauth");
+    if (raw) {
+      const { n, at } = JSON.parse(raw) as { n: number; at: number };
+      if (Date.now() - at < 60_000) attempts = n;
+    }
+    sessionStorage.setItem(
+      "reauth",
+      JSON.stringify({ n: attempts + 1, at: Date.now() }),
+    );
+  } catch {
+    /* storage unavailable — fall through with attempts=0 */
+  }
   import("./toast").then(({ toast }) =>
-    toast("info", "Session expired — signing you back in…"),
+    toast(
+      attempts >= 2 ? "error" : "info",
+      attempts >= 2
+        ? "Session expired and sign-in keeps failing — reload manually or check the ingress"
+        : "Session expired — signing you back in…",
+    ),
   );
-  setTimeout(() => window.location.reload(), 1200);
+  if (attempts < 2) setTimeout(() => window.location.reload(), 1200);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

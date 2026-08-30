@@ -59,14 +59,20 @@ func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request) {
 	}
 	// Same-origin preview (served on the main styrman host): sandbox it so a
 	// malicious app can't script the SPA's API as the viewer.
-	s.serveProxy(w, r, ownerUser, p.ID, port, proxyPrefix(r), true)
+	pfx := proxyPrefix(r)
+	s.serveProxy(w, r, ownerUser, p.ID, port, pfx, pfx, true)
 }
 
 // serveProxy runs the shared preview-proxy path: attach in the owner's
 // namespace, resolve the guest IP, and reverse-proxy to it under prefix. Used
 // by both the authenticated port preview (sandbox=true, same origin as the SPA)
 // and the public link handler (sandbox=false, its own token subdomain origin).
-func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request, ownerUser, projectID string, port int, prefix string, sandbox bool) {
+// extPrefix is the VISITOR-FACING prefix for rewriting absolute Location
+// headers: equal to prefix on path-form routes, but EMPTY on a token host,
+// where previewHostRewrite already folded /link/<token> into the internal
+// path — using the internal prefix there doubled the token in redirects
+// (2026-08-30 review).
+func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request, ownerUser, projectID string, port int, prefix, extPrefix string, sandbox bool) {
 	if fresh := s.orch.EnsureSelfAttached(ownerUser, projectID); fresh {
 		// The attach just reconfigured this container's network namespace — this
 		// request's own connection may be doomed. Bounce the browser to the URL
@@ -91,7 +97,7 @@ func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request, ownerUser, p
 		writeErr(w, http.StatusBadGateway, fmt.Errorf("preview is not available right now"))
 		return
 	}
-	s.proxyFor(ip, port, prefix, sandbox).ServeHTTP(w, r)
+	s.proxyFor(ip, port, prefix, extPrefix, sandbox).ServeHTTP(w, r)
 }
 
 // cookieDomainRe matches the `; Domain=…` attribute of a Set-Cookie header.
@@ -123,8 +129,8 @@ func proxyPrefix(r *http.Request) string {
 
 // proxyFor caches one ReverseProxy per target (devbox pattern); entries are
 // cheap and pruned wholesale when stale.
-func (s *Server) proxyFor(ip string, port int, prefix string, sandbox bool) *httputil.ReverseProxy {
-	key := fmt.Sprintf("%s:%d:%t%s", ip, port, sandbox, prefix)
+func (s *Server) proxyFor(ip string, port int, prefix, extPrefix string, sandbox bool) *httputil.ReverseProxy {
+	key := fmt.Sprintf("%s:%d:%t:%s|%s", ip, port, sandbox, prefix, extPrefix)
 	s.proxyMu.Lock()
 	defer s.proxyMu.Unlock()
 	if s.proxies == nil {
@@ -188,7 +194,7 @@ func (s *Server) proxyFor(ip string, port int, prefix string, sandbox bool) *htt
 					if !strings.HasPrefix(lu.Path, "/") {
 						lu.Path = "/" + lu.Path
 					}
-					lu.Path = prefix + lu.Path
+					lu.Path = extPrefix + lu.Path
 					resp.Header.Set("Location", lu.String())
 				}
 			}

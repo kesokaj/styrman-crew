@@ -327,6 +327,32 @@ fi
 # image carries the dotfiles + agent harness and the entrypoint seeds each
 # PER-PROJECT home write-once — there is no shared home to initialize.)
 
+# ─── 8b. Host-layer backups (restic → GCS, R11 / ADR-044 DR layer) ──────────
+# Install the script + systemd units from the repo. The timer is enabled only
+# once the operator has provisioned the two root-only secrets (SA key + restic
+# password) — until then this prints instructions instead of half-working.
+install -m 755 "${SCRIPT_DIR}/backup/styrman-host-backup" /usr/local/bin/styrman-host-backup
+install -m 644 "${SCRIPT_DIR}/backup/styrman-backup.service" /etc/systemd/system/
+install -m 644 "${SCRIPT_DIR}/backup/styrman-backup.timer" /etc/systemd/system/
+systemctl daemon-reload
+if command -v restic >/dev/null 2>&1; then :; else apt-get install -y restic; fi
+if [ -f /etc/styrman/backup-sa.json ] && [ -f /etc/styrman/restic-pw ]; then
+    systemctl enable --now styrman-backup.timer
+    echo "==> host backups: daily restic timer enabled"
+else
+    cat <<'BK'
+==> host backups INSTALLED but NOT enabled — provision the secrets first:
+    1. GCS bucket + service account (objectAdmin on the bucket only); key to
+       /etc/styrman/backup-sa.json (root:root 600).
+    2. openssl rand -base64 24 > /etc/styrman/restic-pw (root:root 600) and
+       SAVE THAT PASSWORD in a password manager — without it the backups are
+       unreadable after host loss.
+    3. restic init (env in /usr/local/bin/styrman-host-backup), then:
+       systemctl enable --now styrman-backup.timer
+    Non-default bucket/project: override via /etc/styrman/backup.env.
+BK
+fi
+
 # ─── 9. Next steps (secrets can't be auto-filled) ────────────────────────────
 cat <<NEXT
 

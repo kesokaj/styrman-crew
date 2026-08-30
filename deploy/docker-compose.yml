@@ -34,6 +34,14 @@ services:
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - STYRMAN_JWT_KEY=${STYRMAN_JWT_KEY}
       - STYRMAN_INGRESS_TOKEN=${STYRMAN_INGRESS_TOKEN:-}
+      # Optional knobs the ingress also reads (2026-08-30 review: the
+      # allowlist had silently dropped them; empty == unset for its
+      # getEnvOrDefault, so defaults still apply when blank).
+      - AUTH_DOMAIN=${AUTH_DOMAIN:-}
+      - SHELL_DOMAIN=${SHELL_DOMAIN:-}
+      - APPS_DOMAIN=${APPS_DOMAIN:-}
+      - DEFAULT_RPS=${DEFAULT_RPS:-}
+      - CADDY_ADMIN=${CADDY_ADMIN:-}
       - CADDYFILE_BASE_PATH=/etc/caddy/Caddyfile.base
       # Public preview links (1.1): when set, the ingress adds a *.PREVIEW_DOMAIN
       # public wildcard → the server, plus its DNS + cert. Empty = feature off.

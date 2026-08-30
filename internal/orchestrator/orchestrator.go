@@ -469,7 +469,6 @@ func (o *Orchestrator) EnsureSelfAttached(user, project string) bool {
 	if v, ok := o.selfAttached.Load(project); ok && time.Since(v.(time.Time)) < time.Minute {
 		return false
 	}
-	defer o.selfAttached.Store(project, time.Now())
 	// Detached context: this must complete even if the triggering client
 	// gives up (a canceled attach left the network unreachable for the
 	// next request too — same failure class as the delete-handler bug).
@@ -498,10 +497,18 @@ func (o *Orchestrator) EnsureSelfAttached(user, project string) bool {
 	}
 	if err != nil {
 		if !strings.Contains(err.Error(), "already exists") {
+			// GENUINE failure: do NOT memoize — a stored memo made every call
+			// for the next 60s report "attached" while the proxy dialed
+			// through a bridge we never joined (2026-08-30 review). The next
+			// request retries the attach, exactly like the pre-memo code.
 			o.logger.Warn("self-attach to project network failed", "project", project, "error", err)
+			return false
 		}
+		// Already attached — a verified state worth memoizing.
+		o.selfAttached.Store(project, time.Now())
 		return false
 	}
+	o.selfAttached.Store(project, time.Now())
 	// Fresh attachment: give the new interface/route a moment to settle.
 	time.Sleep(500 * time.Millisecond)
 	return true
@@ -708,6 +715,10 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 			return "", fmt.Errorf("create network %s: %w", netName, err)
 		}
 		createdNetwork = true
+		// A FRESH bridge means any self-attach memo for this project points
+		// at a network that no longer exists — invalidate so the preview
+		// proxy re-attaches promptly (2026-08-30 review).
+		o.invalidateSelfAttach(netName)
 	}
 	// On a failed create, tear down the network ONLY if we created it here — an
 	// existing project bridge (e.g. a container re-create on a running project)
@@ -912,6 +923,12 @@ func (o *Orchestrator) WithProjectLock(user, project string, fn func() error) er
 	l.Lock()
 	defer l.Unlock()
 	return fn()
+}
+
+// invalidateSelfAttach drops the self-attach memo for the project owning a
+// bridge (netName is config.NetworkName(project), i.e. "sdb-"+project).
+func (o *Orchestrator) invalidateSelfAttach(netName string) {
+	o.selfAttached.Delete(strings.TrimPrefix(netName, "sdb-"))
 }
 
 // rootOpAllowed confines the root-assisted file ops to server state: StateDir
@@ -1150,6 +1167,9 @@ func (o *Orchestrator) recreateMissingNetwork(ctx context.Context, containerID, 
 		o.logger.Error("network reconnect failed", "network", netName, "error", err)
 		return false
 	}
+	// The recreated bridge is a new network: drop any stale self-attach memo
+	// so the server rejoins it for the preview proxy (2026-08-30 review).
+	o.invalidateSelfAttach(netName)
 	return true
 }
 
@@ -1205,26 +1225,17 @@ func (o *Orchestrator) Logs(ctx context.Context, project string, tail int) (stri
 	defer rc.Close()
 	var buf strings.Builder
 	// Docker multiplexes stdout/stderr into one stream; demux and interleave.
-	lw := &cappedWriter{b: &buf, max: 256 << 10}
-	_, _ = stdcopy.StdCopy(lw, lw, rc)
-	return buf.String(), nil
-}
-
-// cappedWriter drops writes beyond max (keeps the FIRST max bytes — the tail
-// option already bounds the window server-side).
-type cappedWriter struct {
-	b   *strings.Builder
-	max int
-}
-
-func (w *cappedWriter) Write(p []byte) (int, error) {
-	if w.b.Len() < w.max {
-		room := w.max - w.b.Len()
-		if len(p) > room {
-			w.b.Write(p[:room])
-		} else {
-			w.b.Write(p)
+	// The tail option bounds the window to <=2000 lines, so buffering it all
+	// and trimming the FRONT is safe — a first-N-bytes cap silently dropped
+	// the NEWEST lines, the ones a logs view exists for (2026-08-30 review).
+	_, _ = stdcopy.StdCopy(&buf, &buf, rc)
+	out := buf.String()
+	if max := 256 << 10; len(out) > max {
+		out = out[len(out)-max:]
+		if i := strings.IndexByte(out, '\n'); i >= 0 {
+			out = out[i+1:] // start at a line boundary
 		}
+		out = "… (older lines truncated) …\n" + out
 	}
-	return len(p), nil
+	return out, nil
 }

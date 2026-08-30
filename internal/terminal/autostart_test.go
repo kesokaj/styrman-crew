@@ -4,12 +4,12 @@ import "testing"
 
 func TestAutostartPaneCmd(t *testing.T) {
 	cases := map[string]string{
-		// Bare agent commands resume natively on session re-creation (ADR-011
-		// unparked, v1.14.0), falling back to a fresh start.
-		"claude": "bash -lc 'claude --continue || claude\nexec bash -l'",
-		"agy":    "bash -lc 'agy --continue || agy\nexec bash -l'",
-		// Flagged/composed agent commands are left untouched.
-		"claude -p hi": "bash -lc 'claude -p hi\nexec bash -l'",
+		// NO automatic --continue rewrite (2026-08-30 review: all terminals
+		// of a project share one cwd, so auto-resume collided across them).
+		// Users opt in per terminal by setting the flag in their autostart.
+		"claude":            "bash -lc 'claude\nexec bash -l'",
+		"agy --continue":    "bash -lc 'agy --continue\nexec bash -l'",
+		"claude -p hi":      "bash -lc 'claude -p hi\nexec bash -l'",
 		"docker compose up":  "bash -lc 'docker compose up\nexec bash -l'",
 		"npm run dev &":      "bash -lc 'npm run dev &\nexec bash -l'",
 		"echo hi # note":     "bash -lc 'echo hi # note\nexec bash -l'",

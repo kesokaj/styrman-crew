@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily styrman state backup
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=15m
+Persistent=true
+[Install]
+WantedBy=timers.target

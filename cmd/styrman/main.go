@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -372,18 +373,32 @@ func pruneTranscripts(cfg *config.Config, logger *slog.Logger) {
 			continue
 		}
 		for _, p := range projects {
-			logs := filepath.Join(cfg.HomesDir, u.Name(), "p", p.Name(), ".styrman", "logs")
-			_ = filepath.Walk(logs, func(path string, fi os.FileInfo, err error) error {
-				if err != nil || !fi.Mode().IsRegular() {
+			// The per-project home is the GUEST'S writable mount — a guest
+			// could symlink ~/.styrman (or logs/, or a file) at another
+			// tenant's tree or the host, and a naive walk would let the
+			// (root-in-prod) janitor delete THROUGH it (2026-08-30 review,
+			// blocking). os.Root confines every path component: symlinks
+			// that escape the project home are refused, not followed.
+			home, rerr := os.OpenRoot(filepath.Join(cfg.HomesDir, u.Name(), "p", p.Name()))
+			if rerr != nil {
+				continue
+			}
+			_ = fs.WalkDir(home.FS(), ".styrman/logs", func(rel string, d fs.DirEntry, err error) error {
+				if err != nil || d.IsDir() {
 					return nil //nolint:nilerr // best-effort janitor
 				}
+				fi, ierr := d.Info()
+				if ierr != nil || !fi.Mode().IsRegular() {
+					return nil
+				}
 				if fi.ModTime().Before(cutoff) {
-					if os.Remove(path) == nil {
+					if home.Remove(rel) == nil {
 						pruned++
 					}
 				}
 				return nil
 			})
+			home.Close()
 		}
 	}
 	if pruned > 0 {

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/docker/docker/errdefs"
+
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 )
 
@@ -118,7 +120,8 @@ func parseStats(out string, v *projectStatsView) {
 
 // projectLogs returns the tail of the project's microVM console logs
 // (entrypoint boot, dockerd, kernel) — the ops-panel logs view (v1.14.0).
-// Owner-scoped like every project route; ?tail=N caps at 2000 (default 300).
+// Owner-scoped like every project route; ?tail=N — values outside 1..2000
+// fall back to the 300 default.
 func (s *Server) projectLogs(w http.ResponseWriter, r *http.Request) {
 	_, _, p, err := s.getProjectFor(r)
 	if err != nil {
@@ -128,7 +131,12 @@ func (s *Server) projectLogs(w http.ResponseWriter, r *http.Request) {
 	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
 	out, err := s.orch.Logs(r.Context(), p.ID, tail)
 	if err != nil {
-		writeErr(w, http.StatusConflict, errors.New("no logs — is the project created?"))
+		if errdefs.IsNotFound(err) {
+			writeErr(w, http.StatusNotFound, errors.New("no container yet — start the project first"))
+			return
+		}
+		s.logger.Error("project logs failed", "project", p.ID, "error", err)
+		writeErr(w, http.StatusBadGateway, errors.New("could not read logs"))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"logs": out})
