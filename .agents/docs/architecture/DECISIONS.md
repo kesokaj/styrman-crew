@@ -1311,3 +1311,65 @@ Source: internal/credstore/, internal/credbroker/,
 image/configs/styrman-credentials.sh. Verification:
 .agents/docs/changes/2026-08-30-security-review-remediation-v1.9.0.md
 (commit 8ca6368).
+
+---
+
+## ADR-041: Setup terminal clean-exit trap + allowlisted per-tool targeting + harvest-without-teardown (2026-08-30)
+
+**Context.** Two first-run-setup problems. (1) Pressing Ctrl+C in the setup
+terminal restarted `styrman-setup` instead of exiting: SIGINT killed the bash
+script as a signaled exit, the tmux session ended, the browser terminal
+treated the socket close as transient and reconnected, and
+`tmux new-session -A` (ADR-002's attach-or-create pattern) recreated the
+already-ended session — so the script ran again from the top, looking like a
+restart loop. (2) Adding a single credential after setup (e.g. signing into
+gcloud later) required re-running the entire onboarding flow; the greyed-out
+credential rows in Settings weren't actionable, so there was no path to fix
+or add one tool without redoing everything.
+
+**Decision.** `image/configs/styrman-setup` adds
+`trap 'printf "\n"; exit 0' INT`, so Ctrl+C now always exits 0 instead of
+dying to a signal — the pane ends, the bridge's close-4000 signal fires, and
+the UI finalizes cleanly with no reconnect-into-recreated-session loop. The
+script is also refactored into per-tool functions behind a dispatch:
+`styrman-setup` (no args) still runs the full flow unchanged;
+`styrman-setup <tool>...` (`git|ssh|gh|gcloud|claude|agy`) runs only that
+tool's step (ensuring git identity first when the target isn't `git`/`ssh`).
+`internal/terminal/bridge.go`'s `ServeSetup` (`GET /ws/setup`) accepts an
+optional `?tool=` param to select a targeted run, given its own tmux session
+(`styrman-setup-<tool>`, distinct from the main `styrman-setup` session).
+Because that value is interpolated directly into the shell command, it is
+strictly allowlisted through a new `setupTool()` helper — only the six known
+tool names pass; anything else (shell metacharacters, spaces, command
+substitution) resolves to `""` (full flow), covered by
+`internal/terminal/setuptool_test.go`'s `TestSetupToolAllowlist`. A new
+`POST /api/setup/harvest` (`internal/httpapi/setup.go`) seeds the credential
+broker from the RUNNING setup VM without marking setup done and without
+tearing the VM down, sharing its extraction logic with `finishSetup`
+(ADR-034) via a common `seedBrokerFromSetup(user)` helper. On the frontend, a
+new `ManageCredsModal` (`web/src/routes/settings.tsx`) makes the grey/red
+credential rows clickable: it boots the setup VM once, runs
+`styrman-setup <tool>` in a lazy-loaded embedded terminal
+(`TerminalPane`, carrying the tool in its reconnect key), harvests on each
+tool's pane exit while keeping the VM up so several tools can be added in one
+sitting, and only tears the VM down on "Done". `web/src/routes/setup.tsx`'s
+`onExited` is now status-aware — it finalizes via `POST /api/setup/done` only
+when git and ssh are both present, otherwise it `DELETE`s the setup session
+and leaves the banner up, so an incomplete run (e.g. Ctrl+C before git/ssh)
+is never marked done.
+
+**Consequences.** Ctrl+C in the setup terminal now returns control to the
+user cleanly and can never trigger the restart loop again. A single missing
+or stale credential can be added from Settings without rerunning full
+onboarding, and the setup VM stays up across several such adds in one
+session rather than being torn down and reprovisioned per tool. The
+`?tool=` value being interpolated into a shell command makes the allowlist a
+hard security boundary, not a UX nicety — `setupTool()` must stay exhaustive
+if a seventh tool is ever added.
+
+Source: image/configs/styrman-setup, internal/terminal/bridge.go,
+internal/terminal/setuptool_test.go, internal/httpapi/setup.go,
+internal/httpapi/server.go, web/src/lib/api.ts,
+web/src/components/TerminalPane.tsx, web/src/routes/settings.tsx,
+web/src/routes/setup.tsx. Verification:
+.agents/docs/changes/2026-08-30-setup-terminal-robustness-v1.10.0.md

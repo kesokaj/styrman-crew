@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
-# styrman-setup — one-time-per-user onboarding, run in the first-run setup VM
-# (also re-runnable in any project to check status or sign in to more tools).
+# styrman-setup — onboarding, run in the first-run setup VM (also re-runnable in
+# any project to check status or sign in to more tools).
 # REQUIRED: git identity + ssh key. Everything else (GitHub, Google Cloud,
-# Claude, Antigravity) is OPTIONAL — skip it and rerun styrman-setup whenever.
-# Finishing setup harvests whatever is signed in into the broker, which keeps
-# every project current automatically (R3/ADR-032/ADR-034). Idempotent.
+# Claude, Antigravity) is OPTIONAL. Finishing setup harvests whatever is signed
+# in into the broker, which keeps every project current (R3/ADR-032/ADR-034).
+#
+# Usage:
+#   styrman-setup                 # full flow (required git/ssh + all optionals)
+#   styrman-setup gcloud claude   # just those tool(s) — for adding one later
+#
+# Idempotent: every step checks before it changes anything.
 set -uo pipefail
+
+# Ctrl+C exits cleanly (code 0) instead of dying by signal — a signal-kill left
+# the tmux session in a state the terminal reconnected to and RESTARTED setup.
+# A clean exit ends the session, the pane gets close 4000, and the UI goes back.
+trap 'printf "\n"; exit 0' INT
 
 BOLD=$'\033[1m'; DIM=$'\033[2m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RESET=$'\033[0m'
 ok()   { echo "  ${GREEN}✔${RESET} $*"; }
@@ -19,69 +29,73 @@ ask_optional() {
     case "${ans}" in [yY]*) return 0 ;; *) return 1 ;; esac
 }
 
-echo "${BOLD}styrman setup — sign in once, use everywhere${RESET}"
-echo "${DIM}Required: git identity + ssh key. GitHub, Google Cloud, Claude and"
-echo "agy are optional — skip any of them and rerun styrman-setup later.${RESET}"
-
-step "Required · Git identity"
-if git config --global user.email >/dev/null 2>&1; then
-    ok "git: $(git config --global user.name) <$(git config --global user.email)>"
-else
+setup_git() {
+    step "Required · Git identity"
+    if git config --global user.email >/dev/null 2>&1; then
+        ok "git: $(git config --global user.name) <$(git config --global user.email)>"
+        return
+    fi
     todo "no git identity yet"
-    GIT_NAME=""; GIT_EMAIL=""
+    local GIT_NAME="" GIT_EMAIL=""
     # Loop until both are non-empty. Under a non-interactive exec, read returns
     # immediately with empty values — bail with guidance instead of saving an
     # empty identity that makes every commit fail (N32).
     while [ -z "${GIT_NAME}" ] || [ -z "${GIT_EMAIL}" ]; do
-        [ -t 0 ] || { todo "run styrman-setup in an interactive terminal to set git identity"; break; }
+        [ -t 0 ] || { todo "run styrman-setup in an interactive terminal to set git identity"; return; }
         [ -z "${GIT_NAME}" ]  && read -rp "  your name: "  GIT_NAME
         [ -z "${GIT_EMAIL}" ] && read -rp "  your email: " GIT_EMAIL
     done
-    if [ -n "${GIT_NAME}" ] && [ -n "${GIT_EMAIL}" ]; then
-        git config --global user.name "${GIT_NAME}"
-        git config --global user.email "${GIT_EMAIL}"
-        git config --global init.defaultBranch main
-        ok "git identity saved to ~/.gitconfig"
-    fi
-fi
+    git config --global user.name "${GIT_NAME}"
+    git config --global user.email "${GIT_EMAIL}"
+    git config --global init.defaultBranch main
+    ok "git identity saved to ~/.gitconfig"
+}
 
-step "Required · SSH key (for git over ssh)"
-# The key is YOURS — comment it with your identity, not the platform's.
-KEY_COMMENT="$(git config --global user.email 2>/dev/null || true)"
-[ -n "${KEY_COMMENT}" ] || KEY_COMMENT="$(whoami)@styrman"
-if [ -f ~/.ssh/id_ed25519 ]; then
-    CURRENT_COMMENT=$(ssh-keygen -l -f ~/.ssh/id_ed25519.pub 2>/dev/null | sed -E 's/^[0-9]+ [^ ]+ //; s/ \([A-Z0-9]+\)$//')
-    if [ "${CURRENT_COMMENT}" = "styrman" ]; then
-        if ssh-keygen -c -C "${KEY_COMMENT}" -f ~/.ssh/id_ed25519 >/dev/null 2>&1; then
-            ok "key comment updated to ${KEY_COMMENT}"
+setup_ssh() {
+    step "Required · SSH key (for git over ssh)"
+    # The key is YOURS — comment it with your identity, not the platform's.
+    local KEY_COMMENT CURRENT_COMMENT
+    KEY_COMMENT="$(git config --global user.email 2>/dev/null || true)"
+    [ -n "${KEY_COMMENT}" ] || KEY_COMMENT="$(whoami)@styrman"
+    if [ -f ~/.ssh/id_ed25519 ]; then
+        CURRENT_COMMENT=$(ssh-keygen -l -f ~/.ssh/id_ed25519.pub 2>/dev/null | sed -E 's/^[0-9]+ [^ ]+ //; s/ \([A-Z0-9]+\)$//')
+        if [ "${CURRENT_COMMENT}" = "styrman" ]; then
+            if ssh-keygen -c -C "${KEY_COMMENT}" -f ~/.ssh/id_ed25519 >/dev/null 2>&1; then
+                ok "key comment updated to ${KEY_COMMENT}"
+            else
+                todo "could not update key comment (passphrase-protected?) — key kept as-is"
+            fi
         else
-            todo "could not update key comment (passphrase-protected?) — key kept as-is"
+            ok "key exists: ~/.ssh/id_ed25519 (${CURRENT_COMMENT})"
         fi
     else
-        ok "key exists: ~/.ssh/id_ed25519 (${CURRENT_COMMENT})"
+        ssh-keygen -t ed25519 -N "" -C "${KEY_COMMENT}" -f ~/.ssh/id_ed25519 >/dev/null
+        ok "generated ~/.ssh/id_ed25519 (${KEY_COMMENT})"
     fi
-else
-    ssh-keygen -t ed25519 -N "" -C "${KEY_COMMENT}" -f ~/.ssh/id_ed25519 >/dev/null
-    ok "generated ~/.ssh/id_ed25519 (${KEY_COMMENT})"
-fi
-echo "  public key (add to https://github.com/settings/keys if not done):"
-echo "    $(cat ~/.ssh/id_ed25519.pub)"
+    echo "  public key (add to https://github.com/settings/keys if not done):"
+    echo "    $(cat ~/.ssh/id_ed25519.pub)"
+}
 
-step "Optional · GitHub CLI (gh)"
-if gh auth status >/dev/null 2>&1; then
-    ok "gh: logged in as $(gh api user --jq .login 2>/dev/null || echo '?')"
-elif ask_optional "sign in to GitHub now?"; then
-    todo "A one-time code and a URL appear below — CLICK the URL, enter the code, authorize."
-    gh auth login --hostname github.com --git-protocol ssh --web \
-        || todo "gh login skipped/failed — rerun styrman-setup anytime"
-else
-    todo "skipped — rerun styrman-setup anytime"
-fi
+setup_gh() {
+    step "Optional · GitHub CLI (gh)"
+    if gh auth status >/dev/null 2>&1; then
+        ok "gh: logged in as $(gh api user --jq .login 2>/dev/null || echo '?')"
+    elif ask_optional "sign in to GitHub now?"; then
+        todo "A one-time code and a URL appear below — CLICK the URL, enter the code, authorize."
+        gh auth login --hostname github.com --git-protocol ssh --web \
+            || todo "gh login skipped/failed — rerun styrman-setup anytime"
+    else
+        todo "skipped — rerun styrman-setup anytime"
+    fi
+}
 
-step "Optional · Google Cloud (gcloud)"
-if ! command -v gcloud >/dev/null 2>&1; then
-    todo "gcloud not installed in this project — skipping"
-else
+setup_gcloud() {
+    step "Optional · Google Cloud (gcloud)"
+    if ! command -v gcloud >/dev/null 2>&1; then
+        todo "gcloud not installed in this project — skipping"
+        return
+    fi
+    local GACCT
     GACCT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -1)"
     if [ -n "${GACCT}" ]; then
         ok "gcloud account: ${GACCT}"
@@ -93,7 +107,7 @@ else
         todo "gcloud account skipped — rerun styrman-setup anytime"
     fi
     # Application Default Credentials — separate from the account; this is what
-    # terraform and the client libraries use, and what the broker syncs.
+    # terraform and the client libraries use.
     if gcloud auth application-default print-access-token >/dev/null 2>&1; then
         ok "gcloud ADC: present (terraform + client libraries)"
     elif ask_optional "set up Application Default Credentials (gcloud auth application-default login) now?"; then
@@ -103,30 +117,65 @@ else
     else
         todo "ADC skipped — rerun styrman-setup anytime"
     fi
-fi
+}
 
-step "Optional · Claude Code"
-if [ -f ~/.claude/.credentials.json ] || claude auth status 2>/dev/null | grep -qi 'logged in'; then
-    ok "claude: credentials present (~/.claude)"
-elif ask_optional "sign in to Claude now?"; then
-    todo "claude prints a sign-in URL — CLICK it, approve, paste the code back; /exit when done."
-    claude || true
+setup_claude() {
+    step "Optional · Claude Code"
+    if [ -f ~/.claude/.credentials.json ] || claude auth status 2>/dev/null | grep -qi 'logged in'; then
+        ok "claude: credentials present (~/.claude)"
+    elif ask_optional "sign in to Claude now?"; then
+        todo "claude prints a sign-in URL — CLICK it, approve, paste the code back; /exit when done."
+        claude || true
+    else
+        todo "skipped — rerun styrman-setup anytime"
+    fi
+}
+
+setup_agy() {
+    step "Optional · Antigravity CLI (agy)"
+    if [ -f ~/.gemini/antigravity-cli/antigravity-oauth-token ]; then
+        ok "agy: credentials present"
+    elif ask_optional "sign in to Antigravity (agy) now?"; then
+        todo "agy prints a Google sign-in URL — CLICK it, approve, paste the code back, then quit agy."
+        agy || true
+    else
+        todo "skipped — rerun styrman-setup anytime"
+    fi
+}
+
+run_one() {
+    case "$1" in
+        git)       setup_git ;;
+        ssh)       setup_ssh ;;
+        gh|github) setup_gh ;;
+        gcloud)    setup_gcloud ;;
+        claude)    setup_claude ;;
+        agy)       setup_agy ;;
+        *) echo "unknown tool: $1 (git|ssh|gh|gcloud|claude|agy)" >&2 ;;
+    esac
+}
+
+if [ "$#" -gt 0 ]; then
+    # Targeted: sign in to just the named tool(s) — used by the "add credential"
+    # flow in Settings. Git identity is a prerequisite for a usable key comment,
+    # so ensure it quietly first when the target isn't git/ssh itself.
+    case " $* " in *" git "*|*" ssh "*) ;; *) git config --global user.email >/dev/null 2>&1 || setup_git ;; esac
+    for t in "$@"; do run_one "$t"; done
+    step "Done"
+    echo "Signed-in tools are shared with every project through the broker."
 else
-    todo "skipped — rerun styrman-setup anytime"
+    echo "${BOLD}styrman setup — sign in once, use everywhere${RESET}"
+    echo "${DIM}Required: git identity + ssh key. GitHub, Google Cloud, Claude and"
+    echo "agy are optional — skip any of them and rerun styrman-setup later.${RESET}"
+    setup_git
+    setup_ssh
+    setup_gh
+    setup_gcloud
+    setup_claude
+    setup_agy
+    step "Done"
+    echo "Git and ssh are set up; any optional tools you signed in to are shared with"
+    echo "every project — current and future — automatically through the broker."
+    echo "Rerun ${BOLD}styrman-setup${RESET} anytime to check status or sign in to the rest;"
+    echo "${BOLD}Settings → Credentials${RESET} shows what's shared and can re-import."
 fi
-
-step "Optional · Antigravity CLI (agy)"
-if [ -f ~/.gemini/antigravity-cli/antigravity-oauth-token ]; then
-    ok "agy: credentials present"
-elif ask_optional "sign in to Antigravity (agy) now?"; then
-    todo "agy prints a Google sign-in URL — CLICK it, approve, paste the code back, then quit agy."
-    agy || true
-else
-    todo "skipped — rerun styrman-setup anytime"
-fi
-
-step "Done"
-echo "Git and ssh are set up; any optional tools you signed in to are shared with"
-echo "every project — current and future — automatically through the broker."
-echo "Rerun ${BOLD}styrman-setup${RESET} anytime to check status or sign in to the rest;"
-echo "${BOLD}Settings → Credentials${RESET} shows what's shared and can re-import."

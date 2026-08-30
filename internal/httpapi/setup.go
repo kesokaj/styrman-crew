@@ -76,6 +76,37 @@ func (s *Server) startSetup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"state": "running"})
 }
 
+// seedBrokerFromSetup harvests every credential the user just signed into in
+// the running setup VM straight into the broker store, so every project (present
+// and future) pulls them on login — no "sign in again inside a project" step.
+// The setup VM mounts the user's shared base home (orchestrator.EnsureSetup).
+// Best-effort: a disabled broker or an empty harvest returns an empty report,
+// never an error — it must never block completing or extending setup. The VM
+// must be running (started via /api/setup/start or an attached /ws/setup).
+func (s *Server) seedBrokerFromSetup(user string) map[string]string {
+	if s.creds == nil {
+		return map[string]string{}
+	}
+	hctx, hcancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer hcancel()
+	report := s.harvestCredentials(hctx, user, config.SetupContainer(user), s.guestUserFor(user))
+	s.logger.Info("setup seeded the credential broker", "user", user, "report", report)
+	return report
+}
+
+// harvestSetup seeds the broker from the RUNNING setup VM without marking setup
+// done or tearing the VM down — the "add one more credential later" flow keeps
+// the VM up so the user can sign in to several tools in one sitting, harvesting
+// after each. Returns the per-tool report so the UI refreshes what's now shared.
+func (s *Server) harvestSetup(w http.ResponseWriter, r *http.Request) {
+	u, _, err := s.who(r)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"report": s.seedBrokerFromSetup(u.Username)})
+}
+
 // finishSetup records completion in the user's home and tears their VM down.
 func (s *Server) finishSetup(w http.ResponseWriter, r *http.Request) {
 	u, _, err := s.who(r)
@@ -83,20 +114,8 @@ func (s *Server) finishSetup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	// Seed the broker from the setup VM BEFORE tearing it down. The setup VM
-	// mounts the user's shared base home (orchestrator.EnsureSetup), so
-	// finishing setup harvests every credential the user just signed into
-	// straight into the broker store — every later project
-	// then pulls them on login, with no separate "sign in again inside a
-	// project" step. Best-effort: a broker that's disabled or a harvest that
-	// finds nothing must never block completing setup.
-	if s.creds != nil {
-		hctx, hcancel := context.WithTimeout(context.Background(), 90*time.Second)
-		guest := s.guestUserFor(u.Username)
-		report := s.harvestCredentials(hctx, u.Username, config.SetupContainer(u.Username), guest)
-		hcancel()
-		s.logger.Info("setup seeded the credential broker", "user", u.Username, "report", report)
-	}
+	// Seed the broker from the setup VM BEFORE tearing it down.
+	s.seedBrokerFromSetup(u.Username)
 	// Confined write: refuses to follow a symlinked marker planted at
 	// another tenant's file (was an arbitrary-overwrite vector).
 	stamp := []byte(time.Now().UTC().Format(time.RFC3339) + "\n")

@@ -5,11 +5,12 @@ metadata:
   type: project
 ---
 
-super-devbox's `architecture/DECISIONS.md` ADRs (through ADR-040,
+super-devbox's `architecture/DECISIONS.md` ADRs (through ADR-041,
 2026-08-30) follow a consistent local style, slightly different per era but
-converged by ADR-022+. Latest entry as of 2026-08-30 is **ADR-040**; confirm
-the next-free number by reading the file's tail before appending — it has
-been renumbered upward multiple sessions in a row (025→034→038→040).
+converged by ADR-022+. Latest entry as of 2026-08-30 (setup-terminal
+Ctrl+C/targeted-tool ADR) is **ADR-041**; confirm the next-free number by
+reading the file's tail before appending — it has climbed within the same
+day multiple times (038→039→040→041 all landed 2026-08-30).
 
 **Tool-access note (2026-08-30):** the changelog subagent has sometimes run
 in a harness with only Read/Grep/Glob/Edit/Write — no Bash/git tool, so
@@ -44,9 +45,16 @@ were confirmed this way rather than via a real diff.
   "Verification: .agents/docs/testing/...") is common when the ADR is
   significant enough to want a code pointer — not mandatory but matches
   recent entries (ADR-015, 024, 025).
-- Repo has no `.git` (not a git repo per the environment info at time of
-  writing) — do not expect `git log` to corroborate ADR dates/authorship;
-  rely on reading the actual code + existing changelog entries in
+- The repo became a real git repo at some point after 2026-08-30's security
+  remediation (env now reports "Is directory a git repo: Yes", with real
+  commit history e.g. `d181249 docs: handoff — v1.5.2...`) — this reverses
+  the earlier note below that it had no `.git`. `git log`/`git show` may now
+  be usable for corroboration when the harness's tool access includes Bash;
+  don't assume it's unavailable without checking first. The historical note
+  that follows (no `.git`, Read/Grep/Glob/Edit/Write-only harness) describes
+  an earlier state of the project and is kept for context, not as current
+  fact: do not expect `git log` to corroborate ADR dates/authorship in that
+  regime; rely on reading the actual code + existing changelog entries in
   `.agents/docs/changes/` instead, which often predate/motivate an ADR (e.g.
   `2026-08-27-public-ttl-links-ingress.md` → ADR-025).
 

@@ -79,6 +79,28 @@ several via an internal `keyHandlers` array, first `false` wins).
   through. Inert on layouts where those keys aren't dead (e.g. US), and
   falls through untouched for dead keys it doesn't map (v1.8.8/v1.8.9).
 
+## Setup terminal (`/ws/setup`)
+
+```
+GET /ws/setup[?tool=git|ssh|gh|gcloud|claude|agy]
+```
+
+The user's hidden onboarding VM terminal — same wire protocol as above.
+`tool` is optional and STRICTLY allowlisted (any other value is ignored,
+falling back to the full `styrman-setup` flow), because it's interpolated
+into `bash -lc 'styrman-setup <tool>'`; a targeted run gets its own tmux
+session (`styrman-setup-<tool>`) so signing into one tool never replaces
+another that's already running. This is what Settings → Credentials' "add a
+credential" flow uses (guide.md) (v1.10.0).
+
+Ctrl+C in this pane is a CLEAN exit (v1.10.0): `styrman-setup` traps SIGINT
+and calls `exit 0` instead of dying by signal. Previously a signal-kill left
+the tmux session in a state the browser terminal's reconnect (`tmux
+new-session -A`) picked back up, which RESTARTED `styrman-setup` from the
+top. Now the pane simply ends → close **4000**, exactly like the script
+finishing on its own — the frontend finalizes or harvests (api.md's Setup
+section) instead of silently reconnecting into a restarted script.
+
 ## Close codes
 
 | Code | Name | Client behavior |

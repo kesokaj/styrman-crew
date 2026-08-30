@@ -462,6 +462,14 @@ export const api = {
   setupStatus: () => request<SetupStatus>("/api/setup/status"),
   setupStart: () => request<void>("/api/setup/start", { method: "POST" }),
   setupDone: () => request<void>("/api/setup/done", { method: "POST" }),
+  // Seed the broker from the RUNNING setup VM without marking done or tearing
+  // it down — the "add one more credential later" flow (Settings → Credentials).
+  setupHarvest: () =>
+    request<{ report: CredImportReport }>("/api/setup/harvest", {
+      method: "POST",
+    }),
+  // Tear the setup VM down without marking setup done (leave / cancel).
+  setupDiscard: () => request<void>("/api/setup", { method: "DELETE" }),
 };
 
 /** Shareable link to a port exposed inside a project's microVM. */
@@ -470,14 +478,19 @@ export const portUrl = (project: string, term: string, port: number) =>
 
 /** Terminal WebSocket URL. */
 export function termSocketUrl(
-  target: { kind: "term"; project: string; id: string } | { kind: "setup" },
+  target:
+    | { kind: "term"; project: string; id: string }
+    | { kind: "setup"; tool?: string },
   cols: number,
   rows: number,
 ): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const size = `cols=${cols}&rows=${rows}`;
-  if (target.kind === "setup")
-    return `${proto}://${location.host}/ws/setup?${size}`;
+  if (target.kind === "setup") {
+    // Optional targeted tool (?tool=gcloud) → styrman-setup runs just that step.
+    const tool = target.tool ? `&tool=${encodeURIComponent(target.tool)}` : "";
+    return `${proto}://${location.host}/ws/setup?${size}${tool}`;
+  }
   return `${proto}://${location.host}/ws/term/${target.project}/${target.id}?${size}`;
 }
 

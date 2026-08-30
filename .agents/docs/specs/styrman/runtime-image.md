@@ -120,7 +120,23 @@ Steps, in order:
 
 Idempotent, interactive script run in the hidden setup VM (also re-runnable
 in any project to check status or sign in to more tools). Split into
-REQUIRED and OPTIONAL steps (v1.8.0):
+REQUIRED and OPTIONAL steps (v1.8.0), with two invocation modes (v1.10.0):
+
+- `styrman-setup` — the full flow: required git identity + ssh key, then
+  each optional tool in turn. Unchanged behavior.
+- `styrman-setup <tool>...` — run ONLY the named step(s) (`git|ssh|gh|
+  gcloud|claude|agy`). When the target isn't git/ssh itself, the git
+  identity is ensured quietly first (it's the prerequisite for the ssh key
+  comment / a usable env). This is what the "add one credential later" flow
+  in Settings → Credentials runs, via `GET /ws/setup?tool=<tool>` — see
+  terminal-protocol.md and api.md's Setup section.
+
+**Ctrl+C exits cleanly** (`trap 'printf "\n"; exit 0' INT`, v1.10.0).
+Previously SIGINT killed the script by signal, and the browser terminal's
+reconnect (`tmux new-session -A`) picked the ended session back up, which
+RESTARTED `styrman-setup` from the top. The trap's `exit 0` now ends the
+pane cleanly instead — the client gets close 4000 like a normal finish, no
+restart.
 
 - **Required** — git identity (`git config --global user.name/user.email`,
   prompted if unset) and an ssh key (generates `~/.ssh/id_ed25519` if
@@ -139,10 +155,13 @@ REQUIRED and OPTIONAL steps (v1.8.0):
   (rewritten v1.5.5 — used to send the operator to a now-obsolete manual
   Settings → Credentials → Import step).
 
-Finishing setup (`POST /api/setup/done`) harvests whatever was just signed
-into straight into the credential broker (ADR-034, v1.5.4) before tearing
-the VM down — see deploy.md's Credential broker section and api.md's Setup
-section.
+Finishing setup harvests whatever was just signed into straight into the
+credential broker (ADR-034, v1.5.4), via one of two routes (v1.10.0):
+`POST /api/setup/done` — the full first-run completion: harvest, write
+`~/.styrman/setup-done`, and destroy the VM — or `POST /api/setup/harvest`
+— the "add a credential" path: harvest only, no done-marker, VM left
+running so the next tool can be signed into without rebooting. See
+deploy.md's Credential broker section and api.md's Setup section.
 
 ## Credentials materialized per project (broker tiers)
 

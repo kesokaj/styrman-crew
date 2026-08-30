@@ -68,7 +68,7 @@ function SetupPage() {
         <span className="font-medium">First-time setup</span>
         <span className="text-text-dim">
           — sign in to git, GitHub, claude and agy once; everything lands in the
-          shared home
+          shared home. Ctrl+C cancels a step and returns here.
         </span>
       </header>
       <div className="min-h-0 flex-1">
@@ -136,10 +136,21 @@ function SetupPage() {
           <TerminalPane
             target={{ kind: "setup" }}
             onExited={() => {
-              // styrman-setup finished (the pane exits → close 4000). Mark setup
-              // done, which also tears the onboarding VM down, then return to the
-              // dashboard — no manual "Done" click, no idle VM left behind.
-              api.setupDone().finally(() => navigate({ to: "/" }));
+              // styrman-setup finished OR was cancelled with Ctrl+C — either way
+              // the pane exits (close 4000) with NO restart (the SIGINT trap in
+              // styrman-setup makes Ctrl+C a clean exit). Only finalize (harvest +
+              // mark done + tear the VM down) when the REQUIRED creds are in place;
+              // if the user bailed before git+ssh, just discard the VM and leave
+              // the setup banner so they can resume — never mark it "done" early.
+              api
+                .setupStatus()
+                .then((s) =>
+                  s.gitIdentity && s.sshKey
+                    ? api.setupDone()
+                    : api.setupDiscard(),
+                )
+                .catch(() => {})
+                .finally(() => navigate({ to: "/" }));
             }}
           />
         )}

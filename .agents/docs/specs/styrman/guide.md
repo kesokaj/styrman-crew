@@ -262,10 +262,15 @@ Claude, and agy are each OPTIONAL — `[y/N]` prompts, skip any and rerun
 `styrman-setup` anytime, in the setup VM or any project terminal, to pick up
 where you left off (v1.8.0). The generated SSH key's comment is the user's
 git email (fallback `user@styrman` if none is set), not "styrman". Closing
-the setup terminal (typing `exit`, or letting the script finish)
-auto-closes the VM and seeds the credential broker from whatever was just
-signed into — every project, current and future, is current with zero
-re-auth, no manual import step (ADR-034, v1.5.4). Settings → Credentials →
+the setup terminal (typing `exit`, letting the script finish, or **Ctrl+C** —
+a clean exit as of v1.10.0, no longer a restart) returns to the dashboard and
+seeds the credential broker from whatever was just signed into — every
+project, current and future, is current with zero re-auth, no manual import
+step (ADR-034, v1.5.4). The exit is **status-aware** (v1.10.0): setup is only
+marked done (`POST /api/setup/done`, VM destroyed) once the required creds
+(git identity + ssh key) are present; a Ctrl+C before that just discards the
+VM (`DELETE /api/setup`) and leaves the banner up so you can resume — an
+incomplete setup is never marked done. Settings → Credentials →
 **Import from a project** still exists as an optional refresh path (a
 rotated token, or a tool signed into inside a project instead of at setup).
 
@@ -288,16 +293,24 @@ rotated token, or a tool signed into inside a project instead of at setup).
   disk/IP/uptime and synced-credential count (v1.6.0/v1.8.1).
 - **Settings**: account + terminal username, a single status-colored
   **Credentials** view (v1.8.2, replacing the old separate "Tools &
-  credentials" cards) — GREEN = signed in and synced to the broker, GREY =
-  not set up, RED = signed in locally but not yet synced; each row is
-  clickable to read its stored value (v1.8.1); an "Add a variable" row
-  stores any custom env var (NPM_TOKEN, DATABASE_URL, …); "Import from a
-  project" is marked optional (setup already auto-syncs, ADR-034) — theme
-  (Light / Dark / System), and — admins only — LIVE runtime tunables:
-  idle-stop timeout (applies to the reaper immediately) and docker disk
-  size for new project VMs, persisted in `StateDir/settings.json` over the
-  env defaults. (The user-access card was removed in v1.3 — access = env +
-  admin API.)
+  credentials" cards) — GREEN = signed in and synced to the broker (click a
+  green row to read its stored value, v1.8.1), GREY = not set up, RED =
+  signed in locally but not yet synced. Grey and red rows — or their "sign
+  in"/"re-sync" button — are clickable too (v1.10.0): clicking opens a modal
+  that boots the hidden setup VM once and runs `styrman-setup <tool>` in an
+  embedded terminal, harvesting that tool into the broker as soon as the
+  step finishes; the VM stays up so a picker lets you add several
+  credentials in one sitting without rebooting between them, and Ctrl+C in
+  that terminal cancels just the current step and returns to the picker
+  (the script's SIGINT trap makes this a clean exit, not a restart — see
+  terminal-protocol.md). "Done" (or clicking outside the modal) tears the VM
+  down. An "Add a variable" row stores any custom env var (NPM_TOKEN,
+  DATABASE_URL, …); "Import from a project" is marked optional (setup
+  already auto-syncs, ADR-034) — theme (Light / Dark / System), and —
+  admins only — LIVE runtime tunables: idle-stop timeout (applies to the
+  reaper immediately) and docker disk size for new project VMs, persisted
+  in `StateDir/settings.json` over the env defaults. (The user-access card
+  was removed in v1.3 — access = env + admin API.)
 - **Where things live** on the host:
 
 | Path | What |

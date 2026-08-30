@@ -12,9 +12,17 @@ established convention (seen across ~15 entries from 2026-08-26 onward) is:
 - Filename: `YYYY-MM-DD-short-kebab-description.md`, one per completed
   operator batch (often several features/fixes bundled, not strictly one
   file per task).
-- Title: `# YYYY-MM-DD — <short, punchy description of the batch>`
-- `## Summary` — one paragraph: what kind of batch this was, verification
-  numbers up front (unit status, integration N/N, e2e N/N).
+- Title: `# <short, punchy description of the batch> (vX.Y.Z)` — the version
+  string in parens is near-universal on entries from ~v1.5.0 onward (a couple
+  of the earliest entries, pre-versioning, lack it). NOT
+  `# YYYY-MM-DD — description` (that was this memory's earlier, wrong guess —
+  corrected 2026-08-30 after re-checking ~5 more entries). The date instead
+  opens the body as its own line: `Date: YYYY-MM-DD. <first sentence of
+  context>`.
+- `## Summary` (or just the opening paragraph after the `Date:` line, no
+  literal `## Summary` heading in most entries) — what kind of batch this
+  was, verification numbers up front (unit status, integration N/N, e2e
+  N/N).
 - Numbered or thematic subsections for each feature/fix, often with an ADR
   reference in parens like `(ADR-020)` when the change was significant
   enough to also get an ADR in `architecture/DECISIONS.md`.

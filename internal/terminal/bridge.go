@@ -149,19 +149,42 @@ func (b *Bridge) ServeSetup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to start setup environment", http.StatusInternalServerError)
 		return
 	}
+	// Optional targeted tool (?tool=gcloud) → run just that step, for the "add
+	// one credential later" flow. STRICTLY allowlisted: the value is
+	// interpolated into a shell command, so only known-safe tokens pass.
+	tool := setupTool(r.URL.Query().Get("tool"))
+	paneCmd := "bash -lc 'styrman-setup'"
+	tmuxName := "styrman-setup"
+	if tool != "" {
+		paneCmd = "bash -lc 'styrman-setup " + tool + "'"
+		tmuxName = "styrman-setup-" + tool // distinct session per tool
+	}
 	b.serve(w, r, session{
 		containerID: containerID,
 		user:        user,
 		guest:       guest,
-		key:         user + "/system/setup",
-		tmuxName:    "styrman-setup",
+		key:         user + "/system/setup/" + tool,
+		tmuxName:    tmuxName,
 		workdir:     "/home/" + guest,
 		// No trailing `exec bash -l`: styrman-setup is a guided one-shot, so
 		// when it exits the pane should end (→ close 4000 → frontend finalizes)
 		// rather than drop the user into an idle interactive shell.
-		paneCmd: "bash -lc 'styrman-setup'",
+		paneCmd: paneCmd,
 		project: "", // system VM: no idle tracking
 	})
+}
+
+// setupTools is the allowlist of tools styrman-setup accepts as an argument.
+var setupTools = map[string]bool{
+	"git": true, "ssh": true, "gh": true, "gcloud": true, "claude": true, "agy": true,
+}
+
+// setupTool returns v only if it's an allowlisted tool name, else "" (full flow).
+func setupTool(v string) string {
+	if setupTools[v] {
+		return v
+	}
+	return ""
 }
 
 // session describes one terminal attachment target.

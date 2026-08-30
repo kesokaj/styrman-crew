@@ -66,7 +66,12 @@ A terminal is a persisted record whose live view is a tmux session
 | `DELETE .../terminals`              | Close all terminals in the project.                                                                                                                                                                                                                                            |
 
 `GET /ws/term/{id}/{t}` — the terminal WebSocket (see terminal-protocol.md).
-`GET /ws/setup` — the user's hidden onboarding VM terminal.
+`GET /ws/setup[?tool=git|ssh|gh|gcloud|claude|agy]` — the user's hidden
+onboarding VM terminal. `tool` is optional and STRICTLY allowlisted (any
+other value is ignored, falling back to the full flow) since it's
+interpolated into `bash -lc 'styrman-setup <tool>'`; a targeted run gets its
+own tmux session (`styrman-setup-<tool>`) so tools don't replace one
+another (v1.10.0, see terminal-protocol.md).
 
 ### Notifications
 
@@ -150,15 +155,17 @@ see the "Git (real client)" section above (ADR-039).
 ## Setup (first-time onboarding, per user)
 
 Only git identity + an ssh key are REQUIRED (v1.8.0); GitHub, Google Cloud,
-Claude and agy are optional, each skippable and re-runnable later via
-`styrman-setup`.
+Claude and agy are optional, each skippable and re-runnable later — either
+the full `styrman-setup`, or one tool at a time from Settings → Credentials
+(`styrman-setup <tool>`, backed by `POST /api/setup/harvest`, v1.10.0).
 
-| Method & path           | Purpose                                                                                                                                                                                                                                        |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GET /api/setup/status` | Probe of the user's home: `{gitIdentity, sshKey, github, gcloud, claude, agy, done, vmRunning}`. `gitIdentity`/`sshKey` are required; the rest optional. `gcloud` checks for ADC; `agy` checks its OAuth token file (`~/.gemini/antigravity-cli/antigravity-oauth-token`) — there is no keyring fallback (ADR-038/ADR-040). |
-| `POST /api/setup/start` | Boot the user's hidden minimal VM (~1 s).                                                                                                                                                                                                    |
-| `POST /api/setup/done`  | Seeds the credential broker from the setup VM's shared home first — best-effort, never blocks completion (ADR-034; same `harvestCredentials` helper as `/import` above) — then writes `~/.styrman/setup-done` and destroys the VM. The terminal itself now closes automatically when `styrman-setup` exits (v1.5.4), no manual "Done" click. |
-| `DELETE /api/setup`     | Destroy the VM without marking done.                                                                                                                                                                                                        |
+| Method & path              | Purpose                                                                                                                                                                                                                                        |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /api/setup/status`    | Probe of the user's home: `{gitIdentity, sshKey, github, gcloud, claude, agy, done, vmRunning}`. `gitIdentity`/`sshKey` are required; the rest optional. `gcloud` checks for ADC; `agy` checks its OAuth token file (`~/.gemini/antigravity-cli/antigravity-oauth-token`) — there is no keyring fallback (ADR-038/ADR-040). |
+| `POST /api/setup/start`    | Boot the user's hidden minimal VM (~1 s).                                                                                                                                                                                                    |
+| `POST /api/setup/harvest`  | Seeds the credential broker from the RUNNING setup VM (same `harvestCredentials` pass `/done` uses below) WITHOUT marking setup done or destroying the VM: `{"report":{tool: status}}`. Backs "add a credential" in Settings → Credentials — the VM stays up so several tools can be signed into in one sitting (v1.10.0). |
+| `POST /api/setup/done`     | Seeds the credential broker from the setup VM's shared home first — best-effort, never blocks completion (ADR-034; same `harvestCredentials` helper as `/import` above) — then writes `~/.styrman/setup-done` and destroys the VM. The terminal itself now closes automatically when `styrman-setup` exits (v1.5.4), no manual "Done" click. |
+| `DELETE /api/setup`        | Destroy the VM without marking done.                                                                                                                                                                                                        |
 
 ## Misc
 

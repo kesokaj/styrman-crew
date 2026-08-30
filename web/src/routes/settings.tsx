@@ -5,6 +5,23 @@ import { usePolled, useTheme, type ThemePref } from "../lib/hooks";
 import { toast } from "../lib/toast";
 
 const CodeEditor = lazy(() => import("../components/CodeEditor"));
+// Lazy: the terminal (xterm) is only pulled in when the operator actually opens
+// the "add a credential" flow, keeping it out of the settings bundle.
+const TerminalPane = lazy(() =>
+  import("../components/TerminalPane").then((m) => ({
+    default: m.TerminalPane,
+  })),
+);
+
+// Display label for each styrman-setup tool in the add-credential picker.
+const SETUP_TOOL_LABEL: Record<string, string> = {
+  git: "git",
+  ssh: "ssh",
+  gh: "github",
+  gcloud: "gcloud",
+  claude: "claude",
+  agy: "agy",
+};
 
 export const Route = createFileRoute("/settings")({ component: SettingsPage });
 
@@ -105,7 +122,10 @@ function TerminalUsername({
  *  project — new ones included — is current with no re-auth. */
 function CredentialsSection() {
   const { data, refresh } = usePolled(() => api.credentials(), 20000);
-  const { data: st } = usePolled(() => api.setupStatus(), 20000);
+  const { data: st, refresh: refreshSt } = usePolled(
+    () => api.setupStatus(),
+    20000,
+  );
   const { data: toolData } = usePolled(() => api.tools(), 20000);
   const { data: projData } = usePolled(() => api.listProjects(), 15000);
   const running = (projData?.projects ?? []).filter(
@@ -116,6 +136,9 @@ function CredentialsSection() {
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
   const [viewing, setViewing] = useState<CredItem | null>(null);
+  // Non-null → the "add / re-sync a credential" modal is open, seeded with this
+  // styrman-setup tool (git|ssh|gh|gcloud|claude|agy).
+  const [manageTool, setManageTool] = useState<string | null>(null);
 
   const items = data?.items ?? [];
   const brokerOff = data?.brokerEnabled === false;
@@ -166,6 +189,7 @@ function CredentialsSection() {
   const std = [
     {
       label: "git",
+      tool: "git",
       set: !!st?.gitIdentity,
       item: find((i) => i.kind === "git"),
       synced: !!find((i) => i.name === "STYRMAN_GIT_NAME"),
@@ -173,6 +197,7 @@ function CredentialsSection() {
     },
     {
       label: "ssh",
+      tool: "ssh",
       set: !!st?.sshKey,
       item: find((i) => i.id.startsWith("ssh-")),
       synced: !!find((i) => i.id.startsWith("ssh-")),
@@ -180,6 +205,7 @@ function CredentialsSection() {
     },
     {
       label: "github",
+      tool: "gh",
       set: !!st?.github,
       item: find((i) => i.name === "GH_TOKEN"),
       synced: !!find((i) => i.name === "GH_TOKEN"),
@@ -187,6 +213,7 @@ function CredentialsSection() {
     },
     {
       label: "gcloud (ADC)",
+      tool: "gcloud",
       set: !!st?.gcloud,
       item: find((i) => i.id === "gcloud-adc"),
       synced: !!find((i) => i.id === "gcloud-adc"),
@@ -194,6 +221,7 @@ function CredentialsSection() {
     },
     {
       label: "gcloud CLI",
+      tool: "gcloud",
       set: !!find((i) => i.id === "gcloud-credentials-db"),
       item: find((i) => i.id === "gcloud-credentials-db"),
       synced: !!find((i) => i.id === "gcloud-credentials-db"),
@@ -201,6 +229,7 @@ function CredentialsSection() {
     },
     {
       label: "claude",
+      tool: "claude",
       set: !!st?.claude,
       item: find((i) => i.id === "claude-credentials"),
       synced: !!find((i) => i.id === "claude-credentials"),
@@ -208,12 +237,30 @@ function CredentialsSection() {
     },
     {
       label: "agy",
+      tool: "agy",
       set: !!st?.agy,
       item: find((i) => i.id === "agy-oauth-token"),
       synced: !!find((i) => i.id === "agy-oauth-token"),
       detail: "~/.gemini (Antigravity)",
     },
   ];
+  // Deduped by tool (gcloud ADC + gcloud CLI both sign in via `styrman-setup
+  // gcloud`) — the picker inside the add-credential modal.
+  const setupTools: { tool: string; label: string; synced: boolean }[] = [];
+  for (const c of std) {
+    const ex = setupTools.find((t) => t.tool === c.tool);
+    if (ex) ex.synced = ex.synced || c.synced;
+    else
+      setupTools.push({
+        tool: c.tool,
+        label: SETUP_TOOL_LABEL[c.tool] ?? c.tool,
+        synced: c.synced,
+      });
+  }
+  const afterHarvest = () => {
+    refresh();
+    refreshSt();
+  };
   const stdEnv = new Set(["STYRMAN_GIT_NAME", "STYRMAN_GIT_EMAIL", "GH_TOKEN"]);
   const custom = items.filter((i) => i.kind === "env" && !stdEnv.has(i.name));
 
@@ -230,10 +277,11 @@ function CredentialsSection() {
     <Section title="Credentials">
       <Row label="How it works">
         <span className="text-text-dim">
-          Sign in once during setup; the broker keeps one live copy of each and
-          delivers it to every project — no re-auth. Click any credential to
-          read it. Green = synced, grey = not set up, red = signed in but not
-          synced.
+          Sign in once; the broker keeps one live copy of each and delivers it
+          to every project — no re-auth. Green = synced (click to read), grey =
+          not set up, red = signed in but not synced. Click a grey or red one
+          (or its <span className="text-accent">sign in</span> button) to boot
+          the setup VM and add it.
         </span>
       </Row>
       <div className="border-b border-border py-1">
@@ -247,20 +295,25 @@ function CredentialsSection() {
               title={dotTitle(c)}
             />
             <button
-              onClick={() => c.item && setViewing(c.item)}
-              disabled={!c.item}
-              className="w-16 shrink-0 text-left font-medium enabled:hover:text-accent enabled:hover:underline disabled:cursor-default"
-              title={c.item ? "Click to read" : undefined}
+              onClick={() =>
+                c.synced && c.item ? setViewing(c.item) : setManageTool(c.tool)
+              }
+              className="w-16 shrink-0 text-left font-medium hover:text-accent hover:underline"
+              title={c.synced ? "Click to read" : "Click to sign in"}
             >
               {c.label}
             </button>
             <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-dim">
-              {c.set ? (c.detail ?? "signed in") : "not set up"}
+              {c.set ? (c.detail ?? "signed in") : "not set up — click to sign in"}
             </span>
-            {c.set && !c.synced && (
-              <span className="shrink-0 text-[10px] text-danger">
-                not synced
-              </span>
+            {!c.synced && (
+              <button
+                onClick={() => setManageTool(c.tool)}
+                className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium text-accent hover:bg-bg"
+                title="Boot the setup VM and sign in — shared with every project"
+              >
+                {c.set ? "re-sync" : "sign in"}
+              </button>
             )}
           </div>
         ))}
@@ -373,7 +426,160 @@ function CredentialsSection() {
       {viewing && (
         <CredViewer item={viewing} onClose={() => setViewing(null)} />
       )}
+      {manageTool && (
+        <ManageCredsModal
+          tools={setupTools}
+          initialTool={manageTool}
+          onHarvested={afterHarvest}
+          onClose={() => {
+            setManageTool(null);
+            afterHarvest();
+          }}
+        />
+      )}
     </Section>
+  );
+}
+
+/**
+ * Add or re-sync one or more credentials after first setup. Boots the hidden
+ * onboarding VM once, runs `styrman-setup <tool>` for the chosen tool, and
+ * harvests into the broker when that step finishes — the VM stays up so several
+ * tools can be added in one sitting without re-booting. Closing (Done / click
+ * outside) tears the VM down; the broker keeps whatever was signed in.
+ */
+function ManageCredsModal({
+  tools,
+  initialTool,
+  onHarvested,
+  onClose,
+}: {
+  tools: { tool: string; label: string; synced: boolean }[];
+  initialTool: string;
+  onHarvested: () => void;
+  onClose: () => void;
+}) {
+  const [phase, setPhase] = useState<"booting" | "ready" | "error">("booting");
+  const [error, setError] = useState<string>();
+  const [activeTool, setActiveTool] = useState<string | null>(initialTool);
+  const [added, setAdded] = useState<Set<string>>(new Set());
+  const [tearing, setTearing] = useState(false);
+
+  // Boot the setup VM once for the whole session (idempotent — reuses a VM
+  // that's already up).
+  useEffect(() => {
+    let stale = false;
+    api
+      .setupStart()
+      .then(() => !stale && setPhase("ready"))
+      .catch((e: Error) => {
+        if (stale) return;
+        setError(e.message);
+        setPhase("error");
+      });
+    return () => {
+      stale = true;
+    };
+  }, []);
+
+  const close = async () => {
+    if (tearing) return;
+    setTearing(true);
+    // Best effort: leaving must always dismiss, even if teardown hiccups.
+    await api.setupDiscard().catch(() => {});
+    onClose();
+  };
+
+  const onToolExited = () => {
+    // styrman-setup <tool> finished (pane exit → close 4000). Harvest into the
+    // broker; the VM stays up so the next grey row is instant.
+    api
+      .setupHarvest()
+      .then(() => onHarvested())
+      .catch(() => {});
+    if (activeTool) {
+      setAdded((a) => new Set(a).add(activeTool));
+      toast("success", `${SETUP_TOOL_LABEL[activeTool] ?? activeTool} signed in`);
+    }
+    setActiveTool(null); // back to the picker; VM still running
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 md:p-8"
+      onClick={close}
+    >
+      <div
+        className="flex h-[80vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-bg-raised shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs">
+          <span className="font-medium">Add / re-sync credentials</span>
+          <span className="min-w-0 flex-1 truncate text-text-dim">
+            {phase === "ready"
+              ? "setup VM running — sign in; it's shared with every project. Ctrl+C in the terminal cancels a step."
+              : phase === "booting"
+                ? "booting the setup VM…"
+                : ""}
+          </span>
+          <button
+            onClick={close}
+            disabled={tearing}
+            className="shrink-0 rounded bg-accent-soft px-2 py-1 text-on-accent-soft hover:brightness-110 disabled:opacity-50"
+          >
+            {tearing ? "Closing…" : "Done"}
+          </button>
+        </div>
+        <div className="min-h-0 flex-1">
+          {phase === "error" && (
+            <p className="p-4 text-xs text-danger">{error}</p>
+          )}
+          {phase === "booting" && (
+            <p className="p-4 text-xs text-text-dim">Booting the setup VM…</p>
+          )}
+          {phase === "ready" &&
+            (activeTool ? (
+              <Suspense
+                fallback={
+                  <p className="p-4 text-xs text-text-dim">Loading terminal…</p>
+                }
+              >
+                <TerminalPane
+                  target={{ kind: "setup", tool: activeTool }}
+                  onExited={onToolExited}
+                />
+              </Suspense>
+            ) : (
+              <div className="flex flex-col gap-1 p-3 text-xs">
+                <p className="mb-1 text-text-dim">
+                  Click a credential to sign in. It's shared with every project
+                  automatically — click Done when you're finished.
+                </p>
+                {tools.map((t) => {
+                  const green = t.synced || added.has(t.tool);
+                  return (
+                    <button
+                      key={t.tool}
+                      onClick={() => setActiveTool(t.tool)}
+                      className="flex items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-bg"
+                    >
+                      <span
+                        className={`h-2 w-2 shrink-0 rounded-full ${green ? "bg-ok" : "bg-border"}`}
+                      />
+                      <span className="w-24 shrink-0 font-medium">
+                        {t.label}
+                      </span>
+                      <span className="text-text-dim">
+                        {green ? "signed in · synced" : "sign in →"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+        </div>
+      </div>
+    </div>
   );
 }
 

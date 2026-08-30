@@ -304,6 +304,7 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("GET /api/setup/status", s.getSetupStatus)
 	mux.HandleFunc("POST /api/setup/start", s.startSetup)
 	mux.HandleFunc("POST /api/setup/done", s.finishSetup)
+	mux.HandleFunc("POST /api/setup/harvest", s.harvestSetup)
 	mux.HandleFunc("DELETE /api/setup", s.discardSetup)
 	mux.HandleFunc("GET /api/health", s.health)
 	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, _ *http.Request) {

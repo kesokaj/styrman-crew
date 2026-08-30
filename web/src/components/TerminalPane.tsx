@@ -8,7 +8,8 @@ import {
 } from "../lib/terminal";
 
 export type TermTarget =
-  { kind: "term"; project: string; id: string } | { kind: "setup" };
+  | { kind: "term"; project: string; id: string }
+  | { kind: "setup"; tool?: string };
 
 type ConnState =
   | "connecting"
@@ -58,8 +59,9 @@ export function TerminalPane({
   });
 
   const targetKey =
-    (target.kind === "setup" ? "setup" : `${target.project}/${target.id}`) +
-    `#${epoch}`;
+    (target.kind === "setup"
+      ? `setup/${target.tool ?? ""}` // tool in the key: switching tools reconnects
+      : `${target.project}/${target.id}`) + `#${epoch}`;
 
   // N5: a reconnect (epoch bump) or a switch to another terminal starts fresh.
   useEffect(() => {

@@ -298,4 +298,52 @@ DECISIONS.md/TODO.md were NOT touched (approval-gated / another subagent's
 lane) — see the handoff report for the exact REQUIREMENTS.md R3 wording that
 now contradicts the code.
 
+**2026-08-30 session — v1.10.0 setup-terminal robustness + post-setup
+credential management** (task-provided facts, already verified against
+`image/configs/styrman-setup`, `internal/terminal/bridge.go`,
+`internal/httpapi/setup.go`/`server.go`, `web/src/routes/settings.tsx`/
+`setup.tsx` before writing). Key facts for next time:
+- `styrman-setup` traps SIGINT (`trap 'printf "\n"; exit 0' INT`) so Ctrl+C
+  is a clean `exit 0`, not a signal-kill. Previously the reconnecting
+  browser terminal's `tmux new-session -A` picked the signal-killed session
+  back up and RESTARTED the script from the top; now the pane just ends →
+  close 4000, same as a normal finish.
+- `styrman-setup <tool>...` (git|ssh|gh|gcloud|claude|agy) runs ONLY that
+  step, ensuring git identity quietly first if the target isn't git/ssh.
+  Driven by `GET /ws/setup?tool=<tool>` (`internal/terminal/bridge.go`'s
+  `ServeSetup`/`setupTool` — strictly allowlisted, interpolated into a shell
+  command, unknown values fall back to the full flow), own tmux session
+  `styrman-setup-<tool>`.
+- New `POST /api/setup/harvest` (`internal/httpapi/setup.go`'s
+  `harvestSetup`/`seedBrokerFromSetup`): harvests the running setup VM into
+  the broker WITHOUT the done-marker or teardown — `/done` still does both
+  plus destroy. This is what Settings → Credentials' grey/red-row
+  "sign in"/"re-sync" click opens (`ManageCredsModal` in `settings.tsx`):
+  boots the VM once, runs `styrman-setup <tool>` embedded, harvests per
+  step, VM stays up for a picker to add more, "Done"/click-outside tears it
+  down.
+- First-run `/setup` route's `onExited` is now status-aware
+  (`web/src/routes/setup.tsx`): finalizes (`POST /api/setup/done`) only if
+  `gitIdentity && sshKey` are already true; otherwise discards
+  (`DELETE /api/setup`) and leaves the banner — never marks an incomplete
+  setup done. This logic is NOT yet documented anywhere in the four spec
+  files (out of this task's stated scope — task said touch only the
+  Credentials/settings bullet in guide.md, not §3 Install-from-scratch) —
+  flag for a future session if `guide.md`'s §3 setup-closing paragraph is
+  ever revisited, since it still only describes "typing exit or the script
+  finishing," not the Ctrl+C-before-required-creds discard path.
+
+Files touched this session: `runtime-image.md` ("First-run onboarding"
+section — two invocation-mode bullets, Ctrl+C paragraph, "Finishing setup"
+paragraph split into /done vs /harvest), `api.md` (Terminals section's
+`GET /ws/setup` line gained `?tool=`, Setup section intro + new
+`POST /api/setup/harvest` row), `terminal-protocol.md` (new
+"## Setup terminal (`/ws/setup`)" section, placed between "Browser-side
+keyboard handling" and "Close codes" — this doc previously never mentioned
+`/ws/setup` at all, only api.md did), `guide.md` (§4 Settings/Credentials
+bullet — grey/red rows now clickable, describes the add/re-sync modal and
+its Ctrl+C-cancels-current-step behavior). REQUIREMENTS.md, changes/,
+DECISIONS.md, TODO.md were NOT touched (approval-gated / changelog
+subagent's lane).
+
 See [[feedback-styrman-doc-edits]] for edit-process lessons.
