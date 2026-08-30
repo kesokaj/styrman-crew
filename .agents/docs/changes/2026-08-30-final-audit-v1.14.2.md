@@ -92,3 +92,24 @@ all 17 yellows fixed in this pass. Deployed as v1.14.2.
 - Two REQUIREMENTS.md clarifying parentheticals (R9-vs-R11 scope,
   sdb-uuid vs sdb-hash naming) await operator approval — REQUIREMENTS.md
   is never modified without it.
+
+## Post-report addendum: H5 firewall independently verified (2026-08-30)
+
+The v1.9.0 note "H5 not yet independently verified" is closed. Verified
+live on the host via privileged inspection:
+
+- `STYRMAN-FWD`: physdev `--physdev-is-bridged` RETURN first (broker/
+  preview same-bridge traffic exempt), then RFC1918 + link-local DROPs.
+- `STYRMAN-IN`: DROP-all from `sdb-+` on INPUT (projects offer the host
+  nothing; broker traffic is same-bridge L2, never INPUT).
+- Hookups present: `DOCKER-USER -i sdb-+ -j STYRMAN-FWD`,
+  `INPUT -i sdb-+ -j STYRMAN-IN`.
+- Self-heal: `styrman-firewall.timer` active, last run exited 0.
+- IPv6: 7 mirrored ip6tables rules present; moreover IPv6 is disabled
+  GLOBALLY on the host (`/proc/sys/net/ipv6` absent), so the per-bridge
+  `disable_ipv6` is a defense-in-depth no-op — the bypass class cannot
+  exist on this host.
+
+Remaining operator-gated: the R9-vs-R11 clarifying parenthetical
+(proposed, not yet applied) and retroactive sign-off on the sdb-naming
+parenthetical that the reader pass already committed (01353b5).
