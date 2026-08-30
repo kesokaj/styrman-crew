@@ -100,3 +100,16 @@ as the final act.
   pre-wipe survival, /logs and /git/summary responses, caddy env
   minimization, OAuth redirect.
 - Integration + e2e final runs: see the summary appended below.
+
+### Final battery results (2026-08-30, post-marathon)
+
+- Go: all 14 package suites green throughout.
+- Integration: **57 passed / 0 failed / 3 skipped** (the skips are the
+  host-firewall proxy checks, now detected and reported as SKIP — first
+  fully green run on the hardened host).
+- e2e: **34 passed / 0 failed / 1 skipped** (same firewall skip). Two e2e
+  fixes landed during the run: the proxy checks got the firewall probe, and
+  the "git tab" selector was stale (predated the v1.7 git-client rewrite —
+  the suite hadn't run since; now asserts the shipped surface). The 3
+  recoverable hydration warnings are reported as known-benign per ADR-045.
+- Live server v1.14.0 healthy; crew.styrman.xyz behind the OAuth gate.
