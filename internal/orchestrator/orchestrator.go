@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -257,6 +258,16 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 		phome := o.cfg.ProjectHome(user, project)
 		if err := os.MkdirAll(phome, 0o700); err != nil {
 			return "", fmt.Errorf("create project home: %w", err)
+		}
+		// Same rule for the workspace's mount TARGET inside the home bind
+		// (~/projects/<dir> → host-side <phome>/projects/<dir>): dockerd
+		// creates a missing target as ROOT 0755, leaving a root-owned dir in
+		// the per-project home that a NON-ROOT server can never RemoveAll —
+		// a wipe-delete then strands the record with "wipe incomplete"
+		// forever. Pre-create it as ourselves (0755 like dockerd would, for
+		// in-guest traversal); a root server keeps today's exact layout.
+		if err := os.MkdirAll(filepath.Join(phome, "projects", opts.Dir), 0o755); err != nil {
+			return "", fmt.Errorf("create workspace mountpoint: %w", err)
 		}
 		id, err = o.create(ctx, createSpec{
 			name:          name,

@@ -69,6 +69,11 @@ export function Sidebar({
   const [deleting, setDeleting] = useState<Project | null>(null);
   const [renaming, setRenaming] = useState<Project | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  // Optimistic stop/start feedback per project id, cleared when the request
+  // settles — the dot pulses amber and the row says what's happening.
+  const [pending, setPending] = useState<
+    Record<string, "stopping" | "starting">
+  >({});
   const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsed);
 
   const projects = data?.projects ?? [];
@@ -112,8 +117,6 @@ export function Sidebar({
   ) =>
     tryUI(async () => {
       setMenuFor(null);
-      if (action === "stop") await api.stopProject(p.id);
-      if (action === "start") await api.startProject(p.id);
       if (action === "rename") {
         setRenaming(p);
         return;
@@ -122,7 +125,25 @@ export function Sidebar({
         setDeleting(p);
         return;
       }
-      refresh();
+      // Stop takes 10–40 s server-side (graceful guest shutdown before the
+      // container stop) and Start boots a VM — show it immediately instead
+      // of leaving the dot green/grey until the request returns (operator
+      // feedback: "I press stop and the light is still green").
+      setPending((m) => ({
+        ...m,
+        [p.id]: action === "stop" ? "stopping" : "starting",
+      }));
+      try {
+        if (action === "stop") await api.stopProject(p.id);
+        else await api.startProject(p.id);
+        refresh();
+      } finally {
+        setPending((m) => {
+          const next = { ...m };
+          delete next[p.id];
+          return next;
+        });
+      }
     });
 
   return (
@@ -198,15 +219,22 @@ export function Sidebar({
             >
               <span
                 className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                  p.state === "running"
-                    ? "bg-ok"
-                    : p.state === "deleting"
-                      ? "animate-pulse bg-danger"
-                      : "bg-border"
+                  pending[p.id]
+                    ? "animate-pulse bg-warn"
+                    : p.state === "running"
+                      ? "bg-ok"
+                      : p.state === "deleting"
+                        ? "animate-pulse bg-danger"
+                        : "bg-border"
                 }`}
-                title={p.state}
+                title={pending[p.id] ?? p.state}
               />
               <span className="min-w-0 flex-1 truncate">{p.name}</span>
+              {pending[p.id] && (
+                <span className="shrink-0 text-[10px] text-text-dim">
+                  {pending[p.id]}…
+                </span>
+              )}
               {p.state === "deleting" && (
                 <span className="shrink-0 text-[10px] text-text-dim">
                   deleting…
@@ -253,7 +281,14 @@ export function Sidebar({
             </div>
             {menuFor === p.id && p.state !== "deleting" && (
               <div className="mx-2 mb-1 flex gap-1 rounded-lg border border-border bg-bg p-1 text-xs">
-                {p.state === "running" ? (
+                {pending[p.id] ? (
+                  <button
+                    className="flex-1 rounded-md px-2 py-1 text-text-dim"
+                    disabled
+                  >
+                    {pending[p.id]}…
+                  </button>
+                ) : p.state === "running" ? (
                   <button
                     className="flex-1 rounded-md px-2 py-1 hover:bg-bg-hover"
                     onClick={() => projectAction(p, "stop")}

@@ -398,6 +398,13 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 		}
 	}
 	code, reason := closeDecision(gone, done, alive, probed)
+	// Deterministic stop signal: when the project is deliberately stopped
+	// (Stop button / idle reaper), every pane close is 4002 — without this,
+	// the ExitCodeWait race lands some panes on 4000 ("Paused") and others on
+	// a transient close, so the user sees inconsistent states on Stop.
+	if !gone && s.project != "" && b.orch.Stopped(s.user, s.project) {
+		code, reason = config.CloseProjectStopped, "project stopped"
+	}
 	if code == config.CloseShellExited {
 		b.logger.Info("session exited", "session", s.key, "exitCode", exitCode)
 	} else {
