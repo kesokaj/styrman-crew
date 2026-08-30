@@ -117,7 +117,16 @@ behavior — their panes idle at a shell, so reattaching is always safe.
 |---|---|---|
 | 4000 | shell exited | The tmux session genuinely ended (user typed `exit`, agent quit). Do NOT silently reconnect — the UI presents this state as **Paused** with a **Resume** action (the record and transcript persist; reconnecting starts a fresh shell). |
 | 4001 | replaced | A newer WebSocket attached to this conversation (another tab). NEVER auto-reconnect — doing so death-spirals: each reconnect replaces the other tab, which reconnects, forever. |
+| 4002 | project stopped | The project VM was deliberately stopped (Stop button / idle reaper) and this connect carried no boot intent. NEVER auto-reconnect — a reconnect with `?boot=1` would boot the VM back up. The UI shows **Project stopped** with a **Start** action; that click (epoch bump → first connect → `?boot=1`) is the explicit intent that boots it (v1.11.0). |
 | 1000/1001/1006 | normal/going away/abnormal | Transient. Silently reconnect; tmux reattaches with scrollback and running processes intact. |
+
+**Boot intent (`?boot=1`, v1.11.0):** the FIRST connect of a freshly opened
+or explicitly resumed pane carries `?boot=1` — a user action that may boot a
+stopped project. Automatic reconnect retries never carry it; on a
+deliberately-stopped project the server answers them with close 4002 (before
+any VM boot) instead of resurrecting the VM. This is what makes the sidebar
+Stop stick while terminal tabs are open. Setup panes ignore `boot` (the
+setup VM has no stop marker).
 
 ## Session semantics
 

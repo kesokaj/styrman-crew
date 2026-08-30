@@ -53,6 +53,11 @@ const (
 	// agent quit). The frontend must not reconnect into a fresh session
 	// without the user asking.
 	CloseShellExited = 4000
+	// CloseProjectStopped: the project VM was deliberately stopped (Stop
+	// button / idle reaper) — the client must NOT auto-reconnect (that would
+	// boot the VM back up); an explicit user action (Start) reconnects with
+	// boot intent instead.
+	CloseProjectStopped = 4002
 	// CloseReplaced: a newer WebSocket attached to the same conversation.
 	// The frontend must NOT auto-reconnect on this code.
 	CloseReplaced = 4001
@@ -112,16 +117,21 @@ type Config struct {
 // UID/GID default to the owner of HomeDir if it exists, else the current user.
 func Load() (*Config, error) {
 	c := &Config{
-		Addr:          envOr("STYRMAN_ADDR", "127.0.0.1:8080"),
-		PreviewBase:   envOr("STYRMAN_PREVIEW_BASE", ""),
-		PrivateBase:   envOr("STYRMAN_PRIVATE_BASE", ""),
-		StateDir:      envOr("STYRMAN_STATE_DIR", "/var/lib/styrman"),
-		Image:         envOr("STYRMAN_IMAGE", "styrman-runtime:latest"),
-		Runtime:       envOr("STYRMAN_RUNTIME", "mvm"),
-		VCPUs:         envIntOr("STYRMAN_VCPUS", 0),
-		MemoryMB:      envIntOr("STYRMAN_MEMORY_MB", 0),
-		dockerDisk:    envIntOr("STYRMAN_DOCKER_DISK_GB", 20),
-		idleTimeout:   envDurationOr("STYRMAN_IDLE_TIMEOUT", 24*time.Hour),
+		Addr:        envOr("STYRMAN_ADDR", "127.0.0.1:8080"),
+		PreviewBase: envOr("STYRMAN_PREVIEW_BASE", ""),
+		PrivateBase: envOr("STYRMAN_PRIVATE_BASE", ""),
+		StateDir:    envOr("STYRMAN_STATE_DIR", "/var/lib/styrman"),
+		Image:       envOr("STYRMAN_IMAGE", "styrman-runtime:latest"),
+		Runtime:     envOr("STYRMAN_RUNTIME", "mvm"),
+		VCPUs:       envIntOr("STYRMAN_VCPUS", 0),
+		MemoryMB:    envIntOr("STYRMAN_MEMORY_MB", 0),
+		dockerDisk:  envIntOr("STYRMAN_DOCKER_DISK_GB", 20),
+		// 8h (was 24h): an idle-stop only powers the VM off — workspace, home,
+		// tmux transcripts and the docker disk all persist, and the next attach
+		// boots it back exactly where it left off. Real in-guest work (running
+		// DinD containers, a non-shell foreground process in any tmux pane)
+		// blocks the stop regardless of this timer (stopIfIdle's busy probe).
+		idleTimeout:   envDurationOr("STYRMAN_IDLE_TIMEOUT", 8*time.Hour),
 		BrokerAddr:    envOr("STYRMAN_BROKER_ADDR", ":8091"),
 		AuthMode:      envOr("STYRMAN_AUTH", "none"),
 		DevAddr:       os.Getenv("STYRMAN_DEV_ADDR"),

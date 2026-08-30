@@ -203,6 +203,16 @@ curl -fsS -X POST "${API}/api/projects/${ID}/stop" >/dev/null
 check "container stopped" "! docker ps --format '{{.Names}}' | grep -q ${CN}"
 check "terminals still listed while stopped" \
     "curl -fsS ${API}/api/projects/${ID}/terminals | grep -q '\"title\"'"
+# Sticky stop (v1.11.0): an automatic reconnect (no boot=1) must be answered
+# with close 4002 and must NOT boot the VM back; boot=1 (user intent) boots.
+TID=$(curl -fsS "${API}/api/projects/${ID}/terminals" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/${TID}" -wait 3s || true)
+check "stopped project refuses auto-reconnect (close 4002)" "echo '${OUT}' | grep -q 'close:4002'"
+check "VM stayed stopped after refused reconnect" "! docker ps --format '{{.Names}}' | grep -q ${CN}"
+OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/${TID}?cols=120&rows=30&boot=1" \
+    -send "echo revived\r" -wait 8s || true)
+check "boot=1 reconnect boots the stopped VM" "echo '${OUT}' | grep -q revived"
+check "VM running again after boot=1" "docker ps --format '{{.Names}}' | grep -q ${CN}"
 curl -fsS -X DELETE "${API}/api/projects/${ID}?wipe=true" -o /dev/null
 # Delete is ASYNC since v1.3 (202 + background: destroy container, THEN wipe,
 # THEN remove the record). Wait for the LAST step — the record leaving the

@@ -112,6 +112,19 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	store.Touch(projName, convID)
 	tmuxName := conversation.Prefix + convID
 
+	// Deliberately-stopped gate: only a connection carrying boot intent
+	// (`?boot=1` — the first connect of a freshly opened/resumed pane, i.e. a
+	// user action) may boot a project the user stopped or the idle reaper
+	// reaped. An AUTOMATIC reconnect (retry loop after a transient close)
+	// carries no boot param and gets close 4002 instead — otherwise pressing
+	// Stop with a terminal tab open boots the VM straight back up.
+	if r.URL.Query().Get("boot") != "1" && b.orch.Stopped(user, projName) {
+		if conn, err := websocket.Accept(w, r, nil); err == nil {
+			conn.Close(websocket.StatusCode(config.CloseProjectStopped), "project stopped")
+		}
+		return
+	}
+
 	// Ensure the microVM is up before upgrading — first attach after idle-stop
 	// pays the (~seconds) start cost here. The callback resolves the record
 	// (dir, guest username) the orchestrator needs.

@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { CLOSE_EXITED, CLOSE_REPLACED, termSocketUrl } from "../lib/api";
+import {
+  CLOSE_EXITED,
+  CLOSE_REPLACED,
+  CLOSE_STOPPED,
+  termSocketUrl,
+} from "../lib/api";
 import { useTheme } from "../lib/hooks";
 import {
   createTerminal,
@@ -16,6 +21,7 @@ type ConnState =
   | "connected"
   | "exited"
   | "replaced"
+  | "stopped" // project VM deliberately stopped (close 4002)
   | "reconnecting"
   | "disconnected";
 
@@ -123,12 +129,21 @@ export function TerminalPane({
     // any close is final and hands off to onExited (which is status-aware).
     let everOpened = false;
 
+    // Boot intent: the FIRST connect of an effect run is a user action —
+    // opening the terminal, switching to it, or pressing Resume/Start (epoch
+    // bump) — and may boot a stopped project VM. Automatic reconnect retries
+    // are not user intent and must never resurrect a deliberately-stopped VM
+    // (the server answers them with close 4002 instead).
+    let bootIntent = true;
     const connect = () => {
       if (closedForGood) return;
       setState((prev) =>
         prev === "connecting" ? "connecting" : "reconnecting",
       );
-      ws = new WebSocket(termSocketUrl(target, term.cols, term.rows));
+      ws = new WebSocket(
+        termSocketUrl(target, term.cols, term.rows, bootIntent),
+      );
+      bootIntent = false;
       ws.binaryType = "arraybuffer";
       ws.onopen = () => {
         retries = 0;
@@ -151,6 +166,14 @@ export function TerminalPane({
         if (ev.code === CLOSE_REPLACED) {
           setState("replaced");
           closedForGood = true; // protocol: never reconnect on 4001
+          return;
+        }
+        if (ev.code === CLOSE_STOPPED) {
+          // The project VM was deliberately stopped (Stop button / idle
+          // reaper). Never auto-reconnect — that would boot it back up. The
+          // "Start" button (epoch bump → boot intent) resumes explicitly.
+          setState("stopped");
+          closedForGood = true;
           return;
         }
         if (
@@ -320,9 +343,13 @@ export function TerminalPane({
               {state === "exited" &&
                 "Paused — the shell exited; the terminal and its transcript are kept"}
               {state === "replaced" && "Opened in another tab"}
+              {state === "stopped" &&
+                "Project stopped — everything is kept; Start boots it right back"}
               {state === "disconnected" && "Disconnected"}
             </span>
-            {(state === "exited" || state === "disconnected") && (
+            {(state === "exited" ||
+              state === "stopped" ||
+              state === "disconnected") && (
               <button
                 onClick={() => {
                   setState("connecting");
@@ -330,7 +357,11 @@ export function TerminalPane({
                 }}
                 className="rounded-full border border-accent bg-accent-soft px-3 py-1 text-xs text-on-accent-soft hover:brightness-110"
               >
-                {state === "exited" ? "Resume" : "Reconnect"}
+                {state === "exited"
+                  ? "Resume"
+                  : state === "stopped"
+                    ? "Start"
+                    : "Reconnect"}
               </button>
             )}
           </div>

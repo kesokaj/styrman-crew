@@ -187,8 +187,22 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   `POST /api/settings/credentials/import {project}` remains as a
   supplementary/refresh path. Manage from the Settings **Credentials**
   panel (consolidated status-colored view, v1.8.2 — see below).
-- **Idle lifecycle**: terminal traffic timestamps the project; idle ones
-  stop after `STYRMAN_IDLE_TIMEOUT` (24h); reopening boots on connect.
+- **Idle lifecycle** (v1.11.0): terminal traffic (keystrokes + output on
+  ATTACHED terminals) timestamps the project; candidates older than
+  `STYRMAN_IDLE_TIMEOUT` (default 8h — a stop only powers the VM off,
+  everything persists and the next attach resumes exactly where it left
+  off) get a final in-guest busy probe before the plug is pulled: any
+  RUNNING DinD container (`docker ps`), or any tmux pane whose foreground
+  process isn't a plain shell (a detached build, claude still working),
+  blocks the stop and resets the idle clock. Reopening a terminal boots on
+  connect.
+- **Stop is sticky** (v1.11.0): the sidebar Stop button (and the idle
+  reaper) marks the project deliberately stopped; open terminal tabs show
+  "Project stopped" instead of auto-reconnecting — an automatic reconnect
+  used to boot the VM right back up, making Stop un-stick whenever a tab
+  was open. Only explicit user intent boots it again: the Start button,
+  opening/resuming a terminal (its first connect carries `?boot=1`), or
+  any API start. See terminal-protocol.md's close 4002.
 - **Caddy's ingress upstream is chosen deterministically**: the server
   container is multi-homed (the ingress network plus each project's `sdb-*`
   bridge, for the broker + preview proxy), so a naive "first network" pick

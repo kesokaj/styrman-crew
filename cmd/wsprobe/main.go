@@ -53,6 +53,11 @@ func main() {
 		_, data, err := conn.Read(readCtx)
 		readCancel()
 		if err != nil {
+			// Surface a server-initiated close code (e.g. 4000 exited, 4002
+			// project stopped) so scripts can assert protocol behavior.
+			if code := websocket.CloseStatus(err); code >= 0 {
+				fmt.Printf("[close:%d]", code)
+			}
 			break
 		}
 		os.Stdout.Write(data)

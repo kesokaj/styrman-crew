@@ -483,6 +483,11 @@ export function termSocketUrl(
     | { kind: "setup"; tool?: string },
   cols: number,
   rows: number,
+  // boot: this connect carries USER INTENT to run the project (opening or
+  // resuming a pane) and may boot a deliberately-stopped VM. Automatic
+  // reconnect retries pass false and get close 4002 on a stopped project
+  // instead of resurrecting it.
+  boot = false,
 ): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const size = `cols=${cols}&rows=${rows}`;
@@ -491,9 +496,11 @@ export function termSocketUrl(
     const tool = target.tool ? `&tool=${encodeURIComponent(target.tool)}` : "";
     return `${proto}://${location.host}/ws/setup?${size}${tool}`;
   }
-  return `${proto}://${location.host}/ws/term/${target.project}/${target.id}?${size}`;
+  const b = boot ? "&boot=1" : "";
+  return `${proto}://${location.host}/ws/term/${target.project}/${target.id}?${size}${b}`;
 }
 
 /** Terminal protocol close codes (spec: terminal-protocol.md). */
 export const CLOSE_EXITED = 4000;
 export const CLOSE_REPLACED = 4001;
+export const CLOSE_STOPPED = 4002; // project deliberately stopped — never auto-reconnect

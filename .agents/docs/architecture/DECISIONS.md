@@ -1373,3 +1373,52 @@ internal/httpapi/server.go, web/src/lib/api.ts,
 web/src/components/TerminalPane.tsx, web/src/routes/settings.tsx,
 web/src/routes/setup.tsx. Verification:
 .agents/docs/changes/2026-08-30-setup-terminal-robustness-v1.10.0.md
+
+## ADR-042: Sticky stop via a deliberately-stopped marker + boot-intent connects; busy-aware idle reaper (2026-08-30)
+
+**Context.** Every terminal WebSocket connect called `EnsureRunning`, and a
+stopped VM's dying execs surfaced as TRANSIENT closes (the aliveness probe on
+a stopped container fails → "detached"), so open panes auto-reconnected and
+booted the VM straight back. The Stop button could not stick while any
+terminal tab was open, and the idle reaper was defeated the same way. The
+reaper's idle signal was also incomplete: the activity map only records
+attached-terminal traffic, so a detached build, a `docker run -d`, or an
+agent still working in a closed tab all looked idle and were killed at the
+timeout. Separately, the operator judged the 24h default TTL too long given
+that a stop is fully non-destructive.
+
+**Decision.** The orchestrator keeps a `stopped` marker per project
+(`sync.Map`), set under the project lock by `Stop()` (BEFORE the container
+stop, so the dying execs' reconnects already see it) and by the reaper's
+`stopIfIdle`; cleared by any successful `EnsureRunning` and by `Destroy`.
+The terminal bridge answers a connect to a marked project with close **4002**
+(`config.CloseProjectStopped`) unless the URL carries `?boot=1` — boot
+intent, which only user actions produce: `TerminalPane` sends it on the
+FIRST connect of an effect run (opening/switching to a pane, pressing
+Start/Resume), never on automatic retries. On 4002 the client renders
+"Project stopped" with a Start action and does not reconnect.
+`stopIfIdle` additionally probes the guest before stopping: any running DinD
+container (`docker ps -q`) or any tmux pane whose foreground process is not
+a plain shell (`tmux -S /tmp/tmux-*/default list-panes -a -F
+'#{pane_current_command}'`, run as root across all user sockets) blocks the
+stop and refreshes the idle clock; a probe failure reads as idle so the
+reaper still converges on wedged containers. Default
+`STYRMAN_IDLE_TIMEOUT` drops 24h → 8h (config default, compose fallback,
+.env.example). `cmd/wsprobe` prints `[close:<code>]` so integration checks
+can assert the protocol.
+
+**Consequences.** Stop means stopped: terminals become inert views with an
+explicit Start affordance, and only intent boots a VM — the reaper and the
+Stop button can no longer be undone by an open tab. Real work (containers,
+detached/silent commands, running agents) survives any TTL; the timer only
+fells genuinely idle VMs, which lose nothing by stopping. The busy probe
+adds one short exec per reap CANDIDATE (already past the TTL), not per tick.
+Opening a stopped project's terminal still boots it — that click is intent
+by definition. `boot=1` is not a security boundary (any authorized client
+may boot its own project); the marker is purely a UX-correctness latch.
+
+Source: internal/orchestrator/orchestrator.go, internal/terminal/bridge.go,
+internal/config/config.go, web/src/components/TerminalPane.tsx,
+web/src/lib/api.ts, cmd/wsprobe/main.go,
+.agents/docs/testing/styrman/integration.sh. Verification:
+.agents/docs/changes/2026-08-30-sticky-stop-idle-probe-v1.11.0.md

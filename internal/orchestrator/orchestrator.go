@@ -34,6 +34,11 @@ type Orchestrator struct {
 	mu        sync.Mutex             // guards projLocks
 	projLocks map[string]*sync.Mutex // per-project create/start serialization
 	activity  sync.Map               // project name → time.Time of last terminal activity
+	// stopped marks projects deliberately stopped (Stop button / idle reaper).
+	// While set, an automatic terminal-WS reconnect must NOT boot the VM back
+	// (that made Stop un-stick whenever a tab was open); any intentional boot
+	// (EnsureRunning) clears it. Key: key(user, project).
+	stopped sync.Map
 
 	// ipCache memoizes broker source-IP → (user,project) resolution for a
 	// short TTL, so a project calling the broker per git op can't drive
@@ -288,6 +293,9 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 	// HTTP responses (observed as browser ERR_CONNECTION_REFUSED on the
 	// published dev port). The port-preview proxy attaches lazily instead.
 	o.Touch(user, project)
+	// Any successful EnsureRunning is an intentional boot — lift the
+	// deliberately-stopped marker so terminals reconnect normally again.
+	o.stopped.Delete(key(user, project))
 	return id, nil
 }
 
@@ -781,7 +789,19 @@ func (o *Orchestrator) Stop(ctx context.Context, user, project string) error {
 	l := o.lockProject(key(user, project))
 	l.Lock()
 	defer l.Unlock()
+	// Mark BEFORE stopping (under the lock): the container stop kills every
+	// attached terminal exec, and their auto-reconnects must already see the
+	// marker — otherwise the first one boots the VM straight back up.
+	o.stopped.Store(key(user, project), true)
 	return o.stopLocked(ctx, project)
+}
+
+// Stopped reports whether the project was deliberately stopped (Stop button
+// or idle reaper) and not intentionally booted since. The terminal bridge
+// consults this so automatic WS reconnects don't resurrect a stopped VM.
+func (o *Orchestrator) Stopped(user, project string) bool {
+	_, ok := o.stopped.Load(key(user, project))
+	return ok
 }
 
 // stopLocked is Stop's body; the caller must hold the per-project lock
@@ -840,7 +860,51 @@ func (o *Orchestrator) stopIfIdle(ctx context.Context, user, project string, idl
 			return nil // touched since the reap decision — leave it running
 		}
 	}
+	// The activity map only sees ATTACHED terminals (keystrokes + output).
+	// A detached long build, a `docker run -d`, or a closed tab with claude
+	// still working would all look idle — probe the guest for real work
+	// before pulling the plug: any running DinD container, or any tmux pane
+	// whose foreground process isn't a plain shell, blocks the stop.
+	if reason := o.projectBusy(ctx, project); reason != "" {
+		o.logger.Info("idle-stop skipped — project busy", "project", project, "reason", reason)
+		o.Touch(user, project) // full fresh idle window before re-checking
+		return nil
+	}
+	// Same marker as an explicit Stop: an open tab's auto-reconnect used to
+	// boot the VM right back after the reaper stopped it.
+	o.stopped.Store(key(user, project), true)
 	return o.stopLocked(ctx, project)
+}
+
+// busyProbeScript runs in the guest as root: prints "docker" if any DinD
+// container is running, "term:<cmd>" for each tmux pane whose foreground
+// process isn't a plain shell. Empty output = genuinely idle.
+const busyProbeScript = `docker ps -q 2>/dev/null | grep -q . && echo docker
+for s in /tmp/tmux-*/default; do
+  [ -S "$s" ] && tmux -S "$s" list-panes -a -F '#{pane_current_command}' 2>/dev/null
+done | grep -vxE 'bash|sh|-bash|-sh' | sed 's/^/term:/' | sort -u`
+
+// projectBusy reports why the project's guest is still doing real work
+// ("" = idle). Best-effort: an exec failure (container already gone or
+// wedged) reads as idle so the reaper still converges.
+func (o *Orchestrator) projectBusy(ctx context.Context, project string) string {
+	pctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	code, out, err := o.Exec(pctx, config.ContainerName(project),
+		ExecSpec{Cmd: []string{"sh", "-c", busyProbeScript}})
+	if err != nil || code != 0 {
+		return ""
+	}
+	return busyReason(out)
+}
+
+// busyReason condenses the probe output to a single log-friendly reason.
+func busyReason(out string) string {
+	fields := strings.Fields(out)
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.Join(fields, ",")
 }
 
 // Destroy removes the project's container and network. The workspace and all
@@ -864,6 +928,7 @@ func (o *Orchestrator) Destroy(ctx context.Context, user, project string) error 
 		o.logger.Warn("network remove failed", "project", project, "error", err)
 	}
 	o.activity.Delete(key(user, project))
+	o.stopped.Delete(key(user, project))
 	return nil
 }
 

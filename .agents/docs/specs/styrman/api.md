@@ -65,7 +65,11 @@ A terminal is a persisted record whose live view is a tmux session
 | `DELETE .../terminals/{t}`          | Kill session + remove record (transcript stays in History).                                                                                                                                                                                                                    |
 | `DELETE .../terminals`              | Close all terminals in the project.                                                                                                                                                                                                                                            |
 
-`GET /ws/term/{id}/{t}` — the terminal WebSocket (see terminal-protocol.md).
+`GET /ws/term/{id}/{t}[?boot=1]` — the terminal WebSocket (see
+terminal-protocol.md). `boot=1` marks user intent to run the project (the
+first connect of an opened/resumed pane sends it); without it, a connect to
+a deliberately-stopped project is answered with close 4002 instead of
+booting the VM (v1.11.0).
 `GET /ws/setup[?tool=git|ssh|gh|gcloud|claude|agy]` — the user's hidden
 onboarding VM terminal. `tool` is optional and STRICTLY allowlisted (any
 other value is ignored, falling back to the full flow) since it's
@@ -188,5 +192,5 @@ the full `styrman-setup`, or one tool at a time from Settings → Credentials
 | `STYRMAN_IMAGE` / `STYRMAN_RUNTIME`                                      | `styrman-runtime:latest` / `mvm` | Project microVM image + runtime                                                                                                                                                                                                                  |
 | `STYRMAN_SELF_CONTAINER`                                                 | unset                            | The server's own container name (containerized deploys)                                                                                                                                                                                          |
 | `STYRMAN_USER`                                                           | OS user                          | Dev-mode default identity when no allowed emails                                                                                                                                                                                                 |
-| `STYRMAN_DOCKER_DISK_GB` / `STYRMAN_IDLE_TIMEOUT`                        | 20 / 24h                         | Per-project disk, idle stop — both operator-overridable live via `PATCH /api/settings/runtime`                                                                                                                                                  |
+| `STYRMAN_DOCKER_DISK_GB` / `STYRMAN_IDLE_TIMEOUT`                        | 20 / 8h                          | Per-project disk, idle stop (8h since v1.11.0; a stop only powers the VM off, and the reaper's busy probe skips projects with running DinD containers or a non-shell foreground process in any tmux pane) — both operator-overridable live via `PATCH /api/settings/runtime`                                                                                                                                                  |
 | `STYRMAN_VCPUS` / `STYRMAN_MEMORY_MB`                                    | 0 / 0 (Kata's default)           | Per-project vCPU count / memory limit (MiB) applied to new microVMs' container resources; 0 = no limit set, Kata's own default applies                                                                                                          |
