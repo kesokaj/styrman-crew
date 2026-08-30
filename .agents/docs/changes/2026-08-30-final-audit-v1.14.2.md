@@ -110,6 +110,10 @@ live on the host via privileged inspection:
   `disable_ipv6` is a defense-in-depth no-op — the bypass class cannot
   exist on this host.
 
-Remaining operator-gated: the R9-vs-R11 clarifying parenthetical
-(proposed, not yet applied) and retroactive sign-off on the sdb-naming
-parenthetical that the reader pass already committed (01353b5).
+Remaining operator-gated items: ALL CLOSED (2026-08-30). The operator
+retroactively approved R12's sdb-naming parenthetical (01353b5, kept)
+and directed a substantive R9 reword: production may run on cloud or
+bare metal — the platform is not inherently local-only; THIS deployment's
+chosen target is the operator's baremetal Debian homeserver. R9 updated
+with explicit operator approval; no other doc referenced the old
+local-only framing. Nothing gated remains anywhere.

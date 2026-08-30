@@ -54,7 +54,10 @@
    is a UUID (ADR-020); friendly names are labels.
 8. **R8 — Auth via Google OAuth at the ingress** (reused devbox-caddy), application-level
    authorization re-checked against the userstore. No unauthenticated exposure.
-9. **R9 — Local-only deployment** on this machine. No cloud deploy of styrman itself.
+9. **R9 — Deployment target** (operator clarification 2026-08-30): production may run
+   on cloud or bare metal — the platform is not inherently local-only. For THIS
+   deployment the operator has chosen the baremetal Debian homeserver (this machine).
+   No tension with R11: R11 proves the installer works on any fresh Debian 13 host.
 10. **R10 — Secrets**: single gitignored `.env`; per-user secrets in `~/.bash_secrets`
     (never overwritten by provisioning). No secrets in git, images, or labels.
 11. **R11 — Reproducible installation** (operator directive 2026-08-26): the whole
