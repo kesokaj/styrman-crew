@@ -30,6 +30,9 @@ func sharedHarness(t *testing.T) (h http.Handler, projectID string) {
 		// Exercise the S7 ingress-origin defense on /shared too: every doAs
 		// request carries the token; the no-token case is asserted explicitly.
 		IngressToken: "test-ingress-token",
+		// Minting a public link in header mode requires the public wildcard
+		// host (v1.14.0 fail-loud) — give the fixture one.
+		PreviewBase: "public.test",
 	}
 	logger := slog.New(slog.DiscardHandler)
 	users, err := userstore.New(filepath.Join(dir, "users.json"), []string{"owner@gmail.com"})
