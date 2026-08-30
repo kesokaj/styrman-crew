@@ -48,16 +48,13 @@ Deferred work items. Not blocking current work, but should be addressed later.
 - [ ] Transcript rotation for ~/.styrman/logs (unbounded today) (added 2026-08-26)
 - [ ] Ops panel: per-project disk/memory usage, container logs. (v1.3 dashboard covers live terminal tails; resource stats still missing) (added 2026-08-26)
 - [ ] Git status badges in the sidebar (added 2026-08-26)
-- [ ] Split `web/src/components/SidePanel.tsx` into `components/panel/*` — see
-      the fuller item under "Deferred from the 2026-08-28 full audit"; deferred
-      again in the 2026-08-30 security review remediation (v1.9.0) as a pure
-      maintainability refactor, no security/correctness impact (added 2026-08-30)
-- [ ] Move `(*Server).harvestCredentials` (`internal/httpapi/credentials.go`)
-      out of the `httpapi` package into a dedicated location (e.g. alongside
-      `credstore`/`credbroker`) — credential extraction/parsing logic
-      currently lives mixed in with HTTP request handlers. Deferred in the
-      2026-08-30 security review remediation (v1.9.0) as a pure
-      maintainability refactor, no security/correctness impact (added 2026-08-30)
+- [x] ~~Split `web/src/components/SidePanel.tsx` into per-tab files~~ — DONE
+      2026-08-30 (v1.9.1): 1008-line file → a ~95-line shell + SidePanelPorts/
+      History/Git/Clips.tsx (commit 85e7a65)
+- [x] ~~Move `(*Server).harvestCredentials` out of the handler file~~ — DONE
+      2026-08-30 (v1.9.1): harvestCredentials + guestOut + importGuestFile +
+      shellQuote → `internal/httpapi/credharvest.go` (kept in `httpapi` because
+      gitIdentity/guestUserFor are shared Server utils; commit 85e7a65)
 
 - [ ] Makefile target for Artifact Registry push if styrman ever leaves this host (added 2026-08-26)
 
@@ -117,13 +114,10 @@ Deferred work items. Not blocking current work, but should be addressed later.
 - [ ] UI: make the primary rows (Sidebar project, TerminalList terminal,
       FileExplorer entry) keyboard-reachable (`role="button"`/tabIndex or real
       buttons).
-- [ ] UI: split the `SidePanel.tsx` into `components/panel/*`; dedupe the
-      "first terminal or create" navigation helper; `PublicLinks`' sticky
-      poll override; `useMediaQuery` for the panel's 1280px breakpoint.
-      Flagged again (still open, ~969 lines now vs. 770 at the 2026-08-28
-      audit) as a deliberately-deferred pure-maintainability item in the
-      2026-08-30 security review remediation (v1.9.0) — no security or
-      correctness impact, split out to keep that remediation reviewable.
+- [ ] UI: residual SidePanel-area cleanups (the file SPLIT itself is DONE,
+      v1.9.1) — dedupe the "first terminal or create" navigation helper;
+      `PublicLinks`' sticky poll override; `useMediaQuery` for the panel's
+      1280px breakpoint.
 - [ ] UI: surface `usePolled` errors at the remaining call sites
       (NotificationBell, SidePanel tabs, terminal route) — dashboard, sidebar,
       settings, and SetupBanner were fixed in the audit.
