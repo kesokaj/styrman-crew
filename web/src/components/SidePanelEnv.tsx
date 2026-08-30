@@ -11,7 +11,7 @@ import { toast } from "../lib/toast";
  * terminal); running shells keep what they already exported.
  */
 export function EnvTab({ project }: { project: string }) {
-  const { data, refresh } = usePolled(
+  const { data, refresh, error } = usePolled(
     () => api.projectEnv(project),
     15000,
     [project],
@@ -23,7 +23,11 @@ export function EnvTab({ project }: { project: string }) {
   if (!data) {
     // Don't assert "No variables yet" (or render the form) before the first
     // fetch resolves — the broker-disabled state isn't known yet either.
-    return <p className="p-3 text-xs text-text-dim">Loading…</p>;
+    return (
+      <p className={`p-3 text-xs ${error ? "text-danger" : "text-text-dim"}`}>
+        {error ? "Could not load variables — retrying…" : "Loading…"}
+      </p>
+    );
   }
   if (!data.brokerEnabled) {
     return (

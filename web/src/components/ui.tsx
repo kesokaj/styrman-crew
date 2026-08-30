@@ -11,6 +11,7 @@ import {
   type ButtonHTMLAttributes,
   type ComponentProps,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
 import { dismissToast, getToasts, subscribeToasts } from "../lib/toast";
@@ -82,6 +83,63 @@ export function TextInput({
 // file viewer's discard confirm on top of the viewer).
 const dialogStack: symbol[] = [];
 
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * useModalA11y — the shared modal contract (v1.14.0 polish batch): topmost-
+ * Escape closes, Tab is trapped inside the panel, focus moves into the panel
+ * on open and RETURNS to the opener on close. Used by the Dialog shell and by
+ * the custom-layout overlays (credential viewer, add-credential modal, new-
+ * project dialog) so every modal behaves identically for keyboard users.
+ */
+export function useModalA11y(
+  panelRef: RefObject<HTMLDivElement | null>,
+  onClose: () => void,
+) {
+  useEffect(() => {
+    const me = Symbol("dialog");
+    dialogStack.push(me);
+    const opener = document.activeElement as HTMLElement | null;
+    // Move focus into the panel (itself focusable as a fallback target).
+    const panel = panelRef.current;
+    if (panel) {
+      panel.tabIndex = -1;
+      (panel.querySelector<HTMLElement>(FOCUSABLE) ?? panel).focus();
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (dialogStack[dialogStack.length - 1] !== me) return;
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key === "Tab" && panelRef.current) {
+        const items = [
+          ...panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE),
+        ];
+        if (items.length === 0) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        const active = document.activeElement;
+        if (e.shiftKey && (active === first || active === panelRef.current)) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && active === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    addEventListener("keydown", onKey);
+    return () => {
+      dialogStack.splice(dialogStack.indexOf(me), 1);
+      removeEventListener("keydown", onKey);
+      opener?.focus?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose]);
+}
+
 /**
  * Modal shell: scrim + rounded panel; Escape or scrim click closes. Rendered
  * through a portal to document.body — ancestors with a CSS transform (the
@@ -102,19 +160,9 @@ export function Dialog({
   danger?: boolean;
 }) {
   const titleId = useId();
-  useEffect(() => {
-    const me = Symbol("dialog");
-    dialogStack.push(me);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && dialogStack[dialogStack.length - 1] === me)
-        onClose();
-    };
-    addEventListener("keydown", onKey);
-    return () => {
-      dialogStack.splice(dialogStack.indexOf(me), 1);
-      removeEventListener("keydown", onKey);
-    };
-  }, [onClose]);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Full modal contract: topmost-Escape, focus trap, focus restore.
+  useModalA11y(panelRef, onClose);
   return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
@@ -127,6 +175,7 @@ export function Dialog({
       }}
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

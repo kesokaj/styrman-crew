@@ -1,9 +1,10 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { api, tryUI, type CredItem } from "../lib/api";
 import { usePolled, useTheme, type ThemePref } from "../lib/hooks";
 import { useProjects } from "../lib/projects";
 import { toast } from "../lib/toast";
+import { useModalA11y } from "../components/ui";
 
 const CodeEditor = lazy(() => import("../components/CodeEditor"));
 // Lazy: the terminal (xterm) is only pulled in when the operator actually opens
@@ -492,14 +493,11 @@ function ManageCredsModal({
     onClose();
   };
 
-  // Escape closes, like the shared ui.tsx Dialog (audit 2026-08-30: the
-  // hand-rolled overlays lacked keyboard dismissal + dialog semantics).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
-    addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tearing]);
+  // Shared modal contract (Escape / focus trap / focus restore) — the same
+  // hook the Dialog shell uses, keeping this custom-layout overlay identical
+  // for keyboard users (v1.14.0 polish batch).
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(panelRef, close);
 
   const onToolExited = () => {
     // styrman-setup <tool> finished (pane exit → close 4000) — but the pane
@@ -541,6 +539,7 @@ function ManageCredsModal({
       onClick={close}
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label="Add or re-sync credentials"
@@ -647,17 +646,15 @@ function CredViewer({
       stale = true;
     };
   }, [item]);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(panelRef, onClose);
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 md:p-8"
       onClick={onClose}
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label={`Credential ${item.name}`}

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { api, tryUI, type Project, type Terminal } from "../lib/api";
 import { usePolled } from "../lib/hooks";
-import { useProjects } from "../lib/projects";
+import { firstTerminalId, useProjects } from "../lib/projects";
 import { CrewMark } from "../components/icons";
 import { Dialog } from "../components/ui";
 
@@ -70,11 +70,7 @@ function ProjectCard({ project: p }: { project: Project }) {
 
   const open = (term?: string) =>
     tryUI(async () => {
-      let id = term;
-      if (!id) {
-        const { terminals } = await api.listTerminals(p.id);
-        id = terminals[0]?.id ?? (await api.createTerminal(p.id)).id;
-      }
+      const id = term ?? (await firstTerminalId(p.id));
       navigate({
         to: "/p/$project/$term",
         params: { project: p.id, term: id },

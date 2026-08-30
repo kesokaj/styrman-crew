@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "../lib/toast";
 import { api, projectNameError, type BackupMeta } from "../lib/api";
+import { useModalA11y } from "./ui";
 
 type Repo = "local" | "private" | "public" | "clone" | "backup";
 
@@ -81,12 +82,9 @@ export function NewProjectDialog({
     ["backup", "From backup", backups.length === 0],
   ];
 
-  // Escape closes, like the shared ui.tsx Dialog (2026-08-30 audit).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    addEventListener("keydown", onKey);
-    return () => removeEventListener("keydown", onKey);
-  }, [onClose]);
+  // Shared modal contract (Escape / focus trap / focus restore).
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(panelRef, onClose);
 
   // Portal: a transformed ancestor (the sidebar drawer) would otherwise
   // become the containing block for position:fixed and shrink the dialog.
@@ -96,6 +94,7 @@ export function NewProjectDialog({
       onClick={onClose}
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label="New project"

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { api, projectNameError, tryUI, type Project } from "../lib/api";
-import { useProjects } from "../lib/projects";
+import { firstTerminalId, useProjects } from "../lib/projects";
 import { toast } from "../lib/toast";
 import {
   useMediaQuery,
@@ -107,13 +107,9 @@ export function Sidebar({
   const openProject = (p: Project) =>
     tryUI(async () => {
       setExpanded(p.id, true); // opening a project reveals its terminals
-      const { terminals } = await api.listTerminals(p.id);
-      const first = terminals[0] ?? (await api.createTerminal(p.id));
+      const term = await firstTerminalId(p.id);
       onNavigate?.();
-      navigate({
-        to: "/p/$project/$term",
-        params: { project: p.id, term: first.id },
-      });
+      navigate({ to: "/p/$project/$term", params: { project: p.id, term } });
     });
 
   const projectAction = (
@@ -231,6 +227,15 @@ export function Sidebar({
                 params.project === p.id ? "bg-bg-hover" : ""
               } ${p.state === "deleting" ? "pointer-events-none opacity-50" : ""}`}
               onClick={() => p.state !== "deleting" && openProject(p)}
+              // Keyboard parity for the primary row (v1.14.0 polish batch).
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+                  e.preventDefault();
+                  if (p.state !== "deleting") openProject(p);
+                }
+              }}
             >
               <span
                 className={`h-1.5 w-1.5 shrink-0 rounded-full ${

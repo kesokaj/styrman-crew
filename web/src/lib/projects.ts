@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { api, type Project } from "./api";
 
+/** First live terminal of a project, creating one if none exist — the shared
+ *  "open a project" step (deduped from Sidebar + dashboard, v1.14.0). */
+export async function firstTerminalId(project: string): Promise<string> {
+  const { terminals } = await api.listTerminals(project);
+  return terminals[0]?.id ?? (await api.createTerminal(project)).id;
+}
+
 /**
  * ONE app-wide listProjects poll (poll de-amplification, operator item,
  * v1.14.0): Sidebar, dashboard, and Settings previously each ran their own

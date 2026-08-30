@@ -15,7 +15,7 @@ import {
 } from "../lib/api";
 import { useTheme } from "../lib/hooks";
 import { toast } from "../lib/toast";
-import { Button, ConfirmDialog, IconButton, PromptDialog } from "./ui";
+import { Button, ConfirmDialog, IconButton, PromptDialog, useModalA11y } from "./ui";
 import {
   ChevronRightIcon,
   DownloadIcon,
@@ -318,6 +318,21 @@ export function FileExplorer({
                 ? setPath(e.path)
                 : tryUI(async () => setOpen(await api.readFile(scope, e.path)))
             }
+            role="button"
+            tabIndex={0}
+            onKeyDown={(ev) => {
+              if (
+                (ev.key === "Enter" || ev.key === " ") &&
+                ev.target === ev.currentTarget
+              ) {
+                ev.preventDefault();
+                if (e.dir) setPath(e.path);
+                else
+                  void tryUI(async () =>
+                    setOpen(await api.readFile(scope, e.path)),
+                  );
+              }
+            }}
           >
             <span className="shrink-0 text-text-dim">
               {e.dir ? (
@@ -566,6 +581,10 @@ function FileViewer({
     else setConfirmDiscard(true);
   };
 
+  // Shared modal contract (topmost-Escape respects the discard-confirm on
+  // top; focus trap + restore).
+  useModalA11y(modalRef, tryClose);
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 md:p-8"
@@ -573,6 +592,9 @@ function FileViewer({
     >
       <div
         ref={modalRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="File viewer"
         className="flex max-h-[95vh] max-w-[97vw] flex-col overflow-hidden rounded-2xl bg-bg-raised shadow-2xl"
         style={{
           width: "min(56rem, 92vw)",

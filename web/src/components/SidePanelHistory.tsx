@@ -4,7 +4,7 @@ import { usePolled } from "../lib/hooks";
 import { toast } from "../lib/toast";
 
 export function HistoryTab({ project }: { project: string }) {
-  const { data } = usePolled(() => api.listHistory(project), 10000, [project]);
+  const { data, error } = usePolled(() => api.listHistory(project), 10000, [project]);
   const [openId, setOpenId] = useState<string | null>(null);
   const [text, setText] = useState("");
   const [query, setQuery] = useState("");
@@ -81,6 +81,11 @@ export function HistoryTab({ project }: { project: string }) {
         />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        {!data && error && (
+          <p className="px-1 pb-2 text-xs text-danger">
+            Could not load history — retrying…
+          </p>
+        )}
         {matches !== null ? (
           <>
             <div className="flex items-center px-1 pb-1">

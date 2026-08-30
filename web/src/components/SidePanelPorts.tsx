@@ -4,7 +4,7 @@ import { usePolled } from "../lib/hooks";
 import { copyToClipboard, toast } from "../lib/toast";
 
 export function PortsTab({ project, term }: { project: string; term: string }) {
-  const { data } = usePolled(() => api.listPorts(project), 7000, [project]);
+  const { data, error } = usePolled(() => api.listPorts(project), 7000, [project]);
   // One project-wide links poll shared by all rows (not one per open row).
   const { data: linkData, refresh: refreshLinks } = usePolled(
     () => api.listLinks(project),
@@ -19,6 +19,9 @@ export function PortsTab({ project, term }: { project: string; term: string }) {
         through styrman; “share” grants specific Google accounts access to that
         one port.
       </p>
+      {!data && error && (
+        <p className="px-1 text-xs text-danger">Could not load ports — retrying…</p>
+      )}
       {ports.length === 0 && (
         <p className="px-1 text-xs text-text-dim">
           Nothing listening. Start a dev server in a terminal and it appears

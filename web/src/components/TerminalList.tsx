@@ -69,6 +69,14 @@ export function TerminalList({
             activeTerm === t.id ? "bg-bg-active text-text" : "text-text-dim"
           }`}
           onClick={() => open(t.id)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+              e.preventDefault();
+              open(t.id);
+            }
+          }}
         >
           <span className="min-w-0 flex-1 truncate">{t.title}</span>
           {t.command && (

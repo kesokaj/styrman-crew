@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { createPortal } from "react-dom";
+import { useModalA11y } from "./ui";
 import { api } from "../lib/api";
 
 /**
@@ -36,6 +37,10 @@ export function DeleteProjectDialog({
     }
   };
 
+  // Shared modal contract (Escape / focus trap / focus restore).
+  const panelRef = useRef<HTMLDivElement>(null);
+  useModalA11y(panelRef, onClose);
+
   // Portal: a transformed ancestor (the sidebar drawer) would otherwise
   // become the containing block for position:fixed and shrink the dialog.
   return createPortal(
@@ -44,6 +49,10 @@ export function DeleteProjectDialog({
       onClick={onClose}
     >
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Delete project ${projectName}`}
         className="w-96 max-w-full rounded-3xl bg-bg-raised p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >

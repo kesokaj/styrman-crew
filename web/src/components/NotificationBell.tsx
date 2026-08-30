@@ -11,7 +11,7 @@ import { BellIcon } from "./icons";
  */
 export function NotificationBell() {
   const navigate = useNavigate();
-  const { data } = usePolled(() => api.notifications(), 8000);
+  const { data, error } = usePolled(() => api.notifications(), 8000);
   const [open, setOpen] = useState(false);
   const items = data?.notifications ?? [];
 
@@ -25,9 +25,11 @@ export function NotificationBell() {
             : "text-text-dim hover:bg-bg-hover hover:text-text"
         }`}
         title={
-          items.length
-            ? `${items.length} terminal${items.length > 1 ? "s" : ""} waiting for input`
-            : "No terminals waiting"
+          !data && error
+            ? "Notifications unavailable — retrying…"
+            : items.length
+              ? `${items.length} terminal${items.length > 1 ? "s" : ""} waiting for input`
+              : "No terminals waiting"
         }
         aria-label="Notifications"
       >

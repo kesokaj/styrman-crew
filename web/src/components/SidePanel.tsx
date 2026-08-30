@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useMediaQuery } from "../lib/hooks";
 import { FileExplorer } from "./FileExplorer";
 import { XIcon } from "./icons";
 import { PortsTab } from "./SidePanelPorts";
@@ -35,13 +36,13 @@ export function SidePanel({
   projectName?: string;
 }) {
   // Desktop: inline panel, open by default. Below xl it OVERLAYS the
-  // terminal, so it starts collapsed there (the route is client-rendered —
-  // never prerendered — so reading the viewport in the initializer is safe).
-  const [open, setOpen] = useState(
-    () =>
-      typeof window === "undefined" ||
-      window.matchMedia("(min-width: 1280px)").matches,
-  );
+  // terminal, so it defaults collapsed there. The default FOLLOWS the
+  // viewport (useMediaQuery — v1.14.0 polish) until the user toggles, whose
+  // explicit choice then wins for the session.
+  const wide = useMediaQuery("(min-width: 1280px)");
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const open = userOpen ?? wide;
+  const setOpen = (v: boolean) => setUserOpen(v);
   const [tab, setTab] = useState<Tab>("files");
 
   if (!open) {
