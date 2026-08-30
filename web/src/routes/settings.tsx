@@ -491,18 +491,42 @@ function ManageCredsModal({
     onClose();
   };
 
+  // Escape closes, like the shared ui.tsx Dialog (audit 2026-08-30: the
+  // hand-rolled overlays lacked keyboard dismissal + dialog semantics).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tearing]);
+
   const onToolExited = () => {
-    // styrman-setup <tool> finished (pane exit → close 4000). Harvest into the
-    // broker; the VM stays up so the next grey row is instant.
+    // styrman-setup <tool> finished (pane exit → close 4000) — but the pane
+    // ALSO exits on a Ctrl+C cancel or a failed login, so success is decided
+    // by the harvest REPORT, never by the exit itself (2026-08-30 audit: the
+    // old unconditional toast showed a cancelled step as "signed in").
+    const tool = activeTool;
+    setActiveTool(null); // back to the picker; VM still running
+    if (!tool) return;
     api
       .setupHarvest()
-      .then(() => onHarvested())
+      .then(({ report }) => {
+        onHarvested();
+        const stored = Object.entries(report).some(
+          ([k, v]) =>
+            (k === tool || k.startsWith(`${tool}-`)) && v.startsWith("stored"),
+        );
+        if (stored) {
+          setAdded((a) => new Set(a).add(tool));
+          toast("success", `${SETUP_TOOL_LABEL[tool] ?? tool} signed in`);
+        } else {
+          toast(
+            "info",
+            `${SETUP_TOOL_LABEL[tool] ?? tool}: nothing new signed in`,
+          );
+        }
+      })
       .catch(() => {});
-    if (activeTool) {
-      setAdded((a) => new Set(a).add(activeTool));
-      toast("success", `${SETUP_TOOL_LABEL[activeTool] ?? activeTool} signed in`);
-    }
-    setActiveTool(null); // back to the picker; VM still running
   };
 
   return (
@@ -511,6 +535,9 @@ function ManageCredsModal({
       onClick={close}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Add or re-sync credentials"
         className="flex h-[80vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-bg-raised shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -614,12 +641,20 @@ function CredViewer({
       stale = true;
     };
   }, [item]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 md:p-8"
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Credential ${item.name}`}
         className="flex h-[80vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-bg-raised shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
@@ -734,7 +769,10 @@ function BackupsSection() {
                   {proj && (
                     <button
                       onClick={() => restore(b)}
-                      disabled={busy === b.id || running}
+                      // ALL restore buttons lock while one runs (audit
+                      // 2026-08-30): a second concurrent restore raced the
+                      // first's quarantine (the server now 409s it too).
+                      disabled={busy !== null || running}
                       title={
                         running
                           ? "Stop the project first"

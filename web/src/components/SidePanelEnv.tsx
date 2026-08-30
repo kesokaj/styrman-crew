@@ -20,7 +20,12 @@ export function EnvTab({ project }: { project: string }) {
   const [value, setValue] = useState("");
   const keys = [...(data?.keys ?? [])].sort();
 
-  if (data && !data.brokerEnabled) {
+  if (!data) {
+    // Don't assert "No variables yet" (or render the form) before the first
+    // fetch resolves — the broker-disabled state isn't known yet either.
+    return <p className="p-3 text-xs text-text-dim">Loading…</p>;
+  }
+  if (!data.brokerEnabled) {
     return (
       <p className="p-3 text-xs text-text-dim">
         Not available in this deployment mode (the credential broker runs only

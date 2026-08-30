@@ -31,8 +31,8 @@ path — up to a few seconds; the HTTP upgrade completes only after readiness).
 There are no other text messages; unknown control types are ignored.
 
 The client intercepts Ctrl/Cmd+V / Ctrl+Shift+V paste via the clipboard API,
-and Cmd+C to copy a selection explicitly. Plain Ctrl+C is handled specially —
-see Browser-side keyboard handling below.
+and Cmd+C or Ctrl+Shift+C to copy a selection explicitly. Plain Ctrl+C is
+handled specially — see Browser-side keyboard handling below.
 
 OSC 52 (an escape sequence the guest PTY can emit to read/write the system
 clipboard) is **write-only**: tmux/TUI copy (yank in vim, tmux copy-mode)
@@ -57,8 +57,9 @@ several via an internal `keyHandlers` array, first `false` wins).
   though the guest PTY delivers SIGINT correctly once the byte arrives.
   Fixed: plain Ctrl+C sends ETX (`\x03`) explicitly via `term.input()` and
   calls `preventDefault()`, so neither the browser's copy nor xterm's
-  default can intercept it; any lingering selection is cleared. Only Cmd+C
-  (`metaKey`) still copies (v1.8.3, hardened v1.8.6).
+  default can intercept it; any lingering selection is cleared. Plain Ctrl+C
+  is reserved for SIGINT; Cmd+C (`metaKey`) or Ctrl+Shift+C still copy the
+  selection explicitly (v1.8.3, hardened v1.8.6).
 - **AltGr / Option compose** non-US symbols (`@ $ { } [ ] \ € …`) instead of
   acting as Meta. xterm otherwise mistakes the modifier for Meta and sends
   `ESC <key>`, which readline renders as `(arg: N)` instead of typing the

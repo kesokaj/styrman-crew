@@ -175,7 +175,7 @@ run_one() {
         gcloud)    setup_gcloud ;;
         claude)    setup_claude ;;
         agy)       setup_agy ;;
-        *) echo "unknown tool: $1 (git|ssh|gh|gcloud|claude|agy)" >&2 ;;
+        *) echo "unknown tool: $1 (git|ssh|gh|gcloud|claude|agy)" >&2; UNKNOWN_TOOL=1 ;;
     esac
 }
 
@@ -184,7 +184,13 @@ if [ "$#" -gt 0 ]; then
     # credential" flow in Settings. Git identity is a prerequisite for a usable
     # key comment, so ensure it quietly first when the target isn't git/ssh.
     case " $* " in *" git "*|*" ssh "*) ;; *) git config --global user.email >/dev/null 2>&1 || setup_git ;; esac
+    # Flag var, NOT run_one's exit status: the setup_* steps benignly return
+    # 1 when the user answers "keep" at a renew prompt.
+    UNKNOWN_TOOL=0
     for t in "$@"; do run_one "$t"; done
+    # A typo'd tool must not end on "Done" with exit 0 — fail loudly instead
+    # (the server-side ?tool= path is allowlisted; only manual runs hit this).
+    [ "${UNKNOWN_TOOL}" -ne 0 ] && exit 1
     step "Done"
     echo "Signed-in tools are shared with every project through the broker."
 else

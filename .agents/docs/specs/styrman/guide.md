@@ -47,8 +47,8 @@ Load-bearing ideas:
    tooltip of what the broker has provisioned into this project (v1.6.0/
    v1.8.1). Plain **Ctrl+C always sends SIGINT** (explicit `\x03`, bypassing
    both the browser's own copy-on-Ctrl+C and xterm's default so a lingering
-   copy-on-select highlight can no longer swallow it); Cmd+C copies
-   explicitly; paste is Ctrl/Cmd+V or Ctrl+Shift+V via the clipboard API.
+   copy-on-select highlight can no longer swallow it); Cmd+C or Ctrl+Shift+C
+   copies explicitly; paste is Ctrl/Cmd+V or Ctrl+Shift+V via the clipboard API.
    AltGr (Windows/Linux) and Option (macOS) compose non-US symbols (`@ $ {
    } [ ] € …`) instead of acting as Meta, and Nordic/Swedish dead keys (`~
    \` ^ ´ ¨`) are resolved directly rather than through xterm's buggy
@@ -212,7 +212,12 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   dockerd stubs or guest-`sudo` files are root-owned). A deleted project's
   backups survive and can seed a new project: **"From backup"** in the
   create dialog clones workspace + home + the source's project env vars.
-  Host-level snapshots of the whole state dir (TODO) remain the
+  The archive itself does NOT contain the project-scoped env variables —
+  "From backup" copies them live from the source project's broker-side
+  store at creation time, so they only transfer while the source project
+  still exists (deleting a project wipes its scoped env set too); a
+  deleted project's backup restores workspace + home with zero scoped
+  vars. Host-level snapshots of the whole state dir (TODO) remain the
   disaster-recovery layer; this is per-project lifecycle.
 - **Stop is sticky** (v1.11.0): the sidebar Stop button (and the idle
   reaper) marks the project deliberately stopped; open terminal tabs show

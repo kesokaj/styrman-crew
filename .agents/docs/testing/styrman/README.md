@@ -6,16 +6,17 @@ No mocks in the orchestrator path.
 ## Tiers
 
 1. **Unit** — `go test ./...` (store, validation; fast, no Docker).
-2. **Integration (56 checks)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
+2. **Integration (60 checks)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
    (default `styrman-runtime:dev`). Isolated server (own state dir, port
    18080) through the full lifecycle: legacy-layout migration, async create
    → microVM boot, terminals (records, rename, pause, close-all),
    WS I/O + reattach, transcripts, file explorer (incl. traversal guards),
    ports + all preview URL shapes, the in-guest git client (status + diff),
-   settings, persistence across container destruction, UUID identity +
-   friendly rename, wipe. Safe next to a real install. (The old host-side
-   `/diff` + checkpoint checks were replaced with `/git/status` + `/git/diff`
-   checks when those routes were removed in the git-RCE fix, ADR-039.)
+   sticky stop (close 4002 refusal vs `?boot=1` revive), settings,
+   persistence across container destruction, UUID identity + friendly
+   rename, wipe. Safe next to a real install. (The old host-side `/diff` +
+   checkpoint checks were replaced with `/git/status` + `/git/diff` checks
+   when those routes were removed in the git-RCE fix, ADR-039.)
 3. **Manual / UX** — things scripts can't judge:
    - `go run ./cmd/styrman/` → http://127.0.0.1:8080/ in a browser
    - create a project each for claude and agy; complete each agent's first-run

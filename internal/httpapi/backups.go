@@ -43,21 +43,47 @@ func (s *Server) restoringState(user, projectID string) bool {
 	return s.restoring[user+"/"+projectID]
 }
 
-func (s *Server) setRestoring(user, projectID string, v bool) {
+// tryAcquire is a compare-and-set on one of the in-flight maps (audit
+// 2026-08-30: a plain store let two concurrent restores both pass every
+// check, share one quarantine dir, and destroy each other's rollback).
+// Returns false when the slot is already held; release with the closure.
+func (s *Server) tryAcquire(m map[string]bool, user, projectID string) (release func(), ok bool) {
+	key := user + "/" + projectID
 	s.deletingMu.Lock()
 	defer s.deletingMu.Unlock()
-	if v {
-		s.restoring[user+"/"+projectID] = true
-	} else {
-		delete(s.restoring, user+"/"+projectID)
+	if m[key] {
+		return nil, false
 	}
+	m[key] = true
+	return func() {
+		s.deletingMu.Lock()
+		defer s.deletingMu.Unlock()
+		delete(m, key)
+	}, true
 }
 
 // createBackup archives the project now and responds with its metadata.
+// Single-flighted per project (two same-second requests would compute the
+// SAME timestamp id and interleave writes into one archive) and mutually
+// exclusive with an in-flight restore/delete mutating the same tree.
 func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
 	u, _, p, err := s.getProjectFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	release, ok := s.tryAcquire(s.backingUp, u.Username, p.ID)
+	if !ok {
+		writeErr(w, http.StatusConflict, errors.New("a backup of this project is already running"))
+		return
+	}
+	defer release()
+	if s.restoringState(u.Username, p.ID) {
+		writeErr(w, http.StatusConflict, errors.New("project is being restored"))
+		return
+	}
+	if inFlight, _ := s.deletingState(u.Username, p.ID); inFlight {
+		writeErr(w, http.StatusConflict, errors.New("project is being deleted"))
 		return
 	}
 	dir := s.cfg.ProjectBackups(u.Username, p.ID)
@@ -66,12 +92,13 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := time.Now().UTC().Format("20060102T150405Z")
-	tmp := filepath.Join(dir, id+".tar.gz.tmp")
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	// Unique temp name (CreateTemp) — belt to the single-flight's braces.
+	f, err := os.CreateTemp(dir, id+".tmp-*")
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, errors.New("cannot create backup file"))
 		return
 	}
+	tmp := f.Name()
 	cerr := backup.Create(f, map[string]string{
 		"workspace": s.cfg.ProjectWorkspace(u.Username, p.ID),
 		"home":      s.cfg.ProjectHome(u.Username, p.ID),
@@ -94,10 +121,19 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, errors.New("backup failed"))
 		return
 	}
-	fi, _ := os.Stat(final)
+	fi, err := os.Stat(final)
+	if err != nil {
+		// Never dereference a nil FileInfo (audit: this was a panic path);
+		// the archive exists — report it with an unknown size.
+		s.logger.Warn("backup stat failed", "project", p.ID, "backup", id, "error", err)
+	}
+	var size int64
+	if fi != nil {
+		size = fi.Size()
+	}
 	meta := backupMeta{
 		ID: id, ProjectID: p.ID, ProjectName: p.Name,
-		CreatedAt: time.Now().UTC(), SizeBytes: fi.Size(),
+		CreatedAt: time.Now().UTC(), SizeBytes: size,
 	}
 	mb, _ := json.MarshalIndent(meta, "", "  ")
 	if err := os.WriteFile(filepath.Join(dir, id+".json"), append(mb, '\n'), 0o600); err != nil {
@@ -219,31 +255,60 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, errors.New("no such backup"))
 		return
 	}
+	// Acquire the restoring slot FIRST (compare-and-set): a second concurrent
+	// restore 409s instead of sharing the quarantine dir and destroying this
+	// one's rollback (audit 2026-08-30). Then rule out a concurrent delete or
+	// backup of the same tree.
+	release, ok := s.tryAcquire(s.restoring, u.Username, p.ID)
+	if !ok {
+		writeErr(w, http.StatusConflict, errors.New("a restore of this project is already running"))
+		return
+	}
+	defer release()
 	if inFlight, _ := s.deletingState(u.Username, p.ID); inFlight {
 		writeErr(w, http.StatusConflict, errors.New("project is being deleted"))
 		return
 	}
-	st, err := s.orch.Status(r.Context(), u.Username, p.ID)
+	if s.backingUpState(u.Username, p.ID) {
+		writeErr(w, http.StatusConflict, errors.New("a backup of this project is running — retry when it finishes"))
+		return
+	}
+	// The wipe+extract runs under the orchestrator's PER-PROJECT LIFECYCLE
+	// LOCK — the one EnsureRunning takes — with the stopped-check re-done
+	// inside it. The restoring flag alone was a TOCTOU: a boot that had
+	// already passed its flag check could mount the home mid-extract (audit
+	// 2026-08-30). Boots arriving now either 409 on the flag or block on
+	// this lock and then boot the fully-restored tree.
+	err = s.orch.WithProjectLock(u.Username, p.ID, func() error {
+		st, serr := s.orch.Status(r.Context(), u.Username, p.ID)
+		if serr != nil {
+			return serr
+		}
+		if st.State == "running" {
+			return errRestoreRunning
+		}
+		return s.restoreInto(u.Username, p.ID, arch)
+	})
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	if st.State == "running" {
-		writeErr(w, http.StatusConflict, errors.New("stop the project before restoring"))
-		return
-	}
-	// Guard the whole wipe+extract against any concurrent boot (terminal WS
-	// with boot intent, Start button) — they 409 until the restore settles.
-	s.setRestoring(u.Username, p.ID, true)
-	defer s.setRestoring(u.Username, p.ID, false)
-
-	if err := s.restoreInto(u.Username, p.ID, arch); err != nil {
+		if errors.Is(err, errRestoreRunning) {
+			writeErr(w, http.StatusConflict, errors.New("stop the project before restoring"))
+			return
+		}
 		s.logger.Error("restore failed", "user", u.Username, "project", p.ID, "backup", id, "error", err)
 		writeErr(w, http.StatusInternalServerError, fmt.Errorf("restore failed: %w", err))
 		return
 	}
 	s.logger.Info("backup restored", "user", u.Username, "project", p.ID, "backup", id)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "restored", "backup": id})
+}
+
+// errRestoreRunning distinguishes the still-running 409 from real failures.
+var errRestoreRunning = errors.New("project running")
+
+func (s *Server) backingUpState(user, projectID string) bool {
+	s.deletingMu.Lock()
+	defer s.deletingMu.Unlock()
+	return s.backingUp[user+"/"+projectID]
 }
 
 // restoreInto replaces the project's workspace + home (keeping the docker
@@ -330,6 +395,19 @@ func (s *Server) restoreInto(user, projectID, archivePath string) error {
 		return backup.Extract(f, map[string]string{"workspace": ws, "home": phome})
 	}
 	if err := extract(); err != nil {
+		// Purge EVERYTHING the partial extract created before restoring the
+		// originals — rollback alone only cleans paths that existed before,
+		// so archive-only entries would otherwise survive as orphans mixed
+		// into the rolled-back state (audit 2026-08-30). All extracted files
+		// are server-written, so plain RemoveAll suffices.
+		os.RemoveAll(ws)
+		if entries, rerr := os.ReadDir(phome); rerr == nil {
+			for _, e := range entries {
+				if !backup.Skip[e.Name()] {
+					os.RemoveAll(filepath.Join(phome, e.Name()))
+				}
+			}
+		}
 		rollback()
 		return fmt.Errorf("extract: %w", err)
 	}

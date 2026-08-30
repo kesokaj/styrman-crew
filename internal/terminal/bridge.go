@@ -3,7 +3,9 @@
 // verbatim from devbox: binary frames carry raw PTY bytes, JSON text frames
 // carry control messages ({"type":"resize","cols":N,"rows":N}), close code
 // 4000 means the shell genuinely exited, 4001 means this connection was
-// replaced by a newer one and the client must not auto-reconnect.
+// replaced by a newer one and the client must not auto-reconnect, 4002 means
+// the project was deliberately stopped and only a boot-intent connect
+// (?boot=1) may bring it back (ADR-042).
 package terminal
 
 import (
@@ -93,8 +95,8 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Every terminal is a login shell (ADR-014/016): the user launches
 	// claude/agy themselves — both are in the image, and /etc/profile.d
-	// provides the keyring env agy needs. Run several terminals to work with
-	// several agents at once.
+	// materializes the broker credentials (env vars + files, ADR-032). Run
+	// several terminals to work with several agents at once.
 	paneCmd := "bash -l"
 	// Strict: the record must exist (created via POST). Auto-creating here
 	// let stale reconnects resurrect deleted terminals.

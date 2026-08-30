@@ -18,10 +18,11 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> image/
 - Go (latest stable at build time), Node 22
 - Agents: `claude` (npm `@anthropic-ai/claude-code`), `agy` (official installer → `/usr/local/bin/agy`)
 - dbus, gnome-keyring, libsecret-tools — originally installed for agy's Secret
-  Service (spike S4, ADR-032a); **unused since v1.5.5/ADR-040**: agy's real
-  build never touched the keyring, and the broker's keyring tier that would
-  have populated it is deleted outright. Still installed (harmless), no
-  keyring daemon is started at login (no `profile-keyring.sh` step remains)
+  Service (spike S4, ADR-032a); **removed from the image with ADR-040**:
+  agy's real build never touched the keyring, and the broker's keyring tier
+  that would have populated it was deleted outright, so `image/Dockerfile`
+  no longer installs them (its own comment records the removal). No keyring
+  daemon is started at login (no `profile-keyring.sh` step remains)
 - e2fsprogs (project docker.img), tini (PID-1 reaper)
 - `/etc/styrman-base-packages`: dpkg snapshot — the DIFF BASE for apt persistence (ADR-028: user-installed packages are captured vs this at shutdown and replayed on boot), and still useful for drift debugging
 

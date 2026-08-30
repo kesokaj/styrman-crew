@@ -81,6 +81,13 @@ export function NewProjectDialog({
     ["backup", "From backup", backups.length === 0],
   ];
 
+  // Escape closes, like the shared ui.tsx Dialog (2026-08-30 audit).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   // Portal: a transformed ancestor (the sidebar drawer) would otherwise
   // become the containing block for position:fixed and shrink the dialog.
   return createPortal(
@@ -89,6 +96,9 @@ export function NewProjectDialog({
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="New project"
         className="w-80 max-w-full rounded-3xl bg-bg-raised p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >

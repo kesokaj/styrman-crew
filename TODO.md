@@ -72,8 +72,14 @@ Deferred work items. Not blocking current work, but should be addressed later.
 
 ## Post-v1.3 roadmap (operator-approved 2026-08-28, from competitor research)
 
-- [ ] Checkpoints that include `~/.claude` (and agy state) so a restore also
-      rolls back the agent's memory (Replit/Sprites pattern)
+- [x] ~~Checkpoints that include `~/.claude` (and agy state) so a restore also
+      rolls back the agent's memory (Replit/Sprites pattern)~~ — substantially
+      shipped by v1.13.0's per-project backup/restore (ADR-044): a backup
+      archives the whole per-project home, `~/.claude` and agy state
+      included, so restoring one already rolls back agent memory too.
+      Remainder: an AUTOMATIC backup cadence — today's backups are
+      manually triggered from the sidebar ⋯ menu, there's no schedule
+      (closed 2026-08-30)
 - [ ] Platform API as an MCP server — agents manage their own ports/snapshots/
       restarts (Fly Sprites pattern)
 - [ ] Warm VM pool of 1 — pre-booted generic microVM claimed on new-project
@@ -86,7 +92,14 @@ Deferred work items. Not blocking current work, but should be addressed later.
 
 - **Notifications scan efficiency** (2026-08-27, reviewer): `GET /api/notifications` runs one sequential tmux exec per running project per poll and `Live()` re-fetches container status the caller already has. Fine at current scale; if project counts grow, add a `LiveIn(ctx, containerID, guest)` variant, scan projects concurrently (bounded errgroup), and cache per-user results for a few seconds.
 - [x] ~~profile.go GuestUser race~~ — fixed: profileStore has a sync.RWMutex; verified by the 2026-08-28 audit (go test -race clean)
-- [x] ~~Idle-reaper auto-snapshot~~ — covered by the v1.3 periodic checkpoint loop (10-min cadence for active projects; worst-case loss = one interval) (2026-08-28)
+- [x] ~~Idle-reaper auto-snapshot~~ — the v1.3 periodic checkpoint loop this
+      referenced was itself removed in v1.7.0; superseded by two later,
+      independent guarantees instead: idle stop is non-destructive and
+      busy-guarded (v1.11.0, ADR-042 — a stop only powers the VM off, and
+      the reaper's busy probe skips a project with a running DinD container
+      or a non-shell foreground process, so there's nothing to lose), plus
+      manual per-project backups on demand (v1.13.0, ADR-044) (2026-08-28,
+      rationale updated 2026-08-30)
 
 - **SPA hydration mismatch (2026-08-27, Batch E e2e):** the prerendered
   `_shell.html` triggers React #418 (hydration text mismatch) on first client

@@ -100,3 +100,26 @@ func TestExtractRejectsEscapes(t *testing.T) {
 		t.Fatal("traversal escaped the destination")
 	}
 }
+
+// A symlink dir entry followed by a file beneath it must not write through
+// the link outside the destination (defense-in-depth; Create can't emit this).
+func TestExtractRejectsSymlinkParent(t *testing.T) {
+	outside := t.TempDir()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	tw.WriteHeader(&tar.Header{Name: "home/a", Typeflag: tar.TypeSymlink, Linkname: outside, Mode: 0o777})
+	tw.WriteHeader(&tar.Header{Name: "home/a/evil.txt", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4})
+	tw.Write([]byte("evil"))
+	tw.Close()
+	gz.Close()
+
+	dst := t.TempDir()
+	err := Extract(bytes.NewReader(buf.Bytes()), map[string]string{"home": filepath.Join(dst, "home")})
+	if err == nil {
+		t.Fatal("Extract accepted a write through a symlink parent")
+	}
+	if _, serr := os.Stat(filepath.Join(outside, "evil.txt")); !os.IsNotExist(serr) {
+		t.Fatal("file escaped through the symlink parent")
+	}
+}

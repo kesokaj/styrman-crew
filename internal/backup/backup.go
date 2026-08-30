@@ -138,6 +138,14 @@ func Extract(r io.Reader, dests map[string]string) error {
 			return fmt.Errorf("archive entry escapes destination: %q", hdr.Name)
 		}
 		target := filepath.Join(dest, filepath.FromSlash(rel))
+		// Defense in depth: refuse to write THROUGH a symlink component — a
+		// crafted archive could otherwise place `a -> /etc` then `a/passwd`
+		// and escape dest past the abs/".." checks. Unreachable from Create
+		// (filepath.Walk never descends into symlinks), but Extract must not
+		// depend on who wrote the archive.
+		if err := rejectSymlinkParents(dest, filepath.FromSlash(rel)); err != nil {
+			return fmt.Errorf("archive entry %q: %w", hdr.Name, err)
+		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, fs.FileMode(hdr.Mode)&0o777); err != nil {
@@ -185,4 +193,25 @@ func hasDotDot(rel string) bool {
 		}
 	}
 	return false
+}
+
+// rejectSymlinkParents errors if any existing path component between dest and
+// dest/rel (exclusive of the leaf) is a symlink.
+func rejectSymlinkParents(dest, rel string) error {
+	cur := dest
+	segs := strings.Split(rel, string(os.PathSeparator))
+	for _, seg := range segs[:len(segs)-1] {
+		cur = filepath.Join(cur, seg)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil // rest of the path doesn't exist yet — safe
+			}
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("parent %q is a symlink", cur)
+		}
+	}
+	return nil
 }

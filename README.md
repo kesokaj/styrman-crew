@@ -90,10 +90,21 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.9.1**, deployed: https://crew.styrman.xyz (Google sign-in). Verified by
-3 suites (unit + race, 56 integration checks against real Kata, self-hosted
+**v1.13.1**, deployed: https://crew.styrman.xyz (Google sign-in). Verified by
+3 suites (unit + race, 60 integration checks against real Kata, self-hosted
 Playwright browser checks) plus a live post-deploy battery on every release.
-v1.9.0 shipped a full security-review remediation (62 findings, 1 critical):
+v1.13 added per-project **backup/restore** — snapshot a project's workspace +
+home into a server-side archive, restore it in place, or seed a brand-new
+project from any backup, including a deleted project's (ADR-044). v1.12 added
+**project-scoped env variables** in the side panel's Env tab, overriding a
+same-named user-wide variable for just that project (ADR-043). v1.11 made
+project **Stop sticky** and added a busy-aware idle reaper (a project stays
+stopped until explicit user intent restarts it; the reaper won't power off a
+project mid-build or mid-agent-run; default idle timeout raised to 8h,
+ADR-042). v1.10 made the setup terminal Ctrl+C-safe (a clean exit instead of
+restarting the onboarding script) and let Settings → Credentials add or renew
+one credential at a time without a full setup re-run (ADR-041). v1.9.0 shipped
+a full security-review remediation (62 findings, 1 critical):
 closed a host-side git RCE by deleting the checkpoint machinery outright and
 hardening the two host-side git calls that remain (`git init`/`rev-parse`)
 against a guest-controlled `.git/config` — the Git tab's own client already
@@ -145,7 +156,7 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) 
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
 
 # Production (Google OAuth, HTTPS, reboot-safe; stamp the version you deploy):
-vi deploy/.env && STYRMAN_VERSION=1.9.1 docker compose -f deploy/docker-compose.yml up -d --build
+vi deploy/.env && STYRMAN_VERSION=1.13.1 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 Full walkthrough, operations, and troubleshooting:

@@ -83,9 +83,14 @@ type Server struct {
 	deleting   map[string]bool
 	deleteErrs map[string]string
 	// restoring (same mutex, same key) marks an in-flight backup restore —
-	// boot paths refuse while set, or the booting guest and the extraction
-	// would write the same tree concurrently (ADR-044).
+	// boot paths and deletes refuse while set, or the booting guest / the
+	// wipe and the extraction would write the same tree concurrently
+	// (ADR-044; acquired via compare-and-set, audit 2026-08-30).
 	restoring map[string]bool
+	// backingUp (same mutex, same key) single-flights backup creation — two
+	// same-second backups otherwise computed the SAME id and interleaved
+	// writes into one archive (audit 2026-08-30).
+	backingUp map[string]bool
 }
 
 // New creates the Server.
@@ -100,6 +105,7 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		deleting:   map[string]bool{},
 		deleteErrs: map[string]string{},
 		restoring:  map[string]bool{},
+		backingUp:  map[string]bool{},
 	}
 	// Public preview-link store (best-effort: a load failure degrades to
 	// no-links, never blocks server start).
@@ -777,6 +783,14 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	if s.deleting[key] {
 		s.deletingMu.Unlock()
 		w.WriteHeader(http.StatusAccepted) // already in flight — idempotent
+		return
+	}
+	// Symmetric to restoreBackup's deleting check (audit 2026-08-30): a
+	// delete landing mid-restore would run its wipe concurrently with the
+	// restore's rename+extract over the same tree.
+	if s.restoring[key] {
+		s.deletingMu.Unlock()
+		writeErr(w, http.StatusConflict, errors.New("project is being restored — retry when it finishes"))
 		return
 	}
 	s.deleting[key] = true

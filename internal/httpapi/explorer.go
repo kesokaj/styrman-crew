@@ -496,8 +496,9 @@ func (s *Server) importGitCredential(w http.ResponseWriter, r *http.Request) {
 	if body.Host == "" {
 		body.Host = "github.com"
 	}
-	// The host is interpolated into a login-shell command below (gh needs the
-	// login shell to reach the keyring), so validate it strictly.
+	// The host is interpolated into a login-shell command below (the login
+	// shell materializes gh's broker credentials via /etc/profile.d,
+	// ADR-032), so validate it strictly.
 	if !hostnameRe.MatchString(body.Host) {
 		writeErr(w, http.StatusBadRequest, errors.New("invalid host"))
 		return
