@@ -450,8 +450,10 @@ func hasWorkspaceBind(hc *container.HostConfig, workspace string) bool {
 // reach microVM IPs for the port-preview proxy. Returns true when a fresh
 // attach happened — which reconfigures this container's netns and may kill
 // in-flight connections, so callers on a request path should redirect the
-// client to retry rather than proceed.
-func (o *Orchestrator) EnsureSelfAttached(_ context.Context, user, project string) bool {
+// client to retry rather than proceed. Takes no ctx BY DESIGN: the attach
+// must complete even if the triggering client gives up (see the detached
+// context below), so a caller-supplied context would only ever be ignored.
+func (o *Orchestrator) EnsureSelfAttached(user, project string) bool {
 	if o.cfg.SelfContainer == "" {
 		return false
 	}

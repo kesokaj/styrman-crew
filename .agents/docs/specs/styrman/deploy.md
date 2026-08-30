@@ -186,6 +186,18 @@ header-auth matrix (401 no header / 403 unauthorized / 200 authorized /
 health open) against the live state dir. The remaining untested step is the
 Google OAuth handshake itself, which needs the real client + domain.
 
+## Clean reinstall (virgin state)
+
+Long form: `.agents/docs/changes/2026-08-28-clean-reinstall.md`. Short form:
+stop the stack, remove every `styrman-*` container and `sdb-*` network, wipe
+`/var/lib/styrman/{homes,projects,users,credentials,backups}` (keep the dir),
+bring the stack back up. **REQUIRED: restart the styrman server AFTER
+scrubbing `StateDir/users`** — the server caches per-user spaces in memory,
+and skipping the restart leaves stale user state that 400s the next first
+login (this exact omission caused the v1.5.2 first-login failure, fixed
+v1.5.3 / ADR-033). `docker compose up -d --force-recreate styrman` after the
+scrub satisfies it.
+
 ## Project→host/LAN network isolation (R12, ADR-029, chain-based self-heal since 2026-08-30)
 
 Every project's Docker bridge is named `sdb-<projectID>` (`config.NetworkName`),

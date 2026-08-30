@@ -743,7 +743,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		}
 		// Pre-attach for port-preview while nothing depends on it (a fresh
 		// attach can kill in-flight connections through this container).
-		s.orch.EnsureSelfAttached(ctx, u.Username, p.ID)
+		s.orch.EnsureSelfAttached(u.Username, p.ID)
 	}()
 	writeJSON(w, http.StatusCreated, projectView{Project: p, State: "creating"})
 }
@@ -922,10 +922,8 @@ func (s *Server) startProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go func() { // background pre-attach (see createProject)
-		actx, acancel := context.WithTimeout(context.Background(), time.Minute)
-		defer acancel()
 		time.Sleep(time.Second) // let this response flush first
-		s.orch.EnsureSelfAttached(actx, u.Username, p.ID)
+		s.orch.EnsureSelfAttached(u.Username, p.ID)
 	}()
 	writeJSON(w, http.StatusOK, map[string]string{"state": "running"})
 }

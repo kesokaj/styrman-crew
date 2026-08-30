@@ -66,7 +66,7 @@ func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request) {
 // by both the authenticated port preview (sandbox=true, same origin as the SPA)
 // and the public link handler (sandbox=false, its own token subdomain origin).
 func (s *Server) serveProxy(w http.ResponseWriter, r *http.Request, ownerUser, projectID string, port int, prefix string, sandbox bool) {
-	if fresh := s.orch.EnsureSelfAttached(r.Context(), ownerUser, projectID); fresh {
+	if fresh := s.orch.EnsureSelfAttached(ownerUser, projectID); fresh {
 		// The attach just reconfigured this container's network namespace — this
 		// request's own connection may be doomed. Bounce the browser to the URL
 		// it actually used. On a preview host previewHostRewrite rewrote the

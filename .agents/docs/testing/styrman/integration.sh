@@ -22,7 +22,9 @@ PASS=0; FAIL=0
 say()  { echo -e "\n\033[1;34m=== $* ===\033[0m"; }
 ok()   { echo -e "\033[32mPASS\033[0m $*"; PASS=$((PASS+1)); }
 bad()  { echo -e "\033[31mFAIL\033[0m $*"; FAIL=$((FAIL+1)); }
+skip() { echo -e "\033[33mSKIP\033[0m $*"; SKIP=$((SKIP+1)); }
 check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+SKIP=0
 
 cleanup() {
     say "cleanup"
@@ -30,7 +32,7 @@ cleanup() {
     [ -n "${CN}" ] && docker rm -f "${CN}" 2>/dev/null || true
     [ -n "${ID}" ] && docker network rm "sdb-${ID}" 2>/dev/null || true
     sudo rm -rf "${STATE}" 2>/dev/null || rm -rf "${STATE}" || true
-    echo "passed=${PASS} failed=${FAIL}"
+    echo "passed=${PASS} failed=${FAIL} skipped=${SKIP}"
     # An EXIT trap's status does NOT become the script's exit status (audit
     # finding: failing runs exited 0) — exit explicitly from the trap.
     exit $(( FAIL == 0 ? 0 : 1 ))
@@ -129,18 +131,33 @@ say "ports + preview proxy"
 docker exec -d -u "$(id -un)" "${CN}" sh -c 'cd /tmp && echo "<h1>preview</h1>" > i.html && python3 -m http.server 4100 >/dev/null 2>&1'
 sleep 2
 check "port detected" "curl -fsS ${API}/api/projects/${ID}/ports | grep -q 4100"
-check "pretty URL proxies to the app" \
-    "curl -fsS ${API}/p/${ID}/1/port/4100/i.html | grep -q preview"
-check "legacy proxy URL still works" \
-    "curl -fsS ${API}/proxy/${ID}/4100/i.html | grep -q preview"
+# The preview proxy needs the TEST server (a host process) to reach the VM's
+# bridge IP. On a hardened host the v1.9.0 firewall DROPs host→bridge traffic
+# (production is unaffected — its containerized server sits on each bridge),
+# so probe reachability once and SKIP the proxy-path checks when blocked.
+VMIP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${CN}")
+if curl -m 3 -so /dev/null "http://${VMIP}:4100/i.html"; then HOSTFW=""; else HOSTFW=1; fi
+if [ -n "${HOSTFW}" ]; then
+    skip "pretty URL proxies to the app (host firewall blocks host→bridge; prod unaffected)"
+    skip "legacy proxy URL still works (host firewall)"
+else
+    check "pretty URL proxies to the app" \
+        "curl -fsS ${API}/p/${ID}/1/port/4100/i.html | grep -q preview"
+    check "legacy proxy URL still works" \
+        "curl -fsS ${API}/proxy/${ID}/4100/i.html | grep -q preview"
+fi
 check "bare URL redirects to trailing slash" \
     "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/p/${ID}/1/port/4100) = 301 ]"
 
 say "public TTL preview links (1.1 foundation)"
 LINK_TOK=$(curl -fsS -X POST "${API}/api/projects/${ID}/ports/4100/links" -d '{"ttl":"1h"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])' 2>/dev/null || true)
 check "link minted" "[ -n \"${LINK_TOK}\" ]"
-check "public link serves the app (no auth)" \
-    "curl -fsS ${API}/link/${LINK_TOK}/i.html | grep -q preview"
+if [ -n "${HOSTFW}" ]; then
+    skip "public link serves the app (host firewall blocks host→bridge; prod unaffected)"
+else
+    check "public link serves the app (no auth)" \
+        "curl -fsS ${API}/link/${LINK_TOK}/i.html | grep -q preview"
+fi
 check "link listed for the project" \
     "curl -fsS ${API}/api/projects/${ID}/links | grep -q ${LINK_TOK}"
 check "bad token 404s" \

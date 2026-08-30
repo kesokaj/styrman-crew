@@ -82,9 +82,17 @@ type Config struct {
 	// defaults; StateDir/settings.json overrides them and PATCH
 	// /api/settings/runtime updates both live — hence the mutex: the idle
 	// reaper goroutine reads while a request writes.
-	opMu        sync.RWMutex
+	opMu sync.RWMutex
+	// persistMu serializes SetOperator's settings.json write OUTSIDE opMu, so
+	// readers (the reaper tick, GET /settings) never block on an fsync
+	// (2026-08-30 audit-era cleanup).
+	persistMu   sync.Mutex
 	dockerDisk  int           // per-project docker.img size in GB (new VMs)
 	idleTimeout time.Duration // stop project containers idle this long (0 = never)
+	// TranscriptTTL: terminal transcripts older than this are pruned by the
+	// janitor (0 = keep forever). Transcripts live in each per-project home
+	// (~/.styrman/logs, ADR-017) and grew unbounded before v1.14.0.
+	TranscriptTTL time.Duration
 
 	// BrokerAddr: the credential broker's listener (ADR-030). Bound on all
 	// interfaces so projects reach it on their own bridge; NOT published to
@@ -132,6 +140,7 @@ func Load() (*Config, error) {
 		// DinD containers, a non-shell foreground process in any tmux pane)
 		// blocks the stop regardless of this timer (stopIfIdle's busy probe).
 		idleTimeout:   envDurationOr("STYRMAN_IDLE_TIMEOUT", 8*time.Hour),
+		TranscriptTTL: envDurationOr("STYRMAN_TRANSCRIPT_TTL", 30*24*time.Hour),
 		BrokerAddr:    envOr("STYRMAN_BROKER_ADDR", ":8091"),
 		AuthMode:      envOr("STYRMAN_AUTH", "none"),
 		DevAddr:       os.Getenv("STYRMAN_DEV_ADDR"),
@@ -253,12 +262,17 @@ func (c *Config) SetOperator(diskGB int, idle time.Duration) error {
 	if diskGB != 0 && (diskGB < 5 || diskGB > 500) {
 		return fmt.Errorf("docker disk must be 5-500 GB")
 	}
-	c.opMu.Lock()
-	defer c.opMu.Unlock()
+	// persistMu serializes concurrent SetOperator calls end-to-end; the value
+	// lock (opMu) is only held for the snapshot and the final in-memory apply,
+	// so readers never block on the fsync below.
+	c.persistMu.Lock()
+	defer c.persistMu.Unlock()
+	c.opMu.RLock()
 	next := operatorOverrides{
 		DockerDiskGB: c.dockerDisk,
 		IdleTimeout:  c.idleTimeout.String(),
 	}
+	c.opMu.RUnlock()
 	if diskGB != 0 {
 		next.DockerDiskGB = diskGB
 	}
@@ -286,10 +300,12 @@ func (c *Config) SetOperator(diskGB int, idle time.Duration) error {
 		os.Remove(tmp)
 		return fmt.Errorf("persist settings: %w", err)
 	}
+	c.opMu.Lock()
 	c.dockerDisk = next.DockerDiskGB
 	if idle >= 0 {
 		c.idleTimeout = idle
 	}
+	c.opMu.Unlock()
 	return nil
 }
 

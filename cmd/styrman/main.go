@@ -85,12 +85,13 @@ func main() {
 		logger.Info("adopted state", "containers", len(adopted))
 		for _, st := range adopted {
 			if st.State == "running" {
-				orch.EnsureSelfAttached(bctx, st.User, st.Project)
+				orch.EnsureSelfAttached(st.User, st.Project)
 			}
 		}
 	}()
 
 	go orch.RunIdleReaper(ctx)
+	go transcriptJanitor(ctx, cfg, logger)
 
 	api := httpapi.New(cfg, users, orch, logger)
 
@@ -331,4 +332,61 @@ func ensureRepos(cfg *config.Config, logger *slog.Logger) {
 			logger.Info("R13 sweep: initialized git repo", "user", user, "project", p.Name)
 		}
 	})
+}
+
+// transcriptJanitor prunes terminal-transcript files older than
+// cfg.TranscriptTTL (default 30d, STYRMAN_TRANSCRIPT_TTL, 0 = keep forever).
+// Transcripts live in each per-project home (~/.styrman/logs, ADR-017) and
+// grew unbounded before v1.14.0. Runs at startup and every 6h; file-mtime
+// based, best-effort — an unreadable dir is skipped, never fatal.
+func transcriptJanitor(ctx context.Context, cfg *config.Config, logger *slog.Logger) {
+	if cfg.TranscriptTTL <= 0 {
+		return
+	}
+	ticker := time.NewTicker(6 * time.Hour)
+	defer ticker.Stop()
+	for {
+		pruneTranscripts(cfg, logger)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func pruneTranscripts(cfg *config.Config, logger *slog.Logger) {
+	cutoff := time.Now().Add(-cfg.TranscriptTTL)
+	var pruned int
+	users, err := os.ReadDir(cfg.HomesDir)
+	if err != nil {
+		return
+	}
+	for _, u := range users {
+		if !u.IsDir() {
+			continue
+		}
+		projects, err := os.ReadDir(filepath.Join(cfg.HomesDir, u.Name(), "p"))
+		if err != nil {
+			continue
+		}
+		for _, p := range projects {
+			logs := filepath.Join(cfg.HomesDir, u.Name(), "p", p.Name(), ".styrman", "logs")
+			_ = filepath.Walk(logs, func(path string, fi os.FileInfo, err error) error {
+				if err != nil || !fi.Mode().IsRegular() {
+					return nil //nolint:nilerr // best-effort janitor
+				}
+				if fi.ModTime().Before(cutoff) {
+					if os.Remove(path) == nil {
+						pruned++
+					}
+				}
+				return nil
+			})
+		}
+	}
+	if pruned > 0 {
+		logger.Info("transcript janitor pruned old transcripts",
+			"files", pruned, "ttl", cfg.TranscriptTTL.String())
+	}
 }
