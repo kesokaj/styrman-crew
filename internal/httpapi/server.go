@@ -211,6 +211,11 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("POST /api/projects/{project}/start", s.startProject)
 	mux.HandleFunc("POST /api/projects/{project}/stop", s.stopProject)
 	mux.HandleFunc("GET /api/projects/{project}/stats", s.projectStats)
+	// Project-scoped env variables (ADR-043) — SidePanel Env tab.
+	mux.HandleFunc("GET /api/projects/{project}/env", s.listProjectEnv)
+	mux.HandleFunc("PUT /api/projects/{project}/env", s.putProjectEnv)
+	mux.HandleFunc("GET /api/projects/{project}/env/{key}", s.projectEnvValue)
+	mux.HandleFunc("DELETE /api/projects/{project}/env/{key}", s.deleteProjectEnv)
 	// Git side panel — a real git client (runs in the guest VM).
 	mux.HandleFunc("GET /api/projects/{project}/git/status", s.gitStatus)
 	mux.HandleFunc("GET /api/projects/{project}/git/diff", s.gitDiff)
@@ -793,6 +798,13 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		if s.links != nil {
 			if err := s.links.DeleteProject(p.ID); err != nil {
 				s.logger.Warn("public-link cleanup failed", "project", p.Name, "error", err)
+			}
+		}
+		// Project-scoped env variables die with the project (ADR-043) — they
+		// must not leak into any future project reusing the id.
+		if s.creds != nil {
+			if err := s.creds.DeleteProjectAll(u.Username, p.ID); err != nil {
+				s.logger.Warn("project env cleanup failed", "project", p.Name, "error", err)
 			}
 		}
 	}()

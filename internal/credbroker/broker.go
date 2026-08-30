@@ -105,6 +105,16 @@ func (b *Broker) env(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "store error", http.StatusInternalServerError)
 		return
 	}
+	// Project-scoped variables (ADR-043) merge OVER the user-wide tier — the
+	// caller's own project is authoritative on a shared key. Only this
+	// project's callers ever see them; other projects still get just the
+	// user-wide map. Best-effort: a project-tier read error must not take the
+	// user-wide credentials down with it.
+	if pm, perr := b.store.ProjectEnv(user, project); perr == nil {
+		for k, v := range pm {
+			m[k] = v
+		}
+	}
 	if len(m) > 0 {
 		b.logger.Info("cred broker: served env credentials", "user", user, "project", project, "count", len(m))
 	}

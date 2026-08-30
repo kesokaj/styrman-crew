@@ -84,10 +84,16 @@ Load-bearing ideas:
    `/p/<id>/<t>/port/<port>/` links; per-port sharing — adding a Google
    email mints a stable **private link** `https://<token>.private.…/`
    requiring sign-in + membership in the share list, ADR-026 — and public
-   TTL links on `https://<token>.public.…/`, ADR-025), History
-   (transcripts under their terminal's friendly name + FULL-TEXT SEARCH
-   across all of them — everything you and the agents typed or saw), **Git**
-   — a real git client (v1.7.0, see below), Clipboard
+   TTL links on `https://<token>.public.…/`, ADR-025), **Env** —
+   project-scoped env variables (v1.12.0, ADR-043): like Settings' custom
+   variables but delivered ONLY to this project's new login shells; a
+   project variable overrides a same-named global one, deleting it falls
+   back to the global, and the variables die with the project. Click a name
+   to reveal its value (audit-logged); stored via the broker's env tier so
+   NO guest change was needed — the broker merges them per calling project
+   — History (transcripts under their terminal's friendly name + FULL-TEXT
+   SEARCH across all of them — everything you and the agents typed or saw),
+   **Git** — a real git client (v1.7.0, see below), Clipboard
    (session-scoped — see above). The HOME surface is a dashboard: project
    cards with live transcript tails per running terminal (15s refresh,
    click to jump in); polling pauses app-wide in hidden browser tabs.

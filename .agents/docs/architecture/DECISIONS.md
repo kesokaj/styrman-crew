@@ -1422,3 +1422,43 @@ internal/config/config.go, web/src/components/TerminalPane.tsx,
 web/src/lib/api.ts, cmd/wsprobe/main.go,
 .agents/docs/testing/styrman/integration.sh. Verification:
 .agents/docs/changes/2026-08-30-sticky-stop-idle-probe-v1.11.0.md
+
+## ADR-043: Project-scoped env variables as a broker-merged credstore tier (2026-08-30)
+
+**Context.** The broker's env tier (ADR-032) is user-wide: every variable
+reaches every project's login shells. The operator wants variables scoped to
+one project (a DATABASE_URL that belongs to one app), managed from that
+project's side panel. Candidate designs: per-project files in the guest home
+(survives outside the broker's lifecycle, invisible to the credentials
+model), container env at create time (requires a VM recreate per change), or
+a broker-side tier (no guest change, live on the next shell).
+
+**Decision.** A project env tier in the credstore, merged broker-side. The
+broker already resolves every caller's source IP to `(user, project)` for
+logging and the git tier — `/env` now merges `ProjectEnv(user, project)`
+over `AllEnv(user)`, project value winning on a shared key. The guest login
+snippet is UNTOUCHED: scoping is entirely a broker concern. Storage is
+`<user>/proj-<projectID>/env-KEY.json`, sharing the user-wide tier's
+validation (identifier key, single-line value ≤4096 bytes — the line-based
+guest delivery must never be injectable); `List` skips directories so the
+Settings view never shows another surface's rows. CRUD lives on the project
+(`/api/projects/{id}/env[/{key}]`, owner-scoped by `getProjectFor`): the
+list returns keys only, a single-value read is audit-logged like the
+Settings credential viewer, and `deleteProject` removes the whole scoped dir
+so variables cannot outlive their project or leak into an id reuse. The UI
+is a SidePanel "Env" tab; copy states the contract (new login shells only;
+overrides a same-named global; falls back on delete).
+
+**Consequences.** Changing a project variable needs no VM restart — the
+next login shell picks it up, same as the user-wide tier. A project variable
+shadows a global one by design; the fallback-on-delete keeps the mental
+model simple (most-specific wins). The merge happens on every `/env` pull
+(one extra directory read; negligible). Verified live end-to-end: export in
+the owning project, absent in another, shadow + fallback + project-delete
+cleanup all observed on crew.
+
+Source: internal/credstore/credstore.go, internal/credbroker/broker.go,
+internal/httpapi/projectenv.go, internal/httpapi/server.go,
+web/src/components/SidePanelEnv.tsx, web/src/components/SidePanel.tsx,
+web/src/lib/api.ts, web/src/routes/settings.tsx. Verification:
+.agents/docs/changes/2026-08-30-project-env-vars-v1.12.0.md

@@ -76,7 +76,11 @@ Steps, in order:
      bridge a new subnet, which would otherwise strand the project on a
      stale broker IP (M17). Falls back to the injected value if its own
      address can't be read.
-   - `GET /env` → `export` each var. `GET /files` → writes each file under
+   - `GET /env` → `export` each var. The broker merges any PROJECT-SCOPED
+     variables (SidePanel → Env, ADR-043) over the user-wide set for the
+     calling project — the guest snippet is unchanged; scoping happens
+     entirely broker-side via the caller's IP→(user,project) resolution.
+     `GET /files` → writes each file under
      `$HOME` at its mode, via an `umask 077` temp file + atomic rename (never
      a torn or briefly-world-readable credential file).
    - applies `STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL` (env creds) as

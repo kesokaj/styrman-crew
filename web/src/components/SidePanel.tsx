@@ -5,11 +5,13 @@ import { PortsTab } from "./SidePanelPorts";
 import { HistoryTab } from "./SidePanelHistory";
 import { GitTab } from "./SidePanelGit";
 import { ClipsTab } from "./SidePanelClips";
+import { EnvTab } from "./SidePanelEnv";
 
-type Tab = "files" | "ports" | "history" | "git" | "clips";
+type Tab = "files" | "ports" | "env" | "history" | "git" | "clips";
 const TABS: Array<[Tab, string]> = [
   ["files", "Files"],
   ["ports", "Ports"],
+  ["env", "Env"],
   ["history", "History"],
   ["git", "Git"],
   ["clips", "Clipboard"],
@@ -86,6 +88,7 @@ export function SidePanel({
           <FileExplorer project={project} projectName={projectName} />
         )}
         {tab === "ports" && <PortsTab project={project} term={term} />}
+        {tab === "env" && <EnvTab project={project} />}
         {tab === "history" && <HistoryTab project={project} />}
         {tab === "git" && <GitTab project={project} />}
         {tab === "clips" && <ClipsTab />}

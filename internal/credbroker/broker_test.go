@@ -160,3 +160,37 @@ func TestStoreRoundTripAndIsolation(t *testing.T) {
 		t.Fatalf("refresh not read back: %q", c.Token)
 	}
 }
+
+// Project-scoped vars (ADR-043) merge OVER the user-wide tier for the calling
+// project only — the project value wins on a shared key, and another
+// project's vars never appear.
+func TestBrokerEnvProjectMerge(t *testing.T) {
+	b, cs := newBroker(t, fakeResolver{user: "alice", project: "p1"})
+	cs.PutEnv("alice", "GH_TOKEN", "ghs_global")
+	cs.PutEnv("alice", "SHARED", "global")
+	cs.PutProjectEnv("alice", "p1", "SHARED", "project-wins")
+	cs.PutProjectEnv("alice", "p1", "DATABASE_URL", "postgres://p1")
+	cs.PutProjectEnv("alice", "p2", "OTHER_PROJECT", "must-not-leak")
+	srv := httptest.NewServer(b.Handler())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]string
+	json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	if got["GH_TOKEN"] != "ghs_global" {
+		t.Fatalf("user-wide var lost: %+v", got)
+	}
+	if got["SHARED"] != "project-wins" {
+		t.Fatalf("project value must win on a shared key: %+v", got)
+	}
+	if got["DATABASE_URL"] != "postgres://p1" {
+		t.Fatalf("project var missing: %+v", got)
+	}
+	if _, leaked := got["OTHER_PROJECT"]; leaked {
+		t.Fatalf("another project's var leaked: %+v", got)
+	}
+}

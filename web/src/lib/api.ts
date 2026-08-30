@@ -459,6 +459,25 @@ export const api = {
     request<{ content?: string; path?: string; binary?: boolean }>(
       `/api/settings/credentials/${kind}/${encodeURIComponent(id)}/content`,
     ),
+  // Project-scoped env variables (SidePanel Env tab) — delivered only to this
+  // project's NEW login shells; a project value wins over a same-named global.
+  projectEnv: (project: string) =>
+    request<{ brokerEnabled: boolean; keys: string[] }>(
+      `/api/projects/${project}/env`,
+    ),
+  putProjectEnv: (project: string, key: string, value: string) =>
+    request<void>(`/api/projects/${project}/env`, {
+      method: "PUT",
+      body: JSON.stringify({ key, value }),
+    }),
+  projectEnvValue: (project: string, key: string) =>
+    request<{ key: string; value: string }>(
+      `/api/projects/${project}/env/${encodeURIComponent(key)}`,
+    ),
+  deleteProjectEnv: (project: string, key: string) =>
+    request<void>(`/api/projects/${project}/env/${encodeURIComponent(key)}`, {
+      method: "DELETE",
+    }),
   setupStatus: () => request<SetupStatus>("/api/setup/status"),
   setupStart: () => request<void>("/api/setup/start", { method: "POST" }),
   setupDone: () => request<void>("/api/setup/done", { method: "POST" }),

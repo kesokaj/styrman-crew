@@ -419,7 +419,8 @@ function CredentialsSection() {
           <span className="text-[10px] text-text-dim">
             Any custom env variable (e.g. NPM_TOKEN, DATABASE_URL) — exported as
             a shell var in every project. Storing the same name again updates
-            it.
+            it. Variables for ONE project only live in that project's side
+            panel → Env (they override a global with the same name).
           </span>
         </div>
       </Row>

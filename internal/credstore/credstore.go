@@ -148,11 +148,11 @@ func (s *Store) GetGit(user, host string) (GitCred, error) {
 
 // ─── env tier ───────────────────────────────────────────────────────────────
 
-// PutEnv stores (or replaces) a shell-variable credential. The value must be a
+// validateEnv enforces the shared env-credential rules. The value must be a
 // single line with no control characters: the in-guest snippet delivers env
 // creds line-by-line (KEY\tVALUE), so a newline or tab in the value would
 // inject an extra exported variable into every login shell (ADR-032 review).
-func (s *Store) PutEnv(user, key, value string) error {
+func validateEnv(key, value string) error {
 	if !envKeyRe.MatchString(key) {
 		return fmt.Errorf("invalid env key %q", key)
 	}
@@ -164,22 +164,14 @@ func (s *Store) PutEnv(user, key, value string) error {
 	if len(value) > 4096 {
 		return fmt.Errorf("env value for %q exceeds 4096 bytes", key)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	data, err := json.MarshalIndent(EnvCred{Key: key, Value: value}, "", "  ")
-	if err != nil {
-		return err
-	}
-	return atomicWrite(filepath.Join(s.userDir(user), "env-"+key+".json"), append(data, '\n'))
+	return nil
 }
 
-// AllEnv returns every env credential for a user as a key→value map (empty when
-// none are onboarded).
-func (s *Store) AllEnv(user string) (map[string]string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+// readEnvDir loads every env-*.json in dir as a key→value map (empty when the
+// dir doesn't exist). Caller holds the lock.
+func readEnvDir(dir string) (map[string]string, error) {
 	out := map[string]string{}
-	entries, err := os.ReadDir(s.userDir(user))
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return out, nil
@@ -190,7 +182,7 @@ func (s *Store) AllEnv(user string) (map[string]string, error) {
 		if e.IsDir() || !strings.HasPrefix(e.Name(), "env-") || !strings.HasSuffix(e.Name(), ".json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(s.userDir(user), e.Name()))
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
 			continue
 		}
@@ -201,6 +193,89 @@ func (s *Store) AllEnv(user string) (map[string]string, error) {
 		out[c.Key] = c.Value
 	}
 	return out, nil
+}
+
+// PutEnv stores (or replaces) a user-wide shell-variable credential,
+// delivered to every login shell in every project.
+func (s *Store) PutEnv(user, key, value string) error {
+	if err := validateEnv(key, value); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := json.MarshalIndent(EnvCred{Key: key, Value: value}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Join(s.userDir(user), "env-"+key+".json"), append(data, '\n'))
+}
+
+// AllEnv returns every user-wide env credential as a key→value map (empty when
+// none are onboarded).
+func (s *Store) AllEnv(user string) (map[string]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return readEnvDir(s.userDir(user))
+}
+
+// ─── project env tier (ADR-043) ─────────────────────────────────────────────
+// Shell variables scoped to ONE project, stored under
+// <user>/proj-<projectID>/env-KEY.json. The broker's /env merges them over the
+// user-wide tier for that project's callers only (project value wins on a
+// shared key). The proj-* subdirs are invisible to List (it skips dirs).
+
+func (s *Store) projDir(user, project string) string {
+	return filepath.Join(s.userDir(user), "proj-"+safe(project))
+}
+
+// PutProjectEnv stores (or replaces) a shell variable scoped to one project.
+func (s *Store) PutProjectEnv(user, project, key, value string) error {
+	if project == "" {
+		return errors.New("project required")
+	}
+	if err := validateEnv(key, value); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := json.MarshalIndent(EnvCred{Key: key, Value: value}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Join(s.projDir(user, project), "env-"+key+".json"), append(data, '\n'))
+}
+
+// ProjectEnv returns one project's scoped env credentials (empty when none).
+func (s *Store) ProjectEnv(user, project string) (map[string]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return readEnvDir(s.projDir(user, project))
+}
+
+// DeleteProjectEnv removes one project-scoped variable (ErrNotFound if absent).
+func (s *Store) DeleteProjectEnv(user, project, key string) error {
+	if !envKeyRe.MatchString(key) {
+		return fmt.Errorf("invalid env key %q", key)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err := os.Remove(filepath.Join(s.projDir(user, project), "env-"+key+".json"))
+	if os.IsNotExist(err) {
+		return ErrNotFound
+	}
+	return err
+}
+
+// DeleteProjectAll removes a project's entire scoped-credential dir — called
+// when the project itself is deleted, so its variables can't leak into a
+// future project that reuses the id.
+func (s *Store) DeleteProjectAll(user, project string) error {
+	if project == "" {
+		return errors.New("project required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return os.RemoveAll(s.projDir(user, project))
 }
 
 // ─── file tier ──────────────────────────────────────────────────────────────
