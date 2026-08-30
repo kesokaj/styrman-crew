@@ -122,9 +122,10 @@ Load-bearing ideas:
    bind-mounted, guest-writable workspace, a guest→server RCE. All that
    remains host-side is a hardened `git init`/`git rev-parse`
    (`internal/gitrepo`), run with config overrides that neutralize a
-   guest-controlled `.git/config`. Backups are now expected to come from
-   microVM volume snapshots of `/var/lib/styrman` (host infra: LVM/ZFS/
-   restic — tracked in `TODO.md`, not yet built).
+   guest-controlled `.git/config`. Backups are now two layers, both live:
+   in-app per-project archives (ADR-044, §2 below) plus a daily whole-state
+   restic→GCS snapshot of `/var/lib/styrman` (v1.14.0) — see deploy.md's
+   "Host-layer backups" section.
 
 ## 2. Architecture
 
@@ -334,7 +335,8 @@ rotated token, or a tool signed into inside a project instead of at setup).
   commit-message box, "Staged"/"Changes" file lists with per-file stage/
   unstage/discard, and a colored per-file diff viewer. (Automatic
   checkpoint snapshots were REMOVED in v1.7.0 — see §1 idea 5. Back up via
-  microVM volume snapshots instead, once that host tooling exists.)
+  the sidebar ⋯ menu's **Backup** / **Settings → Backups** instead, plus the
+  host-layer disaster-recovery snapshot described in deploy.md.)
 - **Terminals**: sidebar, per project; generated friendly names; ⏸ pause /
   ✕ delete / close all; per-terminal autostart command (pencil → dialog;
   set the autostart to `claude --continue` / `agy --continue` and the
@@ -422,9 +424,15 @@ image) ·
 
 ## 7. Roadmap
 
-Remaining candy: transcript rotation, ops panel (disk/logs per project),
-git badges in the sidebar, agy native session resume, moby SDK migration,
-backup automation for `/var/lib/styrman`. See `TODO.md`.
+Deliberately EMPTY as of v1.14.0 (operator directive, 2026-08-30: "I want
+nothing in todo and roadmap — start fresh with new things"). Everything the
+roadmap used to list here — transcript rotation, an ops panel, sidebar git
+badges, agy native session resume, backup automation — SHIPPED that release;
+a few older ideas (a warm VM pool, a platform MCP server, auto-titles from
+transcripts, a moby SDK migration) were explicitly RETIRED with reasons
+instead. Full shipped/retired history: **ADR-045**
+(`.agents/docs/architecture/DECISIONS.md`) and `.agents/docs/changes/`.
+`TODO.md` is the inbox for new items going forward — add there, not here.
 
 Lineage: combines `devbox` (Kata multi-tenant shell platform; ingress,
 terminal protocol) and `argolis-devbox` (single-VM cloud shell). Full

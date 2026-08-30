@@ -39,7 +39,8 @@ containers disposable always.
   network, own home — projects can never reach each other, nor the host or
   the LAN). Enforced by a host firewall (dedicated iptables chains,
   insert-if-missing so there's no unprotected window) that a self-healing
-  systemd timer re-applies every 60s (ADR-029). Users never see each other's
+  systemd timer re-applies every 60s (ADR-036; the host-reachability rule
+  itself is ADR-029). Users never see each other's
   worlds.
 - **Share previews, not access.** A project owner can grant specific Google
   emails access to ONE exposed port's preview — never the terminal, files,
@@ -90,54 +91,19 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.14.0**, deployed: https://crew.styrman.xyz (Google sign-in). Verified by
-3 suites (unit + race, 60 integration checks against real Kata, self-hosted
-Playwright browser checks) plus a live post-deploy battery on every release.
-v1.13 added per-project **backup/restore** — snapshot a project's workspace +
-home into a server-side archive, restore it in place, or seed a brand-new
-project from any backup, including a deleted project's (ADR-044). v1.12 added
-**project-scoped env variables** in the side panel's Env tab, overriding a
-same-named user-wide variable for just that project (ADR-043). v1.11 made
-project **Stop sticky** and added a busy-aware idle reaper (a project stays
-stopped until explicit user intent restarts it; the reaper won't power off a
-project mid-build or mid-agent-run; default idle timeout raised to 8h,
-ADR-042). v1.10 made the setup terminal Ctrl+C-safe (a clean exit instead of
-restarting the onboarding script) and let Settings → Credentials add or renew
-one credential at a time without a full setup re-run (ADR-041). v1.9.0 shipped
-a full security-review remediation (62 findings, 1 critical):
-closed a host-side git RCE by deleting the checkpoint machinery outright and
-hardening the two host-side git calls that remain (`git init`/`rev-parse`)
-against a guest-controlled `.git/config` — the Git tab's own client already
-ran everything else inside the guest VM (ADR-039); deleted the dormant broker
-keyring tier entirely, so agy's OAuth token is unambiguously a `file`
-credential now, not a fourth "dormant" tier (ADR-040); made every auth
-misconfiguration fail closed at startup instead of at request time; capped
-guest exec output in memory (a project VM is untrusted root in its own
-microVM); and reworked the project-isolation firewall onto dedicated
-insert-if-missing iptables chains so there's no self-heal window where
-isolation is briefly absent. v1.5 completed the **credential broker**
-(ADR-030/032/034): finishing first-run setup auto-seeds it — sign in once
-(git/ssh required, the rest optional and skippable), no manual import step.
-v1.7 replaced automatic git checkpoints with a **real git
-client** in the side panel (status/stage/commit/push/diff, running inside
-the project VM so identity and auth apply) and added server-side code
-**Format**ting via each language's real CLI formatter. v1.8 hardened project
-network isolation with a self-healing firewall (re-applies every 60s, so a
-Docker restart can't leave a project reachable from the host/LAN, ADR-029),
-fixed a Caddy multi-homing bug that could 502 the whole app, consolidated
-Settings into one status-colored **Credentials** view, added a live terminal
-status bar, and improved terminal keyboard handling (Ctrl+C, AltGr/Option
-symbol compose, Nordic dead keys) for non-US layouts. It builds on v1.4's
-**per-project homes** (ADR-031) — each project fully individual, credentials
-the only shared thing — and v1.3's UI redesign (Material 3 tokens, Google
-Sans Flex + Google Sans Code self-hosted, light/dark/system themes, crew
-branding), a dashboard with live terminal tails, full-text history search,
-markdown preview, dynamic runtime settings, per-project workspace storage
-(ADR-027), per-terminal autostart, and apt persistence (ADR-028). Earlier:
-per-port preview sharing (ADR-024), public TTL links (ADR-025), private
-email-gated links (ADR-026). The living documentation is
-`.agents/docs/specs/styrman/guide.md`; per-release notes live in
-`.agents/docs/changes/`.
+**v1.14.1**, deployed: https://crew.styrman.xyz (Google sign-in).
+
+- Current release: the 2026-08-30 marathon — automated backups on BOTH
+  layers (in-app cadence + retention + pre-wipe safety net, and daily
+  whole-state restic→GCS), an ops row + microVM logs on the dashboard,
+  sidebar git badges, project-scoped env vars, sticky stop with a
+  busy-aware idle reaper, per-project backup/restore/clone (ADR-042…045) —
+  followed by a same-day adversarial review with every finding fixed.
+- Verified per release by four suites (unit+race, integration against real
+  Kata, Playwright e2e, live post-deploy battery) — counts and how to run
+  them: `.agents/docs/testing/styrman/README.md`.
+- Full release history: `.agents/docs/changes/` (one file per change) and
+  every decision in `.agents/docs/architecture/DECISIONS.md`.
 
 ## Requirements
 
@@ -149,14 +115,23 @@ email-gated links (ADR-026). The living documentation is
 ## Quick start
 
 ```bash
-sudo bash deploy/host-setup.sh --user $USER   # Docker + Kata "mvm" + dirs (idempotent)
-docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/  # runtime image (~10 min first build; the version keys harness re-seeding)
+# 1. Host: Docker + Kata "mvm", firewall + backup units, builds the
+#    production runtime image (styrman-runtime:latest) and seeds deploy/.env
+#    with generated identity + secrets (idempotent):
+sudo bash deploy/host-setup.sh --user $USER
+# 2. FRESH HOST ONLY: log out and back in (or `newgrp docker`) — the docker
+#    group added in step 1 is not active in your current shell yet.
 
-# Dev (loopback, no auth):
+# Production (Google OAuth, HTTPS, reboot-safe) — uses the :latest image
+# step 1 already built; fill the OAuth/Cloudflare/domain values first:
+vi deploy/.env
+STYRMAN_VERSION=$(git describe --tags --always) \
+  docker compose -f deploy/docker-compose.yml up -d --build
+
+# Dev (loopback, no auth; needs Go 1.25+) — builds its OWN image tag so
+# experiments never touch the production one (~10 min first build):
+docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
-
-# Production (Google OAuth, HTTPS, reboot-safe; stamp the version you deploy):
-vi deploy/.env && STYRMAN_VERSION=1.13.1 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 Full walkthrough, operations, and troubleshooting:

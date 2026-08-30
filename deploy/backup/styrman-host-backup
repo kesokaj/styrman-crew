@@ -11,16 +11,22 @@
 #   /etc/styrman/restic-pw       — restic repo password (ALSO store it in a
 #                                  password manager: without it the backups
 #                                  are unreadable after host loss)
-# Optional override: /etc/styrman/backup.env may redefine GOOGLE_PROJECT /
-# RESTIC_REPOSITORY for a different bucket/project.
+#   one-time: `restic init` against the repository (host-setup.sh prints a
+#   copy-pasteable command). /etc/styrman itself is created by host-setup.sh.
+# The baked-in defaults target the ORIGINAL deployment's GCP project/bucket —
+# on ANY other host /etc/styrman/backup.env MUST redefine GOOGLE_PROJECT and
+# RESTIC_REPOSITORY=gs:<your-bucket>:/ (it is not optional there).
 set -euo pipefail
 export GOOGLE_PROJECT=driven-eft-h4it
 export RESTIC_REPOSITORY=gs:styrman-crew-backups-driven-eft-h4it:/
 [ -f /etc/styrman/backup.env ] && . /etc/styrman/backup.env
 export GOOGLE_APPLICATION_CREDENTIALS=/etc/styrman/backup-sa.json
 export RESTIC_PASSWORD_FILE=/etc/styrman/restic-pw
+# NOTE: StateDir/backups IS included (2026-08-30 reader review): a DELETED
+# project's in-app archives are the ONLY copy of that project — excluding
+# them broke the "backups outlive their project" promise across host loss.
+# Only the reproducible per-project docker disks are excluded.
 restic backup /var/lib/styrman \
   --exclude '/var/lib/styrman/homes/*/p/*/.dockerd' \
-  --exclude '/var/lib/styrman/backups' \
   --tag styrman-state
 restic forget --keep-daily 7 --keep-weekly 4 --keep-monthly 6 --prune

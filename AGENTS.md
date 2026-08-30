@@ -32,14 +32,14 @@ go test ./...
 go vet ./...
 
 # Build runtime image (AMD64, local only)
-docker build -t styrman-runtime:dev image/
+docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/  # the version keys harness re-seeding
 
 # Run locally (loopback, no auth) / deploy production
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/
 STYRMAN_VERSION=<x.y.z> docker compose -f deploy/docker-compose.yml up -d --build
 
 # Test suites
-bash .agents/docs/testing/styrman/integration.sh   # 56 checks vs real Kata
+bash .agents/docs/testing/styrman/integration.sh   # 60 checks; counts live in .agents/docs/testing/styrman/README.md vs real Kata
 bash web/e2e/run.sh                                # 34 Playwright checks (self-hosted)
 ```
 

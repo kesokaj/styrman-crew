@@ -19,12 +19,13 @@ No mocks in the orchestrator path.
    when those routes were removed in the git-RCE fix, ADR-039.)
 3. **Manual / UX** — things scripts can't judge:
    - `go run ./cmd/styrman/` → http://127.0.0.1:8080/ in a browser
-   - create a project each for claude and agy; complete each agent's first-run
+   - create a project each for claude and agy (Antigravity); complete each agent's first-run
      sign-in in the terminal (per project — or once + Settings → Credentials → Import, ADR-032)
    - reload the tab mid-session → same scrollback; open a second tab → first
      shows "replaced" (4001) and does NOT reconnect
    - type `exit` in a shell conversation → "session exited" (4000)
    - resize the window → TUI reflows (tmux + ContainerExecResize)
+4. **Browser e2e (Playwright)** — see the Tier 4 section below.
 
 ## Prereqs
 
@@ -42,7 +43,7 @@ go test ./... && bash .agents/docs/testing/styrman/integration.sh
 Image changes: rebuild the image first; the integration script always creates
 fresh containers so it picks the new image up automatically.
 
-## Tier 4 — Browser e2e (Playwright, 36 checks; 2 auto-SKIP on firewall-hardened hosts)
+## Tier 4 — Browser e2e (Playwright, 36 checks; 34 run + 2 auto-SKIP on firewall-hardened hosts)
 
 `bash web/e2e/run.sh [image-tag]` — self-hosts: builds the server and starts
 its own instance on a host loopback port with an isolated state dir, then
@@ -54,7 +55,7 @@ Drives the real UI in headless Chromium against that server: project
 creation (boots a microVM), agent + shell terminals (xterm's DOM renderer
 makes terminal text assertable, plus copy-on-select),
 typing into the microVM, the Files/Ports/History/Git/Clipboard side-panel tabs,
-rename/delete, deep links, setup page, theme, and full cleanup — 34 checks +
+rename/delete, deep links, setup page, theme, and full cleanup — 36 checks (34 run on firewall-hardened hosts) +
 screenshots.
 Prereq: `cd web && npm i && npx playwright install chromium` (once).
 Self-cleaning: deletes any leftover `e2e-ui` project at start.

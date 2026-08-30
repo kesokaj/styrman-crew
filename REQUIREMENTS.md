@@ -69,7 +69,7 @@
     proxy but has `ip_forward=0` so it can never route between projects. Host
     networking is for the Caddy ingress ONLY, never for projects. Verified
     adversarially (a project with NET_ADMIN adding a manual route through the
-    server stays blocked). Enforced by naming the bridge interface `sdb-<hash>`
+    server stays blocked). Enforced by naming the bridge interface `sdb-<hash>` (the Docker NETWORK is `sdb-<uuid>`; its kernel INTERFACE is `sdb-` + an 11-hex hash of the uuid — the 15-char iface limit — and the firewall matches the shared `sdb-` prefix)
     (so the firewall matches), DOCKER-USER egress drops to RFC1918 + metadata,
     and a self-healing firewall timer (ADR-036). See ADR-015.
 

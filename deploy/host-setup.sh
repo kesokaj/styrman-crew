@@ -331,25 +331,34 @@ fi
 # Install the script + systemd units from the repo. The timer is enabled only
 # once the operator has provisioned the two root-only secrets (SA key + restic
 # password) — until then this prints instructions instead of half-working.
+install -d -m 700 /etc/styrman
 install -m 755 "${SCRIPT_DIR}/backup/styrman-host-backup" /usr/local/bin/styrman-host-backup
 install -m 644 "${SCRIPT_DIR}/backup/styrman-backup.service" /etc/systemd/system/
 install -m 644 "${SCRIPT_DIR}/backup/styrman-backup.timer" /etc/systemd/system/
 systemctl daemon-reload
-if command -v restic >/dev/null 2>&1; then :; else apt-get install -y restic; fi
+if command -v restic >/dev/null 2>&1; then :; else apt-get update -qq && apt-get install -y restic; fi
 if [ -f /etc/styrman/backup-sa.json ] && [ -f /etc/styrman/restic-pw ]; then
     systemctl enable --now styrman-backup.timer
     echo "==> host backups: daily restic timer enabled"
 else
     cat <<'BK'
-==> host backups INSTALLED but NOT enabled — provision the secrets first:
-    1. GCS bucket + service account (objectAdmin on the bucket only); key to
-       /etc/styrman/backup-sa.json (root:root 600).
-    2. openssl rand -base64 24 > /etc/styrman/restic-pw (root:root 600) and
-       SAVE THAT PASSWORD in a password manager — without it the backups are
-       unreadable after host loss.
-    3. restic init (env in /usr/local/bin/styrman-host-backup), then:
-       systemctl enable --now styrman-backup.timer
-    Non-default bucket/project: override via /etc/styrman/backup.env.
+==> host backups INSTALLED but NOT enabled — provision the secrets first
+    (the script's baked-in default is the ORIGINAL deployment's bucket,
+    gs:styrman-crew-backups-driven-eft-h4it:/ in GCP project
+    driven-eft-h4it — on any other host FIRST write /etc/styrman/backup.env
+    with your own GOOGLE_PROJECT= and RESTIC_REPOSITORY=gs:<your-bucket>:/):
+    1. Create the GCS bucket + a service account with objectAdmin on that
+       bucket only; download its key to /etc/styrman/backup-sa.json
+       (root:root 600).
+    2. openssl rand -base64 24 > /etc/styrman/restic-pw; chmod 600 — and
+       SAVE THAT PASSWORD in a password manager: without it the backups
+       are unreadable after host loss.
+    3. Initialize the repository (adjust -r for your bucket):
+       sudo env GOOGLE_PROJECT=<project> \
+         GOOGLE_APPLICATION_CREDENTIALS=/etc/styrman/backup-sa.json \
+         RESTIC_PASSWORD_FILE=/etc/styrman/restic-pw \
+         restic -r gs:<bucket>:/ init
+    4. systemctl enable --now styrman-backup.timer
 BK
 fi
 
@@ -357,12 +366,18 @@ fi
 cat <<NEXT
 
 ==> host setup complete. To bring styrman up (production, Caddy + OAuth):
+    0. LOG OUT AND BACK IN first (or run \`newgrp docker\`) — the docker
+       group this script just added you to is NOT active in this shell,
+       and every docker command below fails without it.
     1. Edit ${SCRIPT_DIR}/.env — fill GOOGLE_CLIENT_ID/SECRET, CLOUDFLARE_API_TOKEN,
-       STYRMAN_ALLOWED_EMAILS, BASE_DOMAIN. (Identity + secrets like
-       STYRMAN_INGRESS_TOKEN / STYRMAN_JWT_KEY are already generated.)
-    2. cd ${SCRIPT_DIR} && docker compose up -d --build
+       STYRMAN_ALLOWED_EMAILS, BASE_DOMAIN, ADMIN_EMAIL. (Identity + secrets
+       like STYRMAN_INGRESS_TOKEN / STYRMAN_JWT_KEY are already generated.)
+    2. cd ${SCRIPT_DIR} && STYRMAN_VERSION=\$(git -C .. describe --tags --always) docker compose up -d --build
 
-    For local testing without OAuth (no ingress): run the integration suite
-    (.agents/docs/testing/styrman/integration.sh) or web/e2e/run.sh — both
-    self-host a server on 127.0.0.1. There is no auth-bypass listener in prod.
+    For local testing without OAuth: the integration suite and web/e2e/run.sh
+    self-host a server on 127.0.0.1 — they need a Go toolchain (e2e also
+    Node + Playwright) which THIS script does not install, and default to
+    image styrman-runtime:dev (pass styrman-runtime:latest as the arg on a
+    host provisioned only by this script). Prereqs:
+    .agents/docs/testing/styrman/README.md. No auth-bypass listener in prod.
 NEXT

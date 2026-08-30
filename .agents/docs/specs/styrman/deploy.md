@@ -145,21 +145,22 @@ public links. The kinds are locked to their routes: a private token 404s on
 
 ### Bring-up
 
+Prerequisites: a Google OAuth client (console.cloud.google.com → APIs &
+Services → Credentials): Web application, redirect URI
+`https://auth.<BASE_DOMAIN>/oauth2/google/authorization-code-callback`;
+and a Cloudflare API token scoped Zone:DNS:Edit on the zone.
+
 ```bash
 sudo bash deploy/host-setup.sh --user $USER   # also seeds deploy/.env identity values
 vi deploy/.env                                # fill: BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET,
                                               #       CLOUDFLARE_API_TOKEN, ADMIN_EMAIL,
                                               #       STYRMAN_ALLOWED_EMAILS
-                                              #       (+ optional STYRMAN_PREVIEW_DOMAIN)
+                                              #       (+ optional STYRMAN_PUBLIC_DOMAIN /
+                                              #       STYRMAN_PRIVATE_DOMAIN)
 docker build -t styrman-runtime:latest image/
 docker compose -f deploy/docker-compose.yml up -d --build
 # → https://styrman.<BASE_DOMAIN>  (Google sign-in via auth.<BASE_DOMAIN>)
 ```
-
-Google OAuth client (console.cloud.google.com → APIs & Services →
-Credentials): Web application, redirect URI
-`https://auth.<BASE_DOMAIN>/oauth2/google/authorization-code-callback`.
-Cloudflare token: Zone:DNS:Edit on the zone.
 
 ### What `host-setup.sh` pins/verifies
 
@@ -204,14 +205,40 @@ Whole-state restic backup of `/var/lib/styrman` to GCS (operator decision
   `/usr/local/bin/styrman-host-backup` (the script),
   `systemd` units `styrman-backup.{service,timer}` (daily 03:00 ±15m,
   Persistent=true).
-- Excludes: per-project docker disks (`homes/*/p/*/.dockerd`, reproducible)
-  and `StateDir/backups` (their sources are in the same snapshot).
-  Retention: 7 daily / 4 weekly / 6 monthly + prune.
+- Excludes: only the reproducible per-project docker disks
+  (`homes/*/p/*/.dockerd`). `StateDir/backups` — the in-app per-project
+  archives, ADR-044 — IS included (2026-08-30 reader review): a deleted
+  project's in-app archive is the ONLY surviving copy of that project, and
+  excluding it broke the "backups outlive their project" promise across a
+  host loss. Retention: 7 daily / 4 weekly / 6 monthly + prune.
 - Verified 2026-08-30: first snapshot pushed AND restored back
   (`restic restore --include …/users` round-trip).
-- Manual run: `sudo styrman-host-backup`; list:
-  `sudo env $(grep -v '^#' /usr/local/bin/styrman-host-backup | grep export | sed 's/export //') restic snapshots`
-  (or read the env from the script).
+
+Provisioning order (first-ever setup, or any host that isn't the original
+`driven-eft-h4it` deployment): 1) create the GCS bucket + a dedicated
+service account with `objectAdmin` on that bucket only; 2) download its key
+to `/etc/styrman/backup-sa.json` (root:root, `chmod 600`); 3) `openssl rand
+-base64 24 > /etc/styrman/restic-pw && chmod 600 /etc/styrman/restic-pw`,
+then save that password in the operator's password manager; 4) `restic
+init` against the repo (env block below); 5) `systemctl enable --now
+styrman-backup.timer`. **On any host that isn't the original deployment,
+`/etc/styrman/backup.env` MUST set `GOOGLE_PROJECT` and
+`RESTIC_REPOSITORY=gs:<your-bucket>:/` FIRST** — the script's baked-in
+defaults are the original deployment's project/bucket and otherwise point a
+new host's backups at someone else's bucket.
+
+The env every manual restic invocation needs (`styrman-host-backup` sets it
+internally; use this verbatim on the ORIGINAL deployment, or substitute
+`/etc/styrman/backup.env`'s overrides on any other host):
+
+```bash
+sudo env GOOGLE_PROJECT=driven-eft-h4it \
+  RESTIC_REPOSITORY=gs:styrman-crew-backups-driven-eft-h4it:/ \
+  GOOGLE_APPLICATION_CREDENTIALS=/etc/styrman/backup-sa.json \
+  RESTIC_PASSWORD_FILE=/etc/styrman/restic-pw \
+  restic snapshots                    # list snapshots
+sudo styrman-host-backup              # manual backup run (script sets the env itself)
+```
 
 The IN-APP layer (ADR-044) additionally runs an automatic per-project
 backup every `STYRMAN_BACKUP_CADENCE` (default 24h, 0 = off) keeping the
@@ -219,17 +246,56 @@ newest `STYRMAN_BACKUP_KEEP` (default 5) archives per project, and a
 wipe-delete always takes a pre-wipe safety backup first — failing CLOSED
 (nothing is deleted if the safety backup fails).
 
+### Restore on a new host (disaster recovery)
+
+1. Clone the repo, then `sudo bash deploy/host-setup.sh --user $USER` —
+   installs restic, `/etc/styrman`, the backup script + systemd units
+   (and everything else host-setup normally does). Log out and back in (or
+   run `newgrp docker`) before continuing — the docker group this script
+   just added you to isn't active in the current shell yet.
+2. Recreate the two root-only secrets: copy the restic repo password out of
+   the operator's password manager into `/etc/styrman/restic-pw` (`chmod
+   600`), and mint + download a fresh service-account key to
+   `/etc/styrman/backup-sa.json` (`chmod 600`) — the SA itself is
+   re-creatable from the GCP console any time, but the PASSWORD is not: it
+   exists only in the password manager, never in the repo or on any disk
+   image.
+3. Restore the state:
+   ```bash
+   sudo env GOOGLE_PROJECT=driven-eft-h4it \
+     GOOGLE_APPLICATION_CREDENTIALS=/etc/styrman/backup-sa.json \
+     RESTIC_PASSWORD_FILE=/etc/styrman/restic-pw \
+     restic -r gs:styrman-crew-backups-driven-eft-h4it:/ restore latest --target /
+   ```
+   writes `/var/lib/styrman` back in place. On a non-original host, set
+   `RESTIC_REPOSITORY` (source `/etc/styrman/backup.env`) instead of the
+   inline `GOOGLE_PROJECT` above.
+4. Reconstruct `deploy/.env` — step 1's `host-setup.sh` seeded a fresh one;
+   re-fill the OAuth/Cloudflare/domain values (see "Bring-up" above).
+   `STYRMAN_UID`/`STYRMAN_GID` must match the uid/gid that OWNS the
+   restored `homes/`/`projects/` trees (restic preserves the original
+   host's ownership), which may not be the new host's default `1000:1000`.
+5. `STYRMAN_VERSION=$(git describe --tags --always) docker compose -f
+   deploy/docker-compose.yml up -d --build`.
+6. Verify: sign in, confirm projects are listed, open a terminal on one.
+   MicroVM CONTAINERS are NOT in the backup by design — they recreate on
+   first attach, since project state is the filesystem (`homes/`,
+   `projects/`), not the container (R7).
+
 ## Clean reinstall (virgin state)
 
 Long form: `.agents/docs/changes/2026-08-28-clean-reinstall.md`. Short form:
 stop the stack, remove every `styrman-*` container and `sdb-*` network, wipe
-`/var/lib/styrman/{homes,projects,users,credentials,backups}` (keep the dir),
-bring the stack back up. **REQUIRED: restart the styrman server AFTER
-scrubbing `StateDir/users`** — the server caches per-user spaces in memory,
-and skipping the restart leaves stale user state that 400s the next first
-login (this exact omission caused the v1.5.2 first-login failure, fixed
-v1.5.3 / ADR-033). `docker compose up -d --force-recreate styrman` after the
-scrub satisfies it.
+`/var/lib/styrman/{homes,projects,users,credentials,backups}` (keep the dir)
+AND the state-root files `users.json`, `links.json`, `settings.json` —
+otherwise stale accounts, share links, and admin tunables survive a
+"virgin" reinstall — then bring the stack back up. **REQUIRED: restart the
+styrman server AFTER scrubbing `StateDir/users`** — the server caches
+per-user spaces in memory, and skipping the restart leaves stale user state
+that 400s the next first login (this exact omission caused the v1.5.2
+first-login failure, fixed v1.5.3 / ADR-033).
+`docker compose -f deploy/docker-compose.yml up -d --force-recreate
+styrman` after the scrub satisfies it.
 
 ## Project→host/LAN network isolation (R12, ADR-029, chain-based self-heal since 2026-08-30)
 
