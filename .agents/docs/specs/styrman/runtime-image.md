@@ -48,11 +48,11 @@ Steps, in order:
    reserved name (root, daemon, …) that already exists at a different uid is
    rejected — the boot fails loudly instead of every `docker exec` silently
    running as the wrong uid on a home it doesn't own (I11).
-5. `~/projects/<dir>`, `~/.dockerd`, `~/.config`, `~/.cache`, `~/.local/bin`,
-   and `~/.local/share/keyrings` (as the user; skipped in minimal mode) —
-   the last is a vestige of the removed keyring plumbing (nothing writes to
-   it anymore, kept only because removing the mkdir isn't worth the churn).
-   `~/.ssh` (mode 700) is created unconditionally, even in minimal mode.
+5. `~/projects/<dir>`, `~/.dockerd`, `~/.config`, `~/.cache`, `~/.local/bin`
+   (as the user; skipped in minimal mode). `~/.ssh` (mode 700) is created
+   unconditionally, even in minimal mode. (The `~/.local/share/keyrings` mkdir
+   and the dbus/gnome-keyring packages were dropped with the keyring tier,
+   ADR-040.)
 6. Seed the per-project home (ADR-031) write-once from the image: shell
    dotfiles from `image/skel/` (`~/.bashrc`, `~/.profile`, `~/.bash_*`, and
    `~/.npmrc` — the last referencing `${NPM_TOKEN}` from the broker) and the
