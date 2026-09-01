@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -29,6 +30,88 @@ type ExecSpec struct {
 // project could OOM the whole shared server (H4/H7). 2 MiB comfortably covers
 // readiness probes, tmux bookkeeping, git status/diff, and the stats script.
 const maxExecOutput = 2 << 20
+
+// tailBuffer keeps only the LAST max bytes written, discarding from the front,
+// while accepting every write so the source is fully drained.
+//
+// Container logs need the opposite retention policy from cappedBuffer: a
+// first-N-bytes cap silently drops the NEWEST lines, which are the ones a logs
+// view exists for (2026-08-30 review). But an UNBOUNDED tail is not the answer
+// either — `container.LogsOptions.Tail` bounds LINES, not bytes, and the guest
+// is root in its own VM and picks the line length, so 2000 lines can be
+// arbitrarily many gigabytes into the shared server's memory (audit 2026-09-01,
+// the same H4/H7 threat cappedBuffer exists for). This bounds the bytes and
+// keeps the tail.
+//
+// NOT goroutine-safe. Safe as both stdout and stderr of one StdCopy call only
+// because StdCopy demuxes a single stream and writes sequentially.
+type tailBuffer struct {
+	buf     []byte
+	max     int
+	dropped bool
+	// lastDrop is the last byte discarded from the front. It tells the caller
+	// whether the retained window begins right after a newline (a clean line
+	// start) or mid-line (a fragment to strip) — see StartsAtLineBoundary.
+	lastDrop byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	switch {
+	case n >= t.max:
+		// This write alone fills or overflows the window: keep only its last
+		// max bytes; everything before that — including all prior content — is
+		// discarded. cut==0 with an empty buffer discards NOTHING (a single
+		// exactly-max write is not truncation — earlier this set dropped=true
+		// spuriously and the caller then ate a real first line, review finding).
+		cut := n - t.max
+		switch {
+		case cut > 0:
+			t.lastDrop, t.dropped = p[cut-1], true
+		case len(t.buf) > 0:
+			t.lastDrop, t.dropped = t.buf[len(t.buf)-1], true
+		}
+		t.buf = append(t.buf[:0], p[cut:]...)
+	case len(t.buf)+n > t.max:
+		// Compact in place so the discarded prefix is actually reclaimed
+		// rather than left pinned by a growing slice header.
+		drop := len(t.buf) + n - t.max
+		t.lastDrop, t.dropped = t.buf[drop-1], true
+		copy(t.buf, t.buf[drop:])
+		t.buf = append(t.buf[:len(t.buf)-drop], p...)
+	default:
+		t.buf = append(t.buf, p...)
+	}
+	return n, nil // always accept, so the reader keeps draining the guest
+}
+
+func (t *tailBuffer) String() string { return string(t.buf) }
+
+// Dropped reports whether anything was discarded from the front.
+func (t *tailBuffer) Dropped() bool { return t.dropped }
+
+// StartsAtLineBoundary reports whether the retained window begins at the start
+// of a line — either nothing was dropped, or the byte just before the window
+// was a newline. When false, the first line is a fragment.
+func (t *tailBuffer) StartsAtLineBoundary() bool {
+	return !t.dropped || t.lastDrop == '\n'
+}
+
+// trimLogTail cleans up a tail-truncated log window: it strips a partial first
+// line only when the window began mid-line, then prepends a truncation banner.
+// Pure and total — extracted so the exact spot an out-of-range index panicked
+// on hostile input (out[len(out)-max-1], == -1 when full) is unit-tested.
+func trimLogTail(out string, dropped, boundary bool) string {
+	if !dropped {
+		return out
+	}
+	if !boundary {
+		if i := strings.IndexByte(out, '\n'); i >= 0 {
+			out = out[i+1:]
+		}
+	}
+	return "… (older lines truncated) …\n" + out
+}
 
 // cappedBuffer accumulates up to max bytes, then keeps "accepting" writes but
 // discards them — so a hostile guest's output is bounded in memory yet still

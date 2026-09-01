@@ -37,6 +37,10 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) 
 # Run locally (loopback, no auth) / deploy production
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/
 STYRMAN_VERSION=<x.y.z> docker compose -f deploy/docker-compose.yml up -d --build
+# Compose refuses to run with STYRMAN_VERSION unset (no mutable tags); the
+# runtime image must be built separately at the SAME version first — full
+# release/rollback procedure + the three-image lineup:
+# .agents/docs/specs/styrman/versioning.md
 
 # Test suites
 bash .agents/docs/testing/styrman/integration.sh   # 60 checks; counts live in .agents/docs/testing/styrman/README.md vs real Kata
@@ -97,6 +101,10 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
   `.agents/docs/testing/styrman/README.md`, the source of truth — currently
   48 passed + 2 auto-SKIP).
 - Spike results (Phase 0) in `.agents/docs/testing/spikes/`.
+- Any privileged (root) test must point state/target dirs at a scratch
+  prefix, never a default that aliases `/var/lib/styrman`/`/etc/styrman` —
+  ADR-052; convention detailed in
+  `.agents/docs/testing/styrman/README.md`.
 
 ## Key Files
 

@@ -32,21 +32,26 @@ LOCK="/run/styrman-update.lock"
 # `git clean -d` in deploy() deleted it — wiping the failed-tag latch and
 # reinstating the very retry storm the latch exists to prevent (review finding;
 # reproduced: both dotfiles gone after one clean).
-# Under /etc/styrman (root-owned 0700), NOT /var/lib/styrman: host-setup chowns
-# the latter to the OPERATOR, so the operator uid could plant a deployed-sha and
-# have root build an arbitrary commit down the `trusted` rollback path — the one
-# trust-bearing input this script did not assert (security review).
-STATE_DIR="${STYRMAN_UPDATE_STATE_DIR:-/etc/styrman/update}"
-STATE="${STATE_DIR}/deployed-version"
-# The exact commit the last good deploy was built from. Rolling back to a SHA is
-# immune to a re-pointed tag AND needs no re-verification: this tree was already
-# verified when it was deployed. Re-verifying the old TAG instead would fail for
-# any release made before signing was adopted (review finding).
-STATE_SHA="${STATE_DIR}/deployed-sha"
-# A tag that failed to come up and was rolled back. Without this the timer
-# would retry the same broken release every tick, forever.
-FAILED="${STATE_DIR}/failed-version"
-RUNTIME_IMAGE="${STYRMAN_IMAGE:-styrman-runtime:dev}"
+# There is NO in-script default (ADR-052): during the 2026-09-01 state-loss
+# incident, privileged test runs against a production-aliasing default state
+# path preceded the wipe of /var/lib/styrman and the rm -rf of /etc/styrman.
+# The production path (/etc/styrman/update — root-owned 0700, NOT the
+# operator-chowned /var/lib/styrman, security review) is pinned in
+# styrman-update.service; anything invoking this script outside that unit must
+# choose a state dir on purpose — tests pass a scratch prefix.
+STATE_DIR="${STYRMAN_UPDATE_STATE_DIR:-}"
+# The three files in it (paths derived AFTER the guard below canonicalizes
+# STATE_DIR): deployed-version — the tag last successfully deployed;
+# deployed-sha — the exact commit it was built from (rolling back to a SHA is
+# immune to a re-pointed tag AND needs no re-verification: that tree was
+# already verified when it was deployed; re-verifying the old TAG would fail
+# for any release made before signing was adopted — review finding);
+# failed-version — a tag that failed and was rolled back, so the timer stops
+# retrying the same broken release every tick.
+# NOTE: the runtime image tag is derived per-deploy from the release version
+# (styrman-runtime:X.Y.Z) inside deploy() — never a mutable tag (operator
+# rule): a :dev/:latest tag made "what do projects boot" depend on whoever
+# last ran a build, and made rollback unable to restore the exact old image.
 # How long to wait for the new server to report its version before rolling back.
 HEALTH_TIMEOUT="${STYRMAN_UPDATE_HEALTH_TIMEOUT:-120}"
 
@@ -64,6 +69,23 @@ log()  { echo "[styrman-update] $*"; }
 fail() { echo "[styrman-update] FATAL: $*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || fail "must run as root"
+# ADR-052: no production-path default outside the systemd unit. Production runs
+# go through `systemctl start styrman-update.service` (the unit pins
+# /etc/styrman/update); a hand-run must pick its state dir explicitly, and a
+# TEST run must pass a scratch prefix that cannot alias production state.
+[ -n "${STATE_DIR}" ] || fail "STYRMAN_UPDATE_STATE_DIR is not set — production: systemctl start styrman-update.service (or pass /etc/styrman/update explicitly); tests: pass a NESTED scratch path, e.g. \$(mktemp -d)/state (ADR-052)"
+# Canonicalize before the refusal check: //var/lib/styrman, relative paths and
+# symlinked aliases must not slip past a literal prefix match (security review).
+STATE_DIR="$(realpath -m -- "${STATE_DIR}")" || fail "cannot canonicalize STYRMAN_UPDATE_STATE_DIR"
+case "${STATE_DIR}" in
+    /var/lib/styrman|/var/lib/styrman/*)
+        # Operator-owned production data — both the ADR-052 incident path and
+        # the deployed-sha trust hole the security review closed.
+        fail "STYRMAN_UPDATE_STATE_DIR=${STATE_DIR} is inside /var/lib/styrman — refusing (ADR-052)" ;;
+esac
+STATE="${STATE_DIR}/deployed-version"
+STATE_SHA="${STATE_DIR}/deployed-sha"
+FAILED="${STATE_DIR}/failed-version"
 [ -d "${DEPLOY_DIR}/.git" ] || fail "no deploy clone at ${DEPLOY_DIR} (see host-setup.sh step 8c)"
 # compose reads this for the ingress token, uid/gid, &c. The updater no longer
 # reads it itself (the version check uses a container label), but a build
@@ -74,9 +96,15 @@ fail() { echo "[styrman-update] FATAL: $*" >&2; exit 1; }
 # checkouts of the same tree would corrupt each other. (The argolis original
 # had no lock and its 5-minute timer could stack.)
 # -m with -p only applies to the deepest dir (SC2174), so create the parent
-# explicitly: /etc/styrman must be 0700 too, not just the leaf.
-install -d -m 700 -o root -g root "$(dirname "${STATE_DIR}")" 2>/dev/null || true
-install -d -m 700 -o root -g root "${STATE_DIR}" || fail "cannot create ${STATE_DIR}"
+# explicitly: a fresh /etc/styrman must be 0700 too, not just the leaf. Create
+# ONLY what is missing — `install -d` re-modes an EXISTING dir, and with the
+# state dir now caller-chosen (ADR-052) that turned a root `--check` against
+# $(mktemp -d) into chmod 0700 root:root of /tmp itself (review+security
+# finding, measured). An existing dir's ownership/mode is asserted below, not
+# forced here.
+STATE_PARENT="$(dirname "${STATE_DIR}")"
+[ -d "${STATE_PARENT}" ] || install -d -m 700 -o root -g root "${STATE_PARENT}" || fail "cannot create ${STATE_PARENT}"
+[ -d "${STATE_DIR}" ] || install -d -m 700 -o root -g root "${STATE_DIR}" || fail "cannot create ${STATE_DIR}"
 # The rollback trusts deployed-sha enough to skip verification, so the dir it
 # lives in gets the same ownership+mode guarantee as every other trust input.
 [ "$(stat -c %u "${STATE_DIR}")" = "0" ] \
@@ -299,18 +327,22 @@ deploy() {
     # files: deploy/.env is gitignored and must NOT be deleted.
     git clean -d --force --quiet || log "WARN: git clean failed"
 
-    log "building runtime image (${RUNTIME_IMAGE}, version ${ver})"
-    docker build -t "${RUNTIME_IMAGE}" --build-arg "STYRMAN_VERSION=${ver}" "${DEPLOY_DIR}/image" \
+    local runtime_image="styrman-runtime:${ver}"
+    log "building runtime image (${runtime_image})"
+    docker build -t "${runtime_image}" --build-arg "STYRMAN_VERSION=${ver}" "${DEPLOY_DIR}/image" \
         || return 1
 
     # Build EVERY compose service, not just styrman: the vendored Caddy ingress
     # is also built from this checkout, and `up -d` alone would leave a tag that
     # changes deploy/caddy/** shipping everything except the ingress — while
     # still reporting VERIFIED (review finding).
-    log "building + starting the stack (server + ingress)"
+    # STYRMAN_IMAGE is passed explicitly: shell env outranks the clone's
+    # deploy/.env in compose precedence, so a stale STYRMAN_IMAGE line left in
+    # that file can never re-point projects at a mutable tag.
+    log "building + starting the stack (server + ingress) at ${ver}"
     ( cd "${DEPLOY_DIR}/deploy" \
-      && STYRMAN_VERSION="${ver}" docker compose -f docker-compose.yml build \
-      && STYRMAN_VERSION="${ver}" docker compose -f docker-compose.yml up -d ) || return 1
+      && STYRMAN_VERSION="${ver}" STYRMAN_IMAGE="${runtime_image}" docker compose -f docker-compose.yml build \
+      && STYRMAN_VERSION="${ver}" STYRMAN_IMAGE="${runtime_image}" docker compose -f docker-compose.yml up -d ) || return 1
 }
 
 # reports_version <x.y.z> — wait until the RUNNING server container is healthy

@@ -309,14 +309,25 @@ log "OK — guest kernel ${GUEST}, host kernel $(uname -r)"
 
 # ─── 7. Build the runtime image (image-only; no secrets needed) ──────────────
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-RUNTIME_IMAGE="${STYRMAN_IMAGE:-styrman-runtime:latest}"
+# Versioned tag, never :latest (operator rule, no mutable tags): the version is
+# the newest release tag sans "v" — the SAME string compose interpolates into
+# STYRMAN_IMAGE=styrman-runtime:${STYRMAN_VERSION}, so what this step builds is
+# exactly what `STYRMAN_VERSION=<that> docker compose up` will boot. A clone
+# with no tags gets a unique setup-<timestamp> tag rather than a mutable one.
+# `|| true` INSIDE the substitution: set -o pipefail is inherited by the
+# subshell, so a tagless or .git-less tree would otherwise abort the whole
+# provisioning script (exit 128, stderr suppressed) and make the fallback
+# below unreachable (review finding, measured).
+SETUP_VERSION="$(cd "${REPO_ROOT}" && { git describe --tags --abbrev=0 2>/dev/null || true; } | sed 's/^v//')"
+[ -n "${SETUP_VERSION}" ] || SETUP_VERSION="setup-$(date +%Y%m%d%H%M)"
+RUNTIME_IMAGE="${STYRMAN_IMAGE:-styrman-runtime:${SETUP_VERSION}}"
 if ! docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
     log "building runtime image ${RUNTIME_IMAGE} (a few minutes)"
     # STYRMAN_VERSION stamps /styrman/VERSION, which keys the write-once
     # harness seeding in each home — without it every build stamps 0.0.0 and
     # existing homes never re-seed (audit finding).
     docker build -t "${RUNTIME_IMAGE}" \
-        --build-arg STYRMAN_VERSION="$(cd "${REPO_ROOT}" && git describe --tags --always 2>/dev/null || date +%Y%m%d%H%M)" \
+        --build-arg STYRMAN_VERSION="${SETUP_VERSION}" \
         "${REPO_ROOT}/image" \
         || { echo "FATAL: runtime image build failed"; exit 1; }
 else
@@ -390,7 +401,11 @@ else
 
     Then enable it:
 
-         sudo styrman-update --check          # dry run, changes nothing
+         # dry run, changes nothing. The state dir is explicit ON PURPOSE
+         # (ADR-052): the script has no default, so a test or hand run can
+         # never touch production state by omission — the systemd unit is
+         # the only place the production path is pinned.
+         sudo STYRMAN_UPDATE_STATE_DIR=/etc/styrman/update styrman-update --check
          sudo systemctl enable --now styrman-update.timer
 
     3. SIGN your release tags. The updater builds and runs the tag AS ROOT, so
@@ -468,12 +483,17 @@ cat <<NEXT
     1. Edit ${SCRIPT_DIR}/.env — fill GOOGLE_CLIENT_ID/SECRET, CLOUDFLARE_API_TOKEN,
        STYRMAN_ALLOWED_EMAILS, BASE_DOMAIN, ADMIN_EMAIL. (Identity + secrets
        like STYRMAN_INGRESS_TOKEN / STYRMAN_JWT_KEY are already generated.)
-    2. cd ${SCRIPT_DIR} && STYRMAN_VERSION=\$(git -C .. describe --tags --always) docker compose up -d --build
+    2. Deploy at the release version (NO v prefix, NO mutable tags — the same
+       string names all three images; see .agents/docs/specs/styrman/versioning.md):
+         cd ${SCRIPT_DIR} \\
+           && ver=\$(git -C .. describe --tags --abbrev=0 | sed 's/^v//') \\
+           && docker build -t styrman-runtime:\$ver --build-arg STYRMAN_VERSION=\$ver ../image \\
+           && STYRMAN_VERSION=\$ver docker compose up -d --build
 
     For local testing without OAuth: the integration suite and web/e2e/run.sh
     self-host a server on 127.0.0.1 — they need a Go toolchain (e2e also
     Node + Playwright) which THIS script does not install, and default to
-    image styrman-runtime:dev (pass styrman-runtime:latest as the arg on a
+    image styrman-runtime:dev (pass the tag step 7 above built as the arg on a
     host provisioned only by this script). Prereqs:
     .agents/docs/testing/styrman/README.md. No auth-bypass listener in prod.
 NEXT

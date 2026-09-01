@@ -7,7 +7,12 @@
 services:
   caddy:
     container_name: styrman-caddy
-    image: styrman-caddy:latest
+    # Versioned tag, no default (operator rule: no mutable tags). After the
+    # 2026-09-01 reboot the host restarted a STALE :latest while the fixed
+    # image sat unbooted under the same name — with versioned tags "what is
+    # running" is readable off `docker ps` and rollback is `STYRMAN_VERSION=old
+    # docker compose up -d`.
+    image: styrman-caddy:${STYRMAN_VERSION:?set STYRMAN_VERSION=X.Y.Z — mutable tags are banned}
     build:
       context: ./caddy
       network: host
@@ -54,18 +59,16 @@ services:
 
   styrman:
     container_name: styrman-server
-    # :latest is the running tag; the deployed version is baked into the binary
-    # (STYRMAN_VERSION build-arg, shown in logs/UI) and every release is git-
-    # tagged. Roll back by rebuilding at the desired tag: `git checkout vX.Y.Z &&
-    # STYRMAN_VERSION=X.Y.Z docker compose build/up styrman`.
-    image: styrman-server:latest
+    # Versioned tag, no default (operator rule: no mutable tags); the same
+    # version is baked into the binary (build-arg below, shown in logs/UI) and
+    # every release is git-tagged. Roll back: `git checkout vX.Y.Z &&
+    # STYRMAN_VERSION=X.Y.Z docker compose build && … up -d`.
+    image: styrman-server:${STYRMAN_VERSION:?set STYRMAN_VERSION=X.Y.Z — mutable tags are banned}
     build:
       context: ..
       dockerfile: deploy/Dockerfile.server
       args:
-        # Stamp the binary's reported version (falls back to 0.0.0). Set e.g.
-        # `STYRMAN_VERSION=1.0.0 docker compose ... up -d --build`.
-        STYRMAN_VERSION: '${STYRMAN_VERSION:-0.0.0}'
+        STYRMAN_VERSION: '${STYRMAN_VERSION}'
       network: host
     # The operator's uid:gid (files created in the per-project homes must match
     # the in-guest user) + the host's docker group for the socket.
@@ -83,7 +86,10 @@ services:
       - STYRMAN_AUTH=header
       - STYRMAN_ALLOWED_EMAILS=${STYRMAN_ALLOWED_EMAILS}
       - STYRMAN_USER=${STYRMAN_USER}
-      - STYRMAN_IMAGE=${STYRMAN_IMAGE:-styrman-runtime:latest}
+      # The runtime image follows the release version unless explicitly
+      # overridden — never a mutable tag (the 2026-09-01 audit caught the
+      # testing guide silently re-stamping the :dev tag production booted).
+      - STYRMAN_IMAGE=${STYRMAN_IMAGE:-styrman-runtime:${STYRMAN_VERSION}}
       - STYRMAN_IDLE_TIMEOUT=${STYRMAN_IDLE_TIMEOUT:-8h}
       - STYRMAN_TRANSCRIPT_TTL=${STYRMAN_TRANSCRIPT_TTL:-720h}
       - STYRMAN_BACKUP_CADENCE=${STYRMAN_BACKUP_CADENCE:-24h}

@@ -1994,3 +1994,119 @@ destroyed alongside the data it protects.
 Source: .agents/docs/changes/2026-09-01-incident-state-loss.md,
 .agents/docs/reviews/2026-09-01-audit-whole-project.md,
 deploy/update/styrman-update, deploy/backup/styrman-host-backup
+
+---
+
+## ADR-053: Immutable versioned image tags — one release version drives all three images (2026-09-01)
+
+**Context.** The operator re-stated a standing rule the same day: "never
+`latest`, always versions." Two same-day incidents made the cost of not
+having this concrete. First,
+`.agents/docs/changes/2026-09-01-incident-reboot-outage.md`: a `sudo
+reboot` restarted `styrman-caddy` on the mutable `:latest` tag, which
+still pointed at the 2026-08-30 image — a fixed image built at 16:49 that
+same day sat unbooted under a different tag, and nothing forced the
+running container onto it. Second, the same day's whole-project audit
+caught production's `deploy/.env` pointing `STYRMAN_IMAGE` at the mutable
+`styrman-runtime:dev` tag, and the redfix round-2 review separately caught
+the testing guide recommending that exact tag be re-stamped by hand — a
+tag that ordinary test/dev iteration silently mutates underneath whatever
+happened to be booted from it last.
+
+**Decision.** A single `STYRMAN_VERSION` drives every image this project
+ships. Release flow: `git tag -s vX.Y.Z` (ADR-051's signed-tag requirement
+already covers provenance) → `STYRMAN_VERSION=X.Y.Z` → `styrman-server:X.Y.Z`,
+`styrman-caddy:X.Y.Z`, `styrman-runtime:X.Y.Z`. Enforcement is structural,
+not conventional: `deploy/docker-compose.yml` interpolates
+`${STYRMAN_VERSION:?set STYRMAN_VERSION=X.Y.Z — mutable tags are banned}`
+for the server and caddy images (compose refuses to render at all without
+it) and derives `STYRMAN_IMAGE` from the same variable;
+`internal/config/config.go`'s `Load()` independently refuses an empty
+`STYRMAN_IMAGE` (previously a silent fallback baked into the default —
+closed the same day this ADR was written); `deploy/update/styrman-update`
+and `deploy/host-setup.sh` both build `styrman-runtime:${ver}` from the
+same tag-derivation shape (`${LATEST#v}` / `git describe --tags --abbrev=0
+| sed 's/^v//'`) rather than defaulting to `:latest`; the two Dockerfiles
+pin their base images and, for the Caddy builder, every `xcaddy` plugin
+version by exact tag (`caddy:2.11.4-builder`/`caddy:2.11.4`,
+`caddy-security@v1.1.64`, `caddy-dns/cloudflare@v0.2.4`,
+`caddy-ratelimit@v0.1.0`, `golang:1.25.13-trixie`) instead of floating
+majors. `:dev` and `:test` remain legitimate tags for local iteration —
+they are never produced or consumed by any production path, only passed
+explicitly by a human or a test harness that sets `STYRMAN_IMAGE` itself.
+
+**Consequences.** "What's running is readable off `docker ps`" — a
+version tag now means one specific, reproducible build, and a rollback is
+just re-pointing compose at an old immutable tag rather than hoping the
+right bytes are still behind `:latest`. Cost: every deploy path (manual,
+`host-setup.sh`'s fresh install, the auto-updater) now needs its own
+version-tagged runtime-image build step, and the redfix round-2 review
+caught exactly this gap on the manual/fresh-install path before it shipped
+(closed in the same commit as this ADR). Deferred, tracked in `TODO.md`:
+digest-pinning the base images (a tag pin is still mutable upstream — the
+security review's point) and asserting the Caddy builder's own Go
+toolchain version, the way `deploy/caddy/Dockerfile` already asserts its
+plugin set via `caddy list-modules`.
+
+Source: deploy/docker-compose.yml, internal/config/config.go,
+deploy/update/styrman-update, deploy/host-setup.sh,
+deploy/Dockerfile.server, deploy/caddy/Dockerfile, deploy/.env.
+Verification: .agents/docs/changes/2026-09-01-redfix-hardening-and-versioning.md,
+.agents/docs/reviews/2026-09-01-review-redfix-round2.md (round 3),
+.agents/docs/testing/2026-09-01-verify-redfix-round2.md.
+
+---
+
+## ADR-054: Ingress reload self-heal — retry rejected loads, exit on admin loss (2026-09-01)
+
+**Context.** `.agents/docs/changes/2026-09-01-incident-reboot-outage.md`:
+on a host reboot, the Caddy ingress's first `/load` attempt failed (the
+network wasn't up yet for `caddy-security`'s OIDC metadata fetch), and the
+watcher running at the time logged "caddy reloaded successfully" anyway
+and latched the failed config as applied — every later scan then saw
+"caddyfile unchanged, skipping reload" and did nothing, for the rest of
+the outage. Separately, the failed load itself moved Caddy's admin
+listener off loopback (`0.0.0.0:26293`, observed live via `ss`), because
+Caddy replaces the running admin server from the *new* config before that
+config's apps are provisioned — a property of Caddy's own reload sequence
+that a rejected load does not, by itself, protect against.
+
+**Decision.** Two independent mechanisms, addressing the two distinct
+failure shapes above. First, a failed `/load` is never latched as applied:
+rejected loads (the admin process answered, the config itself was
+refused) now retry on a fixed 15s timer, indefinitely — verified safe
+because Caddy ≥2.11 keeps both the admin server and the previously-running
+config intact across a *rejected* load (empirically confirmed against
+2.11.4: bad `/load` → 400, admin still 200, site still 302 — the 19:28
+admin hijack was specific to the old watcher/config combination, not an
+inherent Caddy behavior). Second, ≥4 consecutive **transport**-level
+failures — admin unreachable from this process at all, a materially
+different failure than a rejected-but-answered load — make the watcher
+report fatal and exit 1; the container's `restart: unless-stopped` policy
+then recovers with a fresh minimal admin config rather than a process
+stuck retrying against an admin it can no longer reach. The generated
+Caddyfile also now pins an explicit `admin <loopback-addr>` block on every
+load (ADR-053's sibling change, `deploy/caddy/ingress/generator.go`), so a
+loaded config — rejected or not — can never move the listener off
+loopback again; this is the control that actually closes the
+`0.0.0.0:26293` shape, independent of the retry logic.
+
+**Consequences.** A boot-order race (network not yet up, a container
+started before its dependencies) now self-heals within 15 seconds instead
+of wedging until the next container event forces a rescan — closing the
+exact mechanism of the 2026-09-01 reboot outage. The retry-forever design
+has a known limit, recorded rather than hidden: a *persistent* rejection
+(bad OAuth credentials, an operator-authored `Caddyfile.base` that
+collides with the new `admin` block) becomes a silent site-down that
+retries every 15s indefinitely with no backoff or escalation past a
+`log.Error` line — deferred as a follow-up, not fixed here. The retry
+tests were mutation-proven against exactly the class of test-theatre a
+review round caught first (deleting the retry call, or the fatal path's
+early return, left the original test suite green; the corrected tests go
+red under both mutations).
+
+Source: deploy/caddy/ingress/watcher.go, deploy/caddy/ingress/generator.go,
+deploy/caddy/ingress/watcher_test.go.
+Verification: .agents/docs/changes/2026-09-01-redfix-hardening-and-versioning.md,
+.agents/docs/reviews/2026-09-01-review-redfix-round2.md (round 3, mutation-proven),
+.agents/docs/testing/2026-09-01-verify-redfix-round2.md.

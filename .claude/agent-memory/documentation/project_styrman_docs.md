@@ -805,4 +805,120 @@ integration.sh` (default IMAGE `:dev`→`:test` + header warning). No
 changelogs/ADRs/TODO.md touched (changelog subagent's lane, running in
 parallel per the dispatching task). REQUIREMENTS.md not touched.
 
+**2026-09-01 session (fifth pass, same day) — new `versioning.md` guide +
+no-mutable-tags doc sync (v1.16.1 prep, ADR-052 follow-up, post-reboot
+redfix).** Operator asked verbatim for a guide covering the three images,
+versioning scheme, and auto-update; dispatched on top of an uncommitted
+working tree that closed the redfix review's open findings, hardened the
+watcher, finished ADR-052's state-dir enforcement, and introduced a NEW
+standing operator rule mid-session: **no mutable image tags** (`:latest`/
+`:dev`/floating) may reach a compose `image:` line or production
+`STYRMAN_IMAGE` — verified against `internal/config/config.go`,
+`deploy/docker-compose.yml`, `deploy/update/styrman-update`,
+`deploy/update/styrman-update.service`, `deploy/caddy/Dockerfile`,
+`deploy/Dockerfile.server`, and `deploy/host-setup.sh` before writing (not
+trusted from the task's prose). Key facts for next time:
+- **New file**: `.agents/docs/specs/styrman/versioning.md` — the three
+  images/Dockerfiles table, the versioning scheme (one signed tag
+  `vX.Y.Z` → `STYRMAN_VERSION` → all three image tags → the
+  `styrman.version` LABEL the auto-updater reads), the no-mutable-tags rule
+  with its two 2026-09-01 origin incidents (stale `:latest` surviving the
+  19:28 reboot; `integration.sh` re-stamping `:dev` which WAS prod's live
+  tag), the manual release procedure, updating one image out-of-band
+  (caddy pin bumps), pin-bump policy, an auto-updater summary (pointing at
+  `deploy.md` for full mechanics), and rollback (manual vs. automatic
+  SHA-preferred). Deliberately NOT a duplicate of `deploy.md`'s Auto-update
+  section — it's the "how do I ship/update a thing" companion; `deploy.md`
+  keeps the full security-model prose and now links back to
+  `versioning.md` in two places (a new line right under the "## Auto-update"
+  heading, and the Bring-up section).
+- **`config.Load` (`internal/config/config.go`) now has NO fallback for
+  `STYRMAN_IMAGE`** — an empty value is a hard `Load()` error citing the
+  operator rule by name in the error string itself. This is a real, load
+  -bearing behavior change from every prior session's assumption of a
+  `styrman-runtime:latest` default — re-verify this hasn't regressed before
+  citing "no default" again, it's exactly the kind of fact that's easy to
+  half-revert.
+- **`deploy/docker-compose.yml`'s `image:` lines are now
+  `${STYRMAN_VERSION:?set STYRMAN_VERSION=X.Y.Z — mutable tags are
+  banned}`** — compose itself refuses to run unset, not just `config.Load`.
+  `STYRMAN_IMAGE` defaults to `styrman-runtime:${STYRMAN_VERSION}` in the
+  server's `environment:` block (still overridable, e.g. for local dev runs
+  that pass `:dev` explicitly).
+- **Found and fixed a REAL functional gap, not just stale prose**:
+  `deploy.md`'s Bring-up section and both README.md's/`guide.md`'s quick
+  starts previously told the operator to `docker build -t
+  styrman-runtime:latest image/` then `docker compose ... up -d --build`
+  WITHOUT setting `STYRMAN_VERSION` for the build step — under the current
+  code this leaves `STYRMAN_IMAGE` resolving to a `styrman-runtime:X.Y.Z`
+  tag that was NEVER BUILT (only `:latest` was), so projects could not
+  boot. Rewrote all three quick-start blocks to build
+  `styrman-runtime:${STYRMAN_VERSION}` explicitly before `compose up`, with
+  `STYRMAN_VERSION` set consistently across both commands. This is the kind
+  of drift-become-breakage this doc-sync pattern exists to catch — don't
+  assume a mechanical "fix the tag string" edit is enough, trace whether
+  the resulting command sequence actually still works end to end.
+- **`deploy/host-setup.sh` step 7 STILL builds `styrman-runtime:latest` by
+  default** (`RUNTIME_IMAGE="${STYRMAN_IMAGE:-styrman-runtime:latest}"`,
+  confirmed by reading the script — this was NOT changed by the session's
+  working-tree diff, it's a pre-existing gap the no-mutable-tags rule
+  hasn't reached yet). This is now DEAD WEIGHT once a real `vX.Y.Z` deploy
+  runs (production references `styrman-runtime:${STYRMAN_VERSION}`, never
+  `:latest`) — documented honestly as a one-time SMOKE-TEST build (confirms
+  Kata can boot the image) rather than claiming it's what production uses,
+  in README.md/guide.md's quick-start comments. Did NOT edit
+  `host-setup.sh` itself (shell script, code not docs) — flag this for
+  whoever next touches that script: the `:latest` default there is
+  inconsistent with the rule enforced everywhere else and is a legitimate
+  future cleanup target.
+- **ADR-052 follow-up landed in code this session**: `styrman-update` has
+  NO in-script default for `STYRMAN_UPDATE_STATE_DIR` at all (a bare unset
+  value is now a hard `fail`, where before it likely had a
+  production-aliasing default — this is the actual code fix for the
+  2026-09-01 state-loss incident) and explicitly refuses any value that IS
+  or is INSIDE `/var/lib/styrman`. The production path
+  (`/etc/styrman/update`) is pinned in exactly one place,
+  `styrman-update.service`'s `Environment=` line — documented this as the
+  single source of truth in `deploy.md`, `versioning.md`, and a NEW
+  "## Privileged (root) test convention — scratch state only (ADR-052)"
+  section in `.agents/docs/testing/styrman/README.md` (generalizes beyond
+  just the updater — any future root-run host script inherits the same
+  rule).
+- **The `:dev`-is-prod testing warning from an earlier 2026-09-01 pass
+  needed a two-phase honesty fix, not a flat correction**: it previously
+  said unconditionally "do NOT build `:dev`, it's what prod boots." That
+  was true when written (this host's live, gitignored `deploy/.env` really
+  did have `STYRMAN_IMAGE=styrman-runtime:dev`) but will stop being true
+  once v1.16.1 deploys and that override is presumably cleared. Rewrote to
+  state BOTH phases explicitly ("binding until v1.16.1 deploys... re-verify
+  before assuming otherwise") rather than either leaving a warning that
+  will silently go stale, or removing a warning that's still live right
+  now. **Do not assume this override has been cleared in a future
+  session** — re-check the live host's `deploy/.env` (not `.env.example`,
+  which never had it) or ask, since it's gitignored and this repo view
+  can't see it directly.
+- **`api.md`'s Server-environment table had the exact same stale
+  `styrman-runtime:latest` default claim** for `STYRMAN_IMAGE` — found via
+  a repo-wide grep for `runtime:latest`/`0.0.0` while checking for
+  collateral damage, not called out in the dispatching task's explicit file
+  list. Fixed anyway (squarely api.md's job to match `config.go`), same
+  pattern as prior sessions: a task's named file list is a floor, not a
+  ceiling — grep for the exact stale string across `.agents/docs/**/*.md`
+  and root `*.md` before considering a mutable-tag/versioning doc pass
+  done, changelogs and pre-existing review/audit reports excluded (their
+  own lane, historical record).
+
+Files touched this session: `.agents/docs/specs/styrman/versioning.md`
+(NEW), `deploy.md` (Production-mode paragraph, Bring-up section, Auto-update
+section — intro link + "What it does" bullet + run-state paragraph),
+`README.md` (quick start rewritten, new versioning.md pointer),
+`.agents/docs/specs/styrman/guide.md` (§3 install code block, same fix
+shape as README), `.agents/docs/testing/styrman/README.md` (`:dev` warning
+rewritten two-phase, new "Privileged (root) test convention" section),
+`AGENTS.md` (Setup Commands — versioning.md pointer added, deploy line
+itself unchanged since it already matched; Testing — new ADR-052 bullet),
+`api.md` (`STYRMAN_IMAGE` table row). No changelogs/ADRs/TODO.md touched
+(changelog subagent's lane, running in parallel per the dispatching task —
+ADR-050/051/052 already existed, read but not edited).
+
 See [[feedback-styrman-doc-edits]] for edit-process lessons.

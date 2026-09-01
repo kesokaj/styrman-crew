@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -92,5 +93,33 @@ func TestLoadOverridesIgnoresGarbageAndOutOfBounds(t *testing.T) {
 	c.loadOverrides()
 	if c.DockerDiskGB() != 20 || c.IdleTimeoutD() != 24*time.Hour {
 		t.Fatalf("out-of-bounds override applied: %d/%s", c.DockerDiskGB(), c.IdleTimeoutD())
+	}
+}
+
+// Load()'s env contract itself had no test — every other test builds &Config{}
+// directly and bypasses it. STYRMAN_IMAGE lost its styrman-runtime:latest
+// fallback (operator rule: no mutable tags), so an unset value must refuse to
+// start with a message naming the variable, and an explicit value must load.
+func TestLoadRequiresExplicitImage(t *testing.T) {
+	for _, k := range []string{
+		"STYRMAN_AUTH", "STYRMAN_ADDR", "STYRMAN_DEV_ADDR",
+		"STYRMAN_INGRESS_TOKEN", "STYRMAN_USER", "STYRMAN_HOME_DIR",
+	} {
+		t.Setenv(k, "") // envOr treats empty as unset — neutralize host env
+	}
+	t.Setenv("STYRMAN_STATE_DIR", t.TempDir())
+
+	t.Setenv("STYRMAN_IMAGE", "")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "STYRMAN_IMAGE") {
+		t.Fatalf("Load() without STYRMAN_IMAGE must refuse and name the variable, got %v", err)
+	}
+
+	t.Setenv("STYRMAN_IMAGE", "styrman-runtime:9.9.9")
+	c, err := Load()
+	if err != nil {
+		t.Fatalf("Load() with an explicit image failed: %v", err)
+	}
+	if c.Image != "styrman-runtime:9.9.9" {
+		t.Fatalf("Image = %q, want the explicit value", c.Image)
 	}
 }

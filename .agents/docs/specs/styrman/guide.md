@@ -292,24 +292,30 @@ Baremetal Debian 13 or a GCP VM with nested virtualization.
 ```bash
 git clone <repo> styrman && cd styrman
 sudo bash deploy/host-setup.sh --user $USER   # Docker, Kata "mvm", daemon cfg, dirs, the
-                                              # isolation firewall + backup systemd units,
-                                              # the auto-update timer (installed but
+                                              # isolation firewall + backup + auto-update
+                                              # systemd units (auto-update installed but
                                               # disabled until its clone+deploy-key exist,
-                                              # see deploy.md), builds styrman-runtime:latest
-                                              # (the tag production compose uses), seeds
-                                              # deploy/.env
+                                              # see deploy.md), seeds deploy/.env, and does
+                                              # a one-time SMOKE-TEST build of
+                                              # styrman-runtime:latest to confirm Kata can
+                                              # boot it — production never runs this tag
+                                              # (no mutable tags; versioning.md)
 docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/  # separate tag for the loopback dev run; the version keys harness re-seeding
 
 # Dev (no auth, loopback; needs a Go 1.25+ toolchain — host-setup.sh does NOT install one):
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
 
 # Production (Google OAuth + HTTPS + reboot-safe; needs neither Go nor Node —
-# runs the :latest image host-setup.sh already built):
+# build the runtime image at the RELEASE version, then bring the stack up at
+# that same version; no mutable tags — full procedure: versioning.md):
 vi deploy/.env    # BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET, CLOUDFLARE_API_TOKEN,
                   # ADMIN_EMAIL, STYRMAN_ALLOWED_EMAILS, STYRMAN_HOSTNAME (default
                   # styrman; the live deploy uses crew) (redirect URI:
                   # https://auth.<domain>/oauth2/google/authorization-code-callback)
-STYRMAN_VERSION=$(git describe --tags --always) \
+STYRMAN_VERSION=$(git describe --tags --always)
+docker build -t styrman-runtime:${STYRMAN_VERSION} \
+  --build-arg STYRMAN_VERSION=${STYRMAN_VERSION} image/
+STYRMAN_VERSION=${STYRMAN_VERSION} \
   docker compose -f deploy/docker-compose.yml up -d --build
 # DNS records + certs are automatic → https://<STYRMAN_HOSTNAME>.<domain>
 ```

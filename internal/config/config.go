@@ -134,7 +134,7 @@ func Load() (*Config, error) {
 		PreviewBase: envOr("STYRMAN_PREVIEW_BASE", ""),
 		PrivateBase: envOr("STYRMAN_PRIVATE_BASE", ""),
 		StateDir:    envOr("STYRMAN_STATE_DIR", "/var/lib/styrman"),
-		Image:       envOr("STYRMAN_IMAGE", "styrman-runtime:latest"),
+		Image:       os.Getenv("STYRMAN_IMAGE"), // required — validated below
 		Runtime:     envOr("STYRMAN_RUNTIME", "mvm"),
 		VCPUs:       envIntOr("STYRMAN_VCPUS", 0),
 		MemoryMB:    envIntOr("STYRMAN_MEMORY_MB", 0),
@@ -197,6 +197,13 @@ func Load() (*Config, error) {
 	// discipline already applied to the dev listener above.
 	if c.AuthMode == "header" && c.IngressToken == "" {
 		return nil, fmt.Errorf("STYRMAN_AUTH=header requires STYRMAN_INGRESS_TOKEN to be set — an empty token lets any project VM spoof identity headers")
+	}
+	// No image default (operator rule: no mutable tags). The old fallback was
+	// styrman-runtime:latest — a silent mutable pin whenever env wiring broke;
+	// compose derives styrman-runtime:${STYRMAN_VERSION}, dev runs pass :dev
+	// explicitly (README), so an empty value only ever means a broken deploy.
+	if c.Image == "" {
+		return nil, fmt.Errorf("STYRMAN_IMAGE is not set — deploys use styrman-runtime:<x.y.z> (compose derives it from STYRMAN_VERSION); local dev: STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman")
 	}
 	// The shared home's owner is authoritative for the in-guest uid/gid.
 	if st, err := os.Stat(c.HomeDir); err == nil {

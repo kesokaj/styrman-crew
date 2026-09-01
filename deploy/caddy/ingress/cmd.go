@@ -41,8 +41,11 @@ func cmdIngress(flags caddycmd.Flags) (int, error) {
 		return 1, err
 	}
 
-	// Start Caddy with minimal config (admin API only)
-	adminAddr := getEnvOrDefault(EnvCaddyAdmin, DefaultCaddyAdmin)
+	// Start Caddy with minimal config (admin API only). The bind address, the
+	// reload URL (watcher), and the emitted `origins` line must all agree, so
+	// every one of them derives from the single loopback-validated value in cfg
+	// — never from a second env read that could drift.
+	adminAddr := cfg.AdminListen
 	err = caddy.Run(&caddy.Config{
 		Admin: &caddy.AdminConfig{
 			Listen: "tcp/" + adminAddr,
@@ -96,10 +99,18 @@ func cmdIngress(flags caddycmd.Flags) (int, error) {
 		"admin_addr", adminAddr,
 	)
 
-	// Block until signal
-	<-ctx.Done()
-	logger.Info("shutting down")
-	return 0, nil
+	// Block until signal — or until the watcher declares itself unrecoverable
+	// (admin API gone), where exiting nonzero hands recovery to the container
+	// restart policy: a fresh process rebuilds the minimal admin config and the
+	// initial scan + retry loop bring the site back (2026-09-01 boot outage).
+	select {
+	case <-ctx.Done():
+		logger.Info("shutting down")
+		return 0, nil
+	case err := <-watcher.Fatal():
+		logger.Error("watcher unrecoverable — exiting for the restart policy to recover", "error", err)
+		return 1, err
+	}
 }
 
 // loadConfig reads environment variables into a GeneratorConfig.
@@ -127,6 +138,18 @@ func loadConfig(log *slog.Logger) (GeneratorConfig, error) {
 		PrivateDomain:     os.Getenv(EnvPrivateDomain),
 		IngressToken:      os.Getenv(EnvIngressToken),
 		JWTKey:            os.Getenv(EnvJWTKey),
+		AdminListen:       getEnvOrDefault(EnvCaddyAdmin, DefaultCaddyAdmin),
+	}
+
+	// The admin API can replace the whole ingress config, and this process
+	// holds the docker socket under network_mode:host — so a non-loopback bind
+	// hands the platform away. Refuse to start rather than trust a default.
+	// (internal/config/config.go applies the identical guard to
+	// STYRMAN_DEV_ADDR for the same reason.)
+	if !isLoopbackAddr(cfg.AdminListen) {
+		return GeneratorConfig{}, fmt.Errorf(
+			"%s=%q must bind a loopback address (127.0.0.1/::1) — the admin API reconfigures the whole ingress and this process holds the docker socket",
+			EnvCaddyAdmin, cfg.AdminListen)
 	}
 
 	if superAdmins := os.Getenv(EnvSuperAdmins); superAdmins != "" {

@@ -22,6 +22,10 @@ type GeneratorConfig struct {
 	PrivateDomain     string   // Email-gated preview wildcard base (e.g., "private.crew.styrman.xyz"); empty = off
 	IngressToken      string   // shared secret injected as X-Styrman-Ingress (proves ingress origin)
 	JWTKey            string   // stable HMAC key so caddy-security JWTs survive restarts (else sessions break on redeploy)
+	// AdminListen is the admin API's bind address. It is emitted into the
+	// generated global options so the endpoint accepts requests only from
+	// itself — see writeGlobalOptions.
+	AdminListen string
 }
 
 // GenerateCaddyfile produces a complete Caddyfile from a list of discovered apps
@@ -197,6 +201,22 @@ func writeGlobalOptions(b *strings.Builder, apps []App, cfg GeneratorConfig, nee
 	fmt.Fprintf(b, "    email %s\n", cfg.AdminEmail)
 	b.WriteString("    acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}\n")
 	b.WriteString("    auto_https disable_redirects\n\n")
+
+	// The admin API reconfigures the ENTIRE ingress in a network_mode:host
+	// process holding the docker socket, so its exposure is a host-root path.
+	// The `admin <addr>` line is a REAL control: every /load REPLACES the admin
+	// server per the loaded config, and a config that omits the block can move
+	// the listener off loopback — observed live 2026-09-01, when a failed boot
+	// load left the admin on 0.0.0.0:<random> with host checking disabled.
+	// Emitting the loopback pin in every generated config forecloses that,
+	// alongside the loadConfig loopback-bind guard and the >=2.11.4 Caddy
+	// floor (GO-2026-4537 / GO-2026-5743). The `origins` line, by contrast, is
+	// browser-only defense-in-depth: Caddy consults it solely when a request
+	// carries an Origin/Sec-* header, so it does NOT gate a header-less local
+	// `curl` and does not, on its own, make /load caller-bound.
+	if cfg.AdminListen != "" {
+		fmt.Fprintf(b, "    admin %s {\n        origins %s\n    }\n\n", cfg.AdminListen, cfg.AdminListen)
+	}
 
 	b.WriteString("    order rate_limit before basicauth\n")
 	if needsOAuth {

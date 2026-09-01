@@ -755,6 +755,11 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 			Hostname: spec.hostname,
 			Env:      env,
 			Labels:   spec.labels,
+			// Tty stays false (the zero value) ON PURPOSE: Logs() relies on the
+			// daemon-multiplexed stream, where StdCopy's frame headers are
+			// daemon-controlled. With Tty:true StdCopy would parse GUEST bytes
+			// as frame headers (up to 4 GiB allocation per frame) and the
+			// tailBuffer byte-cap would not save the server (review 2026-09-01).
 		},
 		&container.HostConfig{
 			Runtime: o.cfg.Runtime,
@@ -1226,25 +1231,18 @@ func (o *Orchestrator) Logs(ctx context.Context, project string, tail int) (stri
 		return "", err
 	}
 	defer rc.Close()
-	var buf strings.Builder
-	// Docker multiplexes stdout/stderr into one stream; demux and interleave.
-	// The tail option bounds the window to <=2000 lines, so buffering it all
-	// and trimming the FRONT is safe — a first-N-bytes cap silently dropped
-	// the NEWEST lines, the ones a logs view exists for (2026-08-30 review).
-	_, _ = stdcopy.StdCopy(&buf, &buf, rc)
-	out := buf.String()
 	const maxBytes = 256 << 10
-	if len(out) > maxBytes {
-		// Only skip to the next newline when the cut lands MID-line — when it
-		// lands exactly on a line start, that line is complete and kept.
-		cutMidLine := out[len(out)-maxBytes-1] != '\n'
-		out = out[len(out)-maxBytes:]
-		if cutMidLine {
-			if i := strings.IndexByte(out, '\n'); i >= 0 {
-				out = out[i+1:]
-			}
-		}
-		out = "… (older lines truncated) …\n" + out
-	}
-	return out, nil
+	// Docker multiplexes stdout/stderr into one stream; demux and interleave.
+	//
+	// tailBuffer, not strings.Builder: `Tail` bounds LINES, not bytes, and the
+	// guest is root in its own VM and chooses the line length — 2000 lines can
+	// be gigabytes, buffered here on the SHARED server (audit 2026-09-01; the
+	// same H4/H7 threat exec.go's cappedBuffer exists for). It also cannot be
+	// cappedBuffer, which keeps the FIRST n bytes and so drops the newest lines
+	// a logs view exists for (2026-08-30 review). This keeps the tail, bounded.
+	buf := &tailBuffer{max: maxBytes}
+	_, _ = stdcopy.StdCopy(buf, buf, rc)
+	// tailBuffer guarantees len <= maxBytes; trimLogTail (unit-tested) handles
+	// the partial first line and the banner without any indexing.
+	return trimLogTail(buf.String(), buf.Dropped(), buf.StartsAtLineBoundary()), nil
 }

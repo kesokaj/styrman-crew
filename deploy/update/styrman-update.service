@@ -4,6 +4,10 @@ After=docker.service
 Requires=docker.service
 [Service]
 Type=oneshot
+# The ONLY place the production state path is pinned (ADR-052): the script has
+# no default, so a bare invocation — notably a privileged TEST run — can never
+# alias production state by omission.
+Environment=STYRMAN_UPDATE_STATE_DIR=/etc/styrman/update
 ExecStart=/usr/local/bin/styrman-update
 # Builds are heavy and must never starve the running platform.
 Nice=10

@@ -119,17 +119,26 @@ stores — a restart or reboot recovers everything by adoption.
 ## Quick start
 
 ```bash
-# 1. Host: Docker + Kata "mvm", firewall + backup units, builds the
-#    production runtime image (styrman-runtime:latest) and seeds deploy/.env
-#    with generated identity + secrets (idempotent):
+# 1. Host: Docker + Kata "mvm", firewall + backup + auto-update systemd
+#    units, seeds deploy/.env with generated identity + secrets (idempotent).
+#    Also builds the runtime image at the newest release tag —
+#    styrman-runtime:<X.Y.Z>, the exact tag a same-version compose deploy
+#    boots (no mutable tags, operator rule; see versioning.md below):
 sudo bash deploy/host-setup.sh --user $USER
 # 2. FRESH HOST ONLY: log out and back in (or `newgrp docker`) — the docker
 #    group added in step 1 is not active in your current shell yet.
 
-# Production (Google OAuth, HTTPS, reboot-safe) — uses the :latest image
-# step 1 already built; fill the OAuth/Cloudflare/domain values first:
+# Production (Google OAuth, HTTPS, reboot-safe) — no mutable tags: build the
+# runtime image at the RELEASE version, then bring the stack up at that same
+# version. Fill the OAuth/Cloudflare/domain values first:
 vi deploy/.env
-STYRMAN_VERSION=$(git describe --tags --always) \
+# --abbrev=0 + sed: the newest release tag, WITHOUT the v prefix — the same
+# X.Y.Z string names all three images (a v-prefixed or SHA-suffixed value
+# would land the build in a different tag namespace than the auto-updater's).
+STYRMAN_VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//')
+docker build -t styrman-runtime:${STYRMAN_VERSION} \
+  --build-arg STYRMAN_VERSION=${STYRMAN_VERSION} image/
+STYRMAN_VERSION=${STYRMAN_VERSION} \
   docker compose -f deploy/docker-compose.yml up -d --build
 
 # Dev (loopback, no auth; needs Go 1.25+) — builds its OWN image tag so
@@ -139,7 +148,9 @@ STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1
 ```
 
 Full walkthrough, operations, and troubleshooting:
-`.agents/docs/specs/styrman/guide.md`.
+`.agents/docs/specs/styrman/guide.md`. Image lineup, versioning scheme, the
+manual/auto release procedures, and rollback:
+`.agents/docs/specs/styrman/versioning.md`.
 
 ## Lineage
 

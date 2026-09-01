@@ -94,12 +94,6 @@ Add new items below as they arise.
   wasteful; a single settled refit would do. (flagged by the 2026-09-01
   preflight gate, not fixed in that pass)
 
-- [ ] 🔴 Caddy admin API unauthenticated on host loopback + Caddy floor
-  below 2.11.3 (`deploy/caddy/ingress`). (2026-09-01 whole-project audit,
-  `.agents/docs/reviews/2026-09-01-audit-whole-project.md`)
-- [ ] 🔴 Unbounded guest-controlled log buffer
-  (`internal/orchestrator/orchestrator.go:1229`), fix by reusing
-  `cappedBuffer`. (2026-09-01 whole-project audit)
 - [ ] 🟡 Cross-tenant deletion via symlink in `sweepMaterializedFile`
   (`internal/httpapi/credentials.go:217`), fix with an `os.Root`-confined
   `files.Remove`. (2026-09-01 whole-project audit)
@@ -117,8 +111,6 @@ Add new items below as they arise.
   `GOOGLE_PROJECT_ID`; a fresh host silently targets the original
   deployment's bucket (`deploy/backup/styrman-host-backup:17`).
   (2026-09-01 whole-project audit)
-- [ ] 🟡 Production pins the mutable `styrman-runtime:dev` tag
-  (`deploy/.env`). (2026-09-01 whole-project audit)
 - [ ] 🟡 `formatInPlace` has no test coverage, unlike its analog
   `checkerFor`. (2026-09-01 whole-project audit)
 - [ ] 🟡 Add `deploy/caddy/ingress` to `/preflight`'s verification — no
@@ -135,8 +127,26 @@ Add new items below as they arise.
   `styrman-backup.timer` fails until this is done. GCS bucket contents
   are unharmed. (operator action; incident:
   `.agents/docs/changes/2026-09-01-incident-state-loss.md`)
-- [ ] 🟡 Move the auto-updater's default state path off
-  `/var/lib/styrman` in docs and tests, and add an explicit
-  scratch-prefix convention for privileged script testing so a test run
-  can never touch production state (ADR-052). (incident:
-  `.agents/docs/changes/2026-09-01-incident-state-loss.md`)
+- [ ] 🟡 Caddy base images pinned by tag only, not digest, and the
+  builder's own Go toolchain is unasserted (`deploy/caddy/Dockerfile`) —
+  `caddy:2.11.4-builder`/`caddy:2.11.4` still float upstream, so
+  "tag → binary" stays non-deterministic without a digest pin; add a
+  `go version -m` assertion alongside the existing `caddy list-modules`
+  check. (security review 2026-09-01,
+  `.agents/docs/reviews/2026-09-01-security-redfix.md`)
+- [ ] 🟢 `STYRMAN_UPDATE_STATE_DIR=/etc` or `=/` passes the ADR-052 guard
+  (root-owned, mode 755 has no group/world-write bits) — a one-component
+  typo off the recommended `/etc/styrman/update` silently writes
+  deploy-state files into a shared system dir, and the host then looks
+  "never deployed" to the timer. Require the canonicalized path to have
+  at least two components and refuse a bare `/`, `/etc`, `/var`, `/tmp`,
+  `/opt`, `/home`. (round-3 re-review,
+  `.agents/docs/reviews/2026-09-01-review-redfix-round2.md`)
+- [ ] 🟢 Ingress admin `origins` directive is browser-only defense-in-depth,
+  not `/load` authentication — the comment/test now say so correctly, but
+  the loopback guard still accepts `localhost` by name (resolution-dependent)
+  rather than restricting to IP literals; neither is a live hole today
+  (loopback bind + ordering luck), just worth tightening if the guard is
+  ever reused elsewhere. (`deploy/caddy/ingress/generator.go`,
+  `loopback.go`; `.agents/docs/reviews/2026-09-01-review-redfix.md`,
+  `.agents/docs/reviews/2026-09-01-security-redfix.md`)

@@ -25,6 +25,22 @@ the dispatcher identifies a durable decision it should bind future work to
 real forward-looking decision was made, not just findings logged. Always
 re-confirm the tail number before appending; it keeps climbing same-day.
 
+**Update (2026-09-01, later same day):** now at **ADR-054**. This dispatch
+paired two changelog entries (`2026-09-01-incident-reboot-outage.md` — a
+pure incident record, no code — and
+`2026-09-01-redfix-hardening-and-versioning.md` — the actual remediation
++ review/security/verify gates) with two new ADRs in one commit:
+ADR-053 (immutable versioned tags, a durable rule) and ADR-054 (ingress
+reload self-heal, a durable decision the incident forced). Confirms the
+ADR-052 precedent generalizes: an incident write-up and its remediation
+changelog can each motivate their own ADR in the same batch, as long as
+each ADR names a real forward-looking decision, not just a fix. Also
+confirmed here: a same-day incident (reboot) that happens *during* an
+in-flight remediation task is recorded as ITS OWN changelog entry
+separate from the remediation, with each entry cross-referencing the
+other by relative path — do not merge an incident into the feature/fix
+changelog it interrupted, even though they land in the same commit.
+
 **Tool-access note (2026-08-30):** the changelog subagent has sometimes run
 in a harness with only Read/Grep/Glob/Edit/Write — no Bash/git tool, so
 `git show <hash>` is not available even when a task cites specific commit

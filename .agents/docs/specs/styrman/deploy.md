@@ -34,12 +34,18 @@ project microVMs cannot reach.
 ## Production mode (Google OAuth, HTTPS, survives reboots)
 
 Deploy/upgrade: `STYRMAN_VERSION=<x.y.z> docker compose -f
-deploy/docker-compose.yml up -d --build` (the version stamps the binary and
-the Settings page — omitting it shows 0.0.0). Rebuild the runtime image
-first when `image/` changed. v1.3 upgrade note: the ADR-027 workspace
-migration runs on the server's first boot (gracefully stopping running
-project VMs it needs to move), and pre-ADR-027 containers are stop+recreated
-once on next open to gain the workspace bind.
+deploy/docker-compose.yml up -d --build` (the version stamps the binary, the
+Settings page, and every image tag). **Compose refuses to run at all with
+`STYRMAN_VERSION` unset** — every `image:` line is
+`${STYRMAN_VERSION:?...}`-gated (operator rule: no mutable tags). Rebuild the
+runtime image FIRST, at the same version — `docker build -t
+styrman-runtime:${STYRMAN_VERSION} --build-arg
+STYRMAN_VERSION=${STYRMAN_VERSION} image/` — compose never builds it for you.
+Full release/rollback procedure and the three-image lineup:
+`.agents/docs/specs/styrman/versioning.md`. v1.3 upgrade note: the ADR-027
+workspace migration runs on the server's first boot (gracefully stopping
+running project VMs it needs to move), and pre-ADR-027 containers are
+stop+recreated once on next open to gain the workspace bind.
 
 Composition (`deploy/docker-compose.yml`):
 - **styrman-caddy** — the ingress vendored from devbox (`deploy/caddy/`,
@@ -157,10 +163,17 @@ vi deploy/.env                                # fill: BASE_DOMAIN, GOOGLE_CLIENT
                                               #       STYRMAN_ALLOWED_EMAILS
                                               #       (+ optional STYRMAN_PUBLIC_DOMAIN /
                                               #       STYRMAN_PRIVATE_DOMAIN)
-docker build -t styrman-runtime:latest image/
-docker compose -f deploy/docker-compose.yml up -d --build
+STYRMAN_VERSION=$(git describe --tags --always)
+docker build -t styrman-runtime:${STYRMAN_VERSION} \
+  --build-arg STYRMAN_VERSION=${STYRMAN_VERSION} image/
+STYRMAN_VERSION=${STYRMAN_VERSION} \
+  docker compose -f deploy/docker-compose.yml up -d --build
 # → https://styrman.<BASE_DOMAIN>  (Google sign-in via auth.<BASE_DOMAIN>)
 ```
+
+No mutable tags (operator rule) — see `.agents/docs/specs/styrman/
+versioning.md` for the full release procedure, the three-image lineup, and
+why this rule exists (two concrete 2026-09-01 incidents).
 
 ### What `host-setup.sh` pins/verifies
 
@@ -284,6 +297,10 @@ wipe-delete always takes a pre-wipe safety backup first — failing CLOSED
 
 ## Auto-update (tag-gated, ADR-050/051)
 
+Day-to-day "how do I ship a release / update one image" reference:
+`.agents/docs/specs/styrman/versioning.md`. This section is the full
+mechanics + security model.
+
 Installed by `host-setup.sh` step 8c but ships **DISABLED** — enabling it is
 a deliberate, separate action, not a side effect of a normal deploy, since
 the timer's prerequisites (a dedicated clone, its own secrets, and a
@@ -299,7 +316,12 @@ disabled for exactly this reason.
   strictly `^v[0-9]+\.[0-9]+\.[0-9]+$` — so pre-release tags (`-rc1`,
   `-beta`) are ignored BY DESIGN and can be pushed to the remote for
   inspection without being auto-deployed. It picks the highest tag by
-  `sort -V`, not the most recently pushed one.
+  `sort -V`, not the most recently pushed one. On every deploy it builds
+  `styrman-runtime:X.Y.Z` (never `:dev`/`:latest`) plus BOTH compose images
+  (server + caddy) at that same version, and passes `STYRMAN_VERSION`/
+  `STYRMAN_IMAGE` explicitly to `docker compose` — shell env outranks the
+  clone's own `deploy/.env` in compose precedence, so a stale line in that
+  file can never silently re-point projects at a mutable tag.
 - **Where it runs**: a DEDICATED clone at `/opt/styrman`
   (`STYRMAN_DEPLOY_DIR`), never the operator's own working tree — the
   compose build reads `context: ..` from the repo root, so an automatic
@@ -311,7 +333,21 @@ disabled for exactly this reason.
   trusts a recorded commit SHA enough to SKIP re-verifying it — so a
   `/var/lib/styrman`-resident state dir would let the operator uid plant a
   `deployed-sha` and have root build an arbitrary commit down that trusted
-  path (security review). `/etc/styrman` is root-owned `0700`; the script
+  path (security review). **This is enforced by the script itself, not just
+  by convention (ADR-052):** `styrman-update` has NO in-script default for
+  `STYRMAN_UPDATE_STATE_DIR` at all — an unset value is a hard `fail`, not a
+  fallback — and it explicitly REFUSES any value that is `/var/lib/styrman`
+  or lives under it. The ONLY place the production path
+  (`/etc/styrman/update`) is pinned is `Environment=` in
+  `styrman-update.service`; a hand run or a test MUST pass its own value
+  (production: `systemctl start styrman-update.service`; tests: a scratch
+  prefix, e.g. `$(mktemp -d)`). This closed the 2026-09-01 state-loss
+  incident, where a privileged test run against a production-aliasing
+  default state path preceded `/var/lib/styrman` being emptied and
+  `/etc/styrman` being `rm -rf`'d — see
+  `.agents/docs/changes/2026-09-01-incident-state-loss.md` and the ADR-052
+  testing convention in `.agents/docs/testing/styrman/README.md`.
+  `/etc/styrman` is root-owned `0700`; the script
   creates `${STATE_DIR}` (and its parent) `root:root 0700` and, on every
   run, asserts it is still root-owned and not group/world-writable before
   trusting anything read from it. Three files live there: `deployed-version`

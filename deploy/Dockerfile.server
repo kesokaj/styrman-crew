@@ -2,7 +2,11 @@
 # containerized so the vendored Caddy ingress can discover it by labels.
 # Runs as the operator's UID (compose: user + group_add docker) so files it
 # creates in the per-project homes keep the right ownership.
-FROM golang:1.25-trixie AS builder
+# Pinned patch version (operator rule: no floating tags). Keep this at the
+# NEWEST 1.25.x: govulncheck flags dozens of CALLED stdlib vulns across the
+# 1.25 series (h2c, TLS post-handshake, net/textproto, crypto/x509 — fixes
+# spread from 1.25.4 through 1.25.13), and this binary is internet-facing.
+FROM golang:1.25.13-trixie AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

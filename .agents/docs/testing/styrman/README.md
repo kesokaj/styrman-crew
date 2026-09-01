@@ -35,17 +35,58 @@ No mocks in the orchestrator path.
 
 - `styrman-runtime` image built: `docker build -t styrman-runtime:test --build-arg STYRMAN_VERSION=test-$(date +%s) image/`
 
-  **Do NOT build or tag `styrman-runtime:dev` on this host.** `deploy/.env`
-  sets `STYRMAN_IMAGE=styrman-runtime:dev`, so `:dev` is the exact tag
-  production boots — rebuilding it re-stamps what's running in prod. This
+  **Do NOT build or tag `styrman-runtime:dev` on this host until v1.16.1
+  deploys.** As of v1.16.0, `deploy/.env` on this host still sets
+  `STYRMAN_IMAGE=styrman-runtime:dev` — a leftover from before the
+  2026-09-01 "no mutable tags" operator rule — so `:dev` is STILL the exact
+  tag production boots; rebuilding it re-stamps what's running in prod. This
   happened for real during the 2026-09-01 audit (the marker read
-  `dev-1788269597` afterward; restored to `1.16.0`). An immutable
-  `styrman-runtime:1.16.0` release tag also exists now if you need a known-good
-  image to compare against. Use `:test` (or any tag other than `:dev`) for
-  everything in this guide.
+  `dev-1788269597` afterward; restored to `1.16.0`). v1.16.1 closes the
+  mutable-tag path structurally (`config.Load` requires `STYRMAN_IMAGE`,
+  compose derives `styrman-runtime:${STYRMAN_VERSION}` by default — see
+  `.agents/docs/specs/styrman/versioning.md`) — once that release deploys
+  and the live `deploy/.env`'s `STYRMAN_IMAGE` override is cleared,
+  production boots `styrman-runtime:X.Y.Z` and `:dev` reverts to being a
+  purely local, never-deployed dev-loop tag. **Until v1.16.1 is confirmed
+  live, treat this warning as fully binding** — re-verify before assuming
+  otherwise. An immutable `styrman-runtime:1.16.0` release tag also exists
+  if you need a known-good image to compare against. Use `:test` (or any
+  tag other than `:dev`) for everything in this guide.
 - Kata runtime `mvm` working: `docker run --runtime mvm --rm debian:trixie uname -r`
   (host-setup.sh verifies this; if it fails with "invalid namespace type" see
   ADR-009 — the daemon.json time-namespaces flag is missing)
+
+## Privileged (root) test convention — scratch state only (ADR-052)
+
+Any root-run exercise of a host-level script (the auto-updater, the backup
+script, the firewall script, or any future one) MUST point its state/target
+directories at a scratch prefix that cannot alias a real production path —
+never a default that resolves inside `/var/lib/styrman`, `/etc/styrman`, or
+their equivalents. Cleanup stays confined to that scratch prefix too: never
+`rm -rf` a shared directory without first confirming everything that lives
+there belongs to the feature under test — a directory that PREDATES the
+feature under test (like `/etc/styrman`, which held the restic/GCS DR
+secrets before the auto-updater existed) is the highest-risk case, because
+it looks self-contained to whoever is testing the newer feature.
+
+This is a direct fix for the 2026-09-01 state-loss incident: while
+privileged updater tests and parallel verification agents ran against paths
+adjacent to production state, `/var/lib/styrman` was found emptied and
+`/etc/styrman` was `rm -rf`'d by a test cleanup step — see
+`.agents/docs/changes/2026-09-01-incident-state-loss.md` and ADR-052 in
+`.agents/docs/architecture/DECISIONS.md`. `styrman-update` now enforces its
+half of this structurally, not just by convention: it has NO in-script
+default for `STYRMAN_UPDATE_STATE_DIR` (a hard `fail` if it's unset) and
+explicitly refuses any value that is, or is inside, `/var/lib/styrman`
+(canonicalized with `realpath -m` first, so `//var/lib/styrman/x` and
+relative paths cannot slip past a literal-prefix match). Production always
+runs it via `systemctl start styrman-update.service`, which pins
+`/etc/styrman/update`; any hand run or test must pass its own value, and
+MUST use a NESTED scratch path so the parent directory is one this script
+creates rather than an existing shared dir like `/tmp` itself, e.g.
+`STYRMAN_UPDATE_STATE_DIR=$(mktemp -d)/state styrman-update --check` (the
+script's own `install -d` only creates what is missing — it never re-modes
+an existing parent — but a nested path keeps the test unambiguous).
 
 ## Rebuild-and-retest loop
 
