@@ -286,8 +286,12 @@ wipe-delete always takes a pre-wipe safety backup first — failing CLOSED
 
 Installed by `host-setup.sh` step 8c but ships **DISABLED** — enabling it is
 a deliberate, separate action, not a side effect of a normal deploy, since
-the timer's prerequisites (a dedicated clone + its own secrets) don't exist
-on a fresh host.
+the timer's prerequisites (a dedicated clone, its own secrets, and a
+root-owned `/etc/styrman/allowed_signers` for SSH-signed releases) don't
+exist on a fresh host. **Do not enable the timer until `allowed_signers`
+exists and releases are SSH-signed** — the signature gate fails CLOSED and
+would refuse every tag it sees otherwise; `host-setup.sh` ships the timer
+disabled for exactly this reason.
 
 - **What it does**: `styrman-update` (+ `.service`/`.timer`) polls the
   origin every 5 min (`styrman-update.timer`, `OnUnitActiveSec=5min`,
@@ -301,18 +305,35 @@ on a fresh host.
   compose build reads `context: ..` from the repo root, so an automatic
   `git checkout <tag>` against a tree the operator is actively editing
   would stomp in-progress work.
-- **Tags must be signed.** The updater checks out, `docker build`s, and
-  `docker compose up`s the tag AS ROOT, and `docker-compose.yml` itself
-  lives inside that checkout — so it fails CLOSED rather than trusting
-  "anyone who can push a tag": a lightweight tag (`git cat-file -t` ≠
-  `tag`) is rejected outright, then `git verify-tag` must succeed. Sign
-  every release with `git tag -s vX.Y.Z`. The only opt-out is a root-owned
-  `/etc/styrman/update.env` setting `STYRMAN_UPDATE_REQUIRE_SIGNED=0`,
-  which logs a warning on every run so it can't be silently disabled from
-  anywhere the operator doesn't already have root. **Operator-visible
-  consequence**: existing tags v1.14.0–v1.15.0 are annotated-but-unsigned
-  or lightweight, so the updater would refuse every one of them as-is —
-  all releases from this point forward must be tagged with `-s`. See
+- **Tags must be SSH-signed, against an allowed-signers allowlist.** The
+  updater checks out, `docker build`s, and `docker compose up`s the tag AS
+  ROOT, and `docker-compose.yml` itself lives inside that checkout — so it
+  fails CLOSED rather than trusting "anyone who can push a tag": a
+  lightweight tag (`git cat-file -t` ≠ `tag`) is rejected outright. A bare
+  `git verify-tag` is deliberately NOT what's used — it exits 0 for a
+  good-but-**untrusted** signature, so with PGP any key ever imported into
+  root's keyring would pass and git never compares signer to tagger. Only
+  the SSH signature path consults an allowlist, so the updater requires
+  one: it rejects a tag whose object has no `-----BEGIN SSH
+  SIGNATURE-----` block — **a PGP-signed tag is REFUSED, not merely
+  unpinned**; signing with GPG will not satisfy this check — then verifies
+  it against a root-owned, non-group/world-writable
+  `/etc/styrman/allowed_signers`, read from that FIXED path rather than
+  root's gitconfig: `styrman-update.service` sets `ProtectHome=yes` and
+  never sets `$HOME`, so `git config --global` is unreadable under the
+  timer even though it works fine when the operator runs the same command
+  by hand. Sign every release with:
+  ```bash
+  git config gpg.format ssh && git config user.signingkey ~/.ssh/id_ed25519.pub
+  git tag -s vX.Y.Z -m "styrman vX.Y.Z"
+  ```
+  The only opt-out is a root-owned `/etc/styrman/update.env` setting
+  `STYRMAN_UPDATE_REQUIRE_SIGNED=0`, which logs a warning on every run so it
+  can't be silently disabled from anywhere the operator doesn't already have
+  root. **Operator-visible consequence**: existing tags v1.14.0–v1.15.0 are
+  annotated-but-unsigned or lightweight, so the updater would refuse every
+  one of them as-is — all releases from this point forward must be
+  SSH-signed as above (plain `-s` with a GPG key does NOT satisfy this). See
   ADR-051.
 - **How it verifies a deploy**: reads `LABEL styrman.version` off the
   running `styrman-server` container with `docker inspect`, plus
@@ -331,27 +352,71 @@ on a fresh host.
   `STYRMAN_UPDATE_HEALTH_TIMEOUT` (default 120s), the updater redeploys the
   PREVIOUS tag and latches the failed one at
   `/var/lib/styrman/update/failed-version` — so the 5-minute timer does not
-  retry a known-broken release forever. `--force` clears the latch (and
-  also forces a redeploy of the current tag even if nothing changed).
+  retry a known-broken release forever. On every successful deploy the exact
+  commit is also recorded at `/var/lib/styrman/update/deployed-sha`
+  (`git rev-parse <tag>^{commit}`), a durable record of what was actually
+  running that survives the tag itself later being re-pointed. The rollback
+  path re-runs the SAME SSH-signature + `allowed_signers` check against the
+  previous tag before rebuilding it (every tag built is verified, not just
+  the newest, since `git fetch --force` could have re-pointed the old tag
+  too) — so rolling back onto a release made before SSH signing was adopted
+  (v1.14.0–v1.15.0) is refused for the same reason a forward deploy of one
+  would be. `--force` clears the failed latch (and also forces a redeploy of
+  the current tag even if nothing changed).
 - **Flags**: `styrman-update --check` (report what would happen, changes
   nothing) and `styrman-update --force` (see above).
 
 Setup — three prerequisites, since the timer stays disabled until all
-exist (`host-setup.sh` step 8c prints these exact commands):
-1. A read-only deploy key at `/etc/styrman/deploy-key` (the repo is
-   private and root has no key of its own), and a PINNED
-   `/etc/styrman/known_hosts` via `ssh-keyscan github.com` — root's fetch
-   uses `StrictHostKeyChecking=yes` against that pinned file, never
-   trust-on-first-use, since a root-privileged fetch must not accept an
-   attacker's host key even for one window.
-2. The dedicated clone itself at `/opt/styrman`, made with that deploy
-   key.
-3. That clone's OWN `deploy/.env` (gitignored, so a fresh clone has none)
-   — copy the operator's filled-in `deploy/.env` into it.
+exist (`host-setup.sh` step 8c prints these exact commands). `host-setup.sh`
+does **not** auto-clone over SSH or auto-seed `known_hosts` — it prints these
+steps and leaves them to the operator:
+
+1. A read-only deploy key at `/etc/styrman/deploy-key` (the repo is private
+   and root has no key of its own), added to GitHub → Settings → Deploy
+   keys, plus a `known_hosts` seeded from GitHub's **published**
+   fingerprints — never `ssh-keyscan`, which is unauthenticated
+   trust-on-first-use: this `known_hosts` is a trust anchor for a root
+   process that BUILDS AND RUNS what it fetches, so a TOFU window here would
+   let an attacker pin their own host key permanently.
+   ```bash
+   sudo install -d -m 700 /etc/styrman
+   sudo ssh-keygen -t ed25519 -N "" -C styrman-deploy -f /etc/styrman/deploy-key
+   cat /etc/styrman/deploy-key.pub      # add to GitHub → Settings → Deploy keys
+   curl -s https://api.github.com/meta | \
+     jq -r '.ssh_keys[] | "github.com " + .' | sudo tee /etc/styrman/known_hosts
+   # then cross-check the printed keys against GitHub's documented fingerprints:
+   # https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
+   ```
+   Then clone by hand with strict host-key checking against that pinned
+   file (`host-setup.sh` no longer does this step automatically):
+   ```bash
+   sudo GIT_SSH_COMMAND="ssh -i /etc/styrman/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/styrman/known_hosts" \
+        git clone <origin> /opt/styrman
+   sudo chown -R root:root /opt/styrman
+   ```
+2. That clone's OWN `deploy/.env` (gitignored, so a fresh clone has none)
+   — copy the operator's filled-in `deploy/.env` into it:
+   ```bash
+   sudo cp deploy/.env /opt/styrman/deploy/.env
+   sudo chmod 600 /opt/styrman/deploy/.env
+   ```
+3. A root-owned `/etc/styrman/allowed_signers` allowlist, and releases
+   signed with SSH (a PGP-signed tag is refused, see "Tags must be
+   SSH-signed" above):
+   ```bash
+   printf '%s %s\n' "<your-git-email>" "$(cat ~/.ssh/id_ed25519.pub)" \
+     | sudo tee /etc/styrman/allowed_signers
+   sudo chmod 644 /etc/styrman/allowed_signers   # root-owned, not group/world-writable
+   # signing side:
+   git config gpg.format ssh && git config user.signingkey ~/.ssh/id_ed25519.pub
+   git tag -s vX.Y.Z -m "styrman vX.Y.Z"
+   ```
 
 Then `sudo styrman-update --check` (dry run) and
 `sudo systemctl enable --now styrman-update.timer`. Pushing a signed
-`vX.Y.Z` tag afterward deploys it within ~5 minutes.
+`vX.Y.Z` tag afterward deploys it within ~5 minutes. **Do not enable the
+timer before all three prerequisites exist** — the signature gate fails
+CLOSED, so a timer enabled early would simply refuse every tag it polls.
 
 ## Clean reinstall (virgin state)
 

@@ -34,6 +34,11 @@ LOCK="/run/styrman-update.lock"
 # reproduced: both dotfiles gone after one clean).
 STATE_DIR="${STYRMAN_UPDATE_STATE_DIR:-/var/lib/styrman/update}"
 STATE="${STATE_DIR}/deployed-version"
+# The exact commit the last good deploy was built from. Rolling back to a SHA is
+# immune to a re-pointed tag AND needs no re-verification: this tree was already
+# verified when it was deployed. Re-verifying the old TAG instead would fail for
+# any release made before signing was adopted (review finding).
+STATE_SHA="${STATE_DIR}/deployed-sha"
 # A tag that failed to come up and was rolled back. Without this the timer
 # would retry the same broken release every tick, forever.
 FAILED="${STATE_DIR}/failed-version"
@@ -83,6 +88,10 @@ cd "${DEPLOY_DIR}"
 # same ownership guarantee as the tree itself (security review).
 [ "$(stat -c %u "${DEPLOY_DIR}/deploy/.env" 2>/dev/null)" = "0" ] \
     || fail "${DEPLOY_DIR}/deploy/.env is not root-owned — refusing to deploy with credentials another user can write"
+# Mode, not just owner: a root-owned 0666 passed an ownership-only check, and a
+# root-owned 0644 leaks STYRMAN_INGRESS_TOKEN / STYRMAN_ALLOWED_EMAILS.
+[ -z "$(find "${DEPLOY_DIR}/deploy/.env" -perm /077 2>/dev/null)" ] \
+    || fail "${DEPLOY_DIR}/deploy/.env is readable or writable beyond root (chmod 600 it) — it holds the ingress token"
 git() { command git -c safe.directory="${DEPLOY_DIR}" "$@"; }
 
 # The repo is PRIVATE and this runs as root, which has no SSH agent and no key
@@ -138,7 +147,8 @@ if [ -f /etc/styrman/update.env ]; then
     if [ -n "$(find /etc/styrman/update.env -perm /022 2>/dev/null)" ]; then
         fail "/etc/styrman/update.env is group/world-writable — refusing to read update policy from it"
     fi
-    if grep -qE '^[[:space:]]*STYRMAN_UPDATE_REQUIRE_SIGNED[[:space:]]*=[[:space:]]*0' /etc/styrman/update.env; then
+    # Anchored: `...=0anything` must not disable it, and `export ...=0` must.
+    if grep -qE '^[[:space:]]*(export[[:space:]]+)?STYRMAN_UPDATE_REQUIRE_SIGNED[[:space:]]*=[[:space:]]*"?0"?[[:space:]]*$' /etc/styrman/update.env; then
         REQUIRE_SIGNED=0
     fi
 fi
@@ -151,20 +161,52 @@ fi
 # security review). The SSH path DOES enforce an allowlist and fails closed
 # when unconfigured, so that is the supported path and we ASSERT it is
 # configured rather than relying on root's ambient gitconfig.
+# ALLOWED_SIGNERS is a PINNED path, deliberately not read from root's gitconfig:
+# the systemd unit sets ProtectHome=yes, so /root/.gitconfig is unreadable under
+# the timer and `git config --global --get` returns empty there. That failed
+# closed on every tick while a hand-run `sudo styrman-update` passed — the worst
+# shape of bug, since it only appears after the operator enables the timer
+# (review finding).
+ALLOWED_SIGNERS="${STYRMAN_ALLOWED_SIGNERS:-/etc/styrman/allowed_signers}"
+
+# verify_tag <tag> — returns non-zero rather than exiting, so callers inside an
+# `if` condition (deploy) can take their own failure path.
 verify_tag() {
-    local tag="$1" signers
+    local tag="$1"
     [ "${REQUIRE_SIGNED}" = "1" ] || return 0
     # A lightweight tag is just a ref — it cannot carry a signature at all.
     if [ "$(git cat-file -t "${tag}" 2>/dev/null)" != "tag" ]; then
-        fail "${tag} is a lightweight tag and cannot be verified. Re-tag with \`git tag -s ${tag}\` (signed, annotated), or opt out in /etc/styrman/update.env."
+        log "REFUSED: ${tag} is a lightweight tag and cannot be verified. Re-tag with \`git tag -s ${tag}\` (signed, annotated), or opt out in /etc/styrman/update.env."
+        return 1
     fi
-    signers="$(command git config --global --get gpg.ssh.allowedSignersFile 2>/dev/null || true)"
-    if [ -z "${signers}" ] || [ ! -r "${signers}" ]; then
-        fail "tag signing is not verifiable: root has no readable gpg.ssh.allowedSignersFile. Configure SSH tag verification (an allowed_signers file listing the operator's public key, then \`git config --global gpg.ssh.allowedSignersFile <path>\`) — a bare \`git verify-tag\` would accept ANY key in root's keyring."
+    # REQUIRE an SSH signature. `-c gpg.format=ssh` does NOT force the SSH
+    # verifier: git picks it from the signature's own armor header, so a
+    # PGP-signed tag ignores the allowlist entirely and verifies against
+    # whatever is in root's keyring — good-but-untrusted included (measured).
+    # Only the SSH path consults gpg.ssh.allowedSignersFile, so anything else
+    # is refused rather than silently unpinned.
+    if ! git cat-file tag "${tag}" 2>/dev/null | grep -q '^-----BEGIN SSH SIGNATURE-----'; then
+        log "REFUSED: ${tag} is not SSH-signed. Only SSH signatures are checked against the"
+        log "  signer allowlist (${ALLOWED_SIGNERS}); a PGP signature would verify against any"
+        log "  key in root's keyring and pin nothing. Re-tag with SSH signing:"
+        log "    git config gpg.format ssh && git config user.signingkey ~/.ssh/id_ed25519.pub"
+        return 1
     fi
-    if ! command git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="${signers}" \
-            verify-tag "${tag}" 2>&1; then
-        fail "${tag} is not signed by an allowed signer — REFUSING to build and run it as root."
+    if [ -r "${ALLOWED_SIGNERS}" ] && { [ "$(stat -c %u "${ALLOWED_SIGNERS}")" != "0" ] ||
+         [ -n "$(find "${ALLOWED_SIGNERS}" -perm /022 2>/dev/null)" ]; }; then
+        log "REFUSED: ${ALLOWED_SIGNERS} must be root-owned and not group/world-writable —"
+        log "  it decides whose tags this host will build and run as root."
+        return 1
+    fi
+    if [ ! -r "${ALLOWED_SIGNERS}" ]; then
+        log "REFUSED: ${ALLOWED_SIGNERS} is missing or unreadable, so no signer allowlist exists."
+        log "  A bare \`git verify-tag\` accepts ANY key in root's keyring, so this is fatal by design."
+        log "  Create it:  printf '%s %s\\n' <your-git-email> \"\$(cat ~/.ssh/id_ed25519.pub)\" | sudo tee ${ALLOWED_SIGNERS}"
+        return 1
+    fi
+    if ! git -c gpg.ssh.allowedSignersFile="${ALLOWED_SIGNERS}" verify-tag "${tag}" 2>&1; then
+        log "REFUSED: ${tag} is not signed by an allowed signer — will not build and run it as root."
+        return 1
     fi
     log "${tag} signature OK (allowed signer)"
 }
@@ -172,7 +214,7 @@ verify_tag() {
 if [ "${REQUIRE_SIGNED}" != "1" ]; then
     log "WARNING: signature checking DISABLED — any pushed tag will be built and run as root"
 fi
-verify_tag "${LATEST}"
+verify_tag "${LATEST}" || fail "refusing to deploy ${LATEST} (see above)"
 
 CURRENT="$(cat "${STATE}" 2>/dev/null || true)"
 # The state file is root-owned, but a malformed value (notably a leading "-")
@@ -212,15 +254,24 @@ fi
 
 # ─── Deploy ─────────────────────────────────────────────────────────────────
 # deploy <tag> — checkout, rebuild both images, bring the stack up.
+# deploy <ref> <version> [trusted]
+#   ref      what to check out — a tag, or a commit SHA on the rollback path
+#   version  the version string to stamp (a SHA carries none of its own)
+#   trusted  "trusted" skips verification. Used ONLY for a rollback to the
+#            recorded SHA of a deploy this host already verified and ran; every
+#            other path verifies. Rolling back by SHA is what makes the rollback
+#            work at all: re-verifying the old TAG fails for every release made
+#            before signing was adopted (v1.14.0-v1.15.0 here), and `git fetch
+#            --tags --force` would accept a re-pointed tag anyway.
 deploy() {
-    local tag="$1" ver="${1#v}"
-    # EVERY tag we build is verified, not just the newest one. The rollback
-    # path used to check out and root-build the previous tag unverified, and
-    # `git fetch --tags --force` happily accepts a re-pointed old tag
-    # (security review).
-    verify_tag "${tag}"
-    log "deploying ${tag}"
-    git checkout --detach --force "${tag}" 2>/dev/null || fail "checkout ${tag} failed"
+    local ref="$1" ver="$2" trusted="${3:-}"
+    if [ "${trusted}" != "trusted" ]; then
+        verify_tag "${ref}" || return 1
+    else
+        log "rolling back to a previously verified tree (${ref})"
+    fi
+    log "deploying ${ref} as ${ver}"
+    git checkout --detach --force "${ref}" 2>/dev/null || { log "checkout ${ref} failed"; return 1; }
     # --force replaces TRACKED files but leaves untracked ones, and the server
     # image builds with `context: ..` — so a planted file would survive every
     # checkout into every image. `-d` without `-x` deliberately keeps ignored
@@ -290,8 +341,13 @@ reports_version() {
 }
 
 PREVIOUS="${CURRENT}"
-if deploy "${LATEST}" && reports_version "${LATEST#v}"; then
+PREVIOUS_SHA="$(cat "${STATE_SHA}" 2>/dev/null || true)"
+# Only a full 40-hex object name is usable as a rollback ref.
+printf '%s' "${PREVIOUS_SHA}" | grep -qE '^[0-9a-f]{40}$' || PREVIOUS_SHA=""
+
+if deploy "${LATEST}" "${LATEST#v}" && reports_version "${LATEST#v}"; then
     printf '%s' "${LATEST}" > "${STATE}"
+    git rev-parse "${LATEST}^{commit}" > "${STATE_SHA}" 2>/dev/null || true
     rm -f "${FAILED}"
     log "OK — ${LATEST} is live"
     exit 0
@@ -307,7 +363,15 @@ if [ "${PREVIOUS}" = "none" ] || [ -z "${PREVIOUS}" ]; then
     fail "no previous version recorded — leaving the box as-is for manual repair. ${LATEST} is latched as failed; re-run with --force after fixing."
 fi
 log "rolling back to ${PREVIOUS}"
-if deploy "${PREVIOUS}" && reports_version "${PREVIOUS#v}"; then
+# Prefer the recorded SHA (already verified when it was deployed); fall back to
+# the tag only when no SHA was recorded — e.g. the first run after adopting it.
+if [ -n "${PREVIOUS_SHA}" ]; then
+    rollback_ref="${PREVIOUS_SHA}"; rollback_trust="trusted"
+else
+    log "no recorded commit for ${PREVIOUS} — falling back to the tag, which must verify"
+    rollback_ref="${PREVIOUS}"; rollback_trust=""
+fi
+if deploy "${rollback_ref}" "${PREVIOUS#v}" "${rollback_trust}" && reports_version "${PREVIOUS#v}"; then
     printf '%s' "${PREVIOUS}" > "${STATE}"
     fail "rolled back to ${PREVIOUS}. ${LATEST} is marked FAILED and will not be retried automatically — fix it and re-run with --force, or push a newer tag."
 fi

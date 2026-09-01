@@ -86,3 +86,10 @@ Add new items below as they arise.
   draft buffer to survive per terminal, or an intercept on sidebar
   navigation. (flagged by the 2026-09-01 FINAL review, not fixed in that
   pass)
+
+- [ ] `TerminalPane`'s focus/refit schedule sends up to four identical
+  tmux resize frames per Editor→Terminal toggle — the exact cost the
+  120ms debounce exists to avoid. Verified not harmful (no
+  disposed-terminal or pre-WebSocket-window error observed), just
+  wasteful; a single settled refit would do. (flagged by the 2026-09-01
+  preflight gate, not fixed in that pass)

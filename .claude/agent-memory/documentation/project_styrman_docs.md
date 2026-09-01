@@ -682,4 +682,63 @@ changelogs/ADRs/TODO.md touched (out of lane; changelog subagent's territory
 — the source changelog entry and ADR-050/051 already existed before this
 doc pass, read but not edited).
 
+**2026-09-01 session (third pass, same day) — preflight security fix to
+`deploy.md`'s Auto-update section (ssh-keyscan removal, SSH-signing
+prerequisites).** A preflight security re-check found the durable spec still
+taught REMOVED behavior in two spots. Verified against
+`deploy/update/styrman-update` and `deploy/host-setup.sh` step 8c's heredoc
+(the authoritative source of the exact operator-facing commands) before
+writing. Key facts for next time:
+- **`ssh-keyscan` seeding of `/etc/styrman/known_hosts` was deliberately
+  REMOVED** (unauthenticated TOFU pinning a trust anchor for a root process
+  that builds+runs what it fetches — flagged twice in security review per
+  the script's own comment). `host-setup.sh` no longer auto-clones over SSH
+  at all; it prints instructions for the operator to seed `known_hosts` from
+  GitHub's **published** fingerprints (`curl .../meta | jq ... | tee
+  known_hosts`, cross-check against GitHub's docs page) and clone BY HAND
+  with `StrictHostKeyChecking=yes`, then `chown -R root:root` the clone.
+  Don't reintroduce `ssh-keyscan` language if this resurfaces.
+- **Tag verification requires SSH signing + an allowlist, not a bare `git
+  verify-tag`.** `git verify-tag` alone exits 0 for a good-but-*untrusted*
+  signature (any key ever imported into root's keyring passes with GPG);
+  only the SSH-signature path consults an allowlist. `styrman-update`'s
+  `verify_tag()` REJECTS any tag object without a `-----BEGIN SSH
+  SIGNATURE-----` block — **a PGP-signed tag is refused outright, not merely
+  unpinned** — then requires a root-owned, non-group/world-writable
+  `/etc/styrman/allowed_signers` read from that FIXED path (never root's
+  gitconfig — `styrman-update.service` sets `ProtectHome=yes` and no
+  `$HOME`, so `git config --global` reads empty under the timer even though
+  it works fine run by hand). Sign with `git config gpg.format ssh &&
+  git config user.signingkey ~/.ssh/id_ed25519.pub && git tag -s vX.Y.Z`.
+- **Rollback mechanics — a genuine code/comment tension found by reading the
+  script closely, documented as observed rather than as the task described
+  it.** `styrman-update` writes `/var/lib/styrman/update/deployed-sha` on
+  every successful deploy (`git rev-parse <tag>^{commit}`), and the script's
+  own comments say this makes rollback "immune to a re-pointed tag and needs
+  no re-verification." But `STATE_SHA`/`deployed-sha` is **written and never
+  read** — the actual rollback path (`deploy "${PREVIOUS}"`, `PREVIOUS` is
+  always a tag string, never a SHA) calls `verify_tag()` on the previous TAG
+  again, same as a forward deploy. Net effect: rolling back onto any tag
+  made before SSH signing was adopted (v1.14.0–v1.15.0) is refused for the
+  same reason a forward deploy of one would be. Documented `deploy.md`'s
+  Rollback bullet to match what the code actually does (records the SHA for
+  the record, but the automated path still re-verifies the previous tag by
+  name) rather than the aspirational "rolls back to the SHA, no
+  re-verification" framing the dispatching task described — flag this to
+  whoever owns `styrman-update` next, since it may be an unfinished
+  refactor (the SHA plumbing exists but nothing consumes it) rather than
+  intended behavior.
+- **Operational caveat, stated twice on purpose**: the timer must not be
+  enabled before `allowed_signers` exists and releases are SSH-signed — the
+  gate fails closed and would refuse every tag. Added this both to the
+  section's intro paragraph and right after the numbered prerequisites list
+  (the task asked for it "wherever enabling the timer is described").
+
+Files touched this session: `.agents/docs/specs/styrman/deploy.md` only
+(Auto-update section: intro paragraph, "Tags must be SSH-signed" bullet,
+Rollback bullet, "Setup — three prerequisites" list rewritten with the
+exact `host-setup.sh` step-8c commands). No changelogs/ADRs/TODO.md touched
+(out of lane per this task's explicit instruction — this was a docs-only
+preflight fix, not a code change).
+
 See [[feedback-styrman-doc-edits]] for edit-process lessons.

@@ -1896,7 +1896,49 @@ buys little on its own: a hostile tag's payload runs inside the Docker
 daemon, not inside this unit's cgroup, so the signature check above is
 the control that actually matters, not the sandboxing.
 
+**Correction (2026-09-01 preflight remediation, commit `534e0bb`).** Two
+security properties this decision claimed did not actually hold as shipped.
+
+First, "runs `git verify-tag` and fails closed" did not narrow the trust
+boundary to the operator as the Context/Decision text above asserts:
+verified empirically, GPG's `git verify-tag` exits 0 for a
+good-but-**untrusted** signature, and git never compares the signer to the
+tagger, so the real accepted trust set was "any key ever imported into
+root's keyring" — the same "anyone who can push a tag" problem this ADR
+set out to close, just moved one layer down. The SSH signing path does not
+have this gap (it enforces an allowlist and fails closed when
+unconfigured), so it is now the supported path: `verify_tag()` asserts
+root's `gpg.ssh.allowedSignersFile` is set and readable, failing closed
+with setup instructions otherwise. Verification was also missing from the
+rollback path — `deploy "${PREVIOUS}"` built the previous tag with no
+check, and `git fetch --tags --force` accepts a re-pointed old tag — so
+`verify_tag()` is now called for every tag `deploy()` builds, rollback
+included, not only the forward path.
+
+Second, the "root's `git fetch` now pins the GitHub host key... instead of
+`accept-new`" line in the Decision above was undermined by a change made
+later the same day: `deploy/host-setup.sh` started auto-seeding
+`/etc/styrman/known_hosts` via `ssh-keyscan` during its auto-clone step,
+paired with `accept-new` against that same file — the exact unauthenticated
+trust-on-first-use this ADR rejected, just relocated from fetch-time to
+provisioning-time rather than closed, and a failed scan left an empty file
+that the clone then TOFU-populated regardless. This is a case of code
+asserting a security property (fixed host-key pinning) that it did not
+have. `host-setup.sh` no longer auto-clones over SSH; it prints commands to
+seed `/etc/styrman/known_hosts` from GitHub's **published** host-key
+fingerprints, and the comment claiming the TOFU window was closed has been
+corrected.
+
+Two smaller hardening changes landed in the same remediation, forced by
+the same "root builds and runs this checkout" threat model: root now reads
+`/etc/styrman/update.env` with `grep` instead of sourcing it (sourcing ran
+its contents as root; a redefined `log(){ :; }` there silently swallowed
+the "signature checking DISABLED" warning), with root ownership and
+non-group/world-writable mode asserted first, and the same ownership
+assertion was added for `deploy/.env`, which supplies
+`STYRMAN_ALLOWED_EMAILS` and survives `checkout --force`/`git clean -d`.
+
 Source: deploy/update/styrman-update, deploy/update/*.service,
 deploy/host-setup.sh, image/Dockerfile.
 Verification: .agents/docs/reviews/2026-09-01-security-editor-check-and-autoupdate.md,
-.agents/docs/changes/2026-09-01-syntax-check-and-autoupdate.md
+.agents/docs/changes/2026-09-01-syntax-check-and-autoupdate.md (§6)

@@ -1,2 +1,2 @@
-- [Changelog format used in super-devbox](changelog_format_super-devbox.md) — this repo's actual .agents/docs/changes/ style diverges from the generic template; follow the repo precedent.
-- [ADR format used in super-devbox](adr_format_super-devbox.md) — inline-date heading, bold-lead paragraphs, `---` separators, trailing `Source:` line; ADR-022+ style.
+- [Changelog format used in this repo (styrman-crew, formerly super-devbox)](changelog_format_super-devbox.md) — actual .agents/docs/changes/ style diverges from the generic template; follow the repo precedent.
+- [ADR format used in this repo (styrman-crew, formerly super-devbox)](adr_format_super-devbox.md) — inline-date heading, bold-lead paragraphs, `---` separators, trailing `Source:` line, ADR-022+ style; same-day corrections append IN-PLACE, not as new ADRs (see 2026-09-01 revision note).

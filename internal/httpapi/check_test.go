@@ -1,6 +1,11 @@
 package httpapi
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -247,27 +252,51 @@ func TestSafeSuffixBlocksInjection(t *testing.T) {
 	}
 }
 
-// The 5 MiB guard in checkFile/formatFile is only reachable if the CSRF
-// guard's MaxBytesReader allows a body that large. It defaults to 1 MiB, which
-// made those guards dead code and turned an oversize request into a confusing
-// 400 rather than the intended 413.
+// The 5 MiB content guard in checkFile/formatFile is only reachable if
+// csrfGuard's MaxBytesReader allows a body that large. It defaults to 1 MiB,
+// which made those guards dead code and turned an oversize request into a
+// confusing 400 instead of the intended 413.
+//
+// This drives the REAL middleware. An earlier version of this test asserted
+// that three string literals ended with suffixes the test itself had written
+// into them — deleting the "/check" case from server.go left it green (review
+// finding: "theatre"). This one fails if that case is removed.
 func TestCheckAndFormatGetTheLargeBodyLimit(t *testing.T) {
-	for _, p := range []string{
-		"/api/projects/x/check",
-		"/api/projects/x/format",
-		"/api/projects/x/file",
+	// Echo how many bytes the handler could actually read.
+	sink := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n, err := io.Copy(io.Discard, r.Body)
+		if err != nil {
+			http.Error(w, "too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		fmt.Fprintf(w, "%d", n)
+	})
+	h := csrfGuard(sink)
+
+	// 2 MiB — over the 1 MiB default, under the 8 MiB file limit. This is a
+	// realistic editor payload: a file that size opens and saves.
+	body := make([]byte, 2<<20)
+	for _, tc := range []struct {
+		path      string
+		wantAllow bool
+	}{
+		{"/api/projects/p1/check", true},
+		{"/api/projects/p1/format", true},
+		{"/api/projects/p1/file", true},       // control: already had the limit
+		{"/api/projects/p1/terminals", false}, // control: small-JSON default
 	} {
-		if !strings.HasSuffix(p, "/check") &&
-			!strings.HasSuffix(p, "/format") &&
-			!strings.HasSuffix(p, "/file") {
-			t.Fatalf("test is wrong: %s", p)
+		req := httptest.NewRequest(http.MethodPost, tc.path, bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		allowed := rec.Code == http.StatusOK && rec.Body.String() == fmt.Sprint(len(body))
+		if allowed != tc.wantAllow {
+			t.Errorf("%s: read-2MiB allowed=%v want=%v (status %d, body %q)",
+				tc.path, allowed, tc.wantAllow, rec.Code, rec.Body.String())
 		}
 	}
-	// The content cap must be reachable under the raised body limit.
-	if maxCheckBytes > 8<<20 {
-		t.Errorf("maxCheckBytes (%d) exceeds the 8 MiB body limit — unreachable", maxCheckBytes)
-	}
-	if maxCheckBytes <= 1<<20 {
-		t.Errorf("maxCheckBytes (%d) is below the default 1 MiB body cap — suspicious", maxCheckBytes)
+
+	// And the content cap must sit inside that window to be reachable at all.
+	if maxCheckBytes <= 1<<20 || maxCheckBytes > 8<<20 {
+		t.Errorf("maxCheckBytes (%d) is unreachable: it must exceed the 1 MiB default and fit the 8 MiB route limit", maxCheckBytes)
 	}
 }

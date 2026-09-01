@@ -345,7 +345,6 @@ if [ ! -d "${STYRMAN_DEPLOY_DIR}/.git" ]; then
     # ssh:// clone here fails unless a deploy key is installed first. Try, but
     # treat failure as an expected, explained outcome rather than a stray WARN.
     if [ -n "${ORIGIN}" ]; then
-        log "creating deploy clone at ${STYRMAN_DEPLOY_DIR} (from ${ORIGIN})"
         # NO auto-clone over SSH here, and NO ssh-keyscan seeding.
         #
         # The updater fetches as root and BUILDS what it fetches as root, so its

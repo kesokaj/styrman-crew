@@ -70,13 +70,34 @@ feature before writing — don't take a task description's claims on faith.
 See also [[changelog_format_super-devbox]] for the sibling changes/
 convention.
 
-**Amendments/reversals are NEW sequential ADRs, never edits to the old
-one** (the file is append-only). Precedent: ADR-032a ("amends ADR-032") and
-ADR-038 ("amends ADR-032a") are both separate numbered entries whose
-`**Context:**` paragraph names the ADR they revise and says what changed;
-the old ADR's own text is left untouched (a task may ask to add a note
-"under" the old ADR — translate that into a new trailing entry that
-references it, not an in-place edit). Use the phrase "superseded on the
-`<specific point>`" when only part of an old ADR is wrong (e.g. ADR-032a's
-broker-tier shape stayed valid; only its agy-storage assumption was wrong),
-rather than declaring the whole prior ADR dead when it isn't.
+**Amendments/reversals across different days/topics are NEW sequential
+ADRs, never edits to the old one** (the file is append-only). Precedent:
+ADR-032a ("amends ADR-032") and ADR-038 ("amends ADR-032a") are both
+separate numbered entries whose `**Context:**` paragraph names the ADR
+they revise and says what changed; the old ADR's own text is left
+untouched (a task may ask to add a note "under" the old ADR — translate
+that into a new trailing entry that references it, not an in-place edit).
+Use the phrase "superseded on the `<specific point>`" when only part of an
+old ADR is wrong (e.g. ADR-032a's broker-tier shape stayed valid; only its
+agy-storage assumption was wrong), rather than declaring the whole prior
+ADR dead when it isn't.
+
+**Revision as of 2026-09-01 (this repo, now called styrman-crew — same
+DECISIONS.md, ADR count has climbed to ADR-051+): the SAME-DAY-correction
+case is the one exception to "new ADR" above, and it is now the observed
+convention, not a one-off.** When a reviewer/preflight gate catches, on
+the same calendar day an ADR was authored, that the ADR's own Decision
+text asserted something that didn't actually ship or didn't actually hold
+(e.g. ADR-050's `/api/version` health check was abandoned before shipping
+in favor of a docker-label read; ADR-051's `git verify-tag` was later found
+not to pin the signer as claimed), the fix is a `**Correction (same-day
+review remediation)**` or `**Correction (2026-09-01 preflight
+remediation, commit <hash>)**` paragraph **appended inside the existing
+ADR entry**, after Consequences and before the trailing `Source:` line —
+not a new sequential ADR. Both ADR-050 and ADR-051 in this file carry such
+a block. Rationale (inferred from the pattern, not stated anywhere): a
+same-day correction is still describing the *original* decision's true
+final shape, not a new decision made later — a new ADR number would be
+noise for something that never actually shipped in the wrong form. Once a
+day boundary is crossed, or the topic diverges enough to be its own
+decision, go back to the "new sequential ADR" rule above.

@@ -285,10 +285,20 @@ all fixed in this same batch:
 - Unsaved-editor state lifted into the pane store and surfaced as a dot on
   the Editor tab — previously the only dirty cue was a Save button inside
   the pane that had just been hidden.
-- `EditorPane` is now keyed per terminal. Without the key it was reused
-  across a terminal switch: the loaded buffer was cleared and the previous
-  terminal's unsaved edits were wiped with no prompt, while `setDirty(false)`
-  landed on the NEW terminal's key and left the old one latched dirty.
+- `EditorPane` is now keyed per terminal. **Correction (2026-09-01
+  preflight):** this was originally described here as fixing the
+  unsaved-edit loss on a terminal switch — it does not. Traced by the
+  reviewer during preflight: with the key, the pane *unmounts* on a
+  terminal switch and the buffer dies with it, so the loss is still open
+  (tracked in `TODO.md`, "Unsaved editor edits are still lost..."). What
+  the key genuinely fixed is the state **crosstalk** between terminals:
+  without it, `EditorPane` was reused across a switch, so the previous
+  terminal's loaded buffer was cleared and its unsaved edits were wiped
+  with no prompt, the discard-confirm dialog could fire against the wrong
+  terminal, and `setDirty(false)` landed on the NEW terminal's key while
+  leaving the old one latched dirty. Keying the component by terminal ID
+  stops that cross-terminal reuse; it does not preserve the buffer across
+  the switch.
 - Toolbar: the syntax-check note was `shrink-0 truncate` — contradictory,
   since it could not shrink and pushed the action buttons off a narrow
   pane — now `min-w-0 truncate`. `EditorPane`'s two divergent "no file open"
@@ -298,14 +308,85 @@ all fixed in this same batch:
   cover the VERIFYING side too: `git verify-tag` runs as root, so root needs
   the operator's PUBLIC key (a GPG keyring entry, or a root-readable
   `allowed_signers` file for SSH signing) — signing the tag alone is not
-  enough for verification to succeed.
+  enough for verification to succeed. **Correction (2026-09-01 preflight,
+  see §6):** the `ssh-keyscan` auto-seed described here was itself the
+  unauthenticated TOFU mechanism the earlier security review had rejected,
+  and `git verify-tag` did not in fact pin the signer to the operator as
+  claimed — both were fixed in the preflight remediation below.
+
+## 6. Preflight security remediation (commit `534e0bb`, same day)
+
+The `/preflight` gate's security pass re-examined ADR-051's signed-tag
+verification and found the shipped `verify_tag()` asserted a security
+property it did not actually have — recorded here rather than silently
+folded into §3 because it corrects a claim this same changelog entry
+previously made.
+
+- **`git verify-tag` did not pin the signer.** Verified empirically: with
+  GPG, `git verify-tag` exits 0 for a good-but-**untrusted** signature, and
+  git never compares the signer identity to the tagger — so the accepted
+  trust set was "any key ever imported into root's keyring", not "the
+  operator", contrary to both the code comment and the wording in §3/§5
+  above. The SSH signing path does not have this hole: it enforces an
+  allowlist and fails closed when unconfigured, so it is now the
+  supported path. `verify_tag()` asserts root's `gpg.ssh.allowedSignersFile`
+  is set and readable, and fails closed with setup instructions when it
+  isn't. Tested: an operator-signed tag is accepted, a tag signed by a
+  different key is refused, and an unconfigured host refuses everything.
+- **The rollback path skipped verification entirely.** `deploy
+  "${PREVIOUS}"` checked out and root-built the previous tag with no
+  verification step, and `git fetch --tags --force` accepts a re-pointed
+  old tag — so a compromised or re-pointed "previous" tag would have been
+  built and run as root, unverified, during a rollback. Verification is
+  now a function called for **every** tag `deploy()` builds, forward or
+  rollback.
+- **`ssh-keyscan` seeding removed.** This is the section 5 correction
+  above, spelled out: the auto-seed of `/etc/styrman/known_hosts` via
+  `ssh-keyscan` during `host-setup.sh`'s auto-clone was the exact
+  unauthenticated TOFU mechanism the earlier security review
+  (ADR-051) had rejected for root's `git fetch` — it just moved the
+  trust-on-first-use window from fetch-time to provisioning-time rather
+  than closing it, and it was paired with `accept-new` against the same
+  file, so a failed scan left an empty `known_hosts` that the clone step
+  then TOFU-populated anyway. This is a case of code asserting a security
+  property (fixed host-key pinning) that it did not actually have.
+  `host-setup.sh` no longer auto-clones over SSH; it now prints the
+  commands to seed `/etc/styrman/known_hosts` from GitHub's **published**
+  host key fingerprints, and the comment claiming the TOFU window was
+  closed has been corrected.
+- **`/etc/styrman/update.env` is now read with `grep`, not sourced.**
+  Sourcing it as root executes its contents; a redefinition of
+  `log(){ :; }` placed in that file would silently swallow the
+  "signature checking DISABLED" warning that `STYRMAN_UPDATE_REQUIRE_SIGNED=0`
+  is supposed to surface — a silent skip path with no visible trace.
+  Root ownership and non-group/world-writable mode are asserted on the
+  file before it is read. `deploy/.env` ownership is now asserted the
+  same way (it survives `checkout --force` and `git clean -d` and
+  supplies `STYRMAN_ALLOWED_EMAILS`).
+- **`maxCheckBytes` was dead code.** `/check` and `/format` post the same
+  editor content as `/file` but fell through to the default 1 MiB
+  `MaxBytesReader`, so their own declared 5 MiB guard could never fire —
+  a 1-2 MiB file, openable and saveable in the editor, failed Format with
+  a confusing generic 400 instead of the intended 413. Both routes now
+  get the 8 MiB limit.
+
+Verification: operator-signed vs. wrong-key vs. unconfigured-host tag
+cases exercised directly for the SSH verify path; rollback-path
+verification confirmed by forcing a rollback and observing the same
+`verify_tag()` call fire; `update.env` sourcing removed and its
+ownership/mode assertions confirmed to reject a world-writable file;
+`/check` and `/format` confirmed to accept an ~6 MiB file and correctly
+413 above 8 MiB.
 
 ## Follow-ups
 
 See ADR-049 (exec stdin contract — never half-close), ADR-050
 (tag-gated auto-update model, corrected same-day — see its "Correction"
-block for the label-based health check that actually shipped), and the
-new ADR-051 (signed tags required for auto-update) in
-`architecture/DECISIONS.md`. TODO.md carries the coverage gaps and low
-findings from both the original review and the 2026-09-01 re-review that
-remain open (state-file/latch fix aside, which is closed above).
+block for the label-based health check that actually shipped), and
+ADR-051 (signed tags required for auto-update, corrected same-day — see
+its "Correction" block for the signer-pinning and keyscan-TOFU fixes in
+§6 above) in `architecture/DECISIONS.md`. TODO.md carries the coverage
+gaps and low findings from both the original review and the 2026-09-01
+re-review that remain open (state-file/latch fix aside, which is closed
+above), plus the `TerminalPane` redundant-resize-frame item flagged by
+the preflight gate.
