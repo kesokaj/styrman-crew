@@ -8,8 +8,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Record is a durable terminal (ADR-016): it outlives tmux sessions,
@@ -207,12 +210,73 @@ func (s *Store) DeleteProject(project string) error {
 	return nil
 }
 
-// List returns the project's records, newest-opened first.
+// naturalLess compares two titles in "natural" order: runs of ASCII digits
+// compare as numbers, everything else by lower-cased rune, so "Terminal 2"
+// sorts before "Terminal 10" (a plain string sort puts "10" first) and
+// "Apple"/"apple" fold together. Case folding is Unicode-aware — the operator
+// names terminals in Swedish, so "Åke"/"åke" must fold too — but ORDERING of
+// non-ASCII is by code point, not locale collation (so "Ärende" sorts after
+// "Zebra"). That is a deliberate stopping point: real collation would mean
+// x/text/collate, a dependency this does not justify.
+func naturalLess(a, b string) bool {
+	for a != "" && b != "" {
+		if isDigit(a[0]) && isDigit(b[0]) {
+			// Compare whole digit runs numerically. Leading zeros are skipped
+			// so "007" and "7" compare equal and fall through to the rest.
+			ai, bi := 0, 0
+			for ai < len(a) && isDigit(a[ai]) {
+				ai++
+			}
+			for bi < len(b) && isDigit(b[bi]) {
+				bi++
+			}
+			an := strings.TrimLeft(a[:ai], "0")
+			bn := strings.TrimLeft(b[:bi], "0")
+			if len(an) != len(bn) {
+				return len(an) < len(bn) // longer number = larger
+			}
+			if an != bn {
+				return an < bn // same width: lexical == numeric
+			}
+			a, b = a[ai:], b[bi:]
+			continue
+		}
+		ra, na := utf8.DecodeRuneInString(a)
+		rb, nb := utf8.DecodeRuneInString(b)
+		if la, lb := unicode.ToLower(ra), unicode.ToLower(rb); la != lb {
+			return la < lb
+		}
+		a, b = a[na:], b[nb:]
+	}
+	return len(a) < len(b)
+}
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
+// List returns the project's records ordered by title, natural/alphanumeric
+// ascending (operator request 2026-09-01). It used to sort by LastOpened
+// descending, which made the sidebar reshuffle itself every time a terminal
+// was opened — the last-opened one jumped to the top. LastOpened is still
+// recorded (Touch), just no longer an ordering key. Ties break on ID so the
+// order is stable for duplicate titles.
 func (s *Store) List(project string) []Record {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := append([]Record(nil), s.byProject[project]...)
-	sort.Slice(out, func(i, j int) bool { return out[i].LastOpened.After(out[j].LastOpened) })
+	sort.Slice(out, func(i, j int) bool {
+		// Compare BOTH ways rather than testing title equality: titles that
+		// naturalLess treats as equivalent without being byte-identical
+		// ("Apple"/"apple", "Term 07"/"Term 7") must still fall through to the
+		// ID tie-break, or sort.Slice's instability lets their order flip on
+		// any create/delete/rename (review finding).
+		if naturalLess(out[i].Title, out[j].Title) {
+			return true
+		}
+		if naturalLess(out[j].Title, out[i].Title) {
+			return false
+		}
+		return naturalLess(out[i].ID, out[j].ID)
+	})
 	return out
 }
 

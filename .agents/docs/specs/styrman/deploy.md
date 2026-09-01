@@ -282,6 +282,77 @@ wipe-delete always takes a pre-wipe safety backup first — failing CLOSED
    first attach, since project state is the filesystem (`homes/`,
    `projects/`), not the container (R7).
 
+## Auto-update (tag-gated, ADR-050/051)
+
+Installed by `host-setup.sh` step 8c but ships **DISABLED** — enabling it is
+a deliberate, separate action, not a side effect of a normal deploy, since
+the timer's prerequisites (a dedicated clone + its own secrets) don't exist
+on a fresh host.
+
+- **What it does**: `styrman-update` (+ `.service`/`.timer`) polls the
+  origin every 5 min (`styrman-update.timer`, `OnUnitActiveSec=5min`,
+  `RandomizedDelaySec=60`) and deploys the newest STABLE version tag —
+  strictly `^v[0-9]+\.[0-9]+\.[0-9]+$` — so pre-release tags (`-rc1`,
+  `-beta`) are ignored BY DESIGN and can be pushed to the remote for
+  inspection without being auto-deployed. It picks the highest tag by
+  `sort -V`, not the most recently pushed one.
+- **Where it runs**: a DEDICATED clone at `/opt/styrman`
+  (`STYRMAN_DEPLOY_DIR`), never the operator's own working tree — the
+  compose build reads `context: ..` from the repo root, so an automatic
+  `git checkout <tag>` against a tree the operator is actively editing
+  would stomp in-progress work.
+- **Tags must be signed.** The updater checks out, `docker build`s, and
+  `docker compose up`s the tag AS ROOT, and `docker-compose.yml` itself
+  lives inside that checkout — so it fails CLOSED rather than trusting
+  "anyone who can push a tag": a lightweight tag (`git cat-file -t` ≠
+  `tag`) is rejected outright, then `git verify-tag` must succeed. Sign
+  every release with `git tag -s vX.Y.Z`. The only opt-out is a root-owned
+  `/etc/styrman/update.env` setting `STYRMAN_UPDATE_REQUIRE_SIGNED=0`,
+  which logs a warning on every run so it can't be silently disabled from
+  anywhere the operator doesn't already have root. **Operator-visible
+  consequence**: existing tags v1.14.0–v1.15.0 are annotated-but-unsigned
+  or lightweight, so the updater would refuse every one of them as-is —
+  all releases from this point forward must be tagged with `-s`. See
+  ADR-051.
+- **How it verifies a deploy**: reads `LABEL styrman.version` off the
+  running `styrman-server` container with `docker inspect`, plus
+  `.State.Running` and `.State.Health.Status` — **no HTTP request and no
+  auth** (ADR-050's correction: the original design polled `/api/version`,
+  but production runs `STYRMAN_AUTH=header` and the updater has no ingress
+  identity, so every healthy release would 403, time out, and roll itself
+  back). **Deleting the `styrman.version` LABEL from
+  `deploy/Dockerfile.server` breaks the updater**: an absent label reads as
+  an empty string, which never matches the wanted version, so EVERY future
+  release fails verification and gets rolled back. This is a load-bearing
+  cross-file contract between that Dockerfile and `styrman-update`, not an
+  implementation detail — currently held together only by comments in both
+  files.
+- **Rollback**: if the new tag doesn't report itself healthy within
+  `STYRMAN_UPDATE_HEALTH_TIMEOUT` (default 120s), the updater redeploys the
+  PREVIOUS tag and latches the failed one at
+  `/var/lib/styrman/update/failed-version` — so the 5-minute timer does not
+  retry a known-broken release forever. `--force` clears the latch (and
+  also forces a redeploy of the current tag even if nothing changed).
+- **Flags**: `styrman-update --check` (report what would happen, changes
+  nothing) and `styrman-update --force` (see above).
+
+Setup — three prerequisites, since the timer stays disabled until all
+exist (`host-setup.sh` step 8c prints these exact commands):
+1. A read-only deploy key at `/etc/styrman/deploy-key` (the repo is
+   private and root has no key of its own), and a PINNED
+   `/etc/styrman/known_hosts` via `ssh-keyscan github.com` — root's fetch
+   uses `StrictHostKeyChecking=yes` against that pinned file, never
+   trust-on-first-use, since a root-privileged fetch must not accept an
+   attacker's host key even for one window.
+2. The dedicated clone itself at `/opt/styrman`, made with that deploy
+   key.
+3. That clone's OWN `deploy/.env` (gitignored, so a fresh clone has none)
+   — copy the operator's filled-in `deploy/.env` into it.
+
+Then `sudo styrman-update --check` (dry run) and
+`sudo systemctl enable --now styrman-update.timer`. Pushing a signed
+`vX.Y.Z` tag afterward deploys it within ~5 minutes.
+
 ## Clean reinstall (virgin state)
 
 Long form: `.agents/docs/changes/2026-08-28-clean-reinstall.md`. Short form:

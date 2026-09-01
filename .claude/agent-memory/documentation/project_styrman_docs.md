@@ -541,4 +541,145 @@ no stale subagent/harness reference found. `.agents/docs/changes/`,
 DECISIONS.md, TODO.md, REQUIREMENTS.md were NOT touched (changelog
 subagent's lane / approval-gated).
 
+**2026-09-01 session — review-driven doc sync (editor pane, e2e web build,
+e2e counts, hadolint/shellcheck toolchain).** Dispatched off
+`.agents/docs/reviews/2026-09-01-review-editor-pane-and-ordering.md`'s
+low-severity docs-drift findings, on code already in the working tree
+(uncommitted at dispatch time). Key facts for next time:
+- **The centered modal file viewer is GONE** (`FileEditor.tsx`'s old modal
+  chrome deleted 2026-09-01): the editor is now a VIEW of the terminal's
+  MAIN pane (`web/src/components/EditorPane.tsx` + `web/src/lib/
+  editorPane.ts`'s per-`${project}/${term}` module store), toggled by a
+  `Terminal | Editor` control in the terminal header
+  (`web/src/routes/p.$project.$term.tsx`). Both the terminal and the editor
+  stay mounted (`hidden`, never unmounted) so switching never drops the
+  terminal session or the open file. `guide.md`'s load-bearing idea #4 was
+  rewritten for this — don't describe a "resizable editor window" anymore,
+  that was the deleted modal's property.
+- **e2e count is 45 total** (43 passed + 2 auto-SKIP on this
+  firewall-hardened host), up from 36 (34+2) — the 9 new checks are the
+  editor-pane suite (open-in-pane not modal, content, toggle back, terminal
+  survives the round-trip, reopen same file, word-wrap toggle, Dockerfile
+  highlighting, delete-while-open). Fixed in `AGENTS.md` and `.agents/docs/
+  testing/styrman/README.md`'s Tier 4 header + body — same "recount, don't
+  trust a remembered number" trap as every prior session (see the 2026-08-27
+  and 2026-08-30 entries above); it keeps resurfacing because e2e checks get
+  added in feature PRs that don't always touch the testing README themselves.
+- **`web/e2e/run.sh` now builds the web SPA before the Go server** (already
+  in the working tree, well-commented in the script itself) — the server
+  `go:embed`s `web/dist/client`, so building only the binary silently tested
+  stale assets (a real false failure 2026-09-01). `STYRMAN_E2E_SKIP_WEB=1`
+  opts out for server-only iteration; a run leaves `web/dist` dirty
+  (fresh content hashes) — stage with `git add -A -- web/dist`. Documented in
+  both `AGENTS.md`'s testing bullet and the testing README's Tier 4 section.
+- **`image/Dockerfile` gained `shellcheck` (apt) + `hadolint` (GitHub release
+  binary, same pattern as `yq`)**, backing `internal/httpapi/check.go`'s
+  per-language syntax checker (mirrors `format.go`'s dispatch-by-extension
+  shape). Documented in `image/README.md` (one paragraph) and
+  `runtime-image.md`'s Contents list (full checker table by extension).
+- **IMPORTANT unresolved finding, flagged not fixed (out of documentation's
+  lane — this is a code change):** `internal/httpapi/check.go`'s
+  `checkFile` handler is written and unit-tested (`check_test.go`) but is
+  **never registered** in `server.go`'s mux — grepped every
+  `mux.HandleFunc` call site and `/check` isn't among them (unlike
+  `/format`, registered right next to where `/check` would go, line ~271).
+  So `POST /api/projects/{project}/check` is currently unreachable, and
+  nothing in `web/src` calls it either (`api.ts`, `CodeEditor.tsx` have no
+  check/lint wiring) — this is backend-complete, unwired dead code, not yet
+  a live feature. Documented the toolchain as designed/intended per the
+  dispatching task's explicit instruction, but this needs a code fix
+  (`mux.HandleFunc("POST /api/projects/{project}/check", s.checkFile)`) and
+  frontend wiring before it's actually live — re-verify this is still true
+  before describing the Check feature as working in any future doc pass.
+
+Files touched this session: `AGENTS.md` (e2e testing bullet — SPA build +
+skip var + count), `.agents/docs/testing/styrman/README.md` (Tier 4 header +
+body — count, SPA-build paragraph, editor-pane check list), `guide.md`
+(load-bearing idea #4 — editor-pane rewrite, no lint/check-gutter language
+added given the unwired-backend finding above), `image/README.md` (new
+sentence on shellcheck/hadolint), `runtime-image.md` (Contents — new
+shellcheck/hadolint bullet with full checker table). `README.md` (root) has
+no editor/modal prose to fix — checked (grep), nothing there. `api.md` was
+NOT touched — the `/check` route isn't live yet (see finding above), so
+documenting it as a real API surface would itself be inaccurate; revisit
+once the route is registered and the frontend calls it.
+
+**2026-09-01 session (second half of the day's cycle) — e2e recount to
+49/47+2, auto-updater docs (ADR-050/051), `/check` now live in api.md.**
+Third doc-sync pass this same calendar day (after the harness re-sync and
+the editor-pane/e2e-web-build pass, both above) — three unrelated features
+landed in `.agents/docs/changes/2026-09-01-syntax-check-and-autoupdate.md`.
+Key facts for next time:
+- **e2e count is 49 total now** (47 passed + 2 auto-SKIP on this
+  firewall-hardened host), up from 45 (43+2) earlier today — 4 more checks
+  landed in the SAME session that added the auto-updater: discard-and-open
+  loading the second file, no temp-file litter from check/format, syntax
+  check flagging a broken shell script, syntax check reporting a clean file
+  clean. Fixed in `AGENTS.md` and `.agents/docs/testing/styrman/README.md`'s
+  Tier 4 header + body. Static grep of `web/e2e/run.mjs` for `check\(` +
+  `skip\(` call sites only totals 48, one short of the reported 49 — the
+  task supplied the measured number directly (as a verifier run would) and
+  it was trusted over the static recount per instruction; flag this
+  discrepancy if a future session needs to reconcile it exactly (don't
+  assume 48 is right just because grep says so, and don't assume 49 is
+  right either — actually run the suite once to settle it).
+- **Auto-updater (ADR-050/051, `deploy/update/styrman-update` +
+  `.service`/`.timer`, installed by `host-setup.sh` step 8c)**: root
+  systemd timer, every 5 min, deploys the newest tag matching
+  `^v[0-9]+\.[0-9]+\.[0-9]+$` (pre-releases excluded by the regex, highest
+  by `sort -V` not newest by date). Runs against a DEDICATED clone at
+  `/opt/styrman`, never the operator's working tree. **Requires signed
+  tags** (`git tag -s`) — rejects lightweight tags and runs
+  `git verify-tag`, fails closed; opt-out only via root-owned
+  `/etc/styrman/update.env` (`STYRMAN_UPDATE_REQUIRE_SIGNED=0`).
+  Consequence: existing v1.14.0–v1.15.0 tags are unsigned/lightweight and
+  would be refused as-is. Verifies a deploy by reading `LABEL
+  styrman.version` off the running container via `docker inspect` (+
+  `.State.Running`/health) — NOT HTTP, since production's
+  `STYRMAN_AUTH=header` would 403 an unauthenticated poll (ADR-050's
+  same-day correction). Deleting that LABEL from `deploy/Dockerfile.server`
+  breaks the updater (rolls back every release — load-bearing cross-file
+  contract, held together only by comments in both files). Rollback on
+  failed verification redeploys the previous tag and latches the failed one
+  at `/var/lib/styrman/update/failed-version`; `--force` clears it.
+  `--check` is dry-run/report-only. Ships DISABLED — needs a read-only
+  deploy key at `/etc/styrman/deploy-key`, a pinned
+  `/etc/styrman/known_hosts` (`ssh-keyscan`), the clone, and the clone's own
+  `deploy/.env`; `host-setup.sh` step 8c prints the exact commands — kept
+  the new deploy.md section's setup steps consistent with what that script
+  actually prints rather than inventing a second version. New "## Auto-
+  update (tag-gated, ADR-050/051)" section added to `deploy.md`, placed
+  after the Host-layer-backups restore runbook and before Clean reinstall
+  (same shape as the backups section: what/where/how bullets, then a
+  numbered setup list). One-sentence summary added to root `README.md`'s
+  Status bullet list. `guide.md`'s §3 install one-liner comment (which
+  enumerated what `host-setup.sh` installs) also got a short addition
+  mentioning the auto-update timer, kept minimal since guide.md wasn't in
+  the task's explicit scope.
+- **`/check` (syntax checking) is NOW live** — `mux.HandleFunc("POST
+  /api/projects/{project}/check", ...)` is registered (`server.go:273`) and
+  the frontend calls it (`web/src/components/FileEditor.tsx`'s `runCheck`,
+  CodeMirror linter on idle) — this REVERSES the 2026-09-01-earlier-session
+  finding that it was backend-complete but unwired/dead. Added a new "##
+  Check (server-side, syntax)" section to `api.md` right after "## Format
+  (server-side)": request `{path,content}`, response
+  `{supported,tool?,unavailable?,diagnostics:[{line,col?,severity,message}]}`,
+  `supported:false` is HTTP 200 not an error, 409 stopped VM, 413 same cap
+  as `/format` (`maxCheckBytes = maxFormatBytes` in `internal/httpapi/
+  check.go`). Checker-by-extension table: gofmt/shellcheck-or-bash-n/
+  py_compile/node --check/jq empty/yq/tofu fmt -check/hadolint(by
+  basename). Before touching this again, re-verify the mux registration and
+  frontend call site still exist — this is exactly the kind of "wired vs.
+  not" fact that flips between sessions on a fast-moving feature.
+
+Files touched this session: `AGENTS.md` (e2e count 43→47), `.agents/docs/
+testing/styrman/README.md` (Tier 4 header 45→49/43→47 + body — 4 new
+checks named), `.agents/docs/specs/styrman/deploy.md` (new "## Auto-update"
+section), root `README.md` (new Status bullet), `.agents/docs/specs/
+styrman/guide.md` (§3 install comment — auto-update timer mention),
+`.agents/docs/specs/styrman/api.md` (new "## Check" section). No
+changelogs/ADRs/TODO.md touched (out of lane; changelog subagent's territory
+— the source changelog entry and ADR-050/051 already existed before this
+doc pass, read but not edited).
+
 See [[feedback-styrman-doc-edits]] for edit-process lessons.

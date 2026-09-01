@@ -695,6 +695,7 @@ function CredViewer({
               value={data.content ?? ""}
               filename={data.path ?? item.name}
               dark={resolved === "dark"}
+              wrap
               readOnly
               onChange={() => {}}
               onSave={() => {}}

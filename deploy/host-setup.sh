@@ -327,6 +327,90 @@ fi
 # image carries the dotfiles + agent harness and the entrypoint seeds each
 # PER-PROJECT home write-once — there is no shared home to initialize.)
 
+# ─── 8c. Tag-gated auto-update (operator request 2026-09-01) ────────────────
+# Installs the updater + timer, and creates the DEDICATED deploy clone it
+# operates on. The clone is deliberately NOT this repo: production must never
+# be built from the operator's working tree, or an auto `git checkout <tag>`
+# would stomp in-progress work. Like the backup timer, this is installed but
+# only ENABLED once its prerequisite (the clone's own deploy/.env) exists.
+install -m 755 "${SCRIPT_DIR}/update/styrman-update" /usr/local/bin/styrman-update
+install -m 644 "${SCRIPT_DIR}/update/styrman-update.service" /etc/systemd/system/
+install -m 644 "${SCRIPT_DIR}/update/styrman-update.timer" /etc/systemd/system/
+systemctl daemon-reload
+
+STYRMAN_DEPLOY_DIR="${STYRMAN_DEPLOY_DIR:-/opt/styrman}"
+if [ ! -d "${STYRMAN_DEPLOY_DIR}/.git" ]; then
+    ORIGIN="$(git -C "${REPO_ROOT}" remote get-url origin 2>/dev/null || true)"
+    # root has no SSH agent/key of its own, and this repo is private, so an
+    # ssh:// clone here fails unless a deploy key is installed first. Try, but
+    # treat failure as an expected, explained outcome rather than a stray WARN.
+    if [ -n "${ORIGIN}" ]; then
+        log "creating deploy clone at ${STYRMAN_DEPLOY_DIR} (from ${ORIGIN})"
+        if [ -f /etc/styrman/deploy-key ]; then
+            # Seed the pinned known_hosts the updater requires. Without it the
+            # updater's StrictHostKeyChecking=yes fails on EVERY tick with a
+            # message that blames the deploy key (review finding).
+            if [ ! -s /etc/styrman/known_hosts ]; then
+                host="$(printf '%s' "${ORIGIN}" | sed -n 's/^[^@]*@\([^:/]*\).*/\1/p')"
+                [ -n "${host}" ] && ssh-keyscan "${host}" > /etc/styrman/known_hosts 2>/dev/null || true
+            fi
+            GIT_SSH_COMMAND="ssh -i /etc/styrman/deploy-key -o IdentitiesOnly=yes -o UserKnownHostsFile=/etc/styrman/known_hosts -o StrictHostKeyChecking=accept-new" \
+                git clone --quiet "${ORIGIN}" "${STYRMAN_DEPLOY_DIR}" || true
+        else
+            git clone --quiet "${ORIGIN}" "${STYRMAN_DEPLOY_DIR}" 2>/dev/null || true
+        fi
+    fi
+fi
+
+if [ -d "${STYRMAN_DEPLOY_DIR}/.git" ] && [ -f "${STYRMAN_DEPLOY_DIR}/deploy/.env" ]; then
+    systemctl enable --now styrman-update.timer
+    echo "==> auto-update: enabled (checks every 5min for a new vX.Y.Z tag)"
+else
+    cat <<AU
+==> auto-update INSTALLED but NOT enabled. Three prerequisites, all root-only:
+
+    1. A deploy CLONE at ${STYRMAN_DEPLOY_DIR} (production must never build
+       from your working tree — an auto checkout would stomp your edits).
+       The repo is private and root has no key, so give it a READ-ONLY deploy
+       key first (add the .pub to the repo's Deploy keys on GitHub):
+
+         sudo install -d -m 700 /etc/styrman
+         sudo ssh-keygen -t ed25519 -N "" -C styrman-deploy -f /etc/styrman/deploy-key
+         cat /etc/styrman/deploy-key.pub      # add to GitHub → Settings → Deploy keys
+         # Pin the host key (root fetches must NOT trust-on-first-use):
+         sudo sh -c 'ssh-keyscan github.com > /etc/styrman/known_hosts'
+         sudo GIT_SSH_COMMAND="ssh -i /etc/styrman/deploy-key -o IdentitiesOnly=yes -o UserKnownHostsFile=/etc/styrman/known_hosts" \
+              git clone ${ORIGIN:-<origin>} ${STYRMAN_DEPLOY_DIR}
+
+    2. That clone's OWN deploy/.env (gitignored, so a fresh clone has none) (gitignored, so a fresh clone has none):
+
+         sudo cp ${SCRIPT_DIR}/.env ${STYRMAN_DEPLOY_DIR}/deploy/.env
+         sudo chmod 600 ${STYRMAN_DEPLOY_DIR}/deploy/.env
+
+    Then enable it:
+
+         sudo styrman-update --check          # dry run, changes nothing
+         sudo systemctl enable --now styrman-update.timer
+
+    3. SIGN your release tags. The updater builds and runs the tag AS ROOT, so
+       it refuses unsigned ones — otherwise anyone who can push a tag gets root
+       on this host. Annotated + signed:
+
+         git tag -s v1.16.0 -m "styrman v1.16.0" && git push origin v1.16.0
+
+       NOTE the VERIFYING side, not just the signing side: `git verify-tag`
+       runs as ROOT on this host, so root needs your PUBLIC key — a GPG import
+       into root's keyring, or (for SSH signing) a root-readable
+       allowed_signers plus `git config --global gpg.ssh.allowedSignersFile`.
+       Signing the tag is not enough on its own.
+       To accept unsigned tags anyway — a deliberate risk — put
+       STYRMAN_UPDATE_REQUIRE_SIGNED=0 in /etc/styrman/update.env.
+
+    Pushing a SIGNED vX.Y.Z tag then deploys it within ~5 minutes; pre-release
+    tags (-rc1, -beta) are ignored by design.
+AU
+fi
+
 # ─── 8b. Host-layer backups (restic → GCS, R11 / ADR-044 DR layer) ──────────
 # Install the script + systemd units from the repo. The timer is enabled only
 # once the operator has provisioned the two root-only secrets (SA key + restic

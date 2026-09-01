@@ -43,9 +43,17 @@ const MAX_RETRIES = 8;
 export function TerminalPane({
   target,
   onExited,
+  focusToken,
 }: {
   target: TermTarget;
   onExited?: () => void;
+  /**
+   * Bumped by the parent to demand keyboard focus. The pane is hidden with
+   * CSS rather than unmounted when the editor is showing, so nothing restores
+   * focus on the way back — without this the first keystrokes after switching
+   * Editor → Terminal go to <body> and vanish (review finding).
+   */
+  focusToken?: number;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const styrRef = useRef<StyrmanTerminal | null>(null);
@@ -60,6 +68,26 @@ export function TerminalPane({
   );
   // N7: keep onExited fresh without re-running the connection effect.
   const onExitedRef = useRef(onExited);
+  const onResizeRef = useRef<(() => void) | null>(null);
+  const lastFocusToken = useRef(focusToken);
+  useEffect(() => {
+    if (focusToken === undefined || focusToken === lastFocusToken.current) return;
+    lastFocusToken.current = focusToken;
+    // Re-fit BEFORE focusing. While the pane is hidden (display:none) the
+    // ResizeObserver fires with a ~0 host, and onResize calls fit.fit() before
+    // its `cols < 10` guard — so the guard stops a nonsense size reaching tmux
+    // but the LOCAL xterm has already collapsed (observed: a full-width
+    // terminal wrapping at ~12 columns after a Terminal→Editor→Terminal
+    // round-trip). The observer does fire again on unhide, but only after a
+    // 120ms debounce, so the user sees the mangled layout first. Refit now.
+    const timers = [0, 50, 150, 400].map((d) =>
+      setTimeout(() => {
+        onResizeRef.current?.();
+        styrRef.current?.term.focus();
+      }, d),
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [focusToken]);
   useEffect(() => {
     onExitedRef.current = onExited;
   });
@@ -240,6 +268,18 @@ export function TerminalPane({
           );
         }
       }, 120);
+    };
+    // Let the show-the-pane path refit immediately instead of waiting out the
+    // debounce (see the focusToken effect).
+    onResizeRef.current = () => {
+      clearTimeout(resizeTimer);
+      fit.fit();
+      if (term.cols < 10 || term.rows < 3) return;
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
+        );
+      }
     };
     const resizeObserver = new ResizeObserver(onResize);
     resizeObserver.observe(host);

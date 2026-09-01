@@ -86,7 +86,13 @@ export function SidePanel({
       </div>
       <div className="min-h-0 flex-1">
         {tab === "files" && (
-          <FileExplorer project={project} projectName={projectName} />
+          <FileExplorer
+            project={project}
+            projectName={projectName}
+            // With a terminal in context, a file click routes into that
+            // terminal's editor pane instead of the modal viewer.
+            term={term}
+          />
         )}
         {tab === "ports" && <PortsTab project={project} term={term} />}
         {tab === "env" && <EnvTab project={project} />}

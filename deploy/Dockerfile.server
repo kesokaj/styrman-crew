@@ -21,3 +21,12 @@ COPY --from=builder /out/styrman /usr/local/bin/styrman
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
     CMD curl -fsS http://localhost:8080/api/health || exit 1
 ENTRYPOINT ["/usr/local/bin/styrman"]
+
+# Version stamp, LAST so a version bump does not bust the layers above it.
+# The auto-updater verifies a deploy by reading this label with `docker inspect`
+# — no HTTP, no auth, no ingress token. Querying /api/version instead needed a
+# fake identity that STYRMAN_AUTH=header rejects with 403, which made every
+# healthy release look like a failure (review, 2026-09-01). Deleting this LABEL
+# breaks the updater: it would roll back every release.
+ARG STYRMAN_VERSION=0.0.0
+LABEL styrman.version="${STYRMAN_VERSION}"

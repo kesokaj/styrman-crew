@@ -71,9 +71,17 @@ Load-bearing ideas:
 4. **The side panel is project context**: Files (workspace + home; create/
    rename/delete files and folders; view + edit via a lazy-loaded
    CodeMirror 6 editor with syntax highlighting for ~20 languages including
-   Java/C/C++/Rust/PHP/SQL/XML/Terraform (v1.7.2) — the editor window is
-   resizable (size remembered in localStorage) and saving no longer closes
-   it, just re-disables Save until the next edit (v1.7.2); markdown opens as
+   Java/C/C++/Rust/PHP/SQL/XML/Terraform (v1.7.2) — the editor is a VIEW of
+   the terminal's MAIN pane, not a separate modal (2026-09-01, replacing the
+   earlier centered file-viewer modal): a `Terminal | Editor` control in the
+   terminal header toggles the pane, state is kept per terminal (one
+   terminal can sit on the editor while another in the same project shows a
+   shell), and the terminal keeps running underneath either way (hidden with
+   CSS, never unmounted, so its session survives the toggle). Clicking a
+   file in the Files panel opens it in the pane and switches the view there;
+   saving no longer closes it, just re-disables Save until the next edit
+   (v1.7.2); a **Wrap** toggle controls soft-wrap (default on, persisted
+   across sessions); markdown opens as
    a RENDERED preview with an Edit toggle; a **Format** button reformats with
    the file's real CLI formatter running INSIDE the project VM — `gofmt`,
    `prettier`, `black`/`ruff`, `rustfmt`, `shfmt`, `terraform fmt`/`tofu fmt`
@@ -285,8 +293,11 @@ Baremetal Debian 13 or a GCP VM with nested virtualization.
 git clone <repo> styrman && cd styrman
 sudo bash deploy/host-setup.sh --user $USER   # Docker, Kata "mvm", daemon cfg, dirs, the
                                               # isolation firewall + backup systemd units,
-                                              # builds styrman-runtime:latest (the tag
-                                              # production compose uses), seeds deploy/.env
+                                              # the auto-update timer (installed but
+                                              # disabled until its clone+deploy-key exist,
+                                              # see deploy.md), builds styrman-runtime:latest
+                                              # (the tag production compose uses), seeds
+                                              # deploy/.env
 docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/  # separate tag for the loopback dev run; the version keys harness re-seeding
 
 # Dev (no auth, loopback; needs a Go 1.25+ toolchain — host-setup.sh does NOT install one):

@@ -91,6 +91,24 @@ export interface FileContent {
   binary: boolean;
 }
 
+/** One problem reported by a syntax checker, addressed to a line. */
+export interface CheckDiagnostic {
+  line: number;
+  col?: number;
+  severity: "error" | "warning" | "info";
+  message: string;
+}
+
+export interface CheckResult {
+  /** false = no checker exists for this file type (not an error). */
+  supported: boolean;
+  /** The checker that ran (or would have). */
+  tool?: string;
+  /** true = the checker is not installed in the project VM. */
+  unavailable?: boolean;
+  diagnostics: CheckDiagnostic[];
+}
+
 export interface Transcript {
   id: string;
   size: number;
@@ -417,6 +435,14 @@ export const api = {
   // Format content with the language's real CLI formatter in the project VM.
   formatFile: (project: string, path: string, content: string) =>
     request<{ content: string }>(`/api/projects/${project}/format`, {
+      method: "POST",
+      body: JSON.stringify({ path, content }),
+    }),
+  // Syntax-check content with the language's real CLI checker in the project
+  // VM (gofmt, shellcheck, hadolint, …). `supported:false` means we have no
+  // checker for this file type — a normal answer, not an error.
+  checkFile: (project: string, path: string, content: string) =>
+    request<CheckResult>(`/api/projects/${project}/check`, {
       method: "POST",
       body: JSON.stringify({ path, content }),
     }),

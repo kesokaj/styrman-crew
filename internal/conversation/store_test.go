@@ -83,3 +83,109 @@ func TestSaveRecreatesMissingDir(t *testing.T) {
 		t.Fatalf("conversations.json not persisted after recovery: %v", err)
 	}
 }
+
+// TestListNaturalOrder pins the sidebar ordering (operator request
+// 2026-09-01): titles ascending in natural order, NOT most-recently-opened
+// first, which made the list reshuffle on every open.
+func TestListNaturalOrder(t *testing.T) {
+	s, err := NewStore(filepath.Join(t.TempDir(), "conversations.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Created out of order on purpose; "Terminal 10" must NOT sort before
+	// "Terminal 2" (the plain-string-sort trap).
+	for _, title := range []string{"Terminal 10", "beta", "Terminal 2", "0-first", "Alpha"} {
+		if _, err := s.Create("p", title); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Touch the one that would previously have jumped to the top.
+	s.Touch("p", "1")
+
+	got := []string{}
+	for _, r := range s.List("p") {
+		got = append(got, r.Title)
+	}
+	want := []string{"0-first", "Alpha", "beta", "Terminal 2", "Terminal 10"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("List order = %v, want %v", got, want)
+	}
+
+	// Touching must not reorder anything.
+	s.Touch("p", "3")
+	got2 := []string{}
+	for _, r := range s.List("p") {
+		got2 = append(got2, r.Title)
+	}
+	if strings.Join(got2, "|") != strings.Join(want, "|") {
+		t.Errorf("order changed after Touch: %v", got2)
+	}
+}
+
+func TestNaturalLess(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"Terminal 2", "Terminal 10", true},  // numeric, not lexical
+		{"Terminal 10", "Terminal 2", false}, //
+		{"a", "b", true},                     //
+		{"0", "a", true},                     // digits before letters
+		{"Apple", "apple", false},            // case-insensitive → equal → not less
+		{"apple", "Banana", true},            // case-insensitive ordering
+		{"item2", "item2b", true},            // prefix is shorter
+		{"v1.9.0", "v1.15.0", true},          // multi-segment numbers
+		{"007", "7a", true},                  // leading zeros ignored, then shorter
+	}
+	for _, c := range cases {
+		if got := naturalLess(c.a, c.b); got != c.want {
+			t.Errorf("naturalLess(%q,%q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// Swedish titles must fold case like any other (review finding: byte-wise
+// ASCII folding left "Åke"/"åke" unfolded on a Swedish operator's box).
+func TestNaturalLessUnicodeFolding(t *testing.T) {
+	if naturalLess("Åke", "åke") || naturalLess("åke", "Åke") {
+		t.Error(`"Åke" and "åke" should fold to equivalent`)
+	}
+	if naturalLess("Ärende", "ärende") || naturalLess("ärende", "Ärende") {
+		t.Error(`"Ärende" and "ärende" should fold to equivalent`)
+	}
+	// Multi-byte runes must not be split mid-sequence by the digit scanner.
+	if !naturalLess("Åke 2", "Åke 10") {
+		t.Error("numeric ordering broken after a multi-byte rune")
+	}
+}
+
+// Titles that are EQUIVALENT under naturalLess but not byte-identical must
+// still get a deterministic order — sort.Slice is not stable, so without the
+// ID tie-break their order could flip on any store mutation.
+func TestListStableForEquivalentTitles(t *testing.T) {
+	s, err := NewStore(filepath.Join(t.TempDir(), "conversations.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "Apple" and "apple" are equivalent under case-insensitive comparison.
+	for _, title := range []string{"apple", "Apple", "APPLE"} {
+		if _, err := s.Create("p", title); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := []string{}
+	for _, r := range s.List("p") {
+		first = append(first, r.ID)
+	}
+	// Repeated calls, and a mutation in between, must not reshuffle them.
+	_ = s.Rename("p", "2", "Apple")
+	for i := 0; i < 20; i++ {
+		got := []string{}
+		for _, r := range s.List("p") {
+			got = append(got, r.ID)
+		}
+		if strings.Join(got, ",") != strings.Join(first, ",") {
+			t.Fatalf("order flipped between calls: %v vs %v", got, first)
+		}
+	}
+}

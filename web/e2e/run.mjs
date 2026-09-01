@@ -193,6 +193,201 @@ try {
   });
   await shot("04-files");
 
+  // ── Editor pane (2026-09-01): the editor shares the main pane with the
+  // terminal instead of opening as a modal. The terminal must stay MOUNTED
+  // behind it — TerminalPane closes its WebSocket on unmount, so a toggle that
+  // remounted it would silently kill the session on every switch.
+  await check("clicking a file opens it in the editor pane", async () => {
+    await panel().getByText("Files", { exact: true }).click();
+    await page.waitForTimeout(400);
+    await panel().getByText("nested.txt", { exact: true }).click();
+    // Editor pane, not a modal: no dialog, and CodeMirror is in the main pane.
+    await page.waitForSelector(".cm-content", { timeout: 15000 });
+    if (await page.locator('[role="dialog"][aria-label="File viewer"]').count())
+      throw new Error("file opened as a modal, expected the pane");
+  });
+  await check("editor pane shows the file content", async () => {
+    await page.waitForSelector(".cm-content >> text=hi", { timeout: 10000 });
+  });
+  await shot("04c-editor-open"); // the editor pane itself, for design review
+  await check("view toggle switches back to the terminal", async () => {
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.waitForSelector(".xterm", { state: "visible", timeout: 10000 });
+  });
+  // The real regression guard: the shell is still the SAME live session, so a
+  // command typed now still works and the earlier scrollback is intact.
+  // NO explicit .focus() here on purpose: switching back to Terminal must
+  // restore keyboard focus by itself, or the first keystrokes go to <body>.
+  await check("terminal session survived the editor round-trip", async () => {
+    await page.keyboard.type("echo pane-roundtrip-ok");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector(".xterm >> text=pane-roundtrip-ok", {
+      timeout: 15000,
+    });
+  });
+  // The terminal must come back at its FULL width. While hidden the
+  // ResizeObserver collapses the local xterm, and the recovery was debounced —
+  // a full-width terminal came back wrapping at ~12 columns (caught by looking
+  // at a screenshot; the typing check above passed the whole time).
+  await check("terminal keeps its width across the round-trip", async () => {
+    const cols = await page.evaluate(() => {
+      const el = document.querySelector(".xterm-screen");
+      const row = document.querySelector(".xterm-rows > div");
+      if (!el || !row) return 0;
+      // Width of the rendered row box vs the screen: a collapsed terminal
+      // reports a tiny screen width relative to its container.
+      return Math.round(el.getBoundingClientRect().width);
+    });
+    if (cols < 400)
+      throw new Error(`terminal collapsed after the toggle: screen width ${cols}px`);
+  });
+
+  await check("toggling back reopens the same file (no reload)", async () => {
+    await page.getByRole("button", { name: "Editor", exact: true }).click();
+    await page.waitForSelector(".cm-content >> text=hi", { timeout: 10000 });
+  });
+  await check("word wrap toggle is present", async () => {
+    await page.getByRole("button", { name: "Wrap", exact: true }).click();
+    await page.waitForTimeout(200);
+    await page.getByRole("button", { name: "Wrap", exact: true }).click();
+  });
+  await check("Dockerfile highlights (basename match, not full path)", async () => {
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.locator(".xterm textarea").first().focus();
+    await page.keyboard.type("printf 'FROM debian:trixie\\nRUN echo hi\\n' > Dockerfile");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(800);
+    await panel().getByText("Files", { exact: true }).click();
+    // The explorer is still inside subdir/ from the drill-in check; the scope
+    // buttons reset both scope AND path back to the workspace root.
+    await panel().getByText("Project", { exact: true }).click();
+    await page.waitForTimeout(600);
+    await panel().getByText("Dockerfile", { exact: true }).click();
+    // With a grammar loaded, CodeMirror wraps tokens in styled spans (the
+    // theme generates its own class names, so assert on the spans, not on a
+    // `tok-*` class). A file with NO matching grammar renders bare text nodes
+    // — which is exactly what the full-path bug produced for Dockerfiles.
+    // Content must be the DOCKERFILE's, not the previously open file's — this
+    // is the regression that the render-phase reset in useFileEditorState fixes.
+    await page.waitForSelector(".cm-content >> text=FROM debian", {
+      timeout: 15000,
+    });
+    await page.waitForSelector(".cm-content .cm-line span", { timeout: 10000 });
+  });
+  // "Discard and open": editing a file, then clicking another, must prompt and
+  // then actually LOAD the second file. This dead-ended on an empty pane in
+  // review (the store bailed on an identical object, so the loader never re-ran).
+  await check("discard-and-open loads the second file", async () => {
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.locator(".xterm textarea").first().focus();
+    // Two files at the WORKSPACE ROOT (nested.txt lives in subdir/).
+    await page.keyboard.type("echo AAA > one.txt; echo BBB > two.txt");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(900);
+    await panel().getByText("Files", { exact: true }).click();
+    await panel().getByText("Project", { exact: true }).click();
+    await page.waitForTimeout(600);
+    await panel().getByText("one.txt", { exact: true }).click();
+    await page.waitForSelector(".cm-content >> text=AAA", { timeout: 15000 });
+    // Make it dirty.
+    await page.locator(".cm-content").first().click();
+    await page.keyboard.type("DIRTY");
+    await page.waitForTimeout(400);
+    // Opening another file must PROMPT, not silently discard.
+    await panel().getByText("two.txt", { exact: true }).click();
+    await page.waitForSelector("text=Discard unsaved changes?", { timeout: 10000 });
+    await page.getByRole("button", { name: "Discard and open" }).click();
+    // ...and the pane must actually show the SECOND file, not sit empty.
+    await page.waitForSelector(".cm-content >> text=BBB", { timeout: 15000 });
+  });
+
+  // Syntax checking (item 5): the real checker runs in the project VM and its
+  // diagnostics land in CodeMirror's lint gutter.
+  await check("syntax check flags a broken shell script", async () => {
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.locator(".xterm textarea").first().focus();
+    await page.keyboard.type("printf 'if [ 1 -eq 1 ]\\nthen\\necho hi\\n' > broken.sh");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(800);
+    await panel().getByText("Files", { exact: true }).click();
+    await panel().getByText("Project", { exact: true }).click();
+    await page.waitForTimeout(600);
+    await panel().getByText("broken.sh", { exact: true }).click();
+    await page.waitForSelector(".cm-content >> text=echo hi", { timeout: 15000 });
+    await page.waitForSelector(".cm-lint-marker-error", { timeout: 30000 });
+  });
+  await check("syntax check reports a CLEAN file as clean", async () => {
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.locator(".xterm textarea").first().focus();
+    await page.keyboard.type("printf 'echo hello\\n' > fine.sh");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(800);
+    await panel().getByText("Files", { exact: true }).click();
+    await panel().getByText("Project", { exact: true }).click();
+    await page.waitForTimeout(600);
+    await panel().getByText("fine.sh", { exact: true }).click();
+    await page.waitForSelector(".cm-content >> text=echo hello", { timeout: 15000 });
+    await page.waitForTimeout(4000); // let the debounced check run
+    if (await page.locator(".cm-lint-marker-error").count())
+      throw new Error("clean file reported an error");
+  });
+
+  // The check/format endpoints write a temp file INTO the workspace so tools
+  // find the project's config. They must clean it up — leftovers showed up in
+  // the user's file list during development.
+  await check("syntax check leaves no temp files in the workspace", async () => {
+    // Exercise a PYTHON file too, not just a shell one. py_compile emits a
+    // __pycache__ DIRECTORY, which the tmp.* filename pattern below can never
+    // match — so this check previously passed while the litter bug was live
+    // (verifier finding). Checking both is what makes it a real gate.
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.locator(".xterm textarea").first().focus();
+    await page.keyboard.type("printf 'x = 1\\n' > lint.py");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(800);
+    await panel().getByText("Files", { exact: true }).click();
+    await panel().getByText("Project", { exact: true }).click();
+    await page.waitForTimeout(500);
+    await panel().getByText("lint.py", { exact: true }).click();
+    await page.waitForSelector(".cm-content >> text=x = 1", { timeout: 15000 });
+    await page.waitForTimeout(4000); // let the debounced check run in the VM
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await panel().getByText("Project", { exact: true }).click();
+    await page.waitForTimeout(800);
+    const listing = await panel().innerText();
+    if (/tmp\.[A-Za-z0-9]+\./.test(listing))
+      throw new Error(`temp files left in the workspace: ${listing}`);
+    if (/__pycache__/.test(listing))
+      throw new Error(`__pycache__ left in the workspace: ${listing}`);
+  });
+
+  // Deleting a file that is OPEN in the pane must close it — otherwise Save
+  // on the stale path recreates what was just deleted (review finding).
+  await check("deleting an open file clears the editor pane", async () => {
+    await panel().getByText("Files", { exact: true }).click();
+    await panel().getByText("Project", { exact: true }).click();
+    await page.waitForTimeout(500);
+    await panel().getByText("Dockerfile", { exact: true }).click();
+    await page.waitForSelector(".cm-content >> text=FROM debian", {
+      timeout: 15000,
+    });
+    // The row's action buttons are invisible until the row is hovered.
+    await panel()
+      .locator("div.group")
+      .filter({ hasText: "Dockerfile" })
+      .first()
+      .hover();
+    await panel().getByLabel("Delete Dockerfile").click();
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await page.waitForTimeout(1200);
+    // The pane must no longer be offering to save the deleted file.
+    await page.getByRole("button", { name: "Editor", exact: true }).click();
+    await page.waitForSelector("text=No file open", { timeout: 10000 });
+  });
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await page.waitForTimeout(600); // let the refit settle before capturing
+  await shot("04b-editor-pane");
+
   // ── Side panel: Ports (start a server in the terminal first) ────────────
   await page.locator(".xterm textarea").first().focus();
   await page.keyboard.type(

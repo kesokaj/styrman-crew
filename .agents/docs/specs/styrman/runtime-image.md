@@ -15,6 +15,16 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> image/
 - OpenTofu, via the official `get.opentofu.org` installer script
   (`--install-method standalone`), which verifies the release signature
   itself before installing (M32)
+- `shellcheck` (apt) and `hadolint` (GitHub release binary, same "latest
+  release" pattern as `yq`) — the shell and Dockerfile syntax checkers
+  backing the editor's Check feature (`internal/httpapi/check.go`,
+  `POST /api/projects/{id}/check`), which runs the language's real checker
+  INSIDE the project VM, the same shape as `format` (see api.md's "Format
+  (server-side)" section). Full checker table
+  by extension: `gofmt` (go), `shellcheck` falling back to `bash -n` on an
+  image predating it (sh/bash), `python3 -m py_compile` (py), `node --check`
+  (js/jsx/mjs/cjs), `jq empty` (json), `yq e .` (yaml/yml), `tofu fmt -check`
+  (tf/tfvars/hcl), `hadolint -f json` (Dockerfile/Containerfile/`*.dockerfile`)
 - Go (latest stable at build time), Node 22
 - Agents: `claude` (npm `@anthropic-ai/claude-code`), `agy` (official installer → `/usr/local/bin/agy`)
 - dbus, gnome-keyring, libsecret-tools — originally installed for agy's Secret

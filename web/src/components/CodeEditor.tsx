@@ -9,6 +9,8 @@ import {
   StreamLanguage,
 } from "@codemirror/language";
 import { oneDark } from "@codemirror/theme-one-dark";
+import type { CheckDiagnostic } from "../lib/api";
+import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 
 // Explicit grammar list instead of @codemirror/language-data: the full
 // catalogue is 120+ lazy chunks (~2.5 MB) committed and go:embed-ed for
@@ -109,8 +111,11 @@ const LANGUAGES = [
     load: () => legacy(import("@codemirror/legacy-modes/mode/shell"), "shell"),
   }),
   LanguageDescription.of({
+    // Dockerfile, Dockerfile.dev, Containerfile, and the lowercase spellings.
+    // `.dockerfile` as an extension is covered by the extensions list.
     name: "Dockerfile",
-    filename: /^Dockerfile(\..*)?$/,
+    extensions: ["dockerfile", "containerfile"],
+    filename: /^(dockerfile|containerfile)(\..*)?$/i,
     load: () =>
       legacy(import("@codemirror/legacy-modes/mode/dockerfile"), "dockerFile"),
   }),
@@ -138,13 +143,30 @@ const CodeEditor = forwardRef<
     filename: string;
     dark: boolean;
     readOnly: boolean;
+    /** Soft-wrap long lines instead of scrolling horizontally. */
+    wrap: boolean;
+    /**
+     * Runs the language's real checker in the project VM and returns its
+     * diagnostics. Omitted (e.g. the read-only Settings viewer) disables the
+     * lint gutter entirely.
+     */
+    check?: (text: string) => Promise<CheckDiagnostic[]>;
     onChange: (text: string) => void;
     onSave: () => void;
   }
->(function CodeEditor({ value, filename, dark, readOnly, onChange, onSave }, ref) {
+>(function CodeEditor(
+  { value, filename, dark, readOnly, wrap, check, onChange, onSave },
+  ref,
+) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const themeComp = useRef(new Compartment());
+  // Separate compartment so toggling wrap reconfigures in place — remounting
+  // would lose cursor, scroll position, and undo history.
+  const wrapComp = useRef(new Compartment());
+  // Keep the latest check fn reachable from the mount-once linter extension.
+  const checkRef = useRef(check);
+  checkRef.current = check;
   // Refs so the mount-once editor always calls the latest callbacks.
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
@@ -189,6 +211,36 @@ const CodeEditor = forwardRef<
         }),
         EditorState.readOnly.of(readOnly),
         themeComp.current.of(dark ? oneDark : []),
+        wrapComp.current.of(wrap ? EditorView.lineWrapping : []),
+        // Syntax checking runs a real CLI checker inside the project VM, so it
+        // is debounced hard (1s idle) rather than run per keystroke; CodeMirror
+        // also cancels a pending run when the doc changes again.
+        lintGutter(),
+        linter(
+          async (view): Promise<Diagnostic[]> => {
+            const fn = checkRef.current;
+            if (!fn) return [];
+            const doc = view.state.doc;
+            const ds = await fn(doc.toString());
+            return ds.map((d) => {
+              // Clamp: a checker can report a line past the end (e.g. "expected
+              // EOF"), and an out-of-range position throws inside CodeMirror.
+              const lineNo = Math.min(Math.max(d.line, 1), doc.lines);
+              const line = doc.line(lineNo);
+              const from = Math.min(
+                line.from + Math.max((d.col ?? 1) - 1, 0),
+                line.to,
+              );
+              return {
+                from,
+                to: line.to,
+                severity: d.severity,
+                message: d.message,
+              };
+            });
+          },
+          { delay: 1000 },
+        ),
         EditorView.theme({
           "&": {
             height: "100%",
@@ -202,7 +254,14 @@ const CodeEditor = forwardRef<
       ],
     });
     viewRef.current = view;
-    const lang = LanguageDescription.matchFilename(LANGUAGES, filename);
+    // Match on the BASENAME, not the path we were handed. CodeMirror's
+    // matchFilename tests each `filename` regex against the whole string, so
+    // "projects/x/Dockerfile" never matched /^Dockerfile…/ — Dockerfiles and
+    // shell dotfiles (.bashrc &c.) silently lost highlighting, while
+    // extension-matched grammars kept working because matchFilename falls
+    // back to splitting on the last dot.
+    const base = filename.split("/").pop() ?? filename;
+    const lang = LanguageDescription.matchFilename(LANGUAGES, base);
     lang?.load().then((support) => {
       view.dispatch({ effects: StateEffect.appendConfig.of(support) });
     });
@@ -221,6 +280,15 @@ const CodeEditor = forwardRef<
       effects: themeComp.current.reconfigure(dark ? oneDark : []),
     });
   }, [dark]);
+
+  // Same for wrap — reconfigure, never remount.
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: wrapComp.current.reconfigure(
+        wrap ? EditorView.lineWrapping : [],
+      ),
+    });
+  }, [wrap]);
 
   return <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden" />;
 });

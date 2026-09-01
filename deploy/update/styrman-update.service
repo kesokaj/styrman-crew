@@ -1,0 +1,22 @@
+[Unit]
+Description=styrman tag-gated auto-update (newest stable vX.Y.Z tag)
+After=docker.service
+Requires=docker.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/styrman-update
+# Builds are heavy and must never starve the running platform.
+Nice=10
+IOSchedulingClass=idle
+# A build can legitimately take many minutes; the flock in the script is what
+# prevents overlap, so give it room rather than killing a half-built image.
+TimeoutStartSec=45min
+# Modest hardening. Be honest about what it buys: the real control is the tag
+# SIGNATURE check in the script, because a hostile release's payload runs in
+# the DOCKER DAEMON, not in this cgroup — sandboxing this unit cannot contain
+# it (security review, 2026-09-01). These are free, so they stay.
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes

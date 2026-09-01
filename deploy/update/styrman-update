@@ -1,0 +1,267 @@
+#!/usr/bin/env bash
+# styrman-update — pull and deploy the newest STABLE version tag.
+#
+# Ported from argolis-devbox's `devbox update` (operator request 2026-09-01),
+# with the one change the operator asked for: it acts on VERSION TAGS ONLY,
+# never on "whatever landed on the branch". Push a `vX.Y.Z` tag and the host
+# picks it up on the next timer tick; push commits and nothing happens.
+#
+# Two deliberate departures from the argolis original:
+#
+#   1. It operates on a DEDICATED deploy clone (default /opt/styrman), never
+#      on the operator's working tree. argolis deployed from /opt/devbox, but
+#      styrman's compose builds from the repo root, and on this host that has
+#      been the operator's own checkout — `git checkout <tag>` there would
+#      stomp in-progress work.
+#   2. It rolls back. If the new version fails to report itself healthy, the
+#      previous tag is rebuilt and redeployed rather than leaving the box on a
+#      broken version.
+#
+# Both images are rebuilt on every tag (operator's choice): the server, and
+# the runtime image — the latter re-seeds every project's agent harness on its
+# next boot, which is the ADR-046 delivery path.
+#
+# Usage: styrman-update [--check] [--force]
+#   --check   report what would happen, change nothing
+#   --force   rebuild + redeploy at the CURRENT tag even if nothing is new
+set -euo pipefail
+
+DEPLOY_DIR="${STYRMAN_DEPLOY_DIR:-/opt/styrman}"
+LOCK="/run/styrman-update.lock"
+# State lives OUTSIDE the clone. It used to sit at the clone root, where the
+# `git clean -d` in deploy() deleted it — wiping the failed-tag latch and
+# reinstating the very retry storm the latch exists to prevent (review finding;
+# reproduced: both dotfiles gone after one clean).
+STATE_DIR="${STYRMAN_UPDATE_STATE_DIR:-/var/lib/styrman/update}"
+STATE="${STATE_DIR}/deployed-version"
+# A tag that failed to come up and was rolled back. Without this the timer
+# would retry the same broken release every tick, forever.
+FAILED="${STATE_DIR}/failed-version"
+RUNTIME_IMAGE="${STYRMAN_IMAGE:-styrman-runtime:dev}"
+# How long to wait for the new server to report its version before rolling back.
+HEALTH_TIMEOUT="${STYRMAN_UPDATE_HEALTH_TIMEOUT:-120}"
+
+CHECK_ONLY=false
+FORCE=false
+for arg in "$@"; do
+    case "${arg}" in
+        --check) CHECK_ONLY=true ;;
+        --force) FORCE=true ;;
+        *) echo "unknown flag: ${arg}" >&2; exit 2 ;;
+    esac
+done
+
+log()  { echo "[styrman-update] $*"; }
+fail() { echo "[styrman-update] FATAL: $*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || fail "must run as root"
+[ -d "${DEPLOY_DIR}/.git" ] || fail "no deploy clone at ${DEPLOY_DIR} (see host-setup.sh step 8c)"
+# compose reads this for the ingress token, uid/gid, &c. The updater no longer
+# reads it itself (the version check uses a container label), but a build
+# without it produces a broken stack.
+[ -f "${DEPLOY_DIR}/deploy/.env" ] || fail "${DEPLOY_DIR}/deploy/.env missing — the deploy clone needs its own secrets file"
+
+# Serialize: a build can outlast the timer interval, and two concurrent
+# checkouts of the same tree would corrupt each other. (The argolis original
+# had no lock and its 5-minute timer could stack.)
+mkdir -p "${STATE_DIR}" || fail "cannot create ${STATE_DIR}"
+exec 9>"${LOCK}"
+flock -n 9 || { log "another run is in progress — skipping this tick"; exit 0; }
+
+cd "${DEPLOY_DIR}"
+# git refuses to operate on a tree owned by another user. Pass it per-command
+# with `git -c` instead of `git config --global --add`, which never
+# de-duplicates and grew /root/.gitconfig by one line every tick — ~105k lines
+# a year at this cadence (review finding).
+# Assert the clone is root-owned BEFORE disabling git's ownership guard for it:
+# `-c safe.directory` on a tree someone else can write would let them choose the
+# code this script builds as root (security review).
+[ "$(stat -c %u "${DEPLOY_DIR}/.git" 2>/dev/null)" = "0" ] \
+    || fail "${DEPLOY_DIR}/.git is not root-owned — refusing to build from a tree another user can write"
+git() { command git -c safe.directory="${DEPLOY_DIR}" "$@"; }
+
+# The repo is PRIVATE and this runs as root, which has no SSH agent and no key
+# of its own. A read-only deploy key at /etc/styrman/deploy-key is how root
+# fetches; without it `git fetch` fails and the updater would quietly run on
+# stale local tags forever (review finding: the clone/fetch failed with a
+# single WARN in a long log).
+# StrictHostKeyChecking=yes with a PINNED known_hosts, not accept-new: this is
+# a root fetch whose output is built and run as root, so a first-contact TOFU
+# window would let an attacker pin their own host key permanently (security
+# review). host-setup.sh seeds /etc/styrman/known_hosts via ssh-keyscan.
+if [ -f /etc/styrman/deploy-key ]; then
+    export GIT_SSH_COMMAND="ssh -i /etc/styrman/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/styrman/known_hosts"
+fi
+
+# ─── Find the newest STABLE tag ─────────────────────────────────────────────
+# --force so a re-tagged release is picked up; --prune-tags so a DELETED tag
+# stops being a candidate (without it a withdrawn release would live forever
+# in the local clone and keep reinstalling itself).
+# Fail LOUDLY on a fetch error rather than silently deploying from stale local
+# tags: "no new version" and "cannot see new versions" must not look identical.
+if ! git fetch --tags --force --prune --prune-tags origin 2>&1; then
+    fail "git fetch failed — root cannot reach ${DEPLOY_DIR}'s origin. For a private repo install a read-only deploy key at /etc/styrman/deploy-key (chmod 600)."
+fi
+
+# STRICTLY vX.Y.Z. Pre-releases (v1.16.0-rc1, -beta) are excluded by the
+# anchored regex, so release candidates can be pushed without deploying them.
+# sort -V picks the highest VERSION, not the most recently created tag.
+LATEST="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+[ -n "${LATEST}" ] || fail "no stable vX.Y.Z tags found"
+
+# ─── Tag integrity ──────────────────────────────────────────────────────────
+# What this script does with a tag is check it out and BUILD IT AS ROOT, and
+# docker-compose.yml lives inside that checkout — so a hostile revision only
+# has to add a bind mount to own the host. Without a signature the trust set is
+# "anyone who can push a tag" (account takeover, a future collaborator, a
+# write-capable CI token), not "the operator" (security review, 2026-09-01).
+#
+# Fails CLOSED. Set STYRMAN_UPDATE_REQUIRE_SIGNED=0 in /etc/styrman/update.env
+# to accept unsigned tags — a deliberate, root-only, logged choice.
+[ -f /etc/styrman/update.env ] && . /etc/styrman/update.env
+if [ "${STYRMAN_UPDATE_REQUIRE_SIGNED:-1}" = "1" ]; then
+    # A lightweight tag is just a ref — it cannot carry a signature at all.
+    if [ "$(git cat-file -t "${LATEST}" 2>/dev/null)" != "tag" ]; then
+        fail "${LATEST} is a lightweight tag and cannot be verified. Re-tag with \`git tag -s ${LATEST}\` (signed, annotated) and push --force, or opt out in /etc/styrman/update.env."
+    fi
+    if ! git verify-tag "${LATEST}" 2>&1; then
+        fail "${LATEST} has no valid signature — REFUSING to build and run it as root. Sign your release tags (git tag -s), or set STYRMAN_UPDATE_REQUIRE_SIGNED=0 in /etc/styrman/update.env to accept the risk."
+    fi
+    log "${LATEST} signature OK"
+else
+    log "WARNING: signature checking DISABLED — any pushed tag will be built and run as root"
+fi
+
+CURRENT="$(cat "${STATE}" 2>/dev/null || true)"
+# The state file is root-owned, but a malformed value (notably a leading "-")
+# would be read by git as an OPTION. Accept only the tag shape we write.
+if [ -n "${CURRENT}" ] && ! printf '%s' "${CURRENT}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+    log "WARN: ignoring malformed ${STATE} contents"
+    CURRENT=""
+fi
+if [ -z "${CURRENT}" ]; then
+    # First run: fall back to whatever the clone is checked out at.
+    CURRENT="$(git describe --tags --exact-match 2>/dev/null || echo none)"
+fi
+
+log "deployed=${CURRENT} latest-stable=${LATEST}"
+
+# A previously failed tag is not retried automatically — only --force (or a
+# newer tag) gets past this. Retrying a known-broken release on every tick
+# would rebuild both images every few minutes and churn the live server.
+if [ "$(cat "${FAILED}" 2>/dev/null || true)" = "${LATEST}" ] && [ "${FORCE}" = false ]; then
+    log "${LATEST} previously FAILED to deploy and was rolled back — skipping."
+    log "  investigate, then re-run with --force (or push a newer tag)."
+    exit 0
+fi
+if [ "${FORCE}" = true ]; then
+    rm -f "${FAILED}"
+fi
+
+if [ "${CURRENT}" = "${LATEST}" ] && [ "${FORCE}" = false ]; then
+    log "already up to date"
+    exit 0
+fi
+if [ "${CHECK_ONLY}" = true ]; then
+    log "update AVAILABLE: ${CURRENT} → ${LATEST}"
+    git --no-pager log --oneline "${CURRENT}..${LATEST}" 2>/dev/null | head -20 || true
+    exit 0
+fi
+
+# ─── Deploy ─────────────────────────────────────────────────────────────────
+# deploy <tag> — checkout, rebuild both images, bring the stack up.
+deploy() {
+    local tag="$1" ver="${1#v}"
+    log "deploying ${tag}"
+    git checkout --detach --force "${tag}" 2>/dev/null || fail "checkout ${tag} failed"
+    # --force replaces TRACKED files but leaves untracked ones, and the server
+    # image builds with `context: ..` — so a planted file would survive every
+    # checkout into every image. `-d` without `-x` deliberately keeps ignored
+    # files: deploy/.env is gitignored and must NOT be deleted.
+    git clean -d --force --quiet || log "WARN: git clean failed"
+
+    log "building runtime image (${RUNTIME_IMAGE}, version ${ver})"
+    docker build -t "${RUNTIME_IMAGE}" --build-arg "STYRMAN_VERSION=${ver}" "${DEPLOY_DIR}/image" \
+        || return 1
+
+    # Build EVERY compose service, not just styrman: the vendored Caddy ingress
+    # is also built from this checkout, and `up -d` alone would leave a tag that
+    # changes deploy/caddy/** shipping everything except the ingress — while
+    # still reporting VERIFIED (review finding).
+    log "building + starting the stack (server + ingress)"
+    ( cd "${DEPLOY_DIR}/deploy" \
+      && STYRMAN_VERSION="${ver}" docker compose -f docker-compose.yml build \
+      && STYRMAN_VERSION="${ver}" docker compose -f docker-compose.yml up -d ) || return 1
+}
+
+# reports_version <x.y.z> — wait until the RUNNING server container is healthy
+# and carries this version.
+#
+# Read from the container, not the HTTP API. The obvious implementation —
+# polling /api/version — needed an identity header, and production runs
+# STYRMAN_AUTH=header where authGuard exempts only /api/health, so a synthetic
+# "updater@localhost" got 403 forever: every HEALTHY release would have timed
+# out, rolled back, and latched its tag as failed (review finding). The label
+# is stamped at build time (deploy/Dockerfile.server) and needs no auth, no
+# ingress token, and no network.
+#
+# Fails CLOSED: any inability to confirm the version is a failure, because the
+# caller uses this to decide whether to keep the release or roll it back.
+reports_version() {
+    local want="$1" deadline got health running
+    got=""; health=""; running=""   # set -u: the loop may never execute
+    deadline=$(( $(date +%s) + HEALTH_TIMEOUT ))
+    while [ "$(date +%s)" -lt "${deadline}" ]; do
+        got="$(docker inspect styrman-server \
+              --format '{{index .Config.Labels "styrman.version"}}' 2>/dev/null || true)"
+        # No healthcheck defined = "<no value>"; treat only an explicit
+        # "unhealthy"/"starting" as not-ready.
+        health="$(docker inspect styrman-server \
+                 --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || true)"
+        running="$(docker inspect styrman-server --format '{{.State.Running}}' 2>/dev/null || true)"
+        # An EMPTY label is never a match: an image built before version
+        # labelling existed would otherwise compare equal to an empty want and
+        # verify anything. (My own first test of this function passed for
+        # exactly that reason.)
+        # Must be RUNNING. "none" (no healthcheck defined) is accepted only
+        # because a tag could legitimately drop the HEALTHCHECK line — but a
+        # dead container must never verify, which "none" alone allowed.
+        if [ -n "${got}" ] && [ "${got}" = "${want}" ] && [ "${running}" = "true" ] &&
+           { [ "${health}" = "healthy" ] || [ "${health}" = "none" ]; }; then
+            return 0
+        fi
+        sleep 5
+    done
+    if [ -z "${got}" ]; then
+        log "version check failed: styrman-server carries NO styrman.version label."
+        log "  An image built before labelling cannot be verified. Confirm by hand"
+        log "  and re-run with --force once the running version is known-good."
+    else
+        log "version check failed: label=${got} want=${want} running=${running:-?} health=${health:-<none>}"
+    fi
+    return 1
+}
+
+PREVIOUS="${CURRENT}"
+if deploy "${LATEST}" && reports_version "${LATEST#v}"; then
+    printf '%s' "${LATEST}" > "${STATE}"
+    rm -f "${FAILED}"
+    log "OK — ${LATEST} is live"
+    exit 0
+fi
+
+# ─── Rollback ───────────────────────────────────────────────────────────────
+log "ERROR: ${LATEST} did not come up healthy within ${HEALTH_TIMEOUT}s"
+# Latch BEFORE deciding what to do about it: on a first run there is no
+# previous version to roll back to, and without the latch the timer would
+# rebuild this same broken tag every 5 minutes forever (review finding).
+printf '%s' "${LATEST}" > "${FAILED}"
+if [ "${PREVIOUS}" = "none" ] || [ -z "${PREVIOUS}" ]; then
+    fail "no previous version recorded — leaving the box as-is for manual repair. ${LATEST} is latched as failed; re-run with --force after fixing."
+fi
+log "rolling back to ${PREVIOUS}"
+if deploy "${PREVIOUS}" && reports_version "${PREVIOUS#v}"; then
+    printf '%s' "${PREVIOUS}" > "${STATE}"
+    fail "rolled back to ${PREVIOUS}. ${LATEST} is marked FAILED and will not be retried automatically — fix it and re-run with --force, or push a newer tag."
+fi
+fail "rollback to ${PREVIOUS} ALSO failed — manual intervention required"

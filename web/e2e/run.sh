@@ -27,6 +27,21 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# NOTE: this rewrites tracked files — web/dist/client gets fresh content-hashed
+# asset names on every run, so `git status` is dirty afterwards. That is the
+# build output, not stray edits; stage it with `git add -A -- web/dist`.
+#
+# Build the SPA FIRST. The server embeds web/dist/client (web/embed.go), so
+# building only the Go binary silently tests whatever assets were lying in
+# dist from a previous build — a frontend change would appear to "fail" while
+# the real fix sat unbuilt (hit for real on 2026-09-01). Skip with
+# STYRMAN_E2E_SKIP_WEB=1 when iterating on server-only changes.
+if [ -z "${STYRMAN_E2E_SKIP_WEB:-}" ]; then
+    echo "== building web assets =="
+    ( cd "${REPO}/web" && npm run build >/dev/null ) \
+        || { echo "FATAL: web build failed"; exit 1; }
+fi
+
 echo "== building server =="
 ( cd "${REPO}" && go build -o "${STATE}/styrman" ./cmd/styrman/ )
 

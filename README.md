@@ -102,6 +102,10 @@ stores — a restart or reboot recovers everything by adoption.
 - Verified per release by four suites (unit+race, integration against real
   Kata, Playwright e2e, live post-deploy battery) — counts and how to run
   them: `.agents/docs/testing/styrman/README.md`.
+- Self-updating (opt-in, ships disabled): a root systemd timer checks every
+  5 min for the newest SIGNED `vX.Y.Z` release tag and redeploys it, rolling
+  back automatically if it doesn't come up healthy — see `deploy.md`'s
+  "Auto-update" section (ADR-050/051).
 - Full release history: `.agents/docs/changes/` (one file per change) and
   every decision in `.agents/docs/architecture/DECISIONS.md`.
 

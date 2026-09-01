@@ -1,21 +1,11 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, tryUI, type FileEntry, type Scope } from "../lib/api";
 import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
-import {
-  api,
-  tryUI,
-  type FileContent,
-  type FileEntry,
-  type Scope,
-} from "../lib/api";
-import { useTheme } from "../lib/hooks";
-import { toast } from "../lib/toast";
-import { Button, ConfirmDialog, IconButton, PromptDialog, useModalA11y } from "./ui";
+  closeFileInPane,
+  openFileInPane,
+  useFileSavedTick,
+} from "../lib/editorPane";
+import { ConfirmDialog, IconButton, PromptDialog } from "./ui";
 import {
   ChevronRightIcon,
   DownloadIcon,
@@ -27,51 +17,9 @@ import {
   RefreshIcon,
   TrashIcon,
   UploadIcon,
-  XIcon,
 } from "./icons";
 
-// CodeMirror is heavy — load it only when a file is actually opened.
-const CodeEditor = lazy(() => import("./CodeEditor"));
-import type { CodeEditorHandle } from "./CodeEditor";
-
-// File extensions the server can format (its real CLI formatter runs in the
-// project VM); JSON is also handled locally. Keep in sync with format.go.
-const FORMATTABLE = new Set([
-  "go",
-  "tf",
-  "tfvars",
-  "hcl",
-  "rs",
-  "py",
-  "sh",
-  "bash",
-  "js",
-  "jsx",
-  "ts",
-  "tsx",
-  "mjs",
-  "cjs",
-  "json",
-  "css",
-  "scss",
-  "less",
-  "html",
-  "htm",
-  "md",
-  "markdown",
-  "yaml",
-  "yml",
-  "vue",
-  "graphql",
-]);
-const extOf = (p: string) => p.split(".").pop()?.toLowerCase() ?? "";
-
-const fmtSize = (n: number) =>
-  n < 1024
-    ? `${n} B`
-    : n < 1024 * 1024
-      ? `${(n / 1024).toFixed(0)} KB`
-      : `${(n / 1048576).toFixed(1)} MB`;
+import { fmtSize } from "./FileEditor";
 
 type ExplorerDialog =
   | { kind: "newFile" }
@@ -87,16 +35,22 @@ type ExplorerDialog =
 export function FileExplorer({
   project,
   projectName,
+  term,
 }: {
   project: string;
   /** Friendly name shown as the crumb root (falls back to the UUID). */
   projectName?: string;
+  /**
+   * The terminal this explorer is docked next to. Files open in THAT
+   * terminal's editor pane (operator request 2026-09-01). Required: SidePanel
+   * is the only host, and the modal viewer this replaced is gone.
+   */
+  term: string;
 }) {
   const [scope, setScope] = useState<Scope>({ kind: "project", project });
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [error, setError] = useState<string>();
-  const [open, setOpen] = useState<FileContent | null>(null);
   const [dragging, setDragging] = useState(false);
   const [dialog, setDialog] = useState<ExplorerDialog | null>(null);
 
@@ -105,6 +59,12 @@ export function FileExplorer({
     setScope({ kind: "project", project });
     setPath("");
   }, [project]);
+
+  /**
+   * Open a file in this terminal's editor pane, switching the pane to it. The
+   * pane fetches the content itself, so this does no I/O.
+   */
+  const openEntry = (path: string) => openFileInPane(project, term, scope, path);
 
   // Generation guard (audit finding): quick directory hops could let an
   // EARLIER listing resolve last and repaint the previous directory's entries
@@ -125,6 +85,8 @@ export function FileExplorer({
       });
   }, [scope, path]);
 
+  // Re-list when the editor pane saves (it cannot call load() directly).
+  const savedTick = useFileSavedTick();
   useEffect(() => {
     load();
     // Skip the poll while the tab is hidden — the guarantee usePolled gives that
@@ -134,7 +96,7 @@ export function FileExplorer({
       if (!document.hidden) load();
     }, 10000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [load, savedTick]);
 
   const crumbs = path ? path.split("/") : [];
 
@@ -148,21 +110,17 @@ export function FileExplorer({
   const inDir = (name: string) => (path ? `${path}/${name}` : name);
 
   // The open editor must not survive its file being renamed/deleted — Save
-  // on the stale path would recreate what the user just removed.
-  const closeIfOpen = (entryPath: string) => {
-    setOpen((o) =>
-      o && (o.path === entryPath || o.path.startsWith(entryPath + "/"))
-        ? null
-        : o,
-    );
-  };
+  // on the stale path would recreate what the user just removed. This clears
+  // every pane in the project, not just this terminal's: the same file can be
+  // open in another terminal's pane.
+  const closeIfOpen = (entryPath: string) => closeFileInPane(project, entryPath);
 
   const createFile = (name: string) =>
     tryUI(async () => {
       const p = inDir(name);
       await api.saveFile(scope, p, "");
       load();
-      setOpen(await api.readFile(scope, p));
+      openEntry(p); // same editor as a click — never a second surface
     });
 
   const createFolder = (name: string) =>
@@ -313,11 +271,7 @@ export function FileExplorer({
           <div
             key={e.path}
             className="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-bg-hover"
-            onClick={() =>
-              e.dir
-                ? setPath(e.path)
-                : tryUI(async () => setOpen(await api.readFile(scope, e.path)))
-            }
+            onClick={() => (e.dir ? setPath(e.path) : openEntry(e.path))}
           >
             <span className="shrink-0 text-text-dim">
               {e.dir ? (
@@ -335,10 +289,7 @@ export function FileExplorer({
                 if (ev.key === "Enter" || ev.key === " ") {
                   ev.preventDefault();
                   if (e.dir) setPath(e.path);
-                  else
-                    void tryUI(async () =>
-                      setOpen(await api.readFile(scope, e.path)),
-                    );
+                  else void openEntry(e.path);
                 }
               }}
               className={`min-w-0 flex-1 truncate rounded focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${e.dir ? "text-text" : "text-text-dim"}`}
@@ -432,277 +383,6 @@ export function FileExplorer({
           danger
           onConfirm={() => deleteEntry(dialog.entry)}
           onClose={() => setDialog(null)}
-        />
-      )}
-      {open && (
-        <FileViewer
-          scope={scope}
-          file={open}
-          onClose={() => setOpen(null)}
-          onSaved={load}
-        />
-      )}
-    </div>
-  );
-}
-
-function FileViewer({
-  scope,
-  file,
-  onClose,
-  onSaved,
-}: {
-  scope: Scope;
-  file: FileContent;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const [text, setText] = useState(file.content);
-  // The last SAVED content is the dirty baseline — so Save can leave the editor
-  // open (it no longer closes) and the button correctly re-disables until the
-  // next edit.
-  const [savedContent, setSavedContent] = useState(file.content);
-  const [saving, setSaving] = useState(false);
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const { resolved } = useTheme();
-  const modalRef = useRef<HTMLDivElement>(null);
-  const dirty = text !== savedContent;
-
-  // The window is resizable (CSS resize handle, bottom-right); remember the
-  // size across opens. Wrapped in try/catch — storage can be unavailable.
-  useEffect(() => {
-    const el = modalRef.current;
-    if (!el) return;
-    try {
-      const raw = localStorage.getItem("styrman-editor-size");
-      if (raw) {
-        const s = JSON.parse(raw);
-        if (s.w) el.style.width = `${s.w}px`;
-        if (s.h) el.style.height = `${s.h}px`;
-      }
-    } catch {
-      /* no stored size */
-    }
-    const ro = new ResizeObserver(() => {
-      try {
-        localStorage.setItem(
-          "styrman-editor-size",
-          JSON.stringify({ w: el.offsetWidth, h: el.offsetHeight }),
-        );
-      } catch {
-        /* storage disabled */
-      }
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  const isMarkdown = /\.(md|markdown)$/i.test(file.path);
-  const isJSON = /\.json$/i.test(file.path);
-  // Markdown opens in rendered preview (the common intent is READING a doc);
-  // one click flips to the editor. micromark escapes raw HTML by default, so
-  // the rendered output is safe without a sanitizer.
-  const [previewing, setPreviewing] = useState(isMarkdown);
-  const [previewHtml, setPreviewHtml] = useState<string>();
-  useEffect(() => {
-    if (!previewing || !isMarkdown) return;
-    let stale = false;
-    import("micromark")
-      .then(({ micromark }) => {
-        if (stale) return;
-        // micromark escapes raw HTML and sanitizes javascript: hrefs; the
-        // target/rel rewrite just keeps README links from navigating the SPA.
-        const html = micromark(text, { allowDangerousHtml: false }).replaceAll(
-          "<a href=",
-          '<a target="_blank" rel="noopener noreferrer" href=',
-        );
-        setPreviewHtml(html);
-      })
-      .catch(() => {
-        // A failed chunk load must not leave "Rendering…" forever (audit
-        // finding) — fall back to the plain editor view.
-        if (!stale) setPreviewing(false);
-      });
-    return () => {
-      stale = true;
-    };
-  }, [previewing, isMarkdown, text]);
-
-  const editorRef = useRef<CodeEditorHandle>(null);
-  const [formatting, setFormatting] = useState(false);
-  const canFormat =
-    !file.binary && !file.truncated && FORMATTABLE.has(extOf(file.path));
-
-  // JSON formats locally (instant, offline); every other type runs the real CLI
-  // formatter (gofmt, prettier, terraform fmt, …) in the project VM. Both push
-  // the result through the editor's imperative setContent so the VIEW updates
-  // (and onChange flows it back to `text` → dirty).
-  const doFormat = async () => {
-    if (isJSON) {
-      try {
-        editorRef.current?.setContent(
-          JSON.stringify(JSON.parse(text), null, 2) + "\n",
-        );
-      } catch (e) {
-        toast("error", `Not valid JSON: ${(e as Error).message}`);
-      }
-      return;
-    }
-    setFormatting(true);
-    try {
-      const { content } = await api.formatFile(scope.project, file.path, text);
-      editorRef.current?.setContent(content);
-    } catch (e) {
-      toast("error", (e as Error).message);
-    } finally {
-      setFormatting(false);
-    }
-  };
-
-  const save = () => {
-    if (saving || file.truncated) return; // truncated: saving would drop the tail
-    return tryUI(async () => {
-      setSaving(true);
-      try {
-        await api.saveFile(scope, file.path, text);
-        setSavedContent(text); // new baseline; the editor stays open
-        onSaved(); // refresh the listing (size/mtime)
-        toast("success", "Saved");
-      } finally {
-        setSaving(false);
-      }
-    });
-  };
-
-  // Don't silently drop edits when clicking the backdrop or ✕.
-  const tryClose = () => {
-    if (!dirty) onClose();
-    else setConfirmDiscard(true);
-  };
-
-  // Shared modal contract (topmost-Escape respects the discard-confirm on
-  // top; focus trap + restore).
-  useModalA11y(modalRef, tryClose);
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 md:p-8"
-      onClick={tryClose}
-    >
-      <div
-        ref={modalRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="File viewer"
-        className="flex max-h-[95vh] max-w-[97vw] flex-col overflow-hidden rounded-2xl bg-bg-raised shadow-2xl"
-        style={{
-          width: "min(56rem, 92vw)",
-          height: "80vh",
-          resize: "both",
-          minWidth: "22rem",
-          minHeight: "14rem",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs">
-          <span className="truncate font-mono font-medium">{file.path}</span>
-          <span className="text-text-dim">{fmtSize(file.size)}</span>
-          {file.truncated && <span className="text-warn">truncated</span>}
-          <div className="ml-auto flex items-center gap-1">
-            {isMarkdown && !file.binary && (
-              <div className="mr-1 inline-flex rounded-full bg-bg p-0.5">
-                {(
-                  [
-                    [true, "Preview"],
-                    [false, "Edit"],
-                  ] as Array<[boolean, string]>
-                ).map(([mode, label]) => (
-                  <button
-                    key={label}
-                    onClick={() => setPreviewing(mode)}
-                    className={`rounded-full px-2.5 py-0.5 ${
-                      previewing === mode
-                        ? "bg-accent-soft font-medium text-on-accent-soft"
-                        : "text-text-dim hover:text-text"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
-            {canFormat && (
-              <button
-                onClick={doFormat}
-                disabled={formatting}
-                className="inline-flex h-7 items-center rounded-lg px-2 text-text-dim hover:bg-bg-hover hover:text-accent disabled:opacity-40"
-                title={
-                  isJSON
-                    ? "Pretty-print JSON (local); Save to keep it"
-                    : "Format with the language's formatter, run in the project VM; Save to keep it"
-                }
-              >
-                {formatting ? "Formatting…" : "Format"}
-              </button>
-            )}
-            <a
-              href={api.downloadUrl(scope, file.path)}
-              className="inline-flex h-7 items-center rounded-lg px-2 text-text-dim hover:bg-bg-hover hover:text-accent"
-            >
-              Download
-            </a>
-            {!file.binary && !file.truncated && (
-              <Button
-                variant="filled"
-                onClick={save}
-                disabled={!dirty || saving}
-              >
-                {saving ? "Saving…" : "Save"}
-              </Button>
-            )}
-            <IconButton label="Close" onClick={tryClose}>
-              <XIcon />
-            </IconButton>
-          </div>
-        </div>
-        {file.binary ? (
-          <p className="p-4 text-xs text-text-dim">
-            Binary file — use Download to fetch it.
-          </p>
-        ) : isMarkdown && previewing ? (
-          <div
-            className="prose-md min-h-0 flex-1 overflow-y-auto px-6 py-4"
-            // Safe: micromark escapes raw HTML (allowDangerousHtml: false).
-            dangerouslySetInnerHTML={{
-              __html: previewHtml ?? "<p>Rendering…</p>",
-            }}
-          />
-        ) : (
-          <Suspense
-            fallback={
-              <p className="p-4 text-xs text-text-dim">Loading editor…</p>
-            }
-          >
-            <CodeEditor
-              ref={editorRef}
-              value={text}
-              filename={file.path}
-              dark={resolved === "dark"}
-              readOnly={file.truncated}
-              onChange={setText}
-              onSave={save}
-            />
-          </Suspense>
-        )}
-      </div>
-      {confirmDiscard && (
-        <ConfirmDialog
-          title="Discard unsaved changes?"
-          body="The edits in this file are lost."
-          confirmLabel="Discard"
-          danger
-          onConfirm={onClose}
-          onClose={() => setConfirmDiscard(false)}
         />
       )}
     </div>

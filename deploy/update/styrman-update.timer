@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for a new styrman release tag
+[Timer]
+# Same cadence as the argolis original. The run is a no-op (one git fetch)
+# unless a NEW stable tag exists, so a tight interval is cheap.
+OnBootSec=5min
+OnUnitActiveSec=5min
+RandomizedDelaySec=60
+Persistent=true
+[Install]
+WantedBy=timers.target

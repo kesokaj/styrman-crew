@@ -17,7 +17,10 @@ type ExecSpec struct {
 	User    string // "" = container default (root)
 	Env     []string
 	WorkDir string
-	Stdin   []byte // optional; piped to the command's stdin, then EOF
+	// Stdin is piped to the command. NOTE: the stream is never half-closed, so
+	// the command must read an exact byte count (`head -c <len>`) rather than
+	// waiting for EOF — see the comment in Exec.
+	Stdin []byte
 }
 
 // maxExecOutput bounds how much of a non-interactive guest command's output we
@@ -87,17 +90,21 @@ func (o *Orchestrator) Exec(ctx context.Context, containerID string, spec ExecSp
 	}
 	defer att.Close()
 
-	// Feed stdin (if any) then signal EOF so a command like `cat > file` finishes
-	// — piping content over stdin avoids the argv size limit that base64-in-argv
-	// hit (M9). Best-effort: if the hijacked conn can't half-close, the command
-	// waits on its stdin until the ctx deadline.
+	// Feed stdin (if any). Piping content over stdin avoids the argv size limit
+	// that base64-in-argv hit (M9).
+	//
+	// We deliberately do NOT half-close the write side to signal EOF. The
+	// hijacked exec stream is ONE bidirectional connection carrying both stdin
+	// and the multiplexed stdout/stderr; CloseWrite() on it tore the whole
+	// stream down, so everything the command printed AFTER it finished reading
+	// stdin was silently lost. That truncation is why /format returned an empty
+	// document for every request (measured 2026-09-01, pre-existing).
+	//
+	// Consequence for callers: the guest command must NOT wait for stdin EOF.
+	// Read an exact byte count instead (`head -c <len>`), which both current
+	// callers do — see internal/httpapi/format.go and check.go.
 	if spec.Stdin != nil {
-		go func() {
-			_, _ = att.Conn.Write(spec.Stdin)
-			if cw, ok := att.Conn.(interface{ CloseWrite() error }); ok {
-				_ = cw.CloseWrite()
-			}
-		}()
+		go func() { _, _ = att.Conn.Write(spec.Stdin) }()
 	}
 
 	buf := &cappedBuffer{max: maxExecOutput}

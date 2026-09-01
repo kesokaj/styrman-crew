@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
     python-is-python3 e2fsprogs \
     iproute2 iputils-ping dnsutils netcat-openbsd \
     bash-completion lsof mtr-tiny traceroute net-tools gettext-base openssl \
+    shellcheck \
     && rm -rf /var/lib/apt/lists/* \
     && sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen
 
@@ -35,11 +36,24 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
     gh google-cloud-cli google-cloud-cli-gke-gcloud-auth-plugin kubectl \
     && rm -rf /var/lib/apt/lists/*
 
-# Helm + OpenTofu + yq
+# hadolint is PINNED with a checksum, unlike the `latest` fetches around it:
+# an unpinned tool makes the tag->image mapping non-deterministic, so the
+# auto-updater's rollback would not restore the image the old tag produced
+# (security review, 2026-09-01). The pre-existing yq/helm/tofu fetches carry
+# the same risk and are tracked in TODO.md.
+ARG HADOLINT_VERSION=2.15.1
+ARG HADOLINT_SHA256=c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
+# Helm + OpenTofu + yq + hadolint
+# hadolint is the Dockerfile checker behind the editor's lint gutter
+# (internal/httpapi/check.go); shellcheck, its shell counterpart, comes from
+# apt above.
 RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash && \
     curl -fsSL https://get.opentofu.org/install-opentofu.sh | bash -s -- --install-method standalone && \
     curl -fsSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq && \
-    chmod +x /usr/local/bin/yq
+    chmod +x /usr/local/bin/yq && \
+    curl -fsSL https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64 -o /usr/local/bin/hadolint && \
+    echo "${HADOLINT_SHA256}  /usr/local/bin/hadolint" | sha256sum -c - && \
+    chmod +x /usr/local/bin/hadolint
 
 # Go (latest stable) + Node 22
 RUN GO_VERSION=$(curl -fsSL 'https://go.dev/dl/?mode=json' | jq -r '.[0].version') && \

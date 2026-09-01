@@ -1,11 +1,22 @@
 import { useEffect, useState } from "react";
 import { api, type Project } from "./api";
 
-/** First live terminal of a project, creating one if none exist — the shared
- *  "open a project" step (deduped from Sidebar + dashboard, v1.14.0). */
+/** The terminal to land on when opening a project, creating one if none exist
+ *  — the shared "open a project" step (deduped from Sidebar + dashboard,
+ *  v1.14.0).
+ *
+ *  Picks the MOST RECENTLY OPENED terminal, explicitly. This used to fall out
+ *  of the server's list order, but that is now sorted by title so the sidebar
+ *  stops reshuffling (2026-09-01); taking `terminals[0]` after that change
+ *  would land the user on whichever random "adjective noun" title sorts first
+ *  (review finding). Resuming where you left off is the behaviour worth
+ *  keeping, so it is now stated here rather than implied by a sort order. */
 export async function firstTerminalId(project: string): Promise<string> {
   const { terminals } = await api.listTerminals(project);
-  return terminals[0]?.id ?? (await api.createTerminal(project)).id;
+  if (terminals.length === 0) return (await api.createTerminal(project)).id;
+  return terminals.reduce((best, t) =>
+    Date.parse(t.lastOpened) > Date.parse(best.lastOpened) ? t : best,
+  ).id;
 }
 
 /**

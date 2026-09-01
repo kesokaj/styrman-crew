@@ -46,11 +46,21 @@ go test ./... && bash .agents/docs/testing/styrman/integration.sh
 Image changes: rebuild the image first; the integration script always creates
 fresh containers so it picks the new image up automatically.
 
-## Tier 4 — Browser e2e (Playwright, 36 checks + a final client-error gate; firewall-hardened hosts run 34 + 2 auto-SKIP)
+## Tier 4 — Browser e2e (Playwright, 49 checks + a final client-error gate; firewall-hardened hosts run 48 + 2 auto-SKIP)
 
-`bash web/e2e/run.sh [image-tag]` — self-hosts: builds the server and starts
-its own instance on a host loopback port with an isolated state dir, then
-runs the Playwright checks against it. Production has no auth-bypass dev
+`bash web/e2e/run.sh [image-tag]` — self-hosts: builds the web SPA
+(`cd web && npm run build`) FIRST, then the server, then starts its own
+instance on a host loopback port with an isolated state dir, then runs the
+Playwright checks against it. The SPA build has to run first because the
+server embeds `web/dist/client` via `go:embed` (`web/embed.go`) — building
+only the Go binary would silently test whatever assets were already sitting
+in `dist` from a previous build, so a real frontend fix could appear to
+still be failing (hit for real 2026-09-01). Skip it with
+`STYRMAN_E2E_SKIP_WEB=1` when iterating on server-only changes. A run
+therefore rewrites the TRACKED `web/dist/client` files with fresh
+content-hashed asset names, so `git status` is dirty afterwards — that's
+build output, not stray edits; stage it with `git add -A -- web/dist`.
+Production has no auth-bypass dev
 door to test against anymore (2026-08-27 security review; see
 `../../specs/styrman/deploy.md`), and a host-loopback server is unreachable
 from project microVMs either way.
@@ -58,8 +68,16 @@ Drives the real UI in headless Chromium against that server: project
 creation (boots a microVM), agent + shell terminals (xterm's DOM renderer
 makes terminal text assertable, plus copy-on-select),
 typing into the microVM, the Files/Ports/History/Git/Clipboard side-panel tabs,
-rename/delete, deep links, setup page, theme, and full cleanup — 36 checks (34 on firewall-hardened hosts) plus a final no-client-errors gate +
-screenshots.
+rename/delete, deep links, setup page, theme, the editor pane (a file click
+opens it there — not a modal — with the correct content, toggling back to
+the terminal, the terminal session surviving that round-trip, reopening the
+same file, the word-wrap toggle, Dockerfile syntax highlighting,
+discard-and-open correctly LOADING the second file rather than dead-ending
+on an empty pane, deleting a file that is open in the pane, and syntax
+checking — a broken shell script flags a lint-gutter error, a clean file
+stays clean, and the check/format temp file leaves no litter in the
+workspace listing), and full cleanup — 49 checks + the client-error gate (48 pass on firewall-hardened
+hosts, plus 2 auto-SKIP) plus a final no-client-errors gate + screenshots.
 Prereq: `cd web && npm i && npx playwright install chromium` (once).
 Self-cleaning: deletes any leftover `e2e-ui` project at start.
 To point the Playwright checks at an already-running server instead, call

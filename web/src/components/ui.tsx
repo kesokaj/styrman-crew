@@ -222,6 +222,7 @@ export function ConfirmDialog({
   confirmLabel = "Confirm",
   danger = false,
   onConfirm,
+  onCancel,
   onClose,
 }: {
   title: ReactNode;
@@ -229,13 +230,34 @@ export function ConfirmDialog({
   confirmLabel?: string;
   danger?: boolean;
   onConfirm: () => void;
+  /**
+   * Dismissal that is specifically a CANCEL (backdrop, Escape, the Cancel
+   * button) — never fired after onConfirm. onClose alone cannot express this:
+   * it runs after confirming too, so a caller that used it to "undo" a pending
+   * choice silently reverted the confirmed action (EditorPane, 2026-09-01).
+   */
+  onCancel?: () => void;
   onClose: () => void;
 }) {
   return (
-    <Dialog title={title} onClose={onClose} danger={danger}>
+    <Dialog
+      title={title}
+      onClose={() => {
+        onCancel?.();
+        onClose();
+      }}
+      danger={danger}
+    >
       {body && <div className="mb-4 text-xs text-text-dim">{body}</div>}
       <div className="flex justify-end gap-2">
-        <Button onClick={onClose}>Cancel</Button>
+        <Button
+          onClick={() => {
+            onCancel?.();
+            onClose();
+          }}
+        >
+          Cancel
+        </Button>
         <Button
           variant={danger ? "danger" : "filled"}
           autoFocus

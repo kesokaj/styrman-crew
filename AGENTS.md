@@ -87,10 +87,15 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
 
 - Local-first on this machine (Kata runtime `mvm` required — already configured).
 - Integration scripts + guides in `.agents/docs/testing/styrman/`.
-- Browser e2e: `bash web/e2e/run.sh` (self-hosts its own server on host
-  loopback with an isolated state dir, then runs `web/e2e/run.mjs`'s 34
-  Playwright checks against it — production has no auth-bypass listener to
-  test against instead; prereq `npx playwright install chromium`).
+- Browser e2e: `bash web/e2e/run.sh` (builds the web SPA first — the server
+  embeds `web/dist/client` via `go:embed`, so a stale `dist` would silently
+  test the wrong assets; skip with `STYRMAN_E2E_SKIP_WEB=1` for server-only
+  iteration — then self-hosts its own server on host loopback with an
+  isolated state dir, then runs `web/e2e/run.mjs`'s Playwright checks against
+  it — production has no auth-bypass listener to test against instead;
+  prereq `npx playwright install chromium`; check counts:
+  `.agents/docs/testing/styrman/README.md`, the source of truth — currently
+  48 passed + 2 auto-SKIP).
 - Spike results (Phase 0) in `.agents/docs/testing/spikes/`.
 
 ## Key Files

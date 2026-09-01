@@ -83,11 +83,9 @@ func (s *Server) formatFile(w http.ResponseWriter, r *http.Request) {
 
 	// Temp file in the workspace (WorkDir=ws) so formatters discover repo config;
 	// content is read from stdin, so no size limit and no shell interpolation.
-	script := fmt.Sprintf(`F=$(mktemp -p . --suffix=.%s) || { printf 'STYRMAN_ERR\ncannot create temp file'; exit 0; }
-E="${F}.err"
-cat > "$F"
-if %s >"$E" 2>&1; then printf 'STYRMAN_OK\n'; cat "$F"; else printf 'STYRMAN_ERR\n'; cat "$E"; fi
-rm -f "$F" "$E"`, ext, cmd)
+	// ext is already allowlisted by formatInPlace's switch, but sanitize on the
+	// same path as check.go so the two cannot drift apart (defense in depth).
+	script := formatScript(safeSuffix(ext), len(body.Content), cmd)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -113,4 +111,17 @@ rm -f "$F" "$E"`, ext, cmd)
 	// 422: the request was fine but the formatter rejected it (syntax error) or
 	// isn't installed — surface its own message so the user knows which.
 	writeErr(w, http.StatusUnprocessableEntity, errors.New(firstLine(msg)))
+}
+
+// formatScript builds the guest script. Extracted so the stdin contract is
+// unit-testable (format_test.go): it MUST read an exact byte count rather than
+// waiting for stdin EOF — see the long comment in orchestrator.Exec.
+func formatScript(ext string, n int, cmd string) string {
+	return fmt.Sprintf(`F=$(mktemp -p . --suffix=.%s) || { printf 'STYRMAN_ERR\ncannot create temp file'; exit 0; }
+trap 'rm -f "$F" "${F}.err" "${F}.out"' EXIT
+E="${F}.err"
+head -c %d > "$F"
+[ "$(wc -c < "$F")" -eq %d ] || { printf 'STYRMAN_ERR\nshort read: editor content did not arrive intact'; exit 0; }
+if %s >"$E" 2>&1; then printf 'STYRMAN_OK\n'; cat "$F"; else printf 'STYRMAN_ERR\n'; cat "$E"; fi
+rm -f "$F" "$E"`, ext, n, n, cmd)
 }

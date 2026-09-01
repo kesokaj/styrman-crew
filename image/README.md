@@ -8,7 +8,12 @@ subagents — deployed into `~/.claude`, `~/.gemini`, and the vendor-neutral
 from that invocation's PATH to dodge a 60s upstream self-check, ADR-047),
 sets up per-project Docker-in-Docker on a loop-mounted ext4 disk, and
 installs the credential materialization snippet
-(`configs/styrman-credentials.sh`, ADR-032).
+(`configs/styrman-credentials.sh`, ADR-032). Also carries the per-language
+syntax checkers the editor's Check feature runs inside the guest —
+`shellcheck` (apt) and `hadolint` (GitHub release binary, same pattern as
+`yq`) round out the set alongside `gofmt`/`python3`/`node`/`jq`/`yq`/`tofu`
+that were already here for other tools; full checker table in
+`../.agents/docs/specs/styrman/runtime-image.md`.
 
 ```bash
 docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> .

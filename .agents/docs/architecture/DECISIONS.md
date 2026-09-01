@@ -1669,3 +1669,234 @@ Source: image/entrypoint.sh (harness-seeding invocation), the review at
 .agents/docs/reviews/2026-09-01-review-harness-vendor-sync-v1.15.0.md.
 Verification: .agents/docs/changes/2026-09-01-harness-upgrade-v1.15.0.md
 (Post-review finding and fix section).
+
+---
+
+## ADR-048: File editor is a view of the main pane, not a modal — one pane per terminal, terminal never unmounts (2026-09-01)
+
+**Context.** The file editor was a centered modal launched from the 320px
+side panel, stacked on top of the terminal and blocking it while open. The
+operator asked for the editor and the terminal to coexist as two views of
+the same space, switchable per terminal, so one terminal in a project can
+show an editor while another shows a live shell — and for the switch to be
+instant and lossless, not a page-like transition.
+
+**Decision.** The terminal's main pane now renders both the terminal and the
+editor at all times; only one is visible, controlled by a `Terminal |
+Editor` toggle in the terminal header (`web/src/components/EditorPane.tsx`,
+`web/src/lib/editorPane.ts`). View state is per-terminal, keyed
+`${project}/${term}`, held in a **module-level** store
+(`useSyncExternalStore`, not React Router route state or component state) —
+because `TerminalPane` is keyed by project/term and remounts on every
+terminal switch, route-local state would forget which view each terminal was
+on. The pane-open file is deliberately not persisted to localStorage; it's
+session context, not a durable preference (contrast with the `Wrap` toggle,
+which is a preference and is persisted). The terminal DOM/component is
+hidden with CSS when the editor view is active and is **never unmounted**:
+`TerminalPane`'s cleanup effect (`TerminalPane.tsx:272-281`) closes the
+terminal's WebSocket on unmount, so unmounting on every toggle would kill the
+live session each time the operator switched away from the terminal. Shared
+editor logic (`useFileEditorState`, toolbar, body) was extracted into
+`web/src/components/FileEditor.tsx` so the new pane and the pre-existing
+modal (kept for Settings, which has no terminal in context) run one
+implementation, not two.
+
+**Consequences.** Any future component that reads or writes per-terminal UI
+state that must survive a terminal-route remount should follow the same
+module-level-store-keyed-by-`${project}/${term}` pattern rather than route
+state — this is now the precedent, not a one-off. The never-unmount
+constraint on `TerminalPane` is now load-bearing for more than the terminal
+itself: any future work that changes how/when the main pane swaps views must
+preserve it, or every view toggle will silently drop the operator's shell
+session.
+
+**Correction (same-day review remediation).** Two claims in the first draft of
+this ADR were wrong and are corrected here rather than left to be copied:
+(1) the module-level store is NOT needed because the route remounts on a
+terminal switch — it does not remount (TanStack Router keys a match only when
+`remountDeps` is configured, and none is). The real reason is the opposite:
+plain `useState` would PERSIST across the switch and leak one terminal's view
+and open file onto the next, so keying by `${project}/${term}` is what makes
+the state per-terminal. (2) The modal was NOT retained for Settings — Settings
+renders `CodeEditor` directly and never mounts `FileExplorer`, so the modal
+had no remaining entry point and was deleted. There is now exactly ONE editor
+surface.
+
+Source: web/src/lib/editorPane.ts, web/src/components/EditorPane.tsx,
+web/src/components/FileEditor.tsx, web/src/components/TerminalPane.tsx:272-281.
+Verification: .agents/docs/changes/2026-09-01-editor-pane-and-ordering.md
+
+---
+
+## ADR-049: A hijacked Docker exec stream is one bidirectional connection — never `CloseWrite()` it, guests must read an exact byte count (2026-09-01)
+
+**Context.** `internal/orchestrator/exec.go`'s `Exec` helper runs
+guest-side scripts (format, and now check) by writing a payload to the
+hijacked exec stream's stdin and then calling `CloseWrite()` to signal EOF,
+the normal pattern for a plain pipe. A Docker hijacked exec connection is
+not a plain pipe: it is a single bidirectional TCP/unix connection carrying
+stdin on the write side and the multiplexed stdout/stderr frames on the read
+side. Half-closing it with `CloseWrite()` tears down the whole connection,
+not just the write half — so anything the guest process printed *after* it
+finished reading stdin was silently discarded. This shipped `/format`
+returning `{"content":""}` for every call, and since the editor pipes that
+response straight into the buffer, clicking Format blanked the open
+document — a real data-loss bug, live in production since `/format`
+shipped, caught only when instrumented guest-side logging showed the
+formatting script completing normally with no corresponding output ever
+reaching the server. Unit tests never caught it because the defect was in
+the transport, not in anything the tests exercised (script logic, argument
+parsing) — end-to-end/live verification was the only path that could have
+caught it, and initially didn't.
+
+**Decision.** Guest-side scripts driven over exec never rely on stdin EOF.
+The caller sends an exact byte count up front (or the script otherwise knows
+its expected input length) and reads with `head -c <len>`, so the
+connection is never half-closed and stays fully open for the guest to write
+its result back. This is now the required contract for any future
+stdin-carrying exec endpoint in this codebase — `CloseWrite()` on a
+hijacked Docker exec stream is a bug, not a valid way to signal EOF.
+Guarded by `TestGuestScriptsNeverWaitForStdinEOF`, negative-control tested
+(fails if `cat >`/stdin-EOF-waiting is reintroduced into a guest script).
+
+**Consequences.** `/format` and the new `/check` (ADR item, same day —
+`.agents/docs/changes/2026-09-01-syntax-check-and-autoupdate.md`) both read
+exact byte counts and are verified live to return their guest's full
+output. Any new endpoint added later that pipes stdin to a guest process
+over Docker exec must follow the same pattern; reviewers should treat a
+`CloseWrite()` call on an exec stream as a red flag pending confirmation
+it isn't the hijacked bidirectional kind.
+
+Source: internal/orchestrator/exec.go, internal/httpapi/check.go.
+Verification: .agents/docs/changes/2026-09-01-syntax-check-and-autoupdate.md
+
+---
+
+## ADR-050: Tag-gated auto-update from a dedicated deploy clone, with rollback and a failed-tag latch (2026-09-01)
+
+**Context.** The operator asked for the platform to update itself
+automatically (operator request item 1), porting the update mechanism from
+argolis-devbox's `devbox update`. The argolis original acted on new commits
+directly in whatever tree it ran from; the operator explicitly wanted
+deploys gated on stable version tags instead, so release candidates could
+be pushed to the remote and inspected without being auto-deployed.
+
+**Decision.** `deploy/update/styrman-update` (+ `.service`/`.timer`,
+installed by `deploy/host-setup.sh` step 8c) polls the origin, filters tags
+to `^v[0-9]+\.[0-9]+\.[0-9]+$` (excluding any `-rc`/`-beta`/etc. suffix by
+construction), and picks the highest by `sort -V` rather than the most
+recently pushed. Three departures from the argolis original: (a) it
+operates on a **dedicated clone at `/opt/styrman`**, never the operator's
+own working tree, because styrman's compose build reads from the repo root
+and an automatic `git checkout <tag>` against a tree the operator is
+actively editing would stomp uncommitted work; (b) it **rolls back** to the
+previous tag if the newly deployed version fails to report itself healthy
+via `/api/version`, and records the failed tag so the 5-minute timer does
+not rebuild a known-broken release on every subsequent tick; (c) `flock`
+serializes runs, since the argolis timer could stack overlapping
+invocations if one run outlasted the timer interval. Both the server and
+runtime images rebuild on every matching tag, by the operator's explicit
+choice — the runtime rebuild is also how a harness version bump
+(ADR-046/047) reaches already-running project homes on their next boot.
+
+**Consequences.** RCs and betas are structurally invisible to the updater —
+no separate "ignore pre-release" flag to keep in sync, the tag regex is the
+whole mechanism. The updater is not yet live on this host: the timer is
+gated on the deploy clone having its own `deploy/.env` (gitignored), which
+a fresh `/opt/styrman` clone does not have until `host-setup.sh`'s
+credential step is run there — enabling it is a deliberate, separate,
+follow-up action, not a side effect of this change landing. Tag selection,
+ordering, rollback-on-unhealthy, failed-tag latch, missing-clone, and
+concurrent-lock paths were all exercised against a real origin before
+shipping.
+
+**Correction (same-day review remediation).** The original decision text above
+says the updater "rolls back to the previous tag if the newly deployed
+version fails to report itself healthy via `/api/version`". That approach
+was abandoned before shipping and never went live: production runs
+`STYRMAN_AUTH=header`, `authGuard` exempts only `/api/health`, and the
+updater has no ingress token or session — its synthetic HTTP identity got
+403 on every call, so **every** healthy release would have timed out,
+rolled back, and latched its own tag as failed. What actually shipped
+instead: `deploy/Dockerfile.server` stamps `LABEL
+styrman.version="${STYRMAN_VERSION}"` (the `ARG`/`LABEL` pair is
+re-declared in the final stage and placed **last**, after `COPY`/
+`HEALTHCHECK`, so a version bump alone doesn't bust the apt-layer cache),
+and `styrman-update`'s `reports_version()` reads that label straight off
+the running container with `docker inspect`, together with
+`.State.Running` and `.State.Health.Status`. No HTTP request, no auth, no
+ingress token, and `authGuard` was deliberately **not** widened to exempt
+`/api/version` — the label read needs no auth surface at all.
+
+This is a load-bearing cross-file contract, not an implementation detail:
+`deploy/Dockerfile.server`'s `LABEL` and `styrman-update`'s
+`reports_version()` must move together. **Deleting or renaming that LABEL
+makes the updater roll back every future release**, because an absent
+label reads as an empty string and fails the health check closed. That
+coupling currently exists only as comments in the two files — anyone
+touching either must know the other exists.
+
+Source: deploy/update/styrman-update, deploy/update/*.service,
+deploy/update/*.timer, deploy/host-setup.sh (step 8c),
+deploy/Dockerfile.server.
+Verification: .agents/docs/changes/2026-09-01-syntax-check-and-autoupdate.md,
+.agents/docs/reviews/2026-09-01-review-syntax-check-and-autoupdate-rereview.md
+
+---
+
+## ADR-051: Auto-update requires signed tags — narrows the trust boundary to the operator, not "anyone who can push a tag" (2026-09-01)
+
+**Context.** A `security` review of ADR-050's updater
+(`.agents/docs/reviews/2026-09-01-security-editor-check-and-autoupdate.md`)
+found the worst problem was not the shell-injection surface (that one is
+genuinely fixed) but the trust model of the auto-update path itself: the
+updater checks out any `vX.Y.Z` tag that appears on the remote and, as
+**root**, `docker build`s and `docker compose up`s it within ~5 minutes —
+and `docker-compose.yml` itself lives inside that checkout, so a hostile
+revision does not need a code-execution bug, it only needs to add a bind
+mount (e.g. `/:/host`) to own the host. Before this decision the updater
+verified nothing about where a tag came from: no `git verify-tag`, no
+allowed-signers file, and the accepted trust set was implicitly "anyone
+who can push a tag" — a GitHub account compromise, a future collaborator,
+or a write-capable CI token — rather than "the operator". The read-only
+deploy key used to fetch constrains the *host*, not the *pusher*.
+
+**Decision.** Signed tags are now **required**. Before checkout, the
+updater runs `git cat-file -t "${LATEST}"` and rejects lightweight tags
+outright (a lightweight tag cannot carry a signature), then runs
+`git verify-tag` and fails closed if it does not succeed. This can only be
+turned off via root-owned `/etc/styrman/update.env`
+(`STYRMAN_UPDATE_REQUIRE_SIGNED=0`), which logs a warning every time it
+fires, so silently disabling the check is not possible from a
+non-root-writable location. Three related hardening changes landed
+alongside it, all forced by the same "root builds and runs this checkout"
+threat model: (a) root's `git fetch` now pins the GitHub host key
+(`StrictHostKeyChecking=yes` + `/etc/styrman/known_hosts`) instead of
+`accept-new`, because a root-privileged fetch must not trust-on-first-use
+even for one window; (b) the deploy clone's ownership is asserted with
+`stat -c %u` before `-c safe.directory` disables git's ownership guard,
+so the override only ever applies to a clone that is actually root-owned;
+(c) `git clean -d --force` runs after checkout so untracked files planted
+in the clone cannot survive into the build context (`context: ..`) —
+`-x` is deliberately **not** passed, because `deploy/.env` is gitignored
+and must not be deleted by the clean.
+
+**Consequences.** The operator-visible cost is immediate: tags
+`v1.14.0`–`v1.15.0` are annotated-but-unsigned or lightweight, so the
+updater would refuse every one of them as-is. All releases from this
+point forward must be created with `git tag -s`. Also decided in the same
+review pass, recorded here rather than as a separate ADR because they are
+smaller-scoped hardening of the same trust boundary rather than new
+decisions: `hadolint` is now pinned to `2.15.1` with a sha256 checksum
+(an unpinned tool made the tag→image mapping non-deterministic, so a
+rollback would not reliably reproduce the image the old tag originally
+produced), and the updater's systemd unit gained `NoNewPrivileges`,
+`ProtectHome`, and similar hardening — with the explicit caveat that this
+buys little on its own: a hostile tag's payload runs inside the Docker
+daemon, not inside this unit's cgroup, so the signature check above is
+the control that actually matters, not the sandboxing.
+
+Source: deploy/update/styrman-update, deploy/update/*.service,
+deploy/host-setup.sh, image/Dockerfile.
+Verification: .agents/docs/reviews/2026-09-01-security-editor-check-and-autoupdate.md,
+.agents/docs/changes/2026-09-01-syntax-check-and-autoupdate.md
