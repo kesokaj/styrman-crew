@@ -78,6 +78,11 @@ cd "${DEPLOY_DIR}"
 # code this script builds as root (security review).
 [ "$(stat -c %u "${DEPLOY_DIR}/.git" 2>/dev/null)" = "0" ] \
     || fail "${DEPLOY_DIR}/.git is not root-owned — refusing to build from a tree another user can write"
+# deploy/.env survives both `checkout --force` and `git clean -d` (it is
+# gitignored) and supplies STYRMAN_ALLOWED_EMAILS to the stack, so it needs the
+# same ownership guarantee as the tree itself (security review).
+[ "$(stat -c %u "${DEPLOY_DIR}/deploy/.env" 2>/dev/null)" = "0" ] \
+    || fail "${DEPLOY_DIR}/deploy/.env is not root-owned — refusing to deploy with credentials another user can write"
 git() { command git -c safe.directory="${DEPLOY_DIR}" "$@"; }
 
 # The repo is PRIVATE and this runs as root, which has no SSH agent and no key
@@ -88,7 +93,9 @@ git() { command git -c safe.directory="${DEPLOY_DIR}" "$@"; }
 # StrictHostKeyChecking=yes with a PINNED known_hosts, not accept-new: this is
 # a root fetch whose output is built and run as root, so a first-contact TOFU
 # window would let an attacker pin their own host key permanently (security
-# review). host-setup.sh seeds /etc/styrman/known_hosts via ssh-keyscan.
+# review). The operator seeds /etc/styrman/known_hosts from the forge's
+# PUBLISHED fingerprints — host-setup.sh prints the commands and deliberately
+# does NOT auto-seed it, because ssh-keyscan is itself unauthenticated TOFU.
 if [ -f /etc/styrman/deploy-key ]; then
     export GIT_SSH_COMMAND="ssh -i /etc/styrman/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/styrman/known_hosts"
 fi
@@ -118,19 +125,54 @@ LATEST="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail
 #
 # Fails CLOSED. Set STYRMAN_UPDATE_REQUIRE_SIGNED=0 in /etc/styrman/update.env
 # to accept unsigned tags — a deliberate, root-only, logged choice.
-[ -f /etc/styrman/update.env ] && . /etc/styrman/update.env
-if [ "${STYRMAN_UPDATE_REQUIRE_SIGNED:-1}" = "1" ]; then
+#
+# The opt-out is READ, not sourced. `. /etc/styrman/update.env` as root would
+# execute whatever is in that file — and redefining log(){ :; } there would
+# silence the "signature checking DISABLED" warning below, giving a silent
+# skip path (security review). Ownership and mode are asserted first.
+REQUIRE_SIGNED=1
+if [ -f /etc/styrman/update.env ]; then
+    if [ "$(stat -c '%u' /etc/styrman/update.env)" != "0" ]; then
+        fail "/etc/styrman/update.env is not root-owned — refusing to read update policy from it"
+    fi
+    if [ -n "$(find /etc/styrman/update.env -perm /022 2>/dev/null)" ]; then
+        fail "/etc/styrman/update.env is group/world-writable — refusing to read update policy from it"
+    fi
+    if grep -qE '^[[:space:]]*STYRMAN_UPDATE_REQUIRE_SIGNED[[:space:]]*=[[:space:]]*0' /etc/styrman/update.env; then
+        REQUIRE_SIGNED=0
+    fi
+fi
+
+# verify_tag <tag> — refuse anything we cannot attribute to an ALLOWED signer.
+#
+# `git verify-tag` alone is NOT sufficient: with GPG it exits 0 for a
+# good-but-untrusted signature, so any key ever imported into root's keyring
+# passes, and git never compares signer to tagger (verified empirically —
+# security review). The SSH path DOES enforce an allowlist and fails closed
+# when unconfigured, so that is the supported path and we ASSERT it is
+# configured rather than relying on root's ambient gitconfig.
+verify_tag() {
+    local tag="$1" signers
+    [ "${REQUIRE_SIGNED}" = "1" ] || return 0
     # A lightweight tag is just a ref — it cannot carry a signature at all.
-    if [ "$(git cat-file -t "${LATEST}" 2>/dev/null)" != "tag" ]; then
-        fail "${LATEST} is a lightweight tag and cannot be verified. Re-tag with \`git tag -s ${LATEST}\` (signed, annotated) and push --force, or opt out in /etc/styrman/update.env."
+    if [ "$(git cat-file -t "${tag}" 2>/dev/null)" != "tag" ]; then
+        fail "${tag} is a lightweight tag and cannot be verified. Re-tag with \`git tag -s ${tag}\` (signed, annotated), or opt out in /etc/styrman/update.env."
     fi
-    if ! git verify-tag "${LATEST}" 2>&1; then
-        fail "${LATEST} has no valid signature — REFUSING to build and run it as root. Sign your release tags (git tag -s), or set STYRMAN_UPDATE_REQUIRE_SIGNED=0 in /etc/styrman/update.env to accept the risk."
+    signers="$(command git config --global --get gpg.ssh.allowedSignersFile 2>/dev/null || true)"
+    if [ -z "${signers}" ] || [ ! -r "${signers}" ]; then
+        fail "tag signing is not verifiable: root has no readable gpg.ssh.allowedSignersFile. Configure SSH tag verification (an allowed_signers file listing the operator's public key, then \`git config --global gpg.ssh.allowedSignersFile <path>\`) — a bare \`git verify-tag\` would accept ANY key in root's keyring."
     fi
-    log "${LATEST} signature OK"
-else
+    if ! command git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="${signers}" \
+            verify-tag "${tag}" 2>&1; then
+        fail "${tag} is not signed by an allowed signer — REFUSING to build and run it as root."
+    fi
+    log "${tag} signature OK (allowed signer)"
+}
+
+if [ "${REQUIRE_SIGNED}" != "1" ]; then
     log "WARNING: signature checking DISABLED — any pushed tag will be built and run as root"
 fi
+verify_tag "${LATEST}"
 
 CURRENT="$(cat "${STATE}" 2>/dev/null || true)"
 # The state file is root-owned, but a malformed value (notably a leading "-")
@@ -172,6 +214,11 @@ fi
 # deploy <tag> — checkout, rebuild both images, bring the stack up.
 deploy() {
     local tag="$1" ver="${1#v}"
+    # EVERY tag we build is verified, not just the newest one. The rollback
+    # path used to check out and root-build the previous tag unverified, and
+    # `git fetch --tags --force` happily accepts a re-pointed old tag
+    # (security review).
+    verify_tag "${tag}"
     log "deploying ${tag}"
     git checkout --detach --force "${tag}" 2>/dev/null || fail "checkout ${tag} failed"
     # --force replaces TRACKED files but leaves untracked ones, and the server

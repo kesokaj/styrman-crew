@@ -346,19 +346,17 @@ if [ ! -d "${STYRMAN_DEPLOY_DIR}/.git" ]; then
     # treat failure as an expected, explained outcome rather than a stray WARN.
     if [ -n "${ORIGIN}" ]; then
         log "creating deploy clone at ${STYRMAN_DEPLOY_DIR} (from ${ORIGIN})"
-        if [ -f /etc/styrman/deploy-key ]; then
-            # Seed the pinned known_hosts the updater requires. Without it the
-            # updater's StrictHostKeyChecking=yes fails on EVERY tick with a
-            # message that blames the deploy key (review finding).
-            if [ ! -s /etc/styrman/known_hosts ]; then
-                host="$(printf '%s' "${ORIGIN}" | sed -n 's/^[^@]*@\([^:/]*\).*/\1/p')"
-                [ -n "${host}" ] && ssh-keyscan "${host}" > /etc/styrman/known_hosts 2>/dev/null || true
-            fi
-            GIT_SSH_COMMAND="ssh -i /etc/styrman/deploy-key -o IdentitiesOnly=yes -o UserKnownHostsFile=/etc/styrman/known_hosts -o StrictHostKeyChecking=accept-new" \
-                git clone --quiet "${ORIGIN}" "${STYRMAN_DEPLOY_DIR}" || true
-        else
-            git clone --quiet "${ORIGIN}" "${STYRMAN_DEPLOY_DIR}" 2>/dev/null || true
-        fi
+        # NO auto-clone over SSH here, and NO ssh-keyscan seeding.
+        #
+        # The updater fetches as root and BUILDS what it fetches as root, so its
+        # known_hosts is a trust anchor. Seeding it with ssh-keyscan is
+        # unauthenticated trust-on-first-use: it moves that window to
+        # provisioning time rather than closing it, and pairing it with
+        # `StrictHostKeyChecking=accept-new` meant a failed scan left an empty
+        # file that the clone then TOFU-populated anyway (security review, twice).
+        # The operator seeds known_hosts from the forge's PUBLISHED fingerprints
+        # and clones by hand — the instructions below print the exact commands.
+        echo "==> deploy clone not created automatically (see the auto-update notes below)"
     fi
 fi
 
@@ -377,10 +375,14 @@ else
          sudo install -d -m 700 /etc/styrman
          sudo ssh-keygen -t ed25519 -N "" -C styrman-deploy -f /etc/styrman/deploy-key
          cat /etc/styrman/deploy-key.pub      # add to GitHub → Settings → Deploy keys
-         # Pin the host key (root fetches must NOT trust-on-first-use):
-         sudo sh -c 'ssh-keyscan github.com > /etc/styrman/known_hosts'
-         sudo GIT_SSH_COMMAND="ssh -i /etc/styrman/deploy-key -o IdentitiesOnly=yes -o UserKnownHostsFile=/etc/styrman/known_hosts" \
+         # Pin the host key from GitHub's PUBLISHED fingerprints — never
+         # ssh-keyscan, which is unauthenticated trust-on-first-use:
+         curl -s https://api.github.com/meta | \
+           jq -r '.ssh_keys[] | "github.com " + .' | sudo tee /etc/styrman/known_hosts
+         # then CHECK the printed keys against https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
+         sudo GIT_SSH_COMMAND="ssh -i /etc/styrman/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/styrman/known_hosts" \
               git clone ${ORIGIN:-<origin>} ${STYRMAN_DEPLOY_DIR}
+         sudo chown -R root:root ${STYRMAN_DEPLOY_DIR}
 
     2. That clone's OWN deploy/.env (gitignored, so a fresh clone has none) (gitignored, so a fresh clone has none):
 
@@ -398,10 +400,18 @@ else
 
          git tag -s v1.16.0 -m "styrman v1.16.0" && git push origin v1.16.0
 
-       NOTE the VERIFYING side, not just the signing side: `git verify-tag`
-       runs as ROOT on this host, so root needs your PUBLIC key — a GPG import
-       into root's keyring, or (for SSH signing) a root-readable
-       allowed_signers plus `git config --global gpg.ssh.allowedSignersFile`.
+       The VERIFYING side is what the updater enforces, and it needs an
+       ALLOWLIST. A bare `git verify-tag` exits 0 for a good-but-UNTRUSTED
+       signature, so with GPG any key ever imported into root's keyring would
+       pass and git never compares signer to tagger. The updater therefore
+       requires SSH signing with an allowed-signers file and refuses to run
+       without one:
+
+         printf '%s %s\n' "<your-git-email>" "$(cat ~/.ssh/id_ed25519.pub)" \
+           | sudo tee /etc/styrman/allowed_signers
+         sudo git config --global gpg.ssh.allowedSignersFile /etc/styrman/allowed_signers
+         # and on your side: git config gpg.format ssh; git config user.signingkey ~/.ssh/id_ed25519.pub
+
        Signing the tag is not enough on its own.
        To accept unsigned tags anyway — a deliberate risk — put
        STYRMAN_UPDATE_REQUIRE_SIGNED=0 in /etc/styrman/update.env.

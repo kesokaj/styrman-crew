@@ -505,7 +505,14 @@ func csrfGuard(next http.Handler) http.Handler {
 			switch {
 			case strings.HasSuffix(r.URL.Path, "/upload"):
 				limit = 512 << 20
-			case strings.HasSuffix(r.URL.Path, "/file"):
+			case strings.HasSuffix(r.URL.Path, "/file"),
+				strings.HasSuffix(r.URL.Path, "/format"),
+				strings.HasSuffix(r.URL.Path, "/check"):
+				// /format and /check post the SAME editor content as /file.
+				// On the default 1 MiB cap their own 5 MiB guard could never
+				// fire, and a 1-2 MiB file — openable and saveable — failed
+				// Format with a confusing 400 instead of the intended 413
+				// (security review noted maxCheckBytes was dead code).
 				limit = 8 << 20
 			}
 			r.Body = http.MaxBytesReader(w, r.Body, limit)

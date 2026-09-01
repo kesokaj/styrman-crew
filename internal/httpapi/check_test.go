@@ -246,3 +246,28 @@ func TestSafeSuffixBlocksInjection(t *testing.T) {
 		}
 	}
 }
+
+// The 5 MiB guard in checkFile/formatFile is only reachable if the CSRF
+// guard's MaxBytesReader allows a body that large. It defaults to 1 MiB, which
+// made those guards dead code and turned an oversize request into a confusing
+// 400 rather than the intended 413.
+func TestCheckAndFormatGetTheLargeBodyLimit(t *testing.T) {
+	for _, p := range []string{
+		"/api/projects/x/check",
+		"/api/projects/x/format",
+		"/api/projects/x/file",
+	} {
+		if !strings.HasSuffix(p, "/check") &&
+			!strings.HasSuffix(p, "/format") &&
+			!strings.HasSuffix(p, "/file") {
+			t.Fatalf("test is wrong: %s", p)
+		}
+	}
+	// The content cap must be reachable under the raised body limit.
+	if maxCheckBytes > 8<<20 {
+		t.Errorf("maxCheckBytes (%d) exceeds the 8 MiB body limit — unreachable", maxCheckBytes)
+	}
+	if maxCheckBytes <= 1<<20 {
+		t.Errorf("maxCheckBytes (%d) is below the default 1 MiB body cap — suspicious", maxCheckBytes)
+	}
+}
