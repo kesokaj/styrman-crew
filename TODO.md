@@ -141,14 +141,27 @@ Add new items below as they arise.
   `loopback.go`; `.agents/docs/reviews/2026-09-01-review-redfix.md`,
   `.agents/docs/reviews/2026-09-01-security-redfix.md`)
 
-- [ ] Editor/file-explorer UX pass (operator, 2026-09-01: "just some
+- [x] Editor/file-explorer UX pass (operator, 2026-09-01: "just some
   optimisation" — current behavior works fine, this is polish, not a fix).
   Highlight the currently-open file in the file explorer; show the open
-  file's name at the top of the editor pane; a recent-files affordance; and
-  a per-project "open until closed" notion for a file (it stays the active
-  file across navigation until the user explicitly closes it, rather than
-  being tied to whatever is currently selected in the explorer). NEXT
-  planned change set, not scoped or estimated yet.
+  file's name at the top of the editor pane; a recent-files affordance.
+  SHIPPED 2026-09-01 — see
+  `.agents/docs/changes/2026-09-01-editor-ux-and-updater-fixes.md`. The
+  fourth item scoped here, a per-project "open until closed" notion (the
+  active file stays active across explorer navigation until explicitly
+  closed, rather than tracking explorer selection), was not part of what
+  shipped — re-raise separately if still wanted.
+- [ ] 🟡 The updater does not reinstall ITSELF: a release that changes
+  `deploy/update/*` deploys the stack but leaves the OLD
+  `/usr/local/bin/styrman-update` + units installed (bit twice today: the
+  token-auth script and the `DOCKER_CONFIG` unit fix each needed a manual
+  `install`). Fix idea: `deploy()` installs the checkout's updater
+  script+units after a successful health check (takes effect next run).
+- [ ] 🟢 lows carried from `reviews/2026-09-01-review-editor-ux.md` round 2
+  worth tracking: badge/dot invisible to screen readers under the
+  `aria-label` pin (sr-only sibling or `aria-describedby`); `FileEditor`'s
+  during-render reset keyed on path only, not scope (cross-scope same-path
+  open now one click away via chips); open row/chip lose hover affordance.
 - [ ] 🟢 Bearer-token possession-binding trade, accepted risk recorded in
   ADR-056: `/etc/styrman/gh-token` grants full repo-read from any machine
   that reads it once, with no host-key/client-cert/IP anchor the way the
@@ -156,11 +169,12 @@ Add new items below as they arise.
   revocation outweigh it for a repo-scoped read-only credential) — listed
   here so the trade isn't only visible inside the ADR. (security review
   2026-09-01, `.agents/docs/reviews/2026-09-01-security-no-backups.md`)
-- [ ] 🟡 Operator actions from the no-backups/token-auth change, not yet
-  done by anyone: (1) mint the fine-grained GitHub token (this repo only,
-  Contents: Read-only) and install it at `/etc/styrman/gh-token`
-  (root:root, `600`) — the updater fails loudly at every fetch until this
-  is done, by design; (2) delete the GCS bucket
+- [ ] 🟡 Operator actions from the no-backups/token-auth change: (1) mint
+  the fine-grained GitHub token (this repo only, Contents: Read-only) and
+  install it at `/etc/styrman/gh-token` (root:root, `600`) — **DONE
+  2026-09-01**, and the first real timer-driven auto-deploy has since run
+  successfully end-to-end (see
+  `.agents/docs/changes/2026-09-01-editor-ux-and-updater-fixes.md`); (2) delete the GCS bucket
   `styrman-crew-backups-driven-eft-h4it` and its backup service account in
   project `driven-eft-h4it` (no `gcloud` on this host — operator-run); (3)
   shred `/var/lib/styrman/backups/` on the host — an orphaned, unencrypted

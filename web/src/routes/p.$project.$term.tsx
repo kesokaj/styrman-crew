@@ -6,7 +6,7 @@ import { SidePanel } from "../components/SidePanel";
 import { TerminalPane } from "../components/TerminalPane";
 import { TerminalStatusBar } from "../components/TerminalStatusBar";
 import { EditorPane } from "../components/EditorPane";
-import { useEditorPane } from "../lib/editorPane";
+import { basename, useEditorPane } from "../lib/editorPane";
 
 export const Route = createFileRoute("/p/$project/$term")({
   component: TerminalPage,
@@ -103,6 +103,11 @@ function TerminalPage() {
                 key={mode}
                 onClick={() => (mode === "terminal" ? showTerminal() : setView(mode))}
                 aria-pressed={pane.view === mode}
+                // Pinned: the filename badge below is a CHILD of this button,
+                // and without an explicit label it would join the accessible
+                // name ("Editor foo.txt") — breaking every exact-name locator
+                // and screen-reader muscle memory (review finding).
+                aria-label={label}
                 className={`rounded-full px-2.5 py-0.5 ${
                   pane.view === mode
                     ? "bg-accent-soft font-medium text-on-accent-soft"
@@ -115,6 +120,13 @@ function TerminalPage() {
                 }
               >
                 {label}
+                {/* Which file the (hidden) editor holds — otherwise invisible
+                    from the terminal view (operator request 2026-09-01). */}
+                {mode === "editor" && pane.file && (
+                  <span className="ml-1 hidden max-w-28 truncate align-middle font-mono text-[10px] opacity-75 sm:inline-block">
+                    {basename(pane.file.path)}
+                  </span>
+                )}
                 {/* Unsaved edits are otherwise invisible from the terminal
                     view — the editor and its Save button are hidden. */}
                 {mode === "editor" && pane.dirty && (

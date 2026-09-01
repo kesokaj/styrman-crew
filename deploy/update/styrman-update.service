@@ -8,6 +8,11 @@ Type=oneshot
 # no default, so a bare invocation — notably a privileged TEST run — can never
 # alias production state by omission.
 Environment=STYRMAN_UPDATE_STATE_DIR=/etc/styrman/update
+# ProtectHome=yes (below) makes /root read-only, and the docker CLI insists on
+# creating $HOME/.docker — which killed the FIRST real end-to-end deploy at
+# `docker build` (2026-09-01, and the rollback died the same way). Point it
+# into the state dir instead of weakening the hardening.
+Environment=DOCKER_CONFIG=/etc/styrman/update/.docker
 ExecStart=/usr/local/bin/styrman-update
 # Builds are heavy and must never starve the running platform.
 Nice=10

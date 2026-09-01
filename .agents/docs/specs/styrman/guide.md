@@ -50,17 +50,17 @@ Load-bearing ideas:
    copy-on-select highlight can no longer swallow it); Cmd+C or Ctrl+Shift+C
    copies explicitly; paste is Ctrl/Cmd+V or Ctrl+Shift+V via the clipboard API.
    AltGr (Windows/Linux) and Option (macOS) compose non-US symbols (`@ $ {
-   } [ ] € …`) instead of acting as Meta, and Nordic/Swedish dead keys (`~
-   \` ^ ´ ¨`) are resolved directly rather than through xterm's buggy
-   browser-IME path — see terminal-protocol.md's keyboard-handling section.
-   A sidebar notification bell (badge,
-   linking to the terminals waiting for input) surfaces terminals whose tmux
-   window rang its bell while unattended — tmux clears the flag once the
-   session is viewed. The terminal (`web/src/lib/terminal.ts`) copies on
-   select: the clipboard is written the instant a selection is highlighted,
-   not on an explicit Ctrl+C, because TUIs (claude, agy) redraw and wipe
-   selections before a keypress can land — the runtime image's tmux
-   `mouse off` default is what lets native browser selection work at all. (The v1.2 link-rescue bar was removed in v1.3 — copy-on-select
+} [ ] € …`) instead of acting as Meta, and Nordic/Swedish dead keys (`~
+\` ^ ´ ¨`) are resolved directly rather than through xterm's buggy
+browser-IME path — see terminal-protocol.md's keyboard-handling section.
+A sidebar notification bell (badge,
+linking to the terminals waiting for input) surfaces terminals whose tmux
+window rang its bell while unattended — tmux clears the flag once the
+session is viewed. The terminal (`web/src/lib/terminal.ts`) copies on
+select: the clipboard is written the instant a selection is highlighted,
+not on an explicit Ctrl+C, because TUIs (claude, agy) redraw and wipe
+selections before a keypress can land — the runtime image's tmux
+`mouse off` default is what lets native browser selection work at all. (The v1.2 link-rescue bar was removed in v1.3 — copy-on-select
    superseded it.) Ctrl+Shift+F opens a scrollback
    search overlay; OSC 52 lets tmux/TUIs write the system clipboard
    directly. It renders via xterm's DOM renderer, not WebGL, so terminal
@@ -80,7 +80,18 @@ Load-bearing ideas:
    CSS, never unmounted, so its session survives the toggle). Clicking a
    file in the Files panel opens it in the pane and switches the view there;
    saving no longer closes it, just re-disables Save until the next edit
-   (v1.7.2); a **Wrap** toggle controls soft-wrap (default on, persisted
+   (v1.7.2); the explorer row for whatever THIS terminal's pane currently
+   holds is highlighted (matched by scope kind + path), and a per-project
+   **Recent** chip strip between the header and the breadcrumbs shows the
+   last 5 of up to 8 recently opened files (basename, `~/` prefix for home
+   scope, full path on hover) — click to reopen; the currently-open file's
+   chip is highlighted too; the list survives reloads via localStorage
+   (`styrman.recentFiles.<project>`, degrading silently to session-only if
+   storage is blocked) and is pruned when its file is deleted or renamed
+   (2026-09-01). The terminal header's `Terminal | Editor` toggle shows the
+   held file's basename (truncated, mono) next to the Editor label so the
+   open file is visible even while looking at the terminal view
+   (2026-09-01); a **Wrap** toggle controls soft-wrap (default on, persisted
    across sessions); markdown opens as
    a RENDERED preview with an Edit toggle; a **Format** button reformats with
    the file's real CLI formatter running INSIDE the project VM — `gofmt`,
@@ -158,7 +169,7 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
 ```
 
 - **Identity**: email → username slug (`ostling.simon@gmail.com` →
-  `ostling-simon`); the *terminal username* inside guests defaults to the
+  `ostling-simon`); the _terminal username_ inside guests defaults to the
   slug but is user-configurable (Settings → Account; applies to VMs started
   after the change).
 - **State recovery** (ADR-007): containers carry `styrman.*` labels
@@ -178,7 +189,7 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   (separate bridges + Docker's inter-bridge DROP + a DOCKER-USER rule
   dropping private-range FORWARD traffic — LAN, other bridges, cloud
   metadata), and not the host itself (an INPUT drop) — plus a `physdev
-  --physdev-is-bridged` exemption so a project can still reach the
+--physdev-is-bridged` exemption so a project can still reach the
   credential broker and port-preview proxy on its OWN bridge (same-bridge L2
   traffic otherwise also traverses the isolation chain). Installed by
   `host-setup.sh`'s `styrman-firewall.sh` into dedicated `STYRMAN-IN`/
@@ -384,18 +395,18 @@ rotated token, or a tool signed into inside a project instead of at setup).
   was removed in v1.3 — access = env + admin API.)
 - **Where things live** on the host:
 
-| Path | What |
-|---|---|
-| `/var/lib/styrman/homes/<user>/p/<uuid>` | A project's OWN home (ADR-031): dotfiles, tool state, docker disk, transcripts — nothing backs this up, see "Durability" below |
-| `/var/lib/styrman/projects/<user>/<uuid>` | Workspaces (ADR-027, per-project storage) — source code; commit and push it, nothing else preserves it |
-| `…/homes/<user>/p/<uuid>/.dockerd/<uuid>.img` | Per-project Docker disk (sparse) |
-| `…/homes/<user>/p/<uuid>/.styrman/logs/<uuid>/` | Terminal transcripts |
-| `/var/lib/styrman/credentials/<user>/` | The broker's credential store (ADR-032, 0600) — re-onboard via setup on a new host, nothing preserves this either |
-| `/var/lib/styrman/users/<user>/*.json` | Project/terminal/profile metadata |
-| `/var/lib/styrman/users.json` | Runtime-added accounts (admins are env-only) |
-| `/var/lib/styrman/links.json` | Public/private preview share-link tokens (ADR-025/026) |
-| `/var/lib/styrman/settings.json` | Admin-set runtime tunables (idle timeout, docker disk size) overriding env defaults |
-| containers `styrman-<uuid>`, networks `sdb-<uuid>` | Disposable runtime state |
+| Path                                               | What                                                                                                                           |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `/var/lib/styrman/homes/<user>/p/<uuid>`           | A project's OWN home (ADR-031): dotfiles, tool state, docker disk, transcripts — nothing backs this up, see "Durability" below |
+| `/var/lib/styrman/projects/<user>/<uuid>`          | Workspaces (ADR-027, per-project storage) — source code; commit and push it, nothing else preserves it                         |
+| `…/homes/<user>/p/<uuid>/.dockerd/<uuid>.img`      | Per-project Docker disk (sparse)                                                                                               |
+| `…/homes/<user>/p/<uuid>/.styrman/logs/<uuid>/`    | Terminal transcripts                                                                                                           |
+| `/var/lib/styrman/credentials/<user>/`             | The broker's credential store (ADR-032, 0600) — re-onboard via setup on a new host, nothing preserves this either              |
+| `/var/lib/styrman/users/<user>/*.json`             | Project/terminal/profile metadata                                                                                              |
+| `/var/lib/styrman/users.json`                      | Runtime-added accounts (admins are env-only)                                                                                   |
+| `/var/lib/styrman/links.json`                      | Public/private preview share-link tokens (ADR-025/026)                                                                         |
+| `/var/lib/styrman/settings.json`                   | Admin-set runtime tunables (idle timeout, docker disk size) overriding env defaults                                            |
+| containers `styrman-<uuid>`, networks `sdb-<uuid>` | Disposable runtime state                                                                                                       |
 
 Deleting a project WITHOUT "wipe files" keeps its workspace dir under
 `/var/lib/styrman/projects/<user>/` (that's the point), but nothing in the
@@ -411,16 +422,16 @@ re-import it.
 
 ## 5. Troubleshooting
 
-| Symptom | Cause / fix |
-|---|---|
-| `invalid namespace type` starting any microVM | Docker ≥29.5 time-namespaces vs Kata ≤3.31 — host-setup sets the daemon.json feature flag (ADR-009). |
-| Site unreachable but server fine | Check DNS first — a "newly registered domain" blocklist (NextDNS et al.) sinkholed styrman.xyz once (`dig` for 0.0.0.0 answers). |
-| dockerd inside a project uses `vfs` | Loop mount of `~/.dockerd/<uuid>.img` failed; see container logs (ADR-008 fallback). |
+| Symptom                                               | Cause / fix                                                                                                                                                                                                                                                                                  |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `invalid namespace type` starting any microVM         | Docker ≥29.5 time-namespaces vs Kata ≤3.31 — host-setup sets the daemon.json feature flag (ADR-009).                                                                                                                                                                                         |
+| Site unreachable but server fine                      | Check DNS first — a "newly registered domain" blocklist (NextDNS et al.) sinkholed styrman.xyz once (`dig` for 0.0.0.0 answers).                                                                                                                                                             |
+| dockerd inside a project uses `vfs`                   | Loop mount of `~/.dockerd/<uuid>.img` failed; see container logs (ADR-008 fallback).                                                                                                                                                                                                         |
 | agy/claude ask to sign in despite a synced credential | A tool's TOKEN can sync while its per-project CLIENT STATE doesn't (e.g. claude's `hasCompletedOnboarding` — fixed for new logins since v1.5.6). If it's an OLDER project VM, recreate it to pick up a runtime-image fix; a running container keeps the rootfs it booted with until stopped. |
-| `git commit` in a terminal fails "who are you" | The user's git identity hasn't reached the broker yet — rerun `styrman-setup` (or `Settings → Credentials → Import`) so `STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL` get harvested, then open a fresh login shell (v1.7.1). |
-| Terminal shows "replaced" | Same terminal opened in another tab (close 4001) — one attach each, by design. |
-| First port-preview 307s or drops once | The server just joined that project's network; the redirect/retry lands. |
-| Project won't start | `docker logs styrman-<uuid>` — the entrypoint logs every step. |
+| `git commit` in a terminal fails "who are you"        | The user's git identity hasn't reached the broker yet — rerun `styrman-setup` (or `Settings → Credentials → Import`) so `STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL` get harvested, then open a fresh login shell (v1.7.1).                                                                        |
+| Terminal shows "replaced"                             | Same terminal opened in another tab (close 4001) — one attach each, by design.                                                                                                                                                                                                               |
+| First port-preview 307s or drops once                 | The server just joined that project's network; the redirect/retry lands.                                                                                                                                                                                                                     |
+| Project won't start                                   | `docker logs styrman-<uuid>` — the entrypoint logs every step.                                                                                                                                                                                                                               |
 
 ## 6. Development
 

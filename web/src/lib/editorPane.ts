@@ -78,7 +78,103 @@ export function openFileInPane(
   scope: Scope,
   path: string,
 ) {
-  set(project, term, { view: "editor", file: { scope, path }, dirty: false });
+  noteRecent(project, scope.kind, path);
+  // PRESERVE dirty: when the pane parks this open behind the discard-confirm
+  // (unsaved edits), the previous file's edits still exist — resetting the
+  // flag here hid the unsaved dot exactly while it mattered (review finding).
+  // The pane republishes the real flag once a load actually lands.
+  set(project, term, {
+    view: "editor",
+    file: { scope, path },
+    dirty: get(project, term).dirty,
+  });
+}
+
+/** Last path segment — the display name for chips and the header badge. */
+export function basename(path: string): string {
+  return path.includes("/") ? path.slice(path.lastIndexOf("/") + 1) : path;
+}
+
+// ── Recently opened files (operator request 2026-09-01) ─────────────────────
+// Per PROJECT, newest first, deduped, capped. Unlike the open-file state
+// above (session context by design), the recents LIST is a convenience worth
+// keeping across reloads — localStorage, guarded: a blocked or empty store
+// must never break the explorer, so every touch is try/catched and the
+// feature silently degrades to session-only.
+
+export type RecentFile = { scopeKind: Scope["kind"]; path: string };
+
+const RECENTS_CAP = 8;
+const recentsKey = (project: string) => `styrman.recentFiles.${project}`;
+// Arrays are replaced, never mutated: useSyncExternalStore compares snapshots
+// by identity.
+const recents = new Map<string, RecentFile[]>();
+const NO_RECENTS: RecentFile[] = [];
+
+function loadRecents(project: string): RecentFile[] {
+  const cached = recents.get(project);
+  if (cached) return cached;
+  let list: RecentFile[] = NO_RECENTS;
+  try {
+    const raw = localStorage.getItem(recentsKey(project));
+    if (raw) {
+      const parsed: unknown = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        // Validate hard: this crosses a storage boundary another tab (or a
+        // legacy schema) may have written. Reject non-relative and dot-nav
+        // paths outright, bound the length, and dedup (duplicate entries
+        // would become duplicate React keys).
+        const seen = new Set<string>();
+        list = parsed.filter((r): r is RecentFile => {
+          if (!r || typeof r !== "object") return false;
+          const { scopeKind, path } = r as RecentFile;
+          if (scopeKind !== "project" && scopeKind !== "home") return false;
+          if (typeof path !== "string" || !path || path.length > 512)
+            return false;
+          if (path.startsWith("/") || path.split("/").includes(".."))
+            return false;
+          const k = `${scopeKind}/${path}`;
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+        // Bound the ARRAY too, not just each path — a corrupted or foreign
+        // blob must not render an unbounded chip strip.
+        list = list.slice(0, RECENTS_CAP);
+      }
+    }
+  } catch {
+    // blocked storage / bad JSON — start empty
+  }
+  recents.set(project, list);
+  return list;
+}
+
+function storeRecents(project: string, list: RecentFile[]) {
+  recents.set(project, list);
+  try {
+    localStorage.setItem(recentsKey(project), JSON.stringify(list));
+  } catch {
+    // storage blocked/full — keep the in-memory copy for this session
+  }
+  emit();
+}
+
+function noteRecent(project: string, scopeKind: Scope["kind"], path: string) {
+  const prev = loadRecents(project);
+  const rest = prev.filter(
+    (r) => !(r.scopeKind === scopeKind && r.path === path),
+  );
+  storeRecents(project, [{ scopeKind, path }, ...rest].slice(0, RECENTS_CAP));
+}
+
+/** A project's recently opened files, newest first. */
+export function useRecentFiles(project: string): RecentFile[] {
+  return useSyncExternalStore(
+    subscribe,
+    () => loadRecents(project),
+    () => NO_RECENTS,
+  );
 }
 
 /**
@@ -88,7 +184,11 @@ export function openFileInPane(
  * next Save — the hazard the explorer's closeIfOpen has always guarded for the
  * modal, which the pane must honour too (review finding, 2026-09-01).
  */
-export function closeFileInPane(project: string, path: string) {
+export function closeFileInPane(
+  project: string,
+  path: string,
+  scopeKind?: Scope["kind"],
+) {
   let changed = false;
   for (const [key, st] of states) {
     if (!key.startsWith(`${project}/`) || !st.file) continue;
@@ -100,6 +200,20 @@ export function closeFileInPane(project: string, path: string) {
     changed = true;
   }
   if (changed) emit();
+  // A deleted/renamed path leaves the recents strip too. Milder hazard than
+  // the pane sweep above (a stale chip's open just fails to load — it cannot
+  // recreate the file), but a strip of dead chips is noise. Same path-prefix
+  // coarseness; files removed from inside the guest (rm in a terminal) are
+  // not seen here and age out of the cap instead — accepted.
+  // Scope-aware when the caller knows it (the explorer does): deleting
+  // project:notes.md must not drop a home:notes.md chip (review finding).
+  const prev = loadRecents(project);
+  const kept = prev.filter(
+    (r) =>
+      (scopeKind !== undefined && r.scopeKind !== scopeKind) ||
+      (r.path !== path && !r.path.startsWith(path + "/")),
+  );
+  if (kept.length !== prev.length) storeRecents(project, kept);
 }
 
 // A save in the editor pane changes a file's size/mtime, but the pane is a

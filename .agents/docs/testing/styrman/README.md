@@ -97,7 +97,7 @@ go test ./... && bash .agents/docs/testing/styrman/integration.sh
 Image changes: rebuild the image first; the integration script always creates
 fresh containers so it picks the new image up automatically.
 
-## Tier 4 — Browser e2e (Playwright, 49 checks + a final client-error gate; firewall-hardened hosts run 48 + 2 auto-SKIP)
+## Tier 4 — Browser e2e (Playwright, 52 checks + a final client-error gate; firewall-hardened hosts run 51 + 2 auto-SKIP)
 
 `bash web/e2e/run.sh [image-tag]` — self-hosts: builds the web SPA
 (`cd web && npm run build`) FIRST, then the server, then starts its own
@@ -127,7 +127,7 @@ discard-and-open correctly LOADING the second file rather than dead-ending
 on an empty pane, deleting a file that is open in the pane, and syntax
 checking — a broken shell script flags a lint-gutter error, a clean file
 stays clean, and the check/format temp file leaves no litter in the
-workspace listing), and full cleanup — 49 checks + the client-error gate (48 pass on firewall-hardened
+workspace listing), and full cleanup — 52 checks + the client-error gate (51 pass on firewall-hardened
 hosts, plus 2 auto-SKIP) plus a final no-client-errors gate + screenshots.
 Prereq: `cd web && npm i && npx playwright install chromium` (once).
 Self-cleaning: deletes any leftover `e2e-ui` project at start.

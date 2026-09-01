@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, tryUI, type FileEntry, type Scope } from "../lib/api";
 import {
+  basename,
   closeFileInPane,
   openFileInPane,
+  useEditorPane,
   useFileSavedTick,
+  useRecentFiles,
 } from "../lib/editorPane";
 import { ConfirmDialog, IconButton, PromptDialog } from "./ui";
 import {
@@ -66,6 +69,16 @@ export function FileExplorer({
    */
   const openEntry = (path: string) => openFileInPane(project, term, scope, path);
 
+  // What THIS terminal's editor pane is showing — the explorer highlights it
+  // so "which file am I on" is answerable from the listing (operator request
+  // 2026-09-01), plus the project's recently opened files for one-click
+  // reopening.
+  const { state: paneState } = useEditorPane(project, term);
+  const openFile = paneState.file;
+  const recents = useRecentFiles(project);
+  const isOpen = (scopeKind: Scope["kind"], p: string) =>
+    !!openFile && openFile.scope.kind === scopeKind && openFile.path === p;
+
   // Generation guard (audit finding): quick directory hops could let an
   // EARLIER listing resolve last and repaint the previous directory's entries
   // under the new breadcrumb. Each (scope,path) change invalidates in-flight
@@ -113,7 +126,8 @@ export function FileExplorer({
   // on the stale path would recreate what the user just removed. This clears
   // every pane in the project, not just this terminal's: the same file can be
   // open in another terminal's pane.
-  const closeIfOpen = (entryPath: string) => closeFileInPane(project, entryPath);
+  const closeIfOpen = (entryPath: string) =>
+    closeFileInPane(project, entryPath, scope.kind);
 
   const createFile = (name: string) =>
     tryUI(async () => {
@@ -216,6 +230,45 @@ export function FileExplorer({
         </div>
       </div>
 
+      {recents.length > 0 && (
+        <div
+          data-testid="recent-files"
+          className="flex items-center gap-1 overflow-x-auto border-b border-border px-2 py-1.5"
+        >
+          <span className="shrink-0 text-[10px] uppercase tracking-wide text-text-dim">
+            Recent
+          </span>
+          {recents.map((r) => {
+            const open = isOpen(r.scopeKind, r.path);
+            return (
+              <button
+                key={`${r.scopeKind}/${r.path}`}
+                onClick={() =>
+                  openFileInPane(
+                    project,
+                    term,
+                    r.scopeKind === "home"
+                      ? { kind: "home", project }
+                      : { kind: "project", project },
+                    r.path,
+                  )
+                }
+                aria-label={`Open recent file ${(r.scopeKind === "home" ? "~/" : "") + r.path}`}
+                aria-current={open ? "true" : undefined}
+                title={(r.scopeKind === "home" ? "~/" : "") + r.path}
+                className={`max-w-40 shrink-0 truncate rounded-full px-2 py-0.5 font-mono text-[11px] ${
+                  open
+                    ? "bg-accent-soft font-medium text-on-accent-soft"
+                    : "text-text-dim hover:bg-bg-hover hover:text-text"
+                }`}
+              >
+                {r.scopeKind === "home" ? `~/${basename(r.path)}` : basename(r.path)}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-0.5 px-2 py-1 text-[11px] text-text-dim">
         <button
           className="hover:text-text"
@@ -238,6 +291,7 @@ export function FileExplorer({
       </div>
 
       <div
+        data-testid="file-list"
         className={`min-h-0 flex-1 overflow-y-auto px-1 pb-2 ${dragging ? "bg-accent-soft/30 outline-dashed outline-1 outline-accent" : ""}`}
         onDragOver={(e) => {
           e.preventDefault();
@@ -270,7 +324,11 @@ export function FileExplorer({
         {entries.map((e) => (
           <div
             key={e.path}
-            className="group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-bg-hover"
+            className={`group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs ${
+              !e.dir && isOpen(scope.kind, e.path)
+                ? "bg-accent-soft"
+                : "hover:bg-bg-hover"
+            }`}
             onClick={() => (e.dir ? setPath(e.path) : openEntry(e.path))}
           >
             <span className="shrink-0 text-text-dim">
@@ -292,7 +350,16 @@ export function FileExplorer({
                   else void openEntry(e.path);
                 }
               }}
-              className={`min-w-0 flex-1 truncate rounded focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${e.dir ? "text-text" : "text-text-dim"}`}
+              aria-current={
+                !e.dir && isOpen(scope.kind, e.path) ? "true" : undefined
+              }
+              className={`min-w-0 flex-1 truncate rounded focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
+                e.dir
+                  ? "text-text"
+                  : isOpen(scope.kind, e.path)
+                    ? "font-medium text-on-accent-soft"
+                    : "text-text-dim"
+              }`}
             >
               {e.name}
               {e.symlink && <span className="text-accent"> ↗</span>}

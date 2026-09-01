@@ -62,6 +62,10 @@ page.on("console", (m) => {
 page.setDefaultTimeout(15000);
 const shot = (name) => page.screenshot({ path: `${SHOTS}/${name}.png` });
 const panel = () => page.locator("aside").last();
+// File clicks are scoped to the listing: the Recent chips strip (2026-09-01)
+// repeats file basenames inside the same aside, and an unscoped getByText
+// would strict-mode-collide with them.
+const fileList = () => panel().getByTestId("file-list");
 
 try {
   // ── Home ────────────────────────────────────────────────────────────────
@@ -188,7 +192,7 @@ try {
     await page.waitForTimeout(800);
     await panel().getByText("Files", { exact: true }).click();
     await page.waitForTimeout(500);
-    await panel().getByText("subdir", { exact: true }).click();
+    await fileList().getByText("subdir", { exact: true }).click();
     await page.waitForSelector("aside >> text=nested.txt");
   });
   await shot("04-files");
@@ -200,7 +204,7 @@ try {
   await check("clicking a file opens it in the editor pane", async () => {
     await panel().getByText("Files", { exact: true }).click();
     await page.waitForTimeout(400);
-    await panel().getByText("nested.txt", { exact: true }).click();
+    await fileList().getByText("nested.txt", { exact: true }).click();
     // Editor pane, not a modal: no dialog, and CodeMirror is in the main pane.
     await page.waitForSelector(".cm-content", { timeout: 15000 });
     if (await page.locator('[role="dialog"][aria-label="File viewer"]').count())
@@ -208,6 +212,22 @@ try {
   });
   await check("editor pane shows the file content", async () => {
     await page.waitForSelector(".cm-content >> text=hi", { timeout: 10000 });
+  });
+
+  // ── Recents + open-file affordances (2026-09-01): the explorer highlights
+  // the file the current terminal's pane holds, a per-project Recent strip
+  // reopens files in one click, and the terminal header names the held file.
+  await check("explorer highlights the open file", async () => {
+    await fileList()
+      .locator('[aria-current="true"]')
+      .filter({ hasText: "nested.txt" })
+      .waitFor({ timeout: 5000 });
+  });
+  await check("terminal header badge names the held file", async () => {
+    await page
+      .getByRole("button", { name: "Editor", exact: true })
+      .getByText("nested.txt")
+      .waitFor({ timeout: 5000 });
   });
   await shot("04c-editor-open"); // the editor pane itself, for design review
   await check("view toggle switches back to the terminal", async () => {
@@ -262,7 +282,7 @@ try {
     // buttons reset both scope AND path back to the workspace root.
     await panel().getByText("Project", { exact: true }).click();
     await page.waitForTimeout(600);
-    await panel().getByText("Dockerfile", { exact: true }).click();
+    await fileList().getByText("Dockerfile", { exact: true }).click();
     // With a grammar loaded, CodeMirror wraps tokens in styled spans (the
     // theme generates its own class names, so assert on the spans, not on a
     // `tok-*` class). A file with NO matching grammar renders bare text nodes
@@ -273,6 +293,20 @@ try {
       timeout: 15000,
     });
     await page.waitForSelector(".cm-content .cm-line span", { timeout: 10000 });
+  });
+  await check("recent strip reopens a file in one click", async () => {
+    // Dockerfile is open; nested.txt was opened earlier — jump back to it via
+    // its Recent chip and confirm content and the chip's aria-current follow.
+    await panel()
+      .getByTestId("recent-files")
+      .getByLabel(/^Open recent file .*nested\.txt$/)
+      .click({ timeout: 7000 });
+    await page.waitForSelector(".cm-content >> text=hi", { timeout: 10000 });
+    await panel()
+      .getByTestId("recent-files")
+      .locator('[aria-current="true"]')
+      .filter({ hasText: "nested.txt" })
+      .waitFor({ timeout: 5000 });
   });
   // "Discard and open": editing a file, then clicking another, must prompt and
   // then actually LOAD the second file. This dead-ended on an empty pane in
@@ -287,14 +321,14 @@ try {
     await panel().getByText("Files", { exact: true }).click();
     await panel().getByText("Project", { exact: true }).click();
     await page.waitForTimeout(600);
-    await panel().getByText("one.txt", { exact: true }).click();
+    await fileList().getByText("one.txt", { exact: true }).click();
     await page.waitForSelector(".cm-content >> text=AAA", { timeout: 15000 });
     // Make it dirty.
     await page.locator(".cm-content").first().click();
     await page.keyboard.type("DIRTY");
     await page.waitForTimeout(400);
     // Opening another file must PROMPT, not silently discard.
-    await panel().getByText("two.txt", { exact: true }).click();
+    await fileList().getByText("two.txt", { exact: true }).click();
     await page.waitForSelector("text=Discard unsaved changes?", { timeout: 10000 });
     await page.getByRole("button", { name: "Discard and open" }).click();
     // ...and the pane must actually show the SECOND file, not sit empty.
@@ -312,7 +346,7 @@ try {
     await panel().getByText("Files", { exact: true }).click();
     await panel().getByText("Project", { exact: true }).click();
     await page.waitForTimeout(600);
-    await panel().getByText("broken.sh", { exact: true }).click();
+    await fileList().getByText("broken.sh", { exact: true }).click();
     await page.waitForSelector(".cm-content >> text=echo hi", { timeout: 15000 });
     await page.waitForSelector(".cm-lint-marker-error", { timeout: 30000 });
   });
@@ -325,7 +359,7 @@ try {
     await panel().getByText("Files", { exact: true }).click();
     await panel().getByText("Project", { exact: true }).click();
     await page.waitForTimeout(600);
-    await panel().getByText("fine.sh", { exact: true }).click();
+    await fileList().getByText("fine.sh", { exact: true }).click();
     await page.waitForSelector(".cm-content >> text=echo hello", { timeout: 15000 });
     await page.waitForTimeout(4000); // let the debounced check run
     if (await page.locator(".cm-lint-marker-error").count())
@@ -348,7 +382,7 @@ try {
     await panel().getByText("Files", { exact: true }).click();
     await panel().getByText("Project", { exact: true }).click();
     await page.waitForTimeout(500);
-    await panel().getByText("lint.py", { exact: true }).click();
+    await fileList().getByText("lint.py", { exact: true }).click();
     await page.waitForSelector(".cm-content >> text=x = 1", { timeout: 15000 });
     await page.waitForTimeout(4000); // let the debounced check run in the VM
     await page.getByRole("button", { name: "Terminal", exact: true }).click();
@@ -367,7 +401,7 @@ try {
     await panel().getByText("Files", { exact: true }).click();
     await panel().getByText("Project", { exact: true }).click();
     await page.waitForTimeout(500);
-    await panel().getByText("Dockerfile", { exact: true }).click();
+    await fileList().getByText("Dockerfile", { exact: true }).click();
     await page.waitForSelector(".cm-content >> text=FROM debian", {
       timeout: 15000,
     });
