@@ -927,7 +927,7 @@ If any of these are happening, stop and return to Step 1:
 
 - **[Compilation Issues](./references/compilation.md)** — Build failures: module version conflicts, CGO linking problems, version mismatch between `go.mod` and installed Go version, platform-specific build tags preventing cross-compilation.
 
-- **[Code Review Red Flags](./references/code-review-flags.md)** — Patterns to watch during code review that signal potential bugs: unchecked errors, missing nil checks, concurrent map access, goroutines without clear exit, resource leaks from defer in loops.
+- **Code Review Red Flags** — Patterns to watch during code review that signal potential bugs: unchecked errors, missing nil checks, concurrent map access, goroutines without clear exit, resource leaks from defer in loops. Covered by the `review-standards` skill's `go-review` reference — load that skill for review work.
 
 ## Cross-References
 

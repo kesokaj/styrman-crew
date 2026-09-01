@@ -1,12 +1,12 @@
 ---
 name: init-project
-description: Scaffold a new project with the standard agent directory structure, AGENTS.md, REQUIREMENTS.md, and TODO.md.
+description: Scaffold a new project with the standard agent directory structure, AGENTS.md, REQUIREMENTS.md, TODO.md, and ROADMAP.md.
 disable-model-invocation: true
 ---
 
 # Init Project Workflow
 
-Scaffold a new project with the standard agent directory structure, AGENTS.md, REQUIREMENTS.md, and TODO.md.
+Scaffold a new project with the standard agent directory structure, AGENTS.md, REQUIREMENTS.md, TODO.md, and ROADMAP.md.
 
 ## Usage
 
@@ -133,9 +133,33 @@ Deferred work items. Not blocking current work, but should be addressed later.
 ## Ideas / Nice-to-Have
 ```
 
-### Step 5: Create .agents/ Directory
+### Step 5: Create ROADMAP.md
 
-Create the full `.agents/` directory structure:
+Create `ROADMAP.md` at the project root (this is the `templates/ROADMAP.md` template). Fill "Last reviewed" from `date +%F`, never from memory:
+
+```markdown
+# Roadmap
+
+<!-- Division of labor: ROADMAP.md = where the project is going; TODO.md = small deferred items; .agents/docs/plans/ = how. -->
+
+Last reviewed: YYYY-MM-DD
+
+## Now
+
+<!-- The current milestone, with a link to the active plan in .agents/docs/plans/. -->
+
+## Next
+
+<!-- 1-3 upcoming milestones, one line each. -->
+
+## Later / Ideas
+
+<!-- Unscheduled directions worth keeping visible. -->
+```
+
+### Step 6: Create .agents/ Directory
+
+Create the full `.agents/` directory structure — the docs tree carries all seven directories the constitution names:
 
 ```
 .agents/
@@ -148,7 +172,9 @@ Create the full `.agents/` directory structure:
     │   └── DECISIONS.md
     ├── specs/
     ├── testing/
-    └── plans/
+    ├── plans/
+    ├── handoffs/
+    └── reviews/
 ```
 
 Create `DECISIONS.md` with the ADR format:
@@ -171,14 +197,24 @@ What was decided and why? Include specific technologies, configurations, or trad
 -->
 ```
 
-### Step 6: Create README.md
+### Step 7: Create README.md
 
 If no `README.md` exists, create a basic one using the project overview from Step 2.
 
-### Step 7: Summary
+Also ensure `.gitignore` contains a line for per-project agent memory (append if absent):
+
+```
+.claude/agent-memory/
+```
+
+Subagents with `memory: project` write there in every project; without this line the
+state accumulates as untracked noise in `git status`.
+
+### Step 8: Summary
 
 Report what was created and remind the user to:
 1. Fill in `AGENTS.md` with project-specific details
 2. Fill in `REQUIREMENTS.md` with project requirements
 3. Add known deferred items to `TODO.md`
-4. Commit the scaffolded structure
+4. Set the current milestone in `ROADMAP.md` "Now"
+5. Commit the scaffolded structure

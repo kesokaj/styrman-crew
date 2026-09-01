@@ -22,6 +22,7 @@ canonical agent set. Everything in `antigravity/` is derived from those at deplo
 | `claude/agents/`               | `~/.gemini/config/plugins/harness/agents/` (derived) | `~/.claude/agents/`           |
 | `antigravity/plugins/harness/hooks.json` | `~/.gemini/config/plugins/harness/hooks.json` | *(n/a — Claude hooks live in settings.json)* |
 | `claude/scripts/statusline.sh` | *(n/a — agy's statusline is not scriptable)*       | `~/.claude/statusline.sh`       |
+| `shared/scripts/resume-context.sh`, `trail-check.sh` | `~/.agents/bin/` (invoked as explicit steps inside skill bodies, e.g. `/handoff`, `/preflight`) | `~/.agents/bin/` (wired as the `SessionStart`/`Stop` hooks in `settings.json`) |
 | `shared/templates/`            | *(used by `/init-project` workflow)*               | *(used by `/init-project`)*     |
 
 > ℹ️ **Antigravity paths are verified against agy-cli 1.1.11** (which rebuilt the
@@ -32,12 +33,20 @@ canonical agent set. Everything in `antigravity/` is derived from those at deplo
 > `subagent: true` / `mainAgent: false`, maps Claude model aliases to agy tiers,
 > rewrites skill paths) — **edit agents only in `claude/agents/`**.
 >
-> **Subagents run proactively on both vendors.** Agent descriptions carry "use
-> proactively…" triggers and `shared/AGENTS.md` instructs delegation (reviewer after
-> code changes, testing for untested code, changelog + documentation after tasks), so
-> the main agent dispatches them automatically — no manual invocation needed. On
-> Claude Code, `changelog` and `documentation` also keep per-project agent memory
-> (`memory: project`), and `reviewer` preloads the `code-review` skill.
+> **Six subagents, dispatched via the Definition of Done.** `shared/AGENTS.md` (the
+> "Global Agent Constitution", deployed verbatim to both vendors) makes dispatch the
+> only compliant path: `reviewer` (any tracked-source change), `verifier` (before any
+> completion claim or commit — replaces the deleted `testing` agent, and FAILs on
+> uncovered changed code), `changelog` (every completed task), `documentation`
+> (behavior/interface/plan changes), `security` (auth/crypto/secrets/deps touched),
+> and `explorer` (recon spanning 10+ files). Each agent's own `description` front-loads
+> its trigger (e.g. "Dispatch after any change to tracked source files…") rather than a
+> generic "use proactively" phrase — see `SUB_AGENTS.md` for the full roster. On Claude
+> Code this is backstopped by the deterministic shell gates below; **proactive
+> (model-initiated) dispatch on Antigravity is unverified** — the derived agents are
+> confirmed reachable via `invoke_subagent`. On Claude Code, `changelog` and
+> `documentation` also keep per-project agent memory (`memory: project`), and
+> `reviewer` preloads the `review-standards` skill.
 >
 > **Settings:** only Claude's `~/.claude/settings.json` is managed (merged, never
 > overwritten, via `shared/scripts/merge-settings.py` — repo keys win, string lists
@@ -53,6 +62,28 @@ canonical agent set. Everything in `antigravity/` is derived from those at deplo
 > `goimports` (`go install golang.org/x/tools/cmd/goimports@latest`, falls back to
 > `gofmt`) for Go and project-local `prettier` (via `npx --no-install`) for TS/JS/CSS/MD.
 > Both are optional — the hook silently no-ops when a formatter is absent.
+
+> **Deterministic shell gates live in `~/.agents/bin/`, not in either vendor's home
+> directory.** Both `claude/setup.sh` and `antigravity/setup.sh` copy
+> `shared/scripts/resume-context.sh` and `shared/scripts/trail-check.sh` there
+> (backing up any existing copy first) so the two vendors share one script, wired
+> differently per vendor's discovery model:
+> - **Claude Code** registers them as real hooks in `settings.json` —
+>   `SessionStart` runs `resume-context.sh` (prints at most 4 lines orienting the
+>   agent in an existing harness project: the Resume Protocol reading order, the
+>   newest handoff + age, whether the trail is behind HEAD, and any missing root
+>   file) and `Stop` runs `trail-check.sh` (blocks the stop with a JSON
+>   `{"decision":"block",...}` when source changed this session but today's
+>   `changes/`, `reviews/`, or `testing/` entry is missing).
+> - **Antigravity has no equivalent hook events**, so the same scripts are invoked
+>   as an explicit first step written into the relevant skill bodies instead (e.g.
+>   `/handoff` and `/preflight` both open with "On Antigravity, first run
+>   `~/.agents/bin/resume-context.sh`…"); `trail-check.sh --check` is the
+>   human-readable freshness report used there and by `/preflight`.
+>
+> Both scripts are no-ops (exit 0, no output) outside a git repo or a project that
+> hasn't opted in — they only activate once a `changes/` directory exists under the
+> project's docs root.
 
 ## Quick Start
 
@@ -72,24 +103,35 @@ canonical agent set. Everything in `antigravity/` is derived from those at deplo
 
 > ⚠️ The skills deploy uses `rsync --delete`. Anything in
 > `~/.gemini/config/skills/` or `~/.claude/skills/` that isn't in `shared/skills/`
-> will be removed. (Plugins and scripts deploy WITHOUT `--delete` and back up
-> existing files first.) Run with `--dry-run` first if you're not sure.
+> will be removed. Scripts and subagents deploy via plain file copy — no
+> `--delete`, existing files backed up first (Claude's setup also explicitly
+> retires named agents the harness has since dropped, e.g. `testing.md`).
+> `~/.gemini/config/plugins/harness/` is the one exception on the Antigravity
+> side: it's fully harness-owned (agents derived from `claude/agents/`, plus
+> `hooks.json`), so it **does** sync with a scoped `rsync --delete` — a derived
+> agent removed from the repo must not resurrect on the next deploy. Any other
+> plugin directory under `~/.gemini/config/plugins/` (user-installed plugins) is
+> left untouched. Run with `--dry-run` first if you're not sure.
 
 ### Verifying installation
 
 ```bash
 # Antigravity CLI (agy) — paths verified on agy-cli 1.1.11
-wc -l ~/.gemini/GEMINI.md                                  # → 63
-ls ~/.gemini/config/skills/ | wc -l                        # → 23 (incl. audit/distill/handoff/init-project/research/retro)
-ls ~/.gemini/config/plugins/harness/agents/                 # → changelog.md / documentation.md / reviewer.md / testing.md
-agy agents                                                  # → changelog / documentation / reviewer / testing
+wc -l ~/.gemini/GEMINI.md                                  # → 69
+ls -d ~/.gemini/config/skills/*/ | wc -l                   # → 28 (incl. audit/distill/handoff/init-project/preflight/research/retro)
+ls ~/.gemini/config/plugins/harness/agents/                 # → changelog.md / documentation.md / explorer.md / reviewer.md / security.md / verifier.md
+agy plugin validate ~/.gemini/config/plugins/harness        # → "✔ agents: 6 processed" / "✔ hooks: 1 processed" (verified live, agy 1.1.22, 2026-08-31). `agy agents` lists nothing — these are subagent-only, mainAgent:false.
 agy -p "/skills"                                            # quota-free skill listing (agy 1.1.11+)
 
 # Claude Code
-wc -l ~/.claude/CLAUDE.md                                  # → 63
-ls ~/.claude/skills/ | wc -l                               # → 23
-ls ~/.claude/agents/                                       # → changelog / documentation / reviewer / testing (.md)
+wc -l ~/.claude/CLAUDE.md                                  # → 69
+ls -d ~/.claude/skills/*/ | wc -l                          # → 28
+ls ~/.claude/agents/                                       # → changelog / documentation / explorer / reviewer / security / verifier (.md)
 test -f ~/.claude/settings.json && test -x ~/.claude/format-hook.sh && echo "config ok"
+
+# Both vendors — shared shell gates
+ls ~/.agents/bin/                                          # → resume-context.sh trail-check.sh
+~/.agents/bin/trail-check.sh --check                       # → human-readable trail-freshness report
 ```
 
 ## Structure
@@ -97,22 +139,30 @@ test -f ~/.claude/settings.json && test -x ~/.claude/format-hook.sh && echo "con
 ```
 .
 ├── shared/                  # Single source of truth (vendor-neutral)
-│   ├── AGENTS.md            # Global standards (the AGENTS.md spec file)
-│   ├── skills/              # 23 skills: 17 domain skills + 6 workflow skills (/audit, /handoff, /retro, …)
-│   ├── scripts/             # format-hook.sh + merge-settings.py + derive-agy-agent.py
-│   └── templates/           # Project scaffolding templates (AGENTS.md, REQUIREMENTS.md, …)
+│   ├── AGENTS.md            # Global Agent Constitution (the AGENTS.md spec file, 69 lines)
+│   ├── skills/              # 28 skills: 7 workflow skills (/audit, /distill, /handoff,
+│   │                        #   /init-project, /preflight, /research, /retro) + 21 others
+│   │                        #   (language/infra + review-standards + 5 vendored — see VENDORED.md)
+│   ├── scripts/             # format-hook.sh, feedback-capture.sh, merge-settings.py,
+│   │                        #   derive-agy-agent.py, resume-context.sh, trail-check.sh
+│   └── templates/           # Project scaffolding templates (AGENTS.md, REQUIREMENTS.md, ROADMAP.md, …)
 ├── antigravity/             # Antigravity CLI (agy) wrapper — all content derived
 │   ├── GEMINI.md            # Copy of shared/AGENTS.md, refreshed by setup.sh
-│   ├── plugins/harness/     # Plugin: agents/ (derived from claude/agents/) + hooks.json (format hook)
-│   └── setup.sh             # Deploys to ~/.gemini/
+│   ├── plugins/harness/     # Plugin: agents/ (derived from claude/agents/, 6) + hooks.json (format hook)
+│   └── setup.sh             # Deploys to ~/.gemini/ (+ shared/scripts/{resume-context,trail-check}.sh → ~/.agents/bin/)
 ├── claude/                  # Claude Code wrapper
 │   ├── CLAUDE.md            # Copy of shared/AGENTS.md, refreshed by setup.sh
-│   ├── settings.json        # Global baseline, merged into ~/.claude/settings.json
-│   ├── agents/              # Custom subagents (changelog, documentation, reviewer, testing)
+│   ├── settings.json        # Global baseline (incl. SessionStart/Stop hooks), merged into ~/.claude/settings.json
+│   ├── agents/              # 6 custom subagents: changelog, documentation, explorer, reviewer, security, verifier
 │   ├── scripts/             # statusline.sh (Claude-only)
-│   └── setup.sh             # Deploys to ~/.claude/
+│   └── setup.sh             # Deploys to ~/.claude/ (+ shared/scripts/{resume-context,trail-check}.sh → ~/.agents/bin/)
 └── setup.sh                 # Top-level dispatcher → runs antigravity/ + claude/ setups
 ```
+
+Both vendor setup scripts also deploy `shared/scripts/resume-context.sh` and
+`trail-check.sh` to `~/.agents/bin/` — a vendor-neutral location outside either
+vendor's home directory, since both hooks (Claude Code) and skill-body steps
+(Antigravity) reference it by the same path.
 
 Claude-specific slash commands (if any) go in `claude/commands/`; the directory is
 optional and overlaid onto `~/.claude/commands/` when present.
@@ -163,7 +213,19 @@ Each skill follows a **progressive disclosure** architecture:
 The same `SKILL.md` frontmatter format is recognised by both Antigravity and
 Claude Code, so skills port 1:1.
 
-To create a new skill, use the `skill-creator` skill or see `shared/skills/skill-creator/SKILL.md`.
+To create a new skill, follow the SKILL.md standard by hand (frontmatter with
+`name` + trigger-front-loaded `description`, lean body, lazy-loaded `references/`).
+The harness no longer ships its own `skill-creator` (it was Gemini-adapted and
+steered agents away from using subagents; Claude Code's built-in `skill-creator`
+is unaffected and still works).
+
+**Vendored (non-authored) skills** are tracked in `shared/skills/VENDORED.md` — a
+provenance manifest recording, per skill, its upstream source repo, pinned
+commit or digest, license, and the exact command to re-fetch an update. Never
+edit vendored content in place; fork it into a differently-named skill instead.
+Installing a skill globally with `npx skills add -g` writes straight into the
+agent's own skill dir and gets wiped by the next harness deploy (`rsync
+--delete`) — vendor it here to keep it.
 
 ## How Slash Commands Work
 
@@ -178,6 +240,7 @@ source, one deploy target, two vendors:
 - `shared/skills/research/SKILL.md` → `/research`
 - `shared/skills/init-project/SKILL.md` → `/init-project`
 - `shared/skills/handoff/SKILL.md` → `/handoff`
+- `shared/skills/preflight/SKILL.md` → `/preflight`
 
 The workflow skills set `disable-model-invocation: true` so they stay
 user-triggered in Claude Code (agy ignores that key). Claude-specific commands

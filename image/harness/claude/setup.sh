@@ -11,6 +11,7 @@ set -euo pipefail
 #   shared/AGENTS.md   → ~/.claude/CLAUDE.md
 #   shared/skills/     → ~/.claude/skills/      (includes the /audit, /retro, … workflow skills)
 #   claude/commands/   → ~/.claude/commands/    (overlay; Claude-specific extras, if any)
+#   shared/scripts/{resume-context.sh,trail-check.sh} → ~/.agents/bin/  (vendor-neutral shell gates)
 #
 # Also refreshes the in-repo CLAUDE.md copy from shared/AGENTS.md so it stays
 # in sync with the source of truth for inspection.
@@ -81,6 +82,7 @@ log "✅ shared/AGENTS.md → claude/CLAUDE.md"
 log "=== Deploying global CLAUDE.md ==="
 
 run "mkdir -p '${CLAUDE_HOME}'"
+backup "${CLAUDE_HOME}/CLAUDE.md"
 run "cp '${SCRIPT_DIR}/CLAUDE.md' '${CLAUDE_HOME}/CLAUDE.md'"
 log "✅ claude/CLAUDE.md → ${CLAUDE_HOME}/CLAUDE.md"
 
@@ -154,9 +156,21 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 6: Deploy subagents (no --delete: preserve any user-added agents)
+# Step 6: Deploy subagents (no --delete: preserve any user-added agents).
+# The flip side of skipping --delete: agents the harness once shipped but has
+# since retired would linger on installed machines forever, so they are removed
+# explicitly (backup first) — same pattern as MIGRATED_COMMANDS above.
 # ---------------------------------------------------------------------------
 log "=== Deploying subagents ==="
+
+RETIRED_AGENTS=(testing.md)
+for agent in "${RETIRED_AGENTS[@]}"; do
+    if [[ -f "${CC_AGENTS}/${agent}" ]]; then
+        backup "${CC_AGENTS}/${agent}"
+        run "rm '${CC_AGENTS}/${agent}'"
+        log "  retired agents/${agent} (no longer shipped by the harness)"
+    fi
+done
 
 if [[ -d "${SCRIPT_DIR}/agents" ]] && [[ -n "$(ls -A "${SCRIPT_DIR}/agents" 2>/dev/null)" ]]; then
     run "mkdir -p '${CC_AGENTS}'"
@@ -196,6 +210,26 @@ if [[ -f "${SHARED_DIR}/scripts/feedback-capture.sh" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Step 8: Deploy shell gates to ~/.agents/bin/ — the vendor-neutral home that
+# hooks (settings.json on Claude Code) and skill steps (Antigravity) reference.
+# Scripts stay in shared/scripts/ as the source of truth.
+# ---------------------------------------------------------------------------
+log "=== Deploying shell gates to ~/.agents/bin ==="
+
+AGENTS_BIN="${HOME}/.agents/bin"
+run "mkdir -p '${AGENTS_BIN}'"
+for gate in resume-context.sh trail-check.sh; do
+    if [[ -f "${SHARED_DIR}/scripts/${gate}" ]]; then
+        backup "${AGENTS_BIN}/${gate}"
+        run "cp '${SHARED_DIR}/scripts/${gate}' '${AGENTS_BIN}/${gate}'"
+        run "chmod +x '${AGENTS_BIN}/${gate}'"
+        log "✅ shared/scripts/${gate} → ${AGENTS_BIN}/${gate}"
+    else
+        log "⚠️  shared/scripts/${gate} missing — hooks reference ${AGENTS_BIN}/${gate}; rerun setup once it exists"
+    fi
+done
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 echo ""
@@ -204,6 +238,7 @@ log ""
 log "Deployed:"
 log "  Global:    ${CLAUDE_HOME}/CLAUDE.md"
 log "  Skills:    ${CC_SKILLS}/  (workflow skills provide the slash commands below)"
+log "  Gates:     ${AGENTS_BIN}/  (resume-context.sh, trail-check.sh — wired via settings.json hooks)"
 log ""
 log "Available slash commands:"
 log "  /audit          — 4-step code audit protocol"
@@ -212,5 +247,6 @@ log "  /research       — Research & spec protocol (full + light)"
 log "  /retro          — Session retrospective (learning loop)"
 log "  /init-project   — Scaffold a new project with AGENTS.md + .agents/"
 log "  /handoff        — Summarize session for agent-to-agent handoff"
+log "  /preflight      — Release gate (reviewer + security + verifier + trail freshness)"
 log ""
 log "To scaffold a new project, open Claude Code and run: /init-project"

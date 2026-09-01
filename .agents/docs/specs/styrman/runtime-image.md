@@ -57,7 +57,38 @@ Steps, in order:
 6. Seed the per-project home (ADR-031) write-once from the image: shell
    dotfiles from `image/skel/` (`~/.bashrc`, `~/.profile`, `~/.bash_*`, and
    `~/.npmrc` — the last referencing `${NPM_TOKEN}` from the broker) and the
-   agent harness from `image/harness/`.
+   agent harness from `image/harness/` — vendored verbatim from
+   `devshell_prompt/harness` (see `image/harness/VENDORED.md`; upstream
+   commit `6132b97` as of v1.15.0). The harness carries a 69-line "Global
+   Agent Constitution" (`shared/AGENTS.md` — Resume Protocol + a
+   Definition-of-Done dispatch table), 28 skills, and 6 subagents
+   (`changelog`, `documentation`, `reviewer`, `verifier`, `security`,
+   `explorer`; `verifier` replaced the older `testing` agent in v1.15.0).
+   Its own `setup.sh` deploys into THREE locations under the seeded home:
+   `~/.claude` (`CLAUDE.md`, `skills/`, `agents/`, `settings.json`),
+   `~/.gemini` (`GEMINI.md` plus skills/agents derived for `agy`), and the
+   vendor-neutral `~/.agents/bin/` (`resume-context.sh`/`trail-check.sh` —
+   wired as Claude Code's `SessionStart`/`Stop` hooks, invoked as explicit
+   steps inside Antigravity skill bodies). The vendored `setup.sh` is
+   invoked with `/usr/local/bin` trimmed from PATH (ADR-047): its
+   `antigravity/setup.sh` ends with a cosmetic self-check that shells out
+   to `agy -p "/skills"` behind a bare `command -v agy` guard, and on a
+   brand-new project's home — which has no agy OAuth token yet, since that
+   token is only materialized by a login shell that hasn't run at
+   entrypoint time — that call blocks for a fixed 60s before failing. This
+   seeding step sits ahead of `/run/styrman/ready`, so the 60s landed
+   squarely on the boot-critical path and blew R1's cold-boot budget 4x.
+   Hiding `agy` from PATH makes the guard skip the self-check instead;
+   nothing else `setup.sh` needs lives in `/usr/local/bin`, so the deployed
+   harness is byte-identical either way (measured 456ms trimmed vs 60,900ms
+   default). The trim is scoped to this one `runuser … env` invocation —
+   the guest's own login-shell PATH is untouched. Write-once, keyed on
+   `/styrman/VERSION` (stamped from `STYRMAN_VERSION` at image build time,
+   `image/Dockerfile:71-73`) versus a per-home `~/.styrman/.harness-version`
+   stamp (entrypoint step below) — bumping `STYRMAN_VERSION` and rebuilding
+   the image is what RE-SEEDS an already-onboarded project's home AND
+   RETIRES content the harness has since dropped from it (e.g. the old
+   `testing` subagent file, superseded by `verifier`).
    6b. Login-shell `/etc/profile.d` snippets: `zzz-styrman-motd.sh` (zzz- so it
    runs LAST, after credentials are materialized — it probes
    `~/.claude/.credentials.json` etc. and would otherwise nag "run

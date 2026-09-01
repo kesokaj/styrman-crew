@@ -26,6 +26,9 @@ No mocks in the orchestrator path.
    - type `exit` in a shell conversation → "session exited" (4000)
    - resize the window → TUI reflows (tmux + ContainerExecResize)
 4. **Browser e2e (Playwright)** — see the Tier 4 section below.
+5. **Vendored agent harness (`image/harness/`)** — see the Tier 5 section
+   below. NOT automated anywhere (integration.sh and the e2e suite have
+   zero harness assertions) — run by hand on every harness sync.
 
 ## Prereqs
 
@@ -62,3 +65,77 @@ Self-cleaning: deletes any leftover `e2e-ui` project at start.
 To point the Playwright checks at an already-running server instead, call
 `node web/e2e/run.mjs [--base http://127.0.0.1:8080] [--shots /tmp/styrman-shots]`
 directly.
+
+## Tier 5 — Vendored agent harness (`image/harness/`), manual — KNOWN GAP: not automated
+
+Fires whenever `image/harness/` is re-synced from `~/workspace/devshell_prompt/harness`
+and/or `STYRMAN_VERSION` is bumped (ADR-046: the tree is a verbatim mirror,
+one delivery path — version bump + image rebuild). No step here is wired
+into `integration.sh` or `web/e2e` today; derive it fresh from
+`image/entrypoint.sh:110-135` each time until it is automated.
+
+1. Mirror fidelity: `diff -rq image/harness ~/workspace/devshell_prompt/harness`
+   → must report ONLY `VENDORED.md` differing.
+2. Image contents match `image/harness/VENDORED.md`'s stated roster:
+   `docker run --rm --entrypoint bash <image> -c 'cat /styrman/VERSION;
+   wc -l /styrman/harness/shared/AGENTS.md; ls /styrman/harness/claude/agents/;
+   ls -d /styrman/harness/shared/skills/*/ | wc -l'`.
+3. Clean-home deploy — mirrors `image/entrypoint.sh:110-135` exactly
+   (write-once seed, keyed on `/styrman/VERSION`): inside the image,
+   `useradd -m` a throwaway user, `mktemp -d` a user-owned copy of
+   `/styrman/harness` (setup.sh needs a writable tree), then
+   `runuser -u <user> -- env HOME=<home> PATH=/usr/bin:/bin:/usr/sbin:/sbin
+   bash <copy>/setup.sh`. Assert exit 0, matching `CLAUDE.md`/`GEMINI.md`
+   line counts, matching skill count under BOTH `~/.claude/skills/*/` and
+   `~/.gemini/config/skills/*/` (top-level directory count — recursive
+   `SKILL.md` search over-counts nested reference files with the same
+   name), the agent roster under `~/.claude/agents/`, both gates under
+   `~/.agents/bin/`, and valid JSON in `~/.claude/settings.json`.
+
+   **3a. Latency assertion (ADR-047 regression guard) — time the same
+   command:**
+
+   ```bash
+   time runuser -u <user> -- env HOME=<home> PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+       bash <copy>/setup.sh >/dev/null 2>&1
+   ```
+
+   Must complete in **~1s, not ~60s** (measured 2026-09-01: **456ms**
+   trimmed PATH vs **60,900ms** default PATH, byte-identical deploy either
+   way — see ADR-047 and `runtime-image.md` step 6). This guards against
+   the exact regression class Tier 5 exists for: `agy`'s
+   `antigravity/setup.sh` self-check (`agy -p "/skills"`, gated only by
+   `command -v agy`) blocks for a fixed 60s on a home with no agy OAuth
+   token — i.e. every fresh project — and that call sits ahead of
+   `/run/styrman/ready` on the container boot path. The trim only works
+   because `agy` isn't reachable under `/usr/bin:/bin:/usr/sbin:/sbin`; if
+   a future `image/Dockerfile` change or an upstream `setup.sh` edit moves
+   `agy` (or adds another blocking call) onto that trimmed PATH, this is
+   the only check that will catch it — `go test`, `integration.sh`, and
+   `web/e2e` are all blind to harness timing. Also assert the guard
+   condition directly: `runuser -u <user> -- env
+   PATH=/usr/bin:/bin:/usr/sbin:/sbin command -v agy` must find nothing.
+
+   **3b. End-to-end, optional but closer to what R1 actually gates:**
+   create a throwaway project via the API, then compute the gap between
+   `docker inspect -f '{{.State.StartedAt}}' <container>` and the
+   timestamp on the `project <uuid> ready` line from
+   `docker logs -t <container>`. Must be under R1's 5s soft target and
+   well under its 15s hard limit (measured 2026-09-01: **2.69s** cold
+   create end-to-end). Delete the throwaway project afterwards.
+4. Stop-hook guest-session safety: `bash
+   /styrman/harness/shared/scripts/trail-check.sh` (no args = hook mode,
+   as Claude Code's Stop hook invokes it) must exit 0 both outside any git
+   repo and inside a git repo with no `.agents/docs/changes/` dir — a repo
+   that never opted into the harness contract must never be blocked.
+5. Real re-seed evidence, if a stopped project container seeded from an
+   older version is available: `docker cp <container>:<home>/.styrman/.harness-version -`
+   plus the same CLAUDE.md/agents/skills checks as step 3, WITHOUT
+   starting or otherwise modifying the container (`docker cp` reads the
+   stopped filesystem layer directly).
+
+**Known gap (2026-09-01):** none of the above is scripted. A future
+harness sync that breaks `setup.sh`, drops a skill, or ships a hook that
+hangs a guest session would pass `go test`, `integration.sh`, and
+`web/e2e` cleanly. A `harness-check.sh` implementing steps 2–4 above
+belongs in this directory or as an `integration.sh` step.

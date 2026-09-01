@@ -13,10 +13,12 @@ argument-hint: "What will the next session focus on?"
 
 Write a structured handoff document summarising the current conversation so a fresh agent can continue the work without re-reading the full chat history.
 
+On Antigravity, first run `~/.agents/bin/resume-context.sh`. Then on either vendor run `~/.agents/bin/trail-check.sh --check` for a trail-freshness report (Claude Code's SessionStart hook already ran resume-context, but not the check).
+
 ## Usage
 
 ```
-/handoff                     # Handoff saved to project .agents/docs/handoffs/
+/handoff                     # Handoff saved to project <docs-root>/handoffs/
 /handoff --global            # Handoff saved to ~/.agents/handoffs/ (cross-project)
 /handoff fix the auth bug    # Tailor the handoff toward the next session's focus
 ```
@@ -34,7 +36,7 @@ Read the conversation transcript and identify:
 
 ## Step 2: Identify Relevant Artifacts
 
-Do NOT duplicate content that already exists elsewhere. Instead, reference these by path or URL:
+Do NOT duplicate content that already exists elsewhere. Instead, reference these by path or URL (paths below assume the canonical `.agents/docs/` root; some repos use a bare `docs/` tree instead — use whichever exists):
 
 | Artifact | Location |
 |---|---|
@@ -51,7 +53,16 @@ Do NOT duplicate content that already exists elsewhere. Instead, reference these
 
 List each relevant artifact with a one-line summary of what it contains and why the next agent should read it.
 
-## Step 3: Write the Handoff Document
+## Step 3: Bring the Trail Current — FIRST, before writing anything
+
+The handoff records the remainder — it is never a substitute for rows already due:
+
+1. Run `date +%F` and use that date everywhere below — never a date from memory.
+2. If the session changed source files and no `changes/` entry covers those changes, dispatch the `changelog` agent **before** writing the handoff.
+3. The main agent does **not** edit `TODO.md` or `ROADMAP.md` inline. `TODO.md` record updates ride in the `changelog` dispatch from step 2; when the plan shifted, dispatch the `documentation` agent for the `ROADMAP.md` "Now" update. If neither dispatch is warranted, the handoff **notes** the staleness instead of fixing it inline.
+4. Only then write the handoff (Step 4).
+
+## Step 4: Write the Handoff Document
 
 Use this template:
 
@@ -117,7 +128,7 @@ should focus on. Otherwise, infer from the open items above.>
 - **Redact sensitive data.** Strip API keys, passwords, tokens, PII, and anything from `~/.zsh_secrets` or `.env` files. Replace with `<REDACTED>`.
 - **Include the branch and commit state.** The next agent needs to know where the code stands.
 
-## Step 4: Suggest Skills
+## Step 5: Suggest Skills
 
 Based on the session content, recommend skills the next agent should invoke. Only suggest skills that are genuinely relevant — don't list every skill you know about.
 
@@ -125,7 +136,7 @@ Common suggestions:
 
 | If the session involved… | Suggest |
 |---|---|
-| Code changes without review | `code-review` |
+| Code changes without review | dispatch the `reviewer` agent (uses `review-standards`) |
 | Go code | `golang` |
 | Frontend / UI work | `frontend`, `typescript` |
 | Infrastructure / deploy | `cloud-run-deploy`, `docker`, `terraform` |
@@ -133,14 +144,22 @@ Common suggestions:
 | Corrections or friction | `feedback` (to log), then `/retro` (to analyze) |
 | New patterns discovered | `/distill` |
 
-## Step 5: Save the Document
+## Step 6: Save the Document
 
 ### Project-local (default)
 
+Resolve the docs root first: `.agents/docs` if it exists, else `docs/` if it exists, else create `.agents/docs`.
+
 ```bash
-mkdir -p .agents/docs/handoffs
-# Save as: .agents/docs/handoffs/YYYY-MM-DD-<topic>.md
+DOCS_ROOT=.agents/docs
+[ -d "$DOCS_ROOT" ] || { [ -d docs ] && DOCS_ROOT=docs; } || true
+mkdir -p "$DOCS_ROOT/handoffs"
+# Save as: $DOCS_ROOT/handoffs/$(date +%F)-<topic>.md
 ```
+
+Handoffs are dated and **immutable** — never overwrite a previous handoff; a new session gets a new file.
+
+Reading side: on Claude Code, `resume-context.sh` surfaces the newest handoff at session start; on Antigravity, the Resume Protocol in `GEMINI.md` instructs fresh sessions to read it.
 
 ### Global (`--global`)
 
@@ -151,7 +170,7 @@ mkdir -p ~/.agents/handoffs
 # Save as: ~/.agents/handoffs/YYYY-MM-DD-<topic>.md
 ```
 
-## Step 6: Report to User
+## Step 7: Report to User
 
 After saving, tell the user:
 

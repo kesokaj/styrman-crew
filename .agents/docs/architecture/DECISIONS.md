@@ -1582,3 +1582,90 @@ here, with the reasoning to revisit against.
 
 Source: the v1.14.0 commits (e043765..HEAD). Verification:
 .agents/docs/changes/2026-08-30-roadmap-clearing-v1.14.0.md
+
+---
+
+## ADR-046: Vendored harness stays a verbatim mirror; STYRMAN_VERSION bump is the only delivery path (2026-09-01)
+
+**Context.** `image/harness/` is a copy of `devshell_prompt/harness` baked
+into the runtime image so every project home gets identical agent-harness
+defaults from the base image, no shared home or host-side deploy dependency
+(R5/ADR-030). The image entrypoint deploys it into each project home
+write-once, gated by a marker (`~/.styrman/.harness-version`, keyed on
+`/styrman/VERSION`) — so a home only ever re-runs `setup.sh` when the image
+version it was seeded from differs from the current one. The v1.15.0 sync
+(upstream commit `6132b97`) pulled in a substantial harness rehaul —
+Constitution rewrite, 4→6 subagents, 2 new shell gates, 23→28 skills — and
+raised the question of how such vendor updates should be applied and shipped
+going forward.
+
+**Decision.** `image/harness/` is treated as a verbatim mirror of
+`devshell_prompt/harness` and is never hand-edited in place; the single
+exception is `image/harness/VENDORED.md`, a styrman-only file preserved
+across every sync to record the sync date, upstream commit hash, and a
+summary of what the harness currently contains. Any change upstream is
+brought in only by a full re-copy from `devshell_prompt/harness`. Because
+the deploy is write-once and keyed on `/styrman/VERSION`, a harness change
+has exactly one delivery path: bump `STYRMAN_VERSION` and rebuild the
+runtime image. There is no mechanism to push a harness change to
+already-running project homes without that version bump — matching the
+existing credential-broker precedent (ADR-030) that the image, not a
+runtime patch, is the unit of harness delivery.
+
+**Consequences.** Dropped or renamed agents and skills (e.g. `testing.md`
+retired in favor of `verifier`, `skill-creator` and `code-review` removed in
+v1.15.0) are retired from an already-seeded home only when that home
+re-seeds against the new version — `claude/setup.sh`'s explicit
+retired-agent removal plus `rsync --delete` on the skills directory do the
+actual cleanup, but only run once per version bump, never proactively. A
+project that never restarts its container never gets a harness upgrade.
+Re-seeding also leaves timestamped `.bak` litter behind in the guest home
+(one set per bump) and, on `rsync --delete`, silently removes any skill a
+project user hand-added to `~/.claude/skills/` — both accepted as the cost
+of write-once, image-driven delivery rather than a live sync channel.
+
+Source: image/harness/VENDORED.md, image/harness/claude/setup.sh.
+Verification: .agents/docs/changes/2026-09-01-harness-upgrade-v1.15.0.md
+
+## ADR-047: Styrman-side workarounds for upstream harness behavior live in the entrypoint invocation, never inside image/harness/ (2026-09-01)
+
+**Context.** An independent review of the v1.15.0 harness sync (ADR-046)
+found that `antigravity/setup.sh` — the vendored, verbatim-mirrored script —
+ends with a self-check, `agy -p "/skills"`, guarded only by `command -v
+agy`. On any home with no Antigravity OAuth token (every newly created
+project, since the token is materialized by a login shell that has not run
+at entrypoint time) that call hard-blocks the boot path for a fixed 60s,
+violating REQUIREMENTS.md R1 and ADR-045's stated cold-boot latency. ADR-046
+already commits `image/harness/` to being a verbatim mirror, never
+hand-edited — so patching `setup.sh` directly was not an option without
+breaking that rule and losing the ability to `diff -rq` clean against
+upstream on every future sync.
+
+**Decision.** The fix runs the vendored `setup.sh` with a trimmed PATH
+(`/usr/bin:/bin:/usr/sbin:/sbin`, excluding `/usr/local/bin` where `agy`
+lives) from `image/entrypoint.sh`'s invocation of the harness-seeding block,
+so `command -v agy` fails and the self-check is skipped — without touching
+a single byte inside `image/harness/`. This sets the precedent for how
+future upstream-harness quirks should be handled: a styrman-side workaround
+for behavior baked into the vendored tree belongs in the *invocation* of
+that tree (`image/entrypoint.sh`, or equivalent call-site code outside
+`image/harness/`), never inside `image/harness/` itself. If a workaround
+cannot be expressed as an invocation-side change (e.g. it requires altering
+control flow inside a vendored script), that is a signal to raise the issue
+upstream in `devshell_prompt/harness` rather than to special-case the
+mirror.
+
+**Consequences.** The mirror stays verbatim and `diff -rq` against upstream
+remains the fidelity check ADR-046 relies on. The trade-off is that
+invocation-side workarounds are easy to lose track of over time (they live
+away from the code they're compensating for, discoverable only via
+entrypoint comments and this ADR) — future re-syncs must re-check whether
+each workaround is still needed, since an upstream fix could make it
+obsolete or, worse, an upstream change could shift the assumption the
+workaround depends on (e.g. if `agy` moves to a different PATH location).
+No workarounds are known to be currently stale as of this writing.
+
+Source: image/entrypoint.sh (harness-seeding invocation), the review at
+.agents/docs/reviews/2026-09-01-review-harness-vendor-sync-v1.15.0.md.
+Verification: .agents/docs/changes/2026-09-01-harness-upgrade-v1.15.0.md
+(Post-review finding and fix section).

@@ -25,6 +25,8 @@ set -euo pipefail
 #   claude/agents/*.md          → antigravity/plugins/harness/agents/ (derived)
 #   antigravity/plugins/        → ~/.gemini/config/plugins/
 #   shared/scripts/format-hook.sh → ~/.gemini/format-hook.sh
+#   shared/scripts/{resume-context.sh,trail-check.sh} → ~/.agents/bin/  (vendor-neutral
+#                  shell gates — Antigravity runs them as skill steps, Claude as hooks)
 #
 # Usage:
 #   ./antigravity/setup.sh              # Deploy everything
@@ -93,6 +95,7 @@ log "✅ shared/AGENTS.md → antigravity/GEMINI.md"
 log "=== Deploying global GEMINI.md ==="
 
 run "mkdir -p '${GEMINI_HOME}'"
+backup "${GEMINI_HOME}/GEMINI.md"
 run "cp '${SCRIPT_DIR}/GEMINI.md' '${GEMINI_HOME}/GEMINI.md'"
 log "✅ antigravity/GEMINI.md → ${GEMINI_HOME}/GEMINI.md"
 
@@ -151,15 +154,27 @@ fi
 
 # ---------------------------------------------------------------------------
 # Step 6: Deploy plugins (agents + format hook registration via hooks.json)
+# Ownership rule: ${AG_PLUGINS}/harness/ is fully harness-owned, so it syncs
+# with --delete (a derived agent deleted from the repo must not resurrect on
+# the next deploy). Everything else under ${AG_PLUGINS}/ may be user-installed
+# plugins, so any non-harness repo content syncs WITHOUT --delete. Currently
+# harness/ is the only subdir this repo ships.
 # ---------------------------------------------------------------------------
 log "=== Deploying plugins ==="
 
-if [[ -d "${SCRIPT_DIR}/plugins" ]] && [[ -n "$(ls -A "${SCRIPT_DIR}/plugins" 2>/dev/null)" ]]; then
-    run "mkdir -p '${AG_PLUGINS}'"
-    run "rsync -av '${SCRIPT_DIR}/plugins/' '${AG_PLUGINS}/'"
-    log "✅ antigravity/plugins/ → ${AG_PLUGINS}/"
+if [[ -d "${SCRIPT_DIR}/plugins/harness" ]]; then
+    run "mkdir -p '${AG_PLUGINS}/harness'"
+    run "rsync -av --delete '${SCRIPT_DIR}/plugins/harness/' '${AG_PLUGINS}/harness/'"
+    log "✅ antigravity/plugins/harness/ → ${AG_PLUGINS}/harness/ (harness-owned, --delete)"
 else
-    log "ℹ️  No plugins to deploy"
+    log "ℹ️  No harness plugin to deploy"
+fi
+
+OTHER_PLUGINS="$(find "${SCRIPT_DIR}/plugins" -mindepth 1 -maxdepth 1 ! -name harness 2>/dev/null || true)"
+if [[ -n "${OTHER_PLUGINS}" ]]; then
+    run "mkdir -p '${AG_PLUGINS}'"
+    run "rsync -av --exclude 'harness' '${SCRIPT_DIR}/plugins/' '${AG_PLUGINS}/'"
+    log "✅ antigravity/plugins/ (non-harness) → ${AG_PLUGINS}/ (no --delete)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -176,7 +191,27 @@ if [[ -f "${SHARED_DIR}/scripts/format-hook.sh" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Step 8: Remove artifacts of older harness layouts that agy no longer reads
+# Step 8: Deploy shell gates to ~/.agents/bin/ — the vendor-neutral home that
+# skill steps (Antigravity) and hooks (Claude Code settings.json) reference.
+# Scripts stay in shared/scripts/ as the source of truth.
+# ---------------------------------------------------------------------------
+log "=== Deploying shell gates to ~/.agents/bin ==="
+
+AGENTS_BIN="${HOME}/.agents/bin"
+run "mkdir -p '${AGENTS_BIN}'"
+for gate in resume-context.sh trail-check.sh; do
+    if [[ -f "${SHARED_DIR}/scripts/${gate}" ]]; then
+        backup "${AGENTS_BIN}/${gate}"
+        run "cp '${SHARED_DIR}/scripts/${gate}' '${AGENTS_BIN}/${gate}'"
+        run "chmod +x '${AGENTS_BIN}/${gate}'"
+        log "✅ shared/scripts/${gate} → ${AGENTS_BIN}/${gate}"
+    else
+        log "⚠️  shared/scripts/${gate} missing — skill steps reference ${AGENTS_BIN}/${gate}; rerun setup once it exists"
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# Step 9: Remove artifacts of older harness layouts that agy no longer reads
 # (never deletes user data — only files this harness itself deployed)
 # ---------------------------------------------------------------------------
 if [[ -f "${GEMINI_HOME}/settings.json" ]] && grep -q '"_comment": "Minimal settings overlay for the agent harness' "${GEMINI_HOME}/settings.json" 2>/dev/null; then
@@ -194,9 +229,10 @@ log "=== Done ==="
 log ""
 log "Deployed:"
 log "  Global rules: ${GEMINI_HOME}/GEMINI.md"
-log "  Skills:       ${AG_SKILLS}/  (includes workflow skills: /audit /distill /handoff /research /retro /init-project)"
+log "  Skills:       ${AG_SKILLS}/  (includes workflow skills: /audit /distill /handoff /research /retro /init-project /preflight)"
 log "  Plugins:      ${AG_PLUGINS}/harness/ (agents + hooks.json)"
 log "  Format hook:  ${GEMINI_HOME}/format-hook.sh"
+log "  Gates:        ${AGENTS_BIN}/  (resume-context.sh, trail-check.sh — run as skill steps)"
 
 if [[ "$DRY_RUN" != true ]] && command -v agy >/dev/null 2>&1; then
     log ""
@@ -205,14 +241,32 @@ if [[ "$DRY_RUN" != true ]] && command -v agy >/dev/null 2>&1; then
     # which lists primary-agent candidates — won't show them. The plugin
     # validator confirms they parse and register; invoke_subagent uses them.
     AGENT_LINE="$(agy plugin validate "${AG_PLUGINS}/harness" 2>/dev/null | grep -E 'agents' | head -1 | sed 's/^[[:space:]]*//')"
-    EXPECTED_AGENTS="$(ls "${CLAUDE_AGENTS_DIR}"/*.md 2>/dev/null | wc -l | tr -d ' ')"
+    EXPECTED_AGENTS="$(find "${CLAUDE_AGENTS_DIR}" -maxdepth 1 -name '*.md' 2>/dev/null | wc -l | tr -d ' ')"
     log "  plugin agents: ${AGENT_LINE:-validation failed} (expected ${EXPECTED_AGENTS} processed)"
     # `agy -p "/skills"` is quota-free as of agy-cli 1.1.11 (no agent turn).
     # Records are "name<TAB>description"; wrapped description lines don't match.
-    SKILL_COUNT="$(agy -p "/skills" 2>/dev/null | grep -cE '^[a-z0-9][a-z0-9-]*\t' || true)"
-    EXPECTED_SKILLS="$(ls -d "${SHARED_DIR}"/skills/*/ 2>/dev/null | wc -l | tr -d ' ')"
-    log "  agy skills: ${SKILL_COUNT} listed (expected ≥ ${EXPECTED_SKILLS}; builtins add a few)"
-    if [[ "${SKILL_COUNT}" -lt "${EXPECTED_SKILLS}" ]]; then
-        log "  ⚠️  skill count below expected — inspect with: agy -p \"/skills\""
+    # Two checks from one invocation: (a) total record count — pattern allows
+    # underscores in names ([a-z0-9_-], literal tab via $'\t' for BSD grep);
+    # (b) each deployed skill dir name looked up in the output, which is immune
+    # to wrapped-line miscounts. Both reported.
+    TAB=$'\t'
+    SKILLS_OUTPUT="$(agy -p "/skills" 2>/dev/null || true)"
+    SKILL_COUNT="$(printf '%s\n' "${SKILLS_OUTPUT}" | grep -cE "^[a-z0-9][a-z0-9_-]*${TAB}" || true)"
+    EXPECTED_SKILLS=0
+    FOUND_SKILLS=0
+    MISSING_SKILLS=""
+    for skill_dir in "${SHARED_DIR}"/skills/*/; do
+        [[ -d "${skill_dir}" ]] || continue
+        skill_name="$(basename "${skill_dir}")"
+        EXPECTED_SKILLS=$((EXPECTED_SKILLS + 1))
+        if printf '%s\n' "${SKILLS_OUTPUT}" | grep -q "^${skill_name}[[:space:]]"; then
+            FOUND_SKILLS=$((FOUND_SKILLS + 1))
+        else
+            MISSING_SKILLS="${MISSING_SKILLS} ${skill_name}"
+        fi
+    done
+    log "  agy skills: ${SKILL_COUNT} records listed; ${FOUND_SKILLS}/${EXPECTED_SKILLS} deployed skills present by name (builtins add a few records)"
+    if [[ -n "${MISSING_SKILLS}" ]]; then
+        log "  ⚠️  not found in /skills output:${MISSING_SKILLS} — inspect with: agy -p \"/skills\""
     fi
 fi

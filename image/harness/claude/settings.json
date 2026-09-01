@@ -9,6 +9,17 @@
     "command": "~/.claude/statusline.sh"
   },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.agents/bin/resume-context.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
@@ -29,6 +40,17 @@
             "type": "command",
             "command": "~/.claude/feedback-capture.sh",
             "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$HOME/.agents/bin/trail-check.sh",
+            "timeout": 15
           }
         ]
       }

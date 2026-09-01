@@ -493,4 +493,52 @@ exactly these two files) — `api.md`, `runtime-image.md`,
 `terminal-protocol.md`, root `README.md`, `AGENTS.md`, REQUIREMENTS.md,
 TODO.md, DECISIONS.md were read for verification only, not edited.
 
+**2026-09-01 session — v1.15.0 vendored-harness re-sync doc sync.** The
+agent harness at `image/harness/` (deployed into every project's guest
+home, not styrman's own repo tooling) was re-synced verbatim from its
+upstream `devshell_prompt/harness` (commit `6132b97`) and the runtime image
+rebuilt at `STYRMAN_VERSION=1.15.0`. Verified against
+`image/harness/README.md`, `image/harness/claude/setup.sh`,
+`image/entrypoint.sh:110-135`, and `image/Dockerfile:62-75` before writing.
+Key facts for next time:
+- Harness now ships **6 subagents** (`changelog`, `documentation`,
+  `reviewer`, `verifier`, `security`, `explorer`) — up from 4
+  (`testing` retired/replaced by `verifier`, which FAILs on changed code
+  with no covering tests). `shared/AGENTS.md` grew from 62 to 69 lines
+  ("Global Development Standards" → "Global Agent Constitution"), adding a
+  Resume Protocol + Definition-of-Done dispatch table. Skills 23 → 28.
+- **Harness now deploys to THREE locations per project home**, not two:
+  `~/.claude`, `~/.gemini`, AND the new vendor-neutral `~/.agents/bin/`
+  (`resume-context.sh`/`trail-check.sh` shell gates — Claude `SessionStart`/
+  `Stop` hooks; explicit skill-body steps on Antigravity). Source:
+  `image/harness/claude/setup.sh` step 8, confirmed via
+  `image/harness/README.md`'s deploy table.
+- Delivery mechanism into the runtime image itself is UNCHANGED:
+  `image/Dockerfile:71` `COPY harness/ /styrman/harness/`,
+  `STYRMAN_VERSION` stamps `/styrman/VERSION`, `entrypoint.sh:110-135`
+  write-once-seeds per project home keyed on that version vs
+  `~/.styrman/.harness-version`. Re-running setup on a version bump is what
+  RE-SEEDS and RETIRES dropped content (e.g. the old `testing.md` agent
+  file — `claude/setup.sh`'s `RETIRED_AGENTS` array backs it up then
+  removes it) in already-seeded homes.
+- This is styrman's OWN `AGENTS.md` (project root) — its Testing/Architecture
+  sections describe styrman-crew the app, NOT the vendored guest-side
+  harness, and it never names subagents by roster — checked (grep) and
+  found nothing stale to fix this session, unlike the runtime-image.md
+  spec which explicitly documents the harness's own contents.
+- Root `ROADMAP.md` did not exist yet (only the harness's own
+  `image/harness/shared/templates/ROADMAP.md` scaffold existed) — created
+  it this session, Now/Next/Later, mirroring `TODO.md`'s empty-slate
+  framing from the 2026-08-30 operator directive (ADR-045). Next/Later left
+  as commented-out placeholders, no invented items.
+
+Files touched this session: `image/README.md` (harness parenthetical +
+STYRMAN_VERSION paragraph — third `~/.agents/bin/` location),
+`.agents/docs/specs/styrman/runtime-image.md` (step 6 — full harness
+contents/deploy-locations/version-bump-retires paragraph), root
+`ROADMAP.md` (created). `AGENTS.md` was read and verified but NOT edited —
+no stale subagent/harness reference found. `.agents/docs/changes/`,
+DECISIONS.md, TODO.md, REQUIREMENTS.md were NOT touched (changelog
+subagent's lane / approval-gated).
+
 See [[feedback-styrman-doc-edits]] for edit-process lessons.

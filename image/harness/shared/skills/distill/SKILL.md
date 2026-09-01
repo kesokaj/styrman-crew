@@ -58,7 +58,7 @@ A pattern is worth extracting into a skill if it meets **all three**:
 
 ## Step 2: Draft the Skill
 
-Use the `skill-creator` template structure. The draft skill should include:
+Follow the SKILL.md standard (frontmatter with `name` + trigger-front-loaded `description`, lean body, lazy-loaded `references/`). The draft skill should include:
 
 ```markdown
 ---
@@ -158,6 +158,6 @@ Append an entry to `~/.agents/feedback/log.jsonl` (create the directory with `mk
 
 ## Cross-References
 
-- The `skill-creator` skill handles manual skill creation and iterative refinement
+- Claude Code's built-in `skill-creator` skill handles manual skill creation and iterative refinement (on Antigravity, follow the SKILL.md standard by hand)
 - The `/retro` workflow handles corrections and rule gaps (not patterns)
 - The `feedback` skill logs entries that `/distill --from-log` can analyze for cross-session patterns

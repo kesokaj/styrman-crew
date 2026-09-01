@@ -111,7 +111,8 @@ fi
 # The image carries the harness so every project gets IDENTICAL defaults —
 # fixing the old gap where only the operator's shared home got it. Seeded
 # write-once, keyed on the image's harness version, as the user (deploys into
-# ~/.claude and ~/.gemini — the skills/subagents/commands, NOT credentials).
+# ~/.claude, ~/.gemini AND ~/.agents/bin — the skills/subagents/commands and
+# the vendor-neutral shell gates, NOT credentials).
 # Non-fatal: a harness hiccup must never block the project from booting.
 if [ -z "${MINIMAL}" ] && [ -x /styrman/harness/setup.sh ]; then
     HARNESS_VER="$(cat /styrman/VERSION 2>/dev/null || echo dev)"
@@ -121,10 +122,30 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/harness/setup.sh ]; then
         # setup.sh also refreshes files INSIDE its own tree (e.g. GEMINI.md
         # from shared/AGENTS.md), so it needs a writable copy — the image
         # path is root-owned. Run from a user-owned throwaway; the HOME
-        # deploy (~/.claude, ~/.gemini) still lands.
+        # deploy (~/.claude, ~/.gemini, ~/.agents/bin) still lands.
+        #
+        # PATH excludes /usr/local/bin ON PURPOSE (R1 latency). The harness's
+        # antigravity/setup.sh ends with a self-check that shells out to
+        # `agy -p "/skills"`, guarded only by `command -v agy`. On a home with
+        # no agy OAuth token — i.e. EVERY newly created project, since the
+        # token is materialized by a login shell that has not run yet — that
+        # call blocks for a fixed 60s before failing, and this whole block
+        # sits ahead of /run/styrman/ready. Measured: 61s with agy on PATH,
+        # 0.4s without — identical for every artifact setup.sh manages
+        # (running agy additionally leaves its OWN CLI state under
+        # ~/.gemini/antigravity-cli/, which setup.sh does not manage and the
+        # broker recreates anyway). Hiding agy makes the guard skip the
+        # cosmetic self-check — which buys nothing even when it does run:
+        # it reports "0 records listed; 0/28 deployed skills present".
+        # Everything setup.sh needs (bash, rsync, python3, git, jq) is in
+        # /usr/bin.
+        # Do NOT wrap this in `timeout` instead: the self-check is the LAST
+        # step of antigravity/setup.sh, so a timeout would kill the run before
+        # claude/setup.sh executes and the marker would never be written —
+        # re-deploying on every boot, forever.
         HSRC="$(runuser -u "${USERNAME}" -- mktemp -d 2>/dev/null || true)"
         if [ -n "${HSRC}" ] && runuser -u "${USERNAME}" -- cp -r /styrman/harness/. "${HSRC}/" 2>/dev/null \
-            && runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" bash "${HSRC}/setup.sh" >/dev/null 2>&1; then
+            && runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" PATH=/usr/bin:/bin:/usr/sbin:/sbin bash "${HSRC}/setup.sh" >/dev/null 2>&1; then
             runuser -u "${USERNAME}" -- sh -c "printf '%s' '${HARNESS_VER}' > '${HARNESS_STAMP}'" 2>/dev/null || true
             log "agent harness deployed (version ${HARNESS_VER})"
         else
