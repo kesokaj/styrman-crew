@@ -1,7 +1,9 @@
 // Package gitrepo makes git the substrate of every project workspace (R13):
 // it ensures the working tree is a git repository at creation and re-creates
-// one if it ever goes missing. Automatic checkpoints were removed (ADR-035;
-// backups are microVM volume snapshots) and the interactive git client now
+// one if it ever goes missing. Automatic checkpoints were removed (ADR-035)
+// — git history IS the durability story (operator decision 2026-09-01:
+// no backup layer at all; work that matters gets committed and pushed).
+// The interactive git client now
 // runs INSIDE the guest VM (internal/httpapi/git.go), so nothing here reads a
 // diff/status or writes a commit against the guest-controlled tree from the
 // host — that host-side path was a guest→server code-execution vector.

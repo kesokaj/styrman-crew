@@ -20,7 +20,10 @@ export function DeleteProjectDialog({
   onDeleted: () => void;
 }) {
   const [typed, setTyped] = useState("");
-  const [wipe, setWipe] = useState(true);
+  // Default OFF: since the backup feature (and its pre-wipe safety snapshot)
+  // was removed (2026-09-01), a wipe is plainly irreversible — permanent
+  // destruction must be opted into, never the default.
+  const [wipe, setWipe] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const armed = typed.trim().toLowerCase() === "delete";

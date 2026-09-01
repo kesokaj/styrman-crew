@@ -918,18 +918,6 @@ func (o *Orchestrator) stopIfIdle(ctx context.Context, user, project string, idl
 	return o.stopLocked(ctx, project)
 }
 
-// WithProjectLock runs fn while holding the per-project lifecycle lock — the
-// same lock EnsureRunning/Stop/stopIfIdle/Destroy serialize on. Restore uses
-// it so a boot can never virtiofs-mount the home while the tree is being
-// quarantined/extracted (audit 2026-08-30: the restoring flag alone was a
-// TOCTOU — a boot that had already passed the flag check could interleave).
-func (o *Orchestrator) WithProjectLock(user, project string, fn func() error) error {
-	l := o.lockProject(key(user, project))
-	l.Lock()
-	defer l.Unlock()
-	return fn()
-}
-
 // invalidateSelfAttach drops the self-attach memo for the project owning a
 // bridge; the prefix inversion lives in config (single source of truth,
 // 2026-08-30 audit). No-op for system-VM bridges (never memoized).
@@ -942,7 +930,7 @@ func (o *Orchestrator) invalidateSelfAttach(netName string) {
 // rootOpAllowed confines the root-assisted file ops to server state: StateDir
 // plus HomesDir, which is independently configurable (STYRMAN_HOMES_DIR) and
 // need not sit under StateDir (audit: the StateDir-only guard fail-closed
-// refused restores/wipes on such deployments).
+// refused wipes on such deployments).
 func (o *Orchestrator) rootOpAllowed(p string) bool {
 	clean := filepath.Clean(p)
 	for _, root := range []string{o.cfg.StateDir, o.cfg.HomesDir} {
@@ -979,35 +967,6 @@ func (o *Orchestrator) RootRemoveContents(ctx context.Context, dir string) error
 	}
 	if code != 0 {
 		return fmt.Errorf("root remove exited %d: %s", code, strings.TrimSpace(out))
-	}
-	return nil
-}
-
-// RootRename moves from → to as root inside the server's own container.
-// Renaming a DIRECTORY into a different parent rewrites its ".." entry, which
-// requires write permission ON THE DIRECTORY ITSELF — impossible for the
-// unprivileged server when the entry is root-owned (dockerd mount stubs, or
-// files the guest created via sudo, which virtiofs maps to host root). Same
-// guard as RootRemoveContents: both paths must live under StateDir.
-func (o *Orchestrator) RootRename(ctx context.Context, from, to string) error {
-	if o.cfg.SelfContainer == "" {
-		return fmt.Errorf("root rename unavailable outside the containerized server")
-	}
-	cf, ct := filepath.Clean(from), filepath.Clean(to)
-	if !o.rootOpAllowed(cf) || !o.rootOpAllowed(ct) {
-		return fmt.Errorf("root rename refused outside the state/homes dirs")
-	}
-	rctx, cancel := context.WithTimeout(ctx, time.Minute)
-	defer cancel()
-	code, out, err := o.Exec(rctx, o.cfg.SelfContainer, ExecSpec{
-		User: "0",
-		Cmd:  []string{"mv", "-T", cf, ct},
-	})
-	if err != nil {
-		return err
-	}
-	if code != 0 {
-		return fmt.Errorf("root rename exited %d: %s", code, strings.TrimSpace(out))
 	}
 	return nil
 }

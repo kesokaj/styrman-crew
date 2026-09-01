@@ -1,7 +1,0 @@
-[Unit]
-Description=styrman whole-state restic backup to GCS
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/styrman-host-backup
-Nice=10
-IOSchedulingClass=idle

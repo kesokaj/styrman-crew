@@ -707,104 +707,6 @@ function CredViewer({
   );
 }
 
-/**
- * Every backup the user owns (ADR-044): created from a project's sidebar menu
- * (Backup), listed here for restore/delete. A backup survives its project's
- * deletion — it stays restorable into a NEW project ("From backup" in the
- * create dialog). Restore-in-place requires the project stopped.
- */
-function BackupsSection() {
-  const { data, refresh } = usePolled(() => api.listAllBackups(), 30000);
-  const { data: projData, refresh: refreshProjects } = useProjects();
-  const [busy, setBusy] = useState<string | null>(null);
-  const backups = data?.backups ?? [];
-  const projects = projData?.projects ?? [];
-  const projectOf = (id: string) => projects.find((p) => p.id === id);
-
-  const fmtSize = (b: number) => `${(b / 1024 / 1024).toFixed(1)} MB`;
-  const fmtDate = (iso: string) => new Date(iso).toLocaleString();
-
-  const restore = (b: (typeof backups)[number]) =>
-    tryUI(async () => {
-      setBusy(b.id);
-      try {
-        await api.restoreBackup(b.projectId, b.id);
-        toast("success", `Restored ${b.projectName} from ${fmtDate(b.createdAt)}`);
-        refreshProjects();
-      } finally {
-        setBusy(null);
-      }
-    });
-
-  return (
-    <Section title="Backups">
-      <Row label="How it works">
-        <span className="text-text-dim">
-          Create a backup from a project's sidebar menu (⋯ → Backup): workspace
-          + project home, docker disk excluded. Restore replaces the project's
-          current files — stop the project first. A deleted project's backups
-          stay here and can seed a new project ("From backup" when creating).
-        </span>
-      </Row>
-      <Row label={`Backups${backups.length ? ` (${backups.length})` : ""}`}>
-        {backups.length === 0 ? (
-          <span className="text-text-dim">none yet</span>
-        ) : (
-          <div className="flex flex-col gap-1 py-1">
-            {backups.map((b) => {
-              const proj = projectOf(b.projectId);
-              const running = proj?.state === "running";
-              return (
-                <div key={b.projectId + b.id} className="group flex items-center gap-2">
-                  <span className="w-28 shrink-0 truncate font-medium">
-                    {proj?.name ?? b.projectName}
-                    {!proj && (
-                      <span className="ml-1 text-[10px] text-text-dim">
-                        (deleted)
-                      </span>
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-dim">
-                    {fmtDate(b.createdAt)} · {fmtSize(b.sizeBytes)}
-                  </span>
-                  {proj && (
-                    <button
-                      onClick={() => restore(b)}
-                      // ALL restore buttons lock while one runs (audit
-                      // 2026-08-30): a second concurrent restore raced the
-                      // first's quarantine (the server now 409s it too).
-                      disabled={busy !== null || running}
-                      title={
-                        running
-                          ? "Stop the project first"
-                          : "Replace the project's files with this backup"
-                      }
-                      className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium text-accent hover:bg-bg disabled:opacity-40"
-                    >
-                      {busy === b.id ? "restoring…" : "restore"}
-                    </button>
-                  )}
-                  <button
-                    onClick={() =>
-                      tryUI(async () => {
-                        await api.deleteBackup(b.projectId, b.id);
-                        refresh();
-                      })
-                    }
-                    className="shrink-0 text-[10px] text-text-dim opacity-0 hover:text-danger group-hover:opacity-100"
-                  >
-                    remove
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Row>
-    </Section>
-  );
-}
-
 function SettingsPage() {
   const navigate = useNavigate();
   const { data, refresh, error } = usePolled(() => api.settings(), 15000);
@@ -863,8 +765,6 @@ function SettingsPage() {
         </Section>
 
         <CredentialsSection />
-
-        <BackupsSection />
 
         <Section title="Appearance">
           <Row label="Theme">

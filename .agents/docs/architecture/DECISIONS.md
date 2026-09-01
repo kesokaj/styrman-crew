@@ -2110,3 +2110,110 @@ deploy/caddy/ingress/watcher_test.go.
 Verification: .agents/docs/changes/2026-09-01-redfix-hardening-and-versioning.md,
 .agents/docs/reviews/2026-09-01-review-redfix-round2.md (round 3, mutation-proven),
 .agents/docs/testing/2026-09-01-verify-redfix-round2.md.
+
+---
+
+## ADR-055: No backup layer of any kind — durability is git (2026-09-01)
+
+**Context.** Operator decision, same evening: "No backup at all. If a user
+needs backup they should commit to git." R13 (as amended 2026-08-30) had
+mandated two layers — ADR-044's per-project in-app archive/restore and a
+planned restic→GCS whole-state DR layer — and the platform is still
+prototyping. The same-day state-loss incident
+(`.agents/docs/changes/2026-09-01-incident-state-loss.md`) sharpened the
+call: the DR layer's own credentials (`/etc/styrman/{backup-sa.json,
+restic-pw}`) lived only under `/etc/styrman`, so when that directory was
+deleted alongside `/var/lib/styrman`, the backup meant to protect the data
+shared its fate with the data — the only reason the GCS snapshot stayed
+recoverable in principle was an out-of-band copy of the restic password in
+the operator's password manager, not anything the DR layer itself
+guaranteed.
+
+**Decision.** Both ADR-044 layers are removed, in-app and host: the
+`internal/backup` package, its five `/api` routes, `FromBackup`
+project-seeding, the backup cadence goroutine, the config knobs, and every
+UI surface (Sidebar action, Settings section, New-project option); and
+`deploy/backup/*` plus host-setup's restic install/unit/provisioning step.
+A host is rebuilt from `deploy/host-setup.sh` plus the repo, not restored
+from a snapshot. Wipe-delete is now plainly irreversible — the safety
+snapshot it used to take before destroying a project's files is gone, so
+the `DeleteProjectDialog` wipe checkbox defaults **unchecked** rather than
+pre-checked, making the destructive path opt-in. This supersedes ADR-044
+outright and amends R13's backup mandate, with the operator's approval
+recorded in the same commit as the code change (REQUIREMENTS.md changes
+require explicit approval on record; the reviewer treated shipping code
+against the old R13 text as a blocking violation until the amendment
+landed).
+
+**Consequences.** The only durability guarantee left is git — commit and
+push. Two things fall out of this that are NOT code follow-ups but operator
+actions: the orphaned archive directory `/var/lib/styrman/backups/` (found
+live by security review — unencrypted tar.gz files containing per-project
+homes, i.e. materialized ssh keys, gcloud ADC and agent tokens, now
+unreachable by any code path) needs shredding on the host, and the GCS
+bucket + its service account need deleting in the GCP project — neither of
+which any agent performs (`/var/lib/styrman` is off-limits per ADR-052, and
+no `gcloud` runs on this host). The "create project from backup" seeding
+path is gone entirely, not replaced.
+
+Source: internal/orchestrator/orchestrator.go, internal/httpapi/
+credharvest.go, deploy/host-setup.sh, REQUIREMENTS.md (R13),
+web/src/components/DeleteProjectDialog.tsx.
+Verification: .agents/docs/changes/2026-09-01-remove-backups-and-token-auth.md,
+.agents/docs/reviews/2026-09-01-review-no-backups.md,
+.agents/docs/reviews/2026-09-01-security-no-backups.md,
+.agents/docs/testing/2026-09-01-verify-no-backups.md.
+
+---
+
+## ADR-056: Auto-updater authenticates with a fine-grained GitHub token, not an SSH deploy key (2026-09-01)
+
+**Context.** Operator decision, same evening: "the host should not have a
+key." ADR-051 hardened the SSH deploy-key path (host-key pinning, signed-tag
+verification) but never questioned the key's presence itself — and that
+path had already cost two TOFU (trust-on-first-use) incidents in the same
+day's review cycles (ADR-051's own correction paragraph records one; the
+other was `host-setup.sh` re-introducing `accept-new` at provisioning time
+after the fetch-time TOFU was closed). A private key that lives on the host
+forever is a standing liability independent of how carefully the fetch that
+uses it is pinned.
+
+**Decision.** The updater's git auth is now a fine-grained GitHub token,
+scoped to this one repository at `Contents: Read-only`, stored at
+`/etc/styrman/gh-token` (root-owned, mode `600` asserted before every use,
+refused otherwise). The origin is HTTPS, replacing the pinned-`known_hosts`
+SSH trust anchor with TLS's public CA set. A URL-scoped, per-invocation git
+credential helper answers only for `github.com` (an unscoped form was shown
+in review to hand the token to a probe for any host); the token's file path
+is passed via the helper's own exported environment rather than
+interpolated into the git-evaluated string; inherited credential helpers
+are always cleared, with or without a token file present; and
+`GIT_TERMINAL_PROMPT=0` turns a missing or expired token into a loud,
+immediate failure rather than a hang — fine-grained tokens expire by design,
+and that expiry is treated as a feature (forces rotation) rather than
+worked around.
+
+**Consequences, stated honestly.** A bearer token has no possession
+binding: reading `/etc/styrman/gh-token` once yields full repo-read from
+any machine on the internet, with no host-key, client-certificate, or IP
+anchor requiring the attacker to also reach GitHub over the original
+channel — an SSH private key at least required that. Accepted as a
+roughly-neutral trade, tilting positive: both mechanisms are repo-scoped
+and read-only, the token expires and is one-click revocable with an audit
+trail from the GitHub UI (an SSH key is neither), and the SSH path's own
+TOFU history in this project outweighs the possession-binding loss. This
+revises ADR-051's *prerequisites* (the transport and trust anchor the
+updater's `git fetch` relies on) — ADR-051's signed-tag requirement
+(`git verify-tag` against a pinned SSH allowed-signers file, checked before
+every checkout including rollback) is unchanged and remains the control
+that actually gates what gets built and run as root. On the live host: the
+deploy key was revoked, its key files and `known_hosts` deleted, and
+`/opt/styrman` re-pointed at the HTTPS origin — the 5-minute update timer
+now fails loudly at every fetch until the operator mints and installs the
+token, which is deliberate, not a regression.
+
+Source: deploy/update/styrman-update, deploy/host-setup.sh (step 8c).
+Verification: .agents/docs/changes/2026-09-01-remove-backups-and-token-auth.md,
+.agents/docs/reviews/2026-09-01-review-no-backups.md,
+.agents/docs/reviews/2026-09-01-security-no-backups.md,
+.agents/docs/testing/2026-09-01-verify-no-backups.md.

@@ -95,7 +95,6 @@ func main() {
 	go transcriptJanitor(ctx, cfg, logger)
 
 	api := httpapi.New(cfg, users, orch, logger)
-	go api.RunBackupCadence(ctx) // automatic per-project backups (ADR-044 layer 2)
 
 	// Credential broker (ADR-030): a bridge-only, credential-only listener,
 	// separate from the ingress-gated main API. Never published to the host.
@@ -299,8 +298,8 @@ func forEachProject(cfg *config.Config, logger *slog.Logger, fn func(user string
 }
 
 // ensureRepos upholds the R13 invariant on every boot: any project
-// workspace without a git repository (pre-R13 projects, or dirs restored
-// from backup) gets one initialized in place. Never touches existing repos.
+// workspace without a git repository (pre-R13 projects) gets one
+// initialized in place. Never touches existing repos.
 func ensureRepos(cfg *config.Config, logger *slog.Logger) {
 	// A boot sweep must not hang forever on a wedged git — bound the whole pass.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)

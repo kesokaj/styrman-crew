@@ -177,15 +177,6 @@ export interface CredItem {
 /** Per-tool result of an import-from-project pass. */
 export type CredImportReport = Record<string, string>;
 
-/** One per-project backup archive (ADR-044). */
-export interface BackupMeta {
-  id: string;
-  projectId: string;
-  projectName: string;
-  createdAt: string;
-  sizeBytes: number;
-}
-
 export interface SetupStatus {
   gitIdentity: boolean; // required
   sshKey: boolean; // required
@@ -305,9 +296,6 @@ export const api = {
     opts: {
       github?: "none" | "private" | "public";
       cloneUrl?: string;
-      // Seed workspace + home + project env vars from an existing backup
-      // (mutually exclusive with cloneUrl/github).
-      fromBackup?: { project: string; id: string };
     } = {},
   ) =>
     request<Project>("/api/projects", {
@@ -316,12 +304,7 @@ export const api = {
         name,
         github: opts.github ?? "none",
         cloneUrl: opts.cloneUrl ?? "",
-        fromBackup: opts.fromBackup,
       }),
-      // The 201 is fast for plain creates, but a fromBackup create extracts
-      // the whole archive inline first — don't let the default 20 s abort
-      // recreate the "project exists but dialog shows failure" dead-end.
-      signal: AbortSignal.timeout(600000),
     }),
   getProject: (id: string) => request<Project>(`/api/projects/${id}`),
   projectStats: (id: string) =>
@@ -570,30 +553,6 @@ export const api = {
     request<{ content?: string; path?: string; binary?: boolean }>(
       `/api/settings/credentials/${kind}/${encodeURIComponent(id)}/content`,
     ),
-  // Per-project backups (ADR-044): workspace + home minus the docker disk.
-  // Create/restore tar whole trees SYNCHRONOUSLY server-side — same failure
-  // mode as start/stop above: the default 20 s abort reported failures for
-  // operations that then completed (2026-08-30 audit), so both get a long
-  // leash. (GET /api/projects/{id}/backups exists server-side but has no
-  // client caller — the UI lists via listAllBackups.)
-  createBackup: (project: string) =>
-    request<BackupMeta>(`/api/projects/${project}/backups`, {
-      method: "POST",
-      signal: AbortSignal.timeout(600000),
-    }),
-  listAllBackups: () =>
-    request<{ backups: BackupMeta[] }>("/api/settings/backups"),
-  // Under /api/settings: a backup may outlive its project (still restorable
-  // into a new one), so deleting must not require the project record.
-  deleteBackup: (project: string, id: string) =>
-    request<void>(`/api/settings/backups/${project}/${id}`, {
-      method: "DELETE",
-    }),
-  restoreBackup: (project: string, id: string) =>
-    request<void>(`/api/projects/${project}/backups/${id}/restore`, {
-      method: "POST",
-      signal: AbortSignal.timeout(600000),
-    }),
   // Project-scoped env variables (SidePanel Env tab) — delivered only to this
   // project's NEW login shells; a project value wins over a same-named global.
   projectEnv: (project: string) =>

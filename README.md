@@ -93,12 +93,13 @@ stores — a restart or reboot recovers everything by adoption.
 
 **v1.14.1**, deployed: https://crew.styrman.xyz (Google sign-in).
 
-- Current release: the 2026-08-30 marathon — automated backups on BOTH
-  layers (in-app cadence + retention + pre-wipe safety net, and daily
-  whole-state restic→GCS), an ops row + microVM logs on the dashboard,
-  sidebar git badges, project-scoped env vars, sticky stop with a
-  busy-aware idle reaper, per-project backup/restore/clone (ADR-042…045) —
-  followed by a same-day adversarial review with every finding fixed.
+- The 2026-08-30 marathon shipped an ops row + microVM logs on the
+  dashboard, sidebar git badges, project-scoped env vars, and a sticky stop
+  with a busy-aware idle reaper (ADR-042…045), followed by a same-day
+  adversarial review with every finding fixed. It also shipped a two-layer
+  backup feature that has since been **removed entirely** (operator
+  decision 2026-09-01): there is no backup layer of any kind — durability
+  is git, commit and push. A wipe-delete is irreversible.
 - Verified per release by four suites (unit+race, integration against real
   Kata, Playwright e2e, live post-deploy battery) — counts and how to run
   them: `.agents/docs/testing/styrman/README.md`.
@@ -119,8 +120,8 @@ stores — a restart or reboot recovers everything by adoption.
 ## Quick start
 
 ```bash
-# 1. Host: Docker + Kata "mvm", firewall + backup + auto-update systemd
-#    units, seeds deploy/.env with generated identity + secrets (idempotent).
+# 1. Host: Docker + Kata "mvm", firewall + auto-update systemd units,
+#    seeds deploy/.env with generated identity + secrets (idempotent).
 #    Also builds the runtime image at the newest release tag —
 #    styrman-runtime:<X.Y.Z>, the exact tag a same-version compose deploy
 #    boots (no mutable tags, operator rule; see versioning.md below):

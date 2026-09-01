@@ -13,9 +13,9 @@ STYRMAN_VERSION=<x.y.z> docker compose up -d --build
 ```
 
 Full walkthrough: `../.agents/docs/specs/styrman/deploy.md` (including the
-credential broker's bridge-only listener and what to back up).
-
-`backup/` — the host-layer restic→GCS disaster-recovery kit: `styrman-host-backup` (run by the `styrman-backup.service`/`.timer` units, daily 03:00 + up to 15m; installed and enabled by `host-setup.sh` once the secrets exist). Runbook: `../.agents/docs/specs/styrman/deploy.md` → Host-layer backups / Restore on a new host.
+credential broker's bridge-only listener). There is no backup layer —
+durability is git: commit and push, and rebuild a lost host from this
+script + the repo.
 
 `update/` — the tag-gated auto-updater (ADR-050/051): `styrman-update` +
 `.service`/`.timer` units, installed by `host-setup.sh` step 8c but shipped

@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { api, projectNameError, tryUI, type Project } from "../lib/api";
 import { firstTerminalId, useProjects } from "../lib/projects";
-import { toast } from "../lib/toast";
 import {
   useMediaQuery,
   usePolled,
@@ -114,7 +113,7 @@ export function Sidebar({
 
   const projectAction = (
     p: Project,
-    action: "stop" | "start" | "delete" | "rename" | "backup",
+    action: "stop" | "start" | "delete" | "rename",
   ) =>
     tryUI(async () => {
       setMenuFor(null);
@@ -124,16 +123,6 @@ export function Sidebar({
       }
       if (action === "delete") {
         setDeleting(p);
-        return;
-      }
-      if (action === "backup") {
-        // Workspace + home, minus the docker disk (ADR-044). Fine while
-        // running (crash-consistent). Restore lives in Settings → Backups.
-        const m = await api.createBackup(p.id);
-        toast(
-          "success",
-          `Backup created (${(m.sizeBytes / 1024 / 1024).toFixed(1)} MB) — restore from Settings → Backups`,
-        );
         return;
       }
       // Stop takes 10–40 s server-side (graceful guest shutdown before the
@@ -343,13 +332,6 @@ export function Sidebar({
                     Start
                   </button>
                 )}
-                <button
-                  className="flex-1 rounded-md px-2 py-1 hover:bg-bg-hover"
-                  onClick={() => projectAction(p, "backup")}
-                  title="Snapshot workspace + home (docker disk excluded); restore from Settings → Backups"
-                >
-                  Backup
-                </button>
                 <button
                   className="flex-1 rounded-md px-2 py-1 hover:bg-bg-hover"
                   onClick={() => projectAction(p, "rename")}

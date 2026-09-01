@@ -107,10 +107,6 @@ Add new items below as they arise.
 - [ ] 🟡 `STYRMAN_RUNTIME` unvalidated while escape-capable caps are
   granted (`internal/orchestrator/orchestrator.go:759`). (2026-09-01
   whole-project audit)
-- [ ] 🟡 DR backup script's comment says `GOOGLE_PROJECT`, code exports
-  `GOOGLE_PROJECT_ID`; a fresh host silently targets the original
-  deployment's bucket (`deploy/backup/styrman-host-backup:17`).
-  (2026-09-01 whole-project audit)
 - [ ] 🟡 `formatInPlace` has no test coverage, unlike its analog
   `checkerFor`. (2026-09-01 whole-project audit)
 - [ ] 🟡 Add `deploy/caddy/ingress` to `/preflight`'s verification — no
@@ -121,12 +117,6 @@ Add new items below as they arise.
   `internal/identity` untested despite owning the tenancy key;
   `orchestrator` 3.0%; `terminal` 8.5%. (2026-09-01 whole-project audit)
 
-- [ ] 🔴 Re-provision `/etc/styrman/backup-sa.json` (GCS service-account
-  key) and `/etc/styrman/restic-pw` (restic repo password) — both were
-  deleted in the 2026-09-01 state-loss incident. The daily 03:00
-  `styrman-backup.timer` fails until this is done. GCS bucket contents
-  are unharmed. (operator action; incident:
-  `.agents/docs/changes/2026-09-01-incident-state-loss.md`)
 - [ ] 🟡 Caddy base images pinned by tag only, not digest, and the
   builder's own Go toolchain is unasserted (`deploy/caddy/Dockerfile`) —
   `caddy:2.11.4-builder`/`caddy:2.11.4` still float upstream, so
@@ -150,3 +140,31 @@ Add new items below as they arise.
   ever reused elsewhere. (`deploy/caddy/ingress/generator.go`,
   `loopback.go`; `.agents/docs/reviews/2026-09-01-review-redfix.md`,
   `.agents/docs/reviews/2026-09-01-security-redfix.md`)
+
+- [ ] Editor/file-explorer UX pass (operator, 2026-09-01: "just some
+  optimisation" — current behavior works fine, this is polish, not a fix).
+  Highlight the currently-open file in the file explorer; show the open
+  file's name at the top of the editor pane; a recent-files affordance; and
+  a per-project "open until closed" notion for a file (it stays the active
+  file across navigation until the user explicitly closes it, rather than
+  being tied to whatever is currently selected in the explorer). NEXT
+  planned change set, not scoped or estimated yet.
+- [ ] 🟢 Bearer-token possession-binding trade, accepted risk recorded in
+  ADR-056: `/etc/styrman/gh-token` grants full repo-read from any machine
+  that reads it once, with no host-key/client-cert/IP anchor the way the
+  SSH deploy key it replaced had. Accepted (expiry + one-click GitHub-side
+  revocation outweigh it for a repo-scoped read-only credential) — listed
+  here so the trade isn't only visible inside the ADR. (security review
+  2026-09-01, `.agents/docs/reviews/2026-09-01-security-no-backups.md`)
+- [ ] 🟡 Operator actions from the no-backups/token-auth change, not yet
+  done by anyone: (1) mint the fine-grained GitHub token (this repo only,
+  Contents: Read-only) and install it at `/etc/styrman/gh-token`
+  (root:root, `600`) — the updater fails loudly at every fetch until this
+  is done, by design; (2) delete the GCS bucket
+  `styrman-crew-backups-driven-eft-h4it` and its backup service account in
+  project `driven-eft-h4it` (no `gcloud` on this host — operator-run); (3)
+  shred `/var/lib/styrman/backups/` on the host — an orphaned, unencrypted
+  archive containing at least one project's home (ssh keys, gcloud ADC,
+  claude/agy tokens) with no code path left to list or delete it; no agent
+  touches `/var/lib/styrman` (ADR-052).
+  (`.agents/docs/changes/2026-09-01-remove-backups-and-token-auth.md`)

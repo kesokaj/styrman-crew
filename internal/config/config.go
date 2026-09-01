@@ -93,11 +93,6 @@ type Config struct {
 	// janitor (0 = keep forever). Transcripts live in each per-project home
 	// (~/.styrman/logs, ADR-017) and grew unbounded before v1.14.0.
 	TranscriptTTL time.Duration
-	// backupCadence: automatic per-project backup interval (0 = off);
-	// backupKeep: newest archives kept per project (manual + automatic share
-	// the pool; 0 = unlimited). ADR-044 layer 2, v1.14.0.
-	backupCadence time.Duration
-	backupKeep    int
 
 	// BrokerAddr: the credential broker's listener (ADR-030). Bound on all
 	// interfaces so projects reach it on their own bridge; NOT published to
@@ -146,8 +141,6 @@ func Load() (*Config, error) {
 		// blocks the stop regardless of this timer (stopIfIdle's busy probe).
 		idleTimeout:   envDurationOr("STYRMAN_IDLE_TIMEOUT", 8*time.Hour),
 		TranscriptTTL: envDurationOr("STYRMAN_TRANSCRIPT_TTL", 30*24*time.Hour),
-		backupCadence: envDurationOr("STYRMAN_BACKUP_CADENCE", 24*time.Hour),
-		backupKeep:    envIntOr("STYRMAN_BACKUP_KEEP", 5),
 		BrokerAddr:    envOr("STYRMAN_BROKER_ADDR", ":8091"),
 		AuthMode:      envOr("STYRMAN_AUTH", "none"),
 		DevAddr:       os.Getenv("STYRMAN_DEV_ADDR"),
@@ -269,12 +262,6 @@ func (c *Config) IdleTimeoutD() time.Duration {
 	return c.idleTimeout
 }
 
-// BackupCadence is the automatic per-project backup interval (0 = off).
-func (c *Config) BackupCadence() time.Duration { return c.backupCadence }
-
-// BackupKeep is how many newest archives are kept per project (0 = all).
-func (c *Config) BackupKeep() int { return c.backupKeep }
-
 // SetOperator validates, persists, then applies the tunable settings —
 // persist FIRST, so a write failure never leaves live state diverged from
 // what the next restart will load. diskGB 0 / idle < 0 mean "keep".
@@ -368,17 +355,6 @@ func (c *Config) LegacyWorkspaceExists(user, projectDir string) bool {
 // itself cannot be redirected by a guest symlink; contents are guest-written.
 func (c *Config) ProjectWorkspace(user, projectID string) string {
 	return filepath.Join(c.StateDir, "projects", user, projectID)
-}
-
-// ProjectBackups is where one project's backup archives live (ADR-044):
-// server-controlled, never mounted into any guest.
-func (c *Config) ProjectBackups(user, projectID string) string {
-	return filepath.Join(c.StateDir, "backups", user, projectID)
-}
-
-// UserBackups is the per-user backups root (parent of every ProjectBackups).
-func (c *Config) UserBackups(user string) string {
-	return filepath.Join(c.StateDir, "backups", user)
 }
 
 // UserStateDir returns where a user's metadata stores live.

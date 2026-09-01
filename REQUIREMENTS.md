@@ -82,10 +82,12 @@
     missing. Git powers the diff view and the git side panel — a real in-guest
     client (status / stage / unstage / discard / commit / push, correct author
     identity + broker push auth). Automatic checkpoints under
-    `refs/styrman/checkpoints/*` were REMOVED 2026-08-29 (ADR-035); durable
-    backup is two layers (operator directive 2026-08-30): per-project
-    user-triggered backup/restore in-app (workspace + home tar.gz, ADR-044,
-    shipped v1.13.0) and whole-state volume snapshots (host infra, planned).
+    `refs/styrman/checkpoints/*` were REMOVED 2026-08-29 (ADR-035). Durability
+    IS git (operator directive 2026-09-01, superseding the 2026-08-30
+    two-layer backup directive): work that matters gets committed and pushed.
+    There is NO backup layer of any kind — the in-app backup/restore feature
+    (ADR-044) and the restic→GCS host DR layer were both removed (ADR-055),
+    and a wipe-delete is irreversible.
 
 ## Constraints
 

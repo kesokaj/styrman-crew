@@ -133,22 +133,41 @@ cd "${DEPLOY_DIR}"
 # root-owned 0644 leaks STYRMAN_INGRESS_TOKEN / STYRMAN_ALLOWED_EMAILS.
 [ -z "$(find "${DEPLOY_DIR}/deploy/.env" -perm /077 2>/dev/null)" ] \
     || fail "${DEPLOY_DIR}/deploy/.env is readable or writable beyond root (chmod 600 it) — it holds the ingress token"
-git() { command git -c safe.directory="${DEPLOY_DIR}" "$@"; }
-
-# The repo is PRIVATE and this runs as root, which has no SSH agent and no key
-# of its own. A read-only deploy key at /etc/styrman/deploy-key is how root
-# fetches; without it `git fetch` fails and the updater would quietly run on
-# stale local tags forever (review finding: the clone/fetch failed with a
-# single WARN in a long log).
-# StrictHostKeyChecking=yes with a PINNED known_hosts, not accept-new: this is
-# a root fetch whose output is built and run as root, so a first-contact TOFU
-# window would let an attacker pin their own host key permanently (security
-# review). The operator seeds /etc/styrman/known_hosts from the forge's
-# PUBLISHED fingerprints — host-setup.sh prints the commands and deliberately
-# does NOT auto-seed it, because ssh-keyscan is itself unauthenticated TOFU.
-if [ -f /etc/styrman/deploy-key ]; then
-    export GIT_SSH_COMMAND="ssh -i /etc/styrman/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/styrman/known_hosts"
+# The repo is PRIVATE and this runs as root. Auth is a FINE-GRAINED GitHub
+# token (operator decision 2026-09-01: the host holds NO SSH key) — scoped to
+# this ONE repository with Contents: Read-only, stored root-only at
+# /etc/styrman/gh-token, fed to git over HTTPS via an inline credential
+# helper. Never in the remote URL: a URL-embedded token lands in .git/config
+# and every process listing. TLS to github.com replaces the SSH known_hosts
+# trust anchor the old deploy-key path needed. GIT_TERMINAL_PROMPT=0 makes a
+# missing/expired token FAIL FAST instead of hanging on a credential prompt —
+# fine-grained tokens expire, and "cannot see new versions" must be loud
+# (review finding: a fetch failure was once a single WARN in a long log).
+export GIT_TERMINAL_PROMPT=0
+GH_TOKEN_FILE="${STYRMAN_GH_TOKEN_FILE:-/etc/styrman/gh-token}"
+# Exported so the helper below reads it from its OWN environment — the path is
+# never interpolated into the git-evaluated shell string (security review: an
+# unquoted interpolation made a path with spaces yield an empty password, and
+# operator-env paths are a root shell-injection surface).
+export GH_TOKEN_FILE
+# ALWAYS clear inherited credential helpers — with or without a token file —
+# so an ambient root credential store can never silently answer for a fetch
+# whose output is built and run as root (security review).
+GIT_CRED_ARGS=(-c credential.helper=)
+if [ -f "${GH_TOKEN_FILE}" ]; then
+    # Same trust bar as every other root input this script reads.
+    [ "$(stat -c %u "${GH_TOKEN_FILE}")" = "0" ] \
+        || fail "${GH_TOKEN_FILE} is not root-owned — refusing to authenticate with a token another user controls"
+    [ -z "$(find "${GH_TOKEN_FILE}" -perm /077 2>/dev/null)" ] \
+        || fail "${GH_TOKEN_FILE} is readable or writable beyond root (chmod 600 it)"
+    # URL-SCOPED to https://github.com (security review, verified: an
+    # unscoped helper hands the token to a probe for ANY host; the scoped
+    # form fails closed elsewhere). Single-quoted: nothing expands here —
+    # the helper resolves "$GH_TOKEN_FILE" from the exported env at run time.
+    # shellcheck disable=SC2016
+    GIT_CRED_ARGS+=(-c 'credential.https://github.com.helper=!f() { echo username=x-access-token; printf "password=%s\n" "$(cat "${GH_TOKEN_FILE}")"; }; f')
 fi
+git() { command git -c safe.directory="${DEPLOY_DIR}" "${GIT_CRED_ARGS[@]}" "$@"; }
 
 # ─── Find the newest STABLE tag ─────────────────────────────────────────────
 # --force so a re-tagged release is picked up; --prune-tags so a DELETED tag
@@ -157,7 +176,7 @@ fi
 # Fail LOUDLY on a fetch error rather than silently deploying from stale local
 # tags: "no new version" and "cannot see new versions" must not look identical.
 if ! git fetch --tags --force --prune --prune-tags origin 2>&1; then
-    fail "git fetch failed — root cannot reach ${DEPLOY_DIR}'s origin. For a private repo install a read-only deploy key at /etc/styrman/deploy-key (chmod 600)."
+    fail "git fetch failed — root cannot reach ${DEPLOY_DIR}'s origin. For a private repo: mint a FINE-GRAINED GitHub token (this repo only, Contents: Read-only) and install it at ${GH_TOKEN_FILE} (root:root, chmod 600); the origin must be an https:// URL. Expired token? Fine-grained tokens have an expiry — mint a fresh one."
 fi
 
 # STRICTLY vX.Y.Z. Pre-releases (v1.16.0-rc1, -beta) are excluded by the

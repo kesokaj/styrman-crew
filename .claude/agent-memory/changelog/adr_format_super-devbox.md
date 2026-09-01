@@ -111,6 +111,21 @@ old ADR is wrong (e.g. ADR-032a's broker-tier shape stayed valid; only its
 agy-storage assumption was wrong), rather than declaring the whole prior
 ADR dead when it isn't.
 
+**Update (2026-09-01, later still): now at ADR-056.** Two more same-day
+ADRs (ADR-055 "no backup layer of any kind", ADR-056 "updater auth is a
+GitHub token, not an SSH key") for the operator's evening "no backup at
+all" / "host should not have a key" directives — both genuinely NEW
+decisions (different topic, same day as ADR-053/054), not same-day
+corrections, so they got new sequential numbers per the default rule, not
+appended in-place. Useful cross-check discovered here: REQUIREMENTS.md's
+R13 had already been amended (by the same task's code-side work) to cite
+"ADR-055" by number *before* this ADR existed — i.e. the changelog/ADR
+author and the code-diff author agreed on the next-free number in advance.
+Always still verify by reading the file's actual tail before appending
+(the R13 citation could in principle have been wrong), but a forward
+reference like this in REQUIREMENTS.md or a comment is a strong corroborating
+signal, not just the file's last heading.
+
 **Revision as of 2026-09-01 (this repo, now called styrman-crew — same
 DECISIONS.md, ADR count has climbed to ADR-051+): the SAME-DAY-correction
 case is the one exception to "new ADR" above, and it is now the observed

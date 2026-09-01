@@ -185,6 +185,25 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// tryAcquire is a compare-and-set on one of the in-flight maps (audit
+// 2026-08-30: a plain store let two concurrent operations both pass every
+// check and interleave). Lives here since the credential push became its
+// only caller (the backup feature, the other user, was removed 2026-09-01).
+func (s *Server) tryAcquire(m map[string]bool, user, projectID string) (release func(), ok bool) {
+	key := user + "/" + projectID
+	s.deletingMu.Lock()
+	defer s.deletingMu.Unlock()
+	if m[key] {
+		return nil, false
+	}
+	m[key] = true
+	return func() {
+		s.deletingMu.Lock()
+		defer s.deletingMu.Unlock()
+		delete(m, key)
+	}, true
+}
+
 // pushCredsToRunningProjects re-materializes freshly harvested credentials
 // into every RUNNING project of the user, immediately. Mechanism: exec a
 // NO-OP LOGIN shell in each guest — /etc/profile.d's credential snippet

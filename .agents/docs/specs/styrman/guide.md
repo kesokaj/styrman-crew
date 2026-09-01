@@ -130,10 +130,10 @@ Load-bearing ideas:
    bind-mounted, guest-writable workspace, a guest→server RCE. All that
    remains host-side is a hardened `git init`/`git rev-parse`
    (`internal/gitrepo`), run with config overrides that neutralize a
-   guest-controlled `.git/config`. Backups are now two layers, both live:
-   in-app per-project archives (ADR-044, §2 below) plus a daily whole-state
-   restic→GCS snapshot of `/var/lib/styrman` (v1.14.0) — see deploy.md's
-   "Host-layer backups" section.
+   guest-controlled `.git/config`. There is no backup layer of any kind
+   (operator decision 2026-09-01, superseding the earlier two-layer backup
+   feature) — durability is git: commit and push. A wipe-delete is plainly
+   irreversible; see deploy.md's "Durability" section.
 
 ## 2. Architecture
 
@@ -216,27 +216,14 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   process isn't a plain shell (a detached build, claude still working),
   blocks the stop and resets the idle clock. Reopening a terminal boots on
   connect.
-- **Per-project backups** (v1.13.0, ADR-044): the sidebar ⋯ menu's
-  **Backup** snapshots the workspace + project home (docker disk excluded —
-  reproducible cache) into a server-side tar.gz; works while running
-  (crash-consistent). **Settings → Backups** lists them all with
-  restore/delete: restore replaces the STOPPED project's files
-  transactionally (current state is quarantined and renamed back if the
-  extraction fails — root-assisted via the server's own container where
-  dockerd stubs or guest-`sudo` files are root-owned). A deleted project's
-  backups survive and can seed a new project: **"From backup"** in the
-  create dialog clones workspace + home + the source's project env vars.
-  The archive itself does NOT contain the project-scoped env variables —
-  "From backup" copies them live from the source project's broker-side
-  store at creation time, so they only transfer while the source project
-  still exists (deleting a project wipes its scoped env set too); a
-  deleted project's backup restores workspace + home with zero scoped
-  vars. Since v1.14.0 backups are also AUTOMATIC: a cadence pass backs up
-  every project each `STYRMAN_BACKUP_CADENCE` (default 24h) keeping the
-  newest `STYRMAN_BACKUP_KEEP` (5) per project, and a wipe-delete takes
-  a pre-wipe safety backup FIRST, aborting the wipe if it fails. The
-  disaster-recovery layer is live too: daily whole-state restic
-  snapshots to GCS Stockholm (see deploy.md's Host-layer backups).
+- **There is no backup layer** (operator decision 2026-09-01, removing the
+  v1.13.0/v1.14.0 in-app + host-layer backup features entirely — code, UI,
+  and host secrets alike): "if a user needs backup they should commit to
+  git." A **wipe-delete** (`DELETE /api/projects/{id}?wipe=true`) removes
+  the workspace, home, and docker disk with no safety net and no way back —
+  the UI's "type delete to confirm" dialog is the only gate. Durability for
+  anything that matters is: commit and push. See deploy.md's "Durability"
+  section for rebuilding a lost host.
 - **Stop is sticky** (v1.11.0): the sidebar Stop button (and the idle
   reaper) marks the project deliberately stopped; open terminal tabs show
   "Project stopped" instead of auto-reconnecting — an automatic reconnect
@@ -292,9 +279,9 @@ Baremetal Debian 13 or a GCP VM with nested virtualization.
 ```bash
 git clone <repo> styrman && cd styrman
 sudo bash deploy/host-setup.sh --user $USER   # Docker, Kata "mvm", daemon cfg, dirs, the
-                                              # isolation firewall + backup + auto-update
-                                              # systemd units (auto-update installed but
-                                              # disabled until its clone+deploy-key exist,
+                                              # isolation firewall + auto-update systemd
+                                              # units (auto-update installed but disabled
+                                              # until its clone + GitHub token exist,
                                               # see deploy.md), seeds deploy/.env, and does
                                               # a one-time SMOKE-TEST build of
                                               # styrman-runtime:latest to confirm Kata can
@@ -359,9 +346,9 @@ rotated token, or a tool signed into inside a project instead of at setup).
 - **Git**: the Git tab is a real client (v1.7.0) — branch bar with Push, a
   commit-message box, "Staged"/"Changes" file lists with per-file stage/
   unstage/discard, and a colored per-file diff viewer. (Automatic
-  checkpoint snapshots were REMOVED in v1.7.0 — see §1 idea 5. Back up via
-  the sidebar ⋯ menu's **Backup** / **Settings → Backups** instead, plus the
-  host-layer disaster-recovery snapshot described in deploy.md.)
+  checkpoint snapshots were REMOVED in v1.7.0 — see §1 idea 5. There is no
+  backup feature to replace them with: durability is git — commit and
+  push. See deploy.md's "Durability" section.)
 - **Terminals**: sidebar, per project; generated friendly names; ⏸ pause /
   ✕ delete / close all; per-terminal autostart command (pencil → dialog;
   set the autostart to `claude --continue` / `agy --continue` and the
@@ -399,12 +386,11 @@ rotated token, or a tool signed into inside a project instead of at setup).
 
 | Path | What |
 |---|---|
-| `/var/lib/styrman/homes/<user>/p/<uuid>` | A project's OWN home (ADR-031): dotfiles, tool state, docker disk, transcripts — back up |
-| `/var/lib/styrman/projects/<user>/<uuid>` | Workspaces (ADR-027, per-project storage) — back up TOO: source code no longer lives in the home |
+| `/var/lib/styrman/homes/<user>/p/<uuid>` | A project's OWN home (ADR-031): dotfiles, tool state, docker disk, transcripts — nothing backs this up, see "Durability" below |
+| `/var/lib/styrman/projects/<user>/<uuid>` | Workspaces (ADR-027, per-project storage) — source code; commit and push it, nothing else preserves it |
 | `…/homes/<user>/p/<uuid>/.dockerd/<uuid>.img` | Per-project Docker disk (sparse) |
 | `…/homes/<user>/p/<uuid>/.styrman/logs/<uuid>/` | Terminal transcripts |
-| `/var/lib/styrman/credentials/<user>/` | The broker's credential store (ADR-032, 0600) — back up |
-| `/var/lib/styrman/backups/<user>/<uuid>/` | In-app per-project backup archives (ADR-044) — a DELETED project's only surviving copy; in the host-layer restic snapshot too — back up |
+| `/var/lib/styrman/credentials/<user>/` | The broker's credential store (ADR-032, 0600) — re-onboard via setup on a new host, nothing preserves this either |
 | `/var/lib/styrman/users/<user>/*.json` | Project/terminal/profile metadata |
 | `/var/lib/styrman/users.json` | Runtime-added accounts (admins are env-only) |
 | `/var/lib/styrman/links.json` | Public/private preview share-link tokens (ADR-025/026) |
@@ -417,11 +403,11 @@ UI lists it anymore — reclaim disk by removing it manually if you never
 re-import it.
 
 - **Reboots**: containers restart themselves (`unless-stopped`); the server
-  re-adopts from labels. **Disaster recovery**: see deploy.md's "Restore on
-  a new host" runbook — `host-setup.sh` seeds a FRESH `deploy/.env`, so the
-  OAuth/Cloudflare/domain secrets must be reconstructed after restoring
-  `/var/lib/styrman` from the daily restic→GCS snapshot, before bringing
-  the stack back up.
+  re-adopts from labels. **A lost host is not recoverable**: there is no
+  backup layer (operator decision 2026-09-01) — durability is git, commit
+  and push. Rebuilding a host is `host-setup.sh` + a fresh `deploy/.env`
+  (see deploy.md's "Durability" section); anything not committed to a
+  remote, and every onboarded credential, is gone with the old host.
 
 ## 5. Troubleshooting
 

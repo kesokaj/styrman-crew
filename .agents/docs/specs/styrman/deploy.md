@@ -200,100 +200,27 @@ header-auth matrix (401 no header / 403 unauthorized / 200 authorized /
 health open) against the live state dir. The remaining untested step is the
 Google OAuth handshake itself, which needs the real client + domain.
 
-## Host-layer backups (disaster recovery, v1.14.0)
+## Durability (no backup layer, operator decision 2026-09-01)
 
-Whole-state restic backup of `/var/lib/styrman` to GCS (operator decision
-2026-08-29/30; the layer ABOVE the in-app per-project backups, ADR-044):
+styrman does **not** back up anything, at either layer. The in-app
+per-project backup feature (ADR-044, v1.13.0/v1.14.0) and the host-layer
+restic→GCS disaster-recovery snapshot (v1.14.0) are both **removed
+entirely** — code, routes, UI, systemd units, and the `/etc/styrman/
+{backup-sa.json,restic-pw}` secrets they used. There is deliberately no
+replacement. The operator's reasoning: "if a user needs backup they should
+commit to git."
 
-- Bucket `gs://styrman-crew-backups-driven-eft-h4it`, **europe-north2
-  (Stockholm), Nearline**, uniform access; dedicated service account
-  `styrman-backup@…` with `objectAdmin` on that bucket only.
-- IN THE REPO (R11, v1.14.1): `deploy/backup/` holds the script + both
-  systemd units; `host-setup.sh` installs them and enables the timer once
-  the secrets below exist (else it prints provisioning instructions).
-  Non-default bucket/project: override via `/etc/styrman/backup.env`.
-- Host files (root-only): `/etc/styrman/backup-sa.json` (SA key),
-  `/etc/styrman/restic-pw` (repo password — ALSO stored in the operator's
-  password manager; without it the backups are unreadable),
-  `/usr/local/bin/styrman-host-backup` (the script),
-  `systemd` units `styrman-backup.{service,timer}` (daily 03:00 + up to 15m random delay,
-  Persistent=true).
-- Excludes: only the reproducible per-project docker disks
-  (`homes/*/p/*/.dockerd`). `StateDir/backups` — the in-app per-project
-  archives, ADR-044 — IS included (2026-08-30 reader review): a deleted
-  project's in-app archive is the ONLY surviving copy of that project, and
-  excluding it broke the "backups outlive their project" promise across a
-  host loss. Retention: 7 daily / 4 weekly / 6 monthly + prune.
-- Verified 2026-08-30: first snapshot pushed AND restored back
-  (`restic restore --include …/users` round-trip).
-
-Provisioning order (first-ever setup, or any host that isn't the original
-`driven-eft-h4it` deployment): 1) create the GCS bucket + a dedicated
-service account with `objectAdmin` on that bucket only; 2) download its key
-to `/etc/styrman/backup-sa.json` (root:root, `chmod 600`); 3) `openssl rand
--base64 24 > /etc/styrman/restic-pw && chmod 600 /etc/styrman/restic-pw`,
-then save that password in the operator's password manager; 4) `restic
-init` against the repo (env block below); 5) `systemctl enable --now
-styrman-backup.timer`. **On any host that isn't the original deployment,
-`/etc/styrman/backup.env` MUST set `GOOGLE_PROJECT_ID` and
-`RESTIC_REPOSITORY=gs:<your-bucket>:/` FIRST** — the script's baked-in
-defaults are the original deployment's project/bucket and otherwise point a
-new host's backups at someone else's bucket.
-
-The env every manual restic invocation needs (`styrman-host-backup` sets it
-internally; use this verbatim on the ORIGINAL deployment, or substitute
-`/etc/styrman/backup.env`'s overrides on any other host):
-
-```bash
-sudo env GOOGLE_PROJECT_ID=driven-eft-h4it \
-  RESTIC_REPOSITORY=gs:styrman-crew-backups-driven-eft-h4it:/ \
-  GOOGLE_APPLICATION_CREDENTIALS=/etc/styrman/backup-sa.json \
-  RESTIC_PASSWORD_FILE=/etc/styrman/restic-pw \
-  restic snapshots                    # list snapshots
-sudo styrman-host-backup              # manual backup run (script sets the env itself)
-```
-
-The IN-APP layer (ADR-044) additionally runs an automatic per-project
-backup every `STYRMAN_BACKUP_CADENCE` (default 24h, 0 = off) keeping the
-newest `STYRMAN_BACKUP_KEEP` (default 5) archives per project, and a
-wipe-delete always takes a pre-wipe safety backup first — failing CLOSED
-(nothing is deleted if the safety backup fails).
-
-### Restore on a new host (disaster recovery)
-
-1. Clone the repo, then `sudo bash deploy/host-setup.sh --user $USER` —
-   installs restic, `/etc/styrman`, the backup script + systemd units
-   (and everything else host-setup normally does). Log out and back in (or
-   run `newgrp docker`) before continuing — the docker group this script
-   just added you to isn't active in the current shell yet.
-2. Recreate the two root-only secrets: copy the restic repo password out of
-   the operator's password manager into `/etc/styrman/restic-pw` (`chmod
-   600`), and mint + download a fresh service-account key to
-   `/etc/styrman/backup-sa.json` (`chmod 600`) — the SA itself is
-   re-creatable from the GCP console any time, but the PASSWORD is not: it
-   exists only in the password manager, never in the repo or on any disk
-   image.
-3. Restore the state:
-   ```bash
-   sudo env GOOGLE_PROJECT_ID=driven-eft-h4it \
-     GOOGLE_APPLICATION_CREDENTIALS=/etc/styrman/backup-sa.json \
-     RESTIC_PASSWORD_FILE=/etc/styrman/restic-pw \
-     restic -r gs:styrman-crew-backups-driven-eft-h4it:/ restore latest --target /
-   ```
-   writes `/var/lib/styrman` back in place. On a non-original host, set
-   `RESTIC_REPOSITORY` (source `/etc/styrman/backup.env`) instead of the
-   inline `GOOGLE_PROJECT_ID` above.
-4. Reconstruct `deploy/.env` — step 1's `host-setup.sh` seeded a fresh one;
-   re-fill the OAuth/Cloudflare/domain values (see "Bring-up" above).
-   `STYRMAN_UID`/`STYRMAN_GID` must match the uid/gid that OWNS the
-   restored `homes/`/`projects/` trees (restic preserves the original
-   host's ownership), which may not be the new host's default `1000:1000`.
-5. `STYRMAN_VERSION=$(git describe --tags --always) docker compose -f
-   deploy/docker-compose.yml up -d --build`.
-6. Verify: sign in, confirm projects are listed, open a terminal on one.
-   MicroVM CONTAINERS are NOT in the backup by design — they recreate on
-   first attach, since project state is the filesystem (`homes/`,
-   `projects/`), not the container (R7).
+- **Durability is git.** Commit and push; whatever's in the remote survives
+  a lost or wiped host.
+- **A wipe-delete (`DELETE /api/projects/{id}?wipe=true`) is now plainly
+  irreversible** — it removes the workspace, the project home, and the
+  docker disk with no safety net. The UI's "type delete to confirm" dialog
+  is the only gate; there is nothing to restore from afterward.
+- **Rebuilding a host** is: clone the repo, `sudo bash deploy/host-setup.sh
+  --user $USER`, fill in a fresh `deploy/.env` (see "Bring-up" above), bring
+  the stack up. There is no state to restore — only project workspaces that
+  were actually committed and pushed come back; anything left uncommitted
+  in a project's workspace or home is gone with the old host.
 
 ## Auto-update (tag-gated, ADR-050/051)
 
@@ -452,30 +379,30 @@ disabled for exactly this reason.
 
 Setup — three prerequisites, since the timer stays disabled until all
 exist (`host-setup.sh` step 8c prints these exact commands). `host-setup.sh`
-does **not** auto-clone over SSH or auto-seed `known_hosts` — it prints these
-steps and leaves them to the operator:
+does **not** auto-clone — it prints these steps and leaves them to the
+operator:
 
-1. A read-only deploy key at `/etc/styrman/deploy-key` (the repo is private
-   and root has no key of its own), added to GitHub → Settings → Deploy
-   keys, plus a `known_hosts` seeded from GitHub's **published**
-   fingerprints — never `ssh-keyscan`, which is unauthenticated
-   trust-on-first-use: this `known_hosts` is a trust anchor for a root
-   process that BUILDS AND RUNS what it fetches, so a TOFU window here would
-   let an attacker pin their own host key permanently.
+1. A deploy CLONE at `/opt/styrman`. **The host holds NO SSH key at all**
+   (operator decision 2026-09-01): auth is instead a **FINE-GRAINED GitHub
+   token**, scoped to this ONE repository, `Contents: Read-only`, root-owned
+   at `/etc/styrman/gh-token`, fed to git over HTTPS via an inline
+   credential helper — never embedded in the remote URL (that would land in
+   `.git/config` and every process listing). TLS to `github.com` replaces
+   the SSH `known_hosts` trust anchor the old deploy-key flow needed, so
+   there is nothing to seed or pin here. Mint the token in the GitHub UI
+   (Settings → Developer settings → Personal access tokens → Fine-grained
+   tokens: Repository access = only this repo; Permissions = Contents:
+   Read-only; pick an expiry you will honor — a lapsed token makes the
+   updater fail LOUDLY at fetch, not silently):
    ```bash
    sudo install -d -m 700 /etc/styrman
-   sudo ssh-keygen -t ed25519 -N "" -C styrman-deploy -f /etc/styrman/deploy-key
-   cat /etc/styrman/deploy-key.pub      # add to GitHub → Settings → Deploy keys
-   curl -s https://api.github.com/meta | \
-     jq -r '.ssh_keys[] | "github.com " + .' | sudo tee /etc/styrman/known_hosts
-   # then cross-check the printed keys against GitHub's documented fingerprints:
-   # https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
-   ```
-   Then clone by hand with strict host-key checking against that pinned
-   file (`host-setup.sh` no longer does this step automatically):
-   ```bash
-   sudo GIT_SSH_COMMAND="ssh -i /etc/styrman/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/styrman/known_hosts" \
-        git clone <origin> /opt/styrman
+   # paste the token when prompted — never into shell history:
+   sudo sh -c 'umask 077; read -r t; printf "%s" "$t" > /etc/styrman/gh-token'
+   # HTTPS origin; the token never goes in the URL, only through the helper
+   # reading that root-only file:
+   sudo git -c credential.helper= \
+        -c 'credential.helper=!f() { echo username=x-access-token; printf "password=%s\n" "$(cat /etc/styrman/gh-token)"; }; f' \
+        clone https://github.com/<owner>/<repo>.git /opt/styrman
    sudo chown -R root:root /opt/styrman
    ```
 2. That clone's OWN `deploy/.env` (gitignored, so a fresh clone has none)
@@ -506,7 +433,7 @@ CLOSED, so a timer enabled early would simply refuse every tag it polls.
 
 Long form: `.agents/docs/changes/2026-08-28-clean-reinstall.md`. Short form:
 stop the stack, remove every `styrman-*` container and `sdb-*` network, wipe
-`/var/lib/styrman/{homes,projects,users,credentials,backups}` (keep the dir)
+`/var/lib/styrman/{homes,projects,users,credentials}` (keep the dir)
 AND the state-root files `users.json`, `links.json`, `settings.json` —
 otherwise stale accounts, share links, and admin tunables survive a
 "virgin" reinstall — then bring the stack back up. **REQUIRED: restart the
@@ -617,9 +544,11 @@ nothing to configure for it beyond leaving it unpublished (the compose file
 does not expose it).
 
 On-disk: the broker's store lives at `<state>/credentials/<user>/` (0600
-JSON files — git tokens, env tokens, injected files). **Back it up** with
-the rest of the state dir; deleting a file revokes that credential for new
-sessions. Onboarding is now automatic (ADR-034, v1.5.4): finishing first-run
+JSON files — git tokens, env tokens, injected files). There is no backup
+layer (see "Durability" above) — losing the host loses this store too;
+re-run `styrman-setup` (or Settings → Credentials) on the rebuilt host to
+re-onboard. Deleting a file revokes that credential for new sessions.
+Onboarding is now automatic (ADR-034, v1.5.4): finishing first-run
 `styrman-setup` harvests every credential the user just signed into — from
 the setup VM's shared home — straight into the broker, so every project
 created afterwards is current with zero re-auth. `Settings → Credentials →

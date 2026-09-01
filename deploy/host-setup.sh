@@ -342,8 +342,8 @@ fi
 # Installs the updater + timer, and creates the DEDICATED deploy clone it
 # operates on. The clone is deliberately NOT this repo: production must never
 # be built from the operator's working tree, or an auto `git checkout <tag>`
-# would stomp in-progress work. Like the backup timer, this is installed but
-# only ENABLED once its prerequisite (the clone's own deploy/.env) exists.
+# would stomp in-progress work. Installed always, but only ENABLED once its
+# prerequisite (the clone's own deploy/.env) exists.
 install -m 755 "${SCRIPT_DIR}/update/styrman-update" /usr/local/bin/styrman-update
 install -m 644 "${SCRIPT_DIR}/update/styrman-update.service" /etc/systemd/system/
 install -m 644 "${SCRIPT_DIR}/update/styrman-update.timer" /etc/systemd/system/
@@ -352,23 +352,19 @@ systemctl daemon-reload
 STYRMAN_DEPLOY_DIR="${STYRMAN_DEPLOY_DIR:-/opt/styrman}"
 if [ ! -d "${STYRMAN_DEPLOY_DIR}/.git" ]; then
     ORIGIN="$(git -C "${REPO_ROOT}" remote get-url origin 2>/dev/null || true)"
-    # root has no SSH agent/key of its own, and this repo is private, so an
-    # ssh:// clone here fails unless a deploy key is installed first. Try, but
-    # treat failure as an expected, explained outcome rather than a stray WARN.
+    # The repo is private and root authenticates with a fine-grained GitHub
+    # token the operator must mint in the GitHub UI first (no SSH key on the
+    # host — operator decision 2026-09-01) — so no auto-clone here; the
+    # instructions below print the exact commands.
     if [ -n "${ORIGIN}" ]; then
-        # NO auto-clone over SSH here, and NO ssh-keyscan seeding.
-        #
-        # The updater fetches as root and BUILDS what it fetches as root, so its
-        # known_hosts is a trust anchor. Seeding it with ssh-keyscan is
-        # unauthenticated trust-on-first-use: it moves that window to
-        # provisioning time rather than closing it, and pairing it with
-        # `StrictHostKeyChecking=accept-new` meant a failed scan left an empty
-        # file that the clone then TOFU-populated anyway (security review, twice).
-        # The operator seeds known_hosts from the forge's PUBLISHED fingerprints
-        # and clones by hand — the instructions below print the exact commands.
         echo "==> deploy clone not created automatically (see the auto-update notes below)"
     fi
 fi
+
+# Best-effort https rendering of this repo's origin for the instructions
+# below (an ssh-form origin is rewritten; the updater clones over HTTPS).
+HTTPS_ORIGIN="$(printf '%s' "${ORIGIN:-}" | sed -E 's#^git@([^:]+):#https://\1/#')"
+[ -n "${HTTPS_ORIGIN}" ] || HTTPS_ORIGIN="https://github.com/<owner>/<repo>.git"
 
 if [ -d "${STYRMAN_DEPLOY_DIR}/.git" ] && [ -f "${STYRMAN_DEPLOY_DIR}/deploy/.env" ]; then
     systemctl enable --now styrman-update.timer
@@ -379,22 +375,25 @@ else
 
     1. A deploy CLONE at ${STYRMAN_DEPLOY_DIR} (production must never build
        from your working tree — an auto checkout would stomp your edits).
-       The repo is private and root has no key, so give it a READ-ONLY deploy
-       key first (add the .pub to the repo's Deploy keys on GitHub):
+       The repo is private and the host holds NO SSH key (operator decision
+       2026-09-01): auth is a FINE-GRAINED GitHub token, scoped to this ONE
+       repository with Contents: Read-only. Mint it in the GitHub UI
+       (Settings → Developer settings → Fine-grained tokens: Repository
+       access = only this repo; Permissions = Contents: Read-only; pick an
+       expiry you will honor — the updater fails loudly when it lapses):
 
          sudo install -d -m 700 /etc/styrman
-         sudo ssh-keygen -t ed25519 -N "" -C styrman-deploy -f /etc/styrman/deploy-key
-         cat /etc/styrman/deploy-key.pub      # add to GitHub → Settings → Deploy keys
-         # Pin the host key from GitHub's PUBLISHED fingerprints — never
-         # ssh-keyscan, which is unauthenticated trust-on-first-use:
-         curl -s https://api.github.com/meta | \
-           jq -r '.ssh_keys[] | "github.com " + .' | sudo tee /etc/styrman/known_hosts
-         # then CHECK the printed keys against https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
-         sudo GIT_SSH_COMMAND="ssh -i /etc/styrman/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/styrman/known_hosts" \
-              git clone ${ORIGIN:-<origin>} ${STYRMAN_DEPLOY_DIR}
+         # paste the token when prompted — read -s: no echo, so it lands in
+         # neither shell history nor terminal scrollback/transcripts:
+         sudo sh -c 'umask 077; read -rs t; printf "%s" "\$t" > /etc/styrman/gh-token'
+         # HTTPS origin — the token never goes in the URL; the updater feeds
+         # it via a credential helper reading that root-only file:
+         sudo git -c credential.helper= \\
+              -c 'credential.https://github.com.helper=!f() { echo username=x-access-token; printf "password=%s\\n" "\$(cat /etc/styrman/gh-token)"; }; f' \\
+              clone ${HTTPS_ORIGIN} ${STYRMAN_DEPLOY_DIR}
          sudo chown -R root:root ${STYRMAN_DEPLOY_DIR}
 
-    2. That clone's OWN deploy/.env (gitignored, so a fresh clone has none) (gitignored, so a fresh clone has none):
+    2. That clone's OWN deploy/.env (gitignored, so a fresh clone has none):
 
          sudo cp ${SCRIPT_DIR}/.env ${STYRMAN_DEPLOY_DIR}/deploy/.env
          sudo chmod 600 ${STYRMAN_DEPLOY_DIR}/deploy/.env
@@ -415,16 +414,16 @@ else
          git tag -s v1.16.0 -m "styrman v1.16.0" && git push origin v1.16.0
 
        The VERIFYING side is what the updater enforces, and it needs an
-       ALLOWLIST. A bare `git verify-tag` exits 0 for a good-but-UNTRUSTED
+       ALLOWLIST. A bare \`git verify-tag\` exits 0 for a good-but-UNTRUSTED
        signature, so with GPG any key ever imported into root's keyring would
        pass and git never compares signer to tagger. The updater therefore
        requires SSH signing with an allowed-signers file and refuses to run
        without one:
 
-         printf '%s %s\n' "<your-git-email>" "$(cat ~/.ssh/id_ed25519.pub)" \
+         printf '%s %s\n' "<your-git-email>" "\$(cat ~/.ssh/id_ed25519.pub)" \\
            | sudo tee /etc/styrman/allowed_signers
          sudo chmod 644 /etc/styrman/allowed_signers   # root-owned, not group/world-writable
-         # NOTE: no `git config --global` needed — the updater reads this FIXED
+         # NOTE: no \`git config --global\` needed — the updater reads this FIXED
          # path, because systemd gives the unit no $HOME and ProtectHome=yes
          # blanks /root, so root's gitconfig is unreadable under the timer.
          # and on your side: git config gpg.format ssh; git config user.signingkey ~/.ssh/id_ed25519.pub
@@ -438,40 +437,13 @@ else
 AU
 fi
 
-# ─── 8b. Host-layer backups (restic → GCS, R11 / ADR-044 DR layer) ──────────
-# Install the script + systemd units from the repo. The timer is enabled only
-# once the operator has provisioned the two root-only secrets (SA key + restic
-# password) — until then this prints instructions instead of half-working.
+# (Step 8b, the restic→GCS host backup layer, was REMOVED — operator decision
+# 2026-09-01: no backup layer at all; durability is git. Users commit and
+# push; a stale host is rebuilt from this script + the repo. If an old host
+# still carries styrman-backup.{service,timer}, disable and delete them.)
+# /etc/styrman itself stays: the auto-updater's allowed_signers, gh-token,
+# and run-state live there.
 install -d -m 700 /etc/styrman
-install -m 755 "${SCRIPT_DIR}/backup/styrman-host-backup" /usr/local/bin/styrman-host-backup
-install -m 644 "${SCRIPT_DIR}/backup/styrman-backup.service" /etc/systemd/system/
-install -m 644 "${SCRIPT_DIR}/backup/styrman-backup.timer" /etc/systemd/system/
-systemctl daemon-reload
-if command -v restic >/dev/null 2>&1; then :; else apt-get update -qq && apt-get install -y restic; fi
-if [ -f /etc/styrman/backup-sa.json ] && [ -f /etc/styrman/restic-pw ]; then
-    systemctl enable --now styrman-backup.timer
-    echo "==> host backups: daily restic timer enabled"
-else
-    cat <<'BK'
-==> host backups INSTALLED but NOT enabled — provision the secrets first
-    (the script's baked-in default is the ORIGINAL deployment's bucket,
-    gs:styrman-crew-backups-driven-eft-h4it:/ in GCP project
-    driven-eft-h4it — on any other host FIRST write /etc/styrman/backup.env
-    with your own GOOGLE_PROJECT= and RESTIC_REPOSITORY=gs:<your-bucket>:/):
-    1. Create the GCS bucket + a service account with objectAdmin on that
-       bucket only; download its key to /etc/styrman/backup-sa.json
-       (root:root 600).
-    2. openssl rand -base64 24 > /etc/styrman/restic-pw && chmod 600 /etc/styrman/restic-pw
-       SAVE THAT PASSWORD in a password manager: without it the backups
-       are unreadable after host loss.
-    3. Initialize the repository (adjust -r for your bucket):
-       sudo env GOOGLE_PROJECT=<project> \
-         GOOGLE_APPLICATION_CREDENTIALS=/etc/styrman/backup-sa.json \
-         RESTIC_PASSWORD_FILE=/etc/styrman/restic-pw \
-         restic -r gs:<bucket>:/ init
-    4. systemctl enable --now styrman-backup.timer
-BK
-fi
 
 # ─── 9. Next steps (secrets can't be auto-filled) ────────────────────────────
 cat <<NEXT
