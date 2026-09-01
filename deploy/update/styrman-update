@@ -32,7 +32,11 @@ LOCK="/run/styrman-update.lock"
 # `git clean -d` in deploy() deleted it — wiping the failed-tag latch and
 # reinstating the very retry storm the latch exists to prevent (review finding;
 # reproduced: both dotfiles gone after one clean).
-STATE_DIR="${STYRMAN_UPDATE_STATE_DIR:-/var/lib/styrman/update}"
+# Under /etc/styrman (root-owned 0700), NOT /var/lib/styrman: host-setup chowns
+# the latter to the OPERATOR, so the operator uid could plant a deployed-sha and
+# have root build an arbitrary commit down the `trusted` rollback path — the one
+# trust-bearing input this script did not assert (security review).
+STATE_DIR="${STYRMAN_UPDATE_STATE_DIR:-/etc/styrman/update}"
 STATE="${STATE_DIR}/deployed-version"
 # The exact commit the last good deploy was built from. Rolling back to a SHA is
 # immune to a re-pointed tag AND needs no re-verification: this tree was already
@@ -69,7 +73,16 @@ fail() { echo "[styrman-update] FATAL: $*" >&2; exit 1; }
 # Serialize: a build can outlast the timer interval, and two concurrent
 # checkouts of the same tree would corrupt each other. (The argolis original
 # had no lock and its 5-minute timer could stack.)
-mkdir -p "${STATE_DIR}" || fail "cannot create ${STATE_DIR}"
+# -m with -p only applies to the deepest dir (SC2174), so create the parent
+# explicitly: /etc/styrman must be 0700 too, not just the leaf.
+install -d -m 700 -o root -g root "$(dirname "${STATE_DIR}")" 2>/dev/null || true
+install -d -m 700 -o root -g root "${STATE_DIR}" || fail "cannot create ${STATE_DIR}"
+# The rollback trusts deployed-sha enough to skip verification, so the dir it
+# lives in gets the same ownership+mode guarantee as every other trust input.
+[ "$(stat -c %u "${STATE_DIR}")" = "0" ] \
+    || fail "${STATE_DIR} is not root-owned — refusing to trust the recorded deploy state"
+[ -z "$(find "${STATE_DIR}" -maxdepth 0 -perm /022 2>/dev/null)" ] \
+    || fail "${STATE_DIR} is group/world-writable — refusing to trust the recorded deploy state"
 exec 9>"${LOCK}"
 flock -n 9 || { log "another run is in progress — skipping this tick"; exit 0; }
 
@@ -185,7 +198,15 @@ verify_tag() {
     # whatever is in root's keyring — good-but-untrusted included (measured).
     # Only the SSH path consults gpg.ssh.allowedSignersFile, so anything else
     # is refused rather than silently unpinned.
-    if ! git cat-file tag "${tag}" 2>/dev/null | grep -q '^-----BEGIN SSH SIGNATURE-----'; then
+    # Take the LAST armor header, matching git's own parse_signature: the tag
+    # MESSAGE is author-controlled and `git cat-file tag` prints it, so a decoy
+    # "-----BEGIN SSH SIGNATURE-----" line in the message passed a plain grep
+    # while the real PGP block appended at the end still won — verify-tag then
+    # exited 0 with the allowlist never consulted (security review reproduced
+    # it). Comparing the last header closes that.
+    if [ "$(git cat-file tag "${tag}" 2>/dev/null |
+            grep -E '^-----BEGIN (SSH|PGP) SIGNATURE-----' | tail -1)" \
+         != '-----BEGIN SSH SIGNATURE-----' ]; then
         log "REFUSED: ${tag} is not SSH-signed. Only SSH signatures are checked against the"
         log "  signer allowlist (${ALLOWED_SIGNERS}); a PGP signature would verify against any"
         log "  key in root's keyring and pin nothing. Re-tag with SSH signing:"
@@ -347,7 +368,14 @@ printf '%s' "${PREVIOUS_SHA}" | grep -qE '^[0-9a-f]{40}$' || PREVIOUS_SHA=""
 
 if deploy "${LATEST}" "${LATEST#v}" && reports_version "${LATEST#v}"; then
     printf '%s' "${LATEST}" > "${STATE}"
-    git rev-parse "${LATEST}^{commit}" > "${STATE_SHA}" 2>/dev/null || true
+    # Only record a trusted SHA when it was actually verified — otherwise a SHA
+    # captured during an opt-out window would keep skipping verification after
+    # signing is re-enabled (security review).
+    if [ "${REQUIRE_SIGNED}" = "1" ]; then
+        git rev-parse "${LATEST}^{commit}" > "${STATE_SHA}" 2>/dev/null || true
+    else
+        rm -f "${STATE_SHA}"
+    fi
     rm -f "${FAILED}"
     log "OK — ${LATEST} is live"
     exit 0

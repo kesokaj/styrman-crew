@@ -408,7 +408,10 @@ else
 
          printf '%s %s\n' "<your-git-email>" "$(cat ~/.ssh/id_ed25519.pub)" \
            | sudo tee /etc/styrman/allowed_signers
-         sudo git config --global gpg.ssh.allowedSignersFile /etc/styrman/allowed_signers
+         sudo chmod 644 /etc/styrman/allowed_signers   # root-owned, not group/world-writable
+         # NOTE: no `git config --global` needed — the updater reads this FIXED
+         # path, because systemd gives the unit no $HOME and ProtectHome=yes
+         # blanks /root, so root's gitconfig is unreadable under the timer.
          # and on your side: git config gpg.format ssh; git config user.signingkey ~/.ssh/id_ed25519.pub
 
        Signing the tag is not enough on its own.
