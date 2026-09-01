@@ -16,3 +16,11 @@ Full walkthrough: `../.agents/docs/specs/styrman/deploy.md` (including the
 credential broker's bridge-only listener and what to back up).
 
 `backup/` — the host-layer restic→GCS disaster-recovery kit: `styrman-host-backup` (run by the `styrman-backup.service`/`.timer` units, daily 03:00 + up to 15m; installed and enabled by `host-setup.sh` once the secrets exist). Runbook: `../.agents/docs/specs/styrman/deploy.md` → Host-layer backups / Restore on a new host.
+
+`update/` — the tag-gated auto-updater (ADR-050/051): `styrman-update` +
+`.service`/`.timer` units, installed by `host-setup.sh` step 8c but shipped
+**DISABLED**. Enabling it is a deliberate, separate operator action — it
+requires a dedicated clone at `/opt/styrman`, its own `deploy/.env`, and a
+root-owned `/etc/styrman/allowed_signers` for SSH-signed releases before the
+timer is turned on. Runbook (prerequisites, signing, rollback):
+`../.agents/docs/specs/styrman/deploy.md` → Auto-update.

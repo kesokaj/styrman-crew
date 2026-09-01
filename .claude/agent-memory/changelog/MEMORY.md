@@ -1,2 +1,3 @@
 - [Changelog format used in this repo (styrman-crew, formerly super-devbox)](changelog_format_super-devbox.md) — actual .agents/docs/changes/ style diverges from the generic template; follow the repo precedent.
 - [ADR format used in this repo (styrman-crew, formerly super-devbox)](adr_format_super-devbox.md) — inline-date heading, bold-lead paragraphs, `---` separators, trailing `Source:` line, ADR-022+ style; same-day corrections append IN-PLACE, not as new ADRs (see 2026-09-01 revision note).
+- [Whole-project audit recording pattern](audit_entries_pattern.md) — one changelog entry over the merged scanner report, TODO.md one-liners per finding, no ADR by default (audit ≠ remediation ≠ decision).

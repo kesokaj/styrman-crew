@@ -1942,3 +1942,55 @@ Source: deploy/update/styrman-update, deploy/update/*.service,
 deploy/host-setup.sh, image/Dockerfile.
 Verification: .agents/docs/reviews/2026-09-01-security-editor-check-and-autoupdate.md,
 .agents/docs/changes/2026-09-01-syntax-check-and-autoupdate.md (§6)
+
+---
+
+## ADR-052: Privileged tests never touch a production-aliasing path — mandatory scratch prefix (2026-09-01)
+
+**Context.** On 2026-09-01, while exercising the tag-gated auto-updater
+(ADR-050/ADR-051) before it was tagged into v1.16.0, `/var/lib/styrman` —
+the entire production state directory (every project home, workspace,
+per-user JSON store, and in-app backup) — was found empty and root-owned,
+and `/etc/styrman` (home to the restic/GCS disaster-recovery secrets, which
+predate the updater entirely) was deleted outright by a `sudo rm -rf`
+issued as test cleanup. The exact command that emptied `/var/lib/styrman`
+was never identified; it happened while privileged updater tests and
+parallel verification agents ran against paths adjacent to production
+state. Full incident record:
+`.agents/docs/changes/2026-09-01-incident-state-loss.md`. Two compounding
+causes: the updater's default state directory pointed at
+`/var/lib/styrman` with no override consistently applied when tests ran as
+root, and the cleanup step deleted `/etc/styrman` without establishing
+that anything other than the feature under test lived there.
+
+**Decision.** Any privileged (root-run) test, script exercise, or
+verification pass MUST run against a scratch prefix that cannot alias a
+real production path — never a default that resolves inside
+`/var/lib/styrman`, `/etc/styrman`, or their equivalents. Concretely: (a)
+host-level scripts and services (the updater and any future ones) take an
+explicit, test-overridable state-directory argument/env var with **no
+default that is itself a production path** when invoked outside its own
+systemd unit; (b) any harness or agent that must run privileged tests sets
+that override unconditionally as part of test setup, rather than relying
+on a human or agent to remember it per invocation; (c) a cleanup step
+(`rm -rf` or equivalent) run against a shared directory must first
+establish everything that lives there and confine deletion to what the
+feature under test actually created — a directory that predates the
+feature (like `/etc/styrman`, which held DR secrets before the updater
+existed) is the highest-risk case precisely because it looks
+self-contained to whoever is testing the newer feature.
+
+**Consequences.** This ADR states the convention; it does not itself
+perform the fix. Two follow-ups are tracked in `TODO.md`: moving the
+updater's default state path off `/var/lib/styrman` in its docs and tests,
+and re-provisioning `/etc/styrman/backup-sa.json` and `restic-pw` (the
+daily `styrman-backup.timer` fails until then). Separately, this incident
+is also a case for treating out-of-band credential storage as load-bearing
+policy rather than incidental: the restic password's copy in the
+operator's password manager — outside `/etc/styrman` — is the only reason
+the GCS backup stayed recoverable in principle once the on-host copy was
+destroyed alongside the data it protects.
+
+Source: .agents/docs/changes/2026-09-01-incident-state-loss.md,
+.agents/docs/reviews/2026-09-01-audit-whole-project.md,
+deploy/update/styrman-update, deploy/backup/styrman-host-backup

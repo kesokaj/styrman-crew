@@ -93,3 +93,50 @@ Add new items below as they arise.
   disposed-terminal or pre-WebSocket-window error observed), just
   wasteful; a single settled refit would do. (flagged by the 2026-09-01
   preflight gate, not fixed in that pass)
+
+- [ ] 🔴 Caddy admin API unauthenticated on host loopback + Caddy floor
+  below 2.11.3 (`deploy/caddy/ingress`). (2026-09-01 whole-project audit,
+  `.agents/docs/reviews/2026-09-01-audit-whole-project.md`)
+- [ ] 🔴 Unbounded guest-controlled log buffer
+  (`internal/orchestrator/orchestrator.go:1229`), fix by reusing
+  `cappedBuffer`. (2026-09-01 whole-project audit)
+- [ ] 🟡 Cross-tenant deletion via symlink in `sweepMaterializedFile`
+  (`internal/httpapi/credentials.go:217`), fix with an `os.Root`-confined
+  `files.Remove`. (2026-09-01 whole-project audit)
+- [ ] 🟡 `usernameFromEmail` duplicates `identity.DeriveUsername` on a
+  false import-cycle justification, live on two different auth paths —
+  divergence resolves one email to two state dirs
+  (`internal/config/config.go:392`). (2026-09-01 whole-project audit)
+- [ ] 🟡 Project egress deny-list omits `100.64.0.0/10` (Tailscale) and
+  `198.18.0.0/15` (`deploy/host-setup.sh:149-206`). (2026-09-01
+  whole-project audit)
+- [ ] 🟡 `STYRMAN_RUNTIME` unvalidated while escape-capable caps are
+  granted (`internal/orchestrator/orchestrator.go:759`). (2026-09-01
+  whole-project audit)
+- [ ] 🟡 DR backup script's comment says `GOOGLE_PROJECT`, code exports
+  `GOOGLE_PROJECT_ID`; a fresh host silently targets the original
+  deployment's bucket (`deploy/backup/styrman-host-backup:17`).
+  (2026-09-01 whole-project audit)
+- [ ] 🟡 Production pins the mutable `styrman-runtime:dev` tag
+  (`deploy/.env`). (2026-09-01 whole-project audit)
+- [ ] 🟡 `formatInPlace` has no test coverage, unlike its analog
+  `checkerFor`. (2026-09-01 whole-project audit)
+- [ ] 🟡 Add `deploy/caddy/ingress` to `/preflight`'s verification — no
+  gate scans it today. (2026-09-01 whole-project audit)
+- [ ] 🟢 Dead code: `LastActivity`, `Project.Agent`, `Project.GitInit`.
+  (2026-09-01 whole-project audit)
+- [ ] 🟢 Coverage: zero frontend unit tests (8,254 LOC);
+  `internal/identity` untested despite owning the tenancy key;
+  `orchestrator` 3.0%; `terminal` 8.5%. (2026-09-01 whole-project audit)
+
+- [ ] 🔴 Re-provision `/etc/styrman/backup-sa.json` (GCS service-account
+  key) and `/etc/styrman/restic-pw` (restic repo password) — both were
+  deleted in the 2026-09-01 state-loss incident. The daily 03:00
+  `styrman-backup.timer` fails until this is done. GCS bucket contents
+  are unharmed. (operator action; incident:
+  `.agents/docs/changes/2026-09-01-incident-state-loss.md`)
+- [ ] 🟡 Move the auto-updater's default state path off
+  `/var/lib/styrman` in docs and tests, and add an explicit
+  scratch-prefix convention for privileged script testing so a test run
+  can never touch production state (ADR-052). (incident:
+  `.agents/docs/changes/2026-09-01-incident-state-loss.md`)

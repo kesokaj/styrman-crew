@@ -305,6 +305,24 @@ disabled for exactly this reason.
   compose build reads `context: ..` from the repo root, so an automatic
   `git checkout <tag>` against a tree the operator is actively editing
   would stomp in-progress work.
+- **Run-state lives under `/etc/styrman/update`**
+  (`STYRMAN_UPDATE_STATE_DIR`), **not** `/var/lib/styrman`: `host-setup.sh`
+  chowns the latter to the OPERATOR uid, and the rollback path (below)
+  trusts a recorded commit SHA enough to SKIP re-verifying it — so a
+  `/var/lib/styrman`-resident state dir would let the operator uid plant a
+  `deployed-sha` and have root build an arbitrary commit down that trusted
+  path (security review). `/etc/styrman` is root-owned `0700`; the script
+  creates `${STATE_DIR}` (and its parent) `root:root 0700` and, on every
+  run, asserts it is still root-owned and not group/world-writable before
+  trusting anything read from it. Three files live there: `deployed-version`
+  (the tag last successfully deployed), `deployed-sha` (that tag's exact
+  commit — see Rollback below), and `failed-version` (the tag most recently
+  rolled back, so the timer stops retrying it). State was moved out of the
+  deploy clone for a second reason too: `git clean -d` inside `deploy()`
+  used to delete both dotfiles on every run when they lived at the clone
+  root, wiping the failed-tag latch and reinstating the retry storm it
+  exists to prevent (review finding, reproduced: both files gone after one
+  clean).
 - **Tags must be SSH-signed, against an allowed-signers allowlist.** The
   updater checks out, `docker build`s, and `docker compose up`s the tag AS
   ROOT, and `docker-compose.yml` itself lives inside that checkout — so it
@@ -314,10 +332,19 @@ disabled for exactly this reason.
   good-but-**untrusted** signature, so with PGP any key ever imported into
   root's keyring would pass and git never compares signer to tagger. Only
   the SSH signature path consults an allowlist, so the updater requires
-  one: it rejects a tag whose object has no `-----BEGIN SSH
-  SIGNATURE-----` block — **a PGP-signed tag is REFUSED, not merely
-  unpinned**; signing with GPG will not satisfy this check — then verifies
-  it against a root-owned, non-group/world-writable
+  one — and the check is stricter than a plain grep for the marker line: it
+  takes the **LAST** `-----BEGIN (SSH|PGP) SIGNATURE-----` header out of
+  `git cat-file tag <tag>`, matching git's own `parse_signature`, and
+  refuses unless that last header is exactly
+  `-----BEGIN SSH SIGNATURE-----` — **a PGP-signed tag is REFUSED, not
+  merely unpinned**; signing with GPG will not satisfy this check. A plain
+  first-match grep was bypassable: `git cat-file tag` also prints the
+  author-controlled tag MESSAGE, so a decoy `-----BEGIN SSH SIGNATURE-----`
+  line planted in the message satisfied a naive grep while a real PGP
+  signature block appended after it still won verification — `verify-tag`
+  then exited 0 with the SSH allowlist never consulted (security review,
+  reproduced). Once the SSH-signature shape is confirmed, it verifies the
+  tag against a root-owned, non-group/world-writable
   `/etc/styrman/allowed_signers`, read from that FIXED path rather than
   root's gitconfig: `styrman-update.service` sets `ProtectHome=yes` and
   never sets `$HOME`, so `git config --global` is unreadable under the
@@ -327,14 +354,27 @@ disabled for exactly this reason.
   git config gpg.format ssh && git config user.signingkey ~/.ssh/id_ed25519.pub
   git tag -s vX.Y.Z -m "styrman vX.Y.Z"
   ```
-  The only opt-out is a root-owned `/etc/styrman/update.env` setting
-  `STYRMAN_UPDATE_REQUIRE_SIGNED=0`, which logs a warning on every run so it
-  can't be silently disabled from anywhere the operator doesn't already have
-  root. **Operator-visible consequence**: existing tags v1.14.0–v1.15.0 are
-  annotated-but-unsigned or lightweight, so the updater would refuse every
-  one of them as-is — all releases from this point forward must be
-  SSH-signed as above (plain `-s` with a GPG key does NOT satisfy this). See
-  ADR-051.
+  The only opt-out is a root-owned, non-group/world-writable
+  `/etc/styrman/update.env` setting `STYRMAN_UPDATE_REQUIRE_SIGNED=0` —
+  READ with `grep` against an anchored pattern (tolerating `export` and
+  quoting), never sourced: `. /etc/styrman/update.env` as root would
+  execute whatever the file contains, and a redefined `log(){ :; }` in it
+  would silence the "signature checking DISABLED" warning below, giving a
+  silent skip path (security review). Ownership and mode are asserted
+  before the file is read at all. The warning logs on every run so the
+  opt-out can't be silently disabled from anywhere the operator doesn't
+  already have root. **Operator-visible consequence**: existing tags
+  v1.14.0–v1.15.0 are annotated-but-unsigned or lightweight, so the
+  updater would refuse every one of them as-is — all releases from this
+  point forward must be SSH-signed as above (plain `-s` with a GPG key
+  does NOT satisfy this). See ADR-051.
+- **`deploy/.env` is itself an asserted trust input**, not just a file
+  whose presence is checked. Before touching anything, the script confirms
+  `${DEPLOY_DIR}/.git` and `${DEPLOY_DIR}/deploy/.env` are root-owned, and
+  that `deploy/.env`'s mode is not readable/writable beyond root (`chmod
+  600`) — it holds `STYRMAN_INGRESS_TOKEN`/`STYRMAN_ALLOWED_EMAILS`. It is
+  gitignored, so it survives both `git checkout --force` and `git clean -d`
+  across every deploy.
 - **How it verifies a deploy**: reads `LABEL styrman.version` off the
   running `styrman-server` container with `docker inspect`, plus
   `.State.Running` and `.State.Health.Status` — **no HTTP request and no
@@ -349,20 +389,28 @@ disabled for exactly this reason.
   implementation detail — currently held together only by comments in both
   files.
 - **Rollback**: if the new tag doesn't report itself healthy within
-  `STYRMAN_UPDATE_HEALTH_TIMEOUT` (default 120s), the updater redeploys the
-  PREVIOUS tag and latches the failed one at
-  `/var/lib/styrman/update/failed-version` — so the 5-minute timer does not
-  retry a known-broken release forever. On every successful deploy the exact
-  commit is also recorded at `/var/lib/styrman/update/deployed-sha`
-  (`git rev-parse <tag>^{commit}`), a durable record of what was actually
-  running that survives the tag itself later being re-pointed. The rollback
-  path re-runs the SAME SSH-signature + `allowed_signers` check against the
-  previous tag before rebuilding it (every tag built is verified, not just
-  the newest, since `git fetch --force` could have re-pointed the old tag
-  too) — so rolling back onto a release made before SSH signing was adopted
-  (v1.14.0–v1.15.0) is refused for the same reason a forward deploy of one
-  would be. `--force` clears the failed latch (and also forces a redeploy of
-  the current tag even if nothing changed).
+  `STYRMAN_UPDATE_HEALTH_TIMEOUT` (default 120s), the updater latches the
+  failed tag at `${STATE_DIR}/failed-version` (so the 5-minute timer does
+  not retry it forever) and redeploys the PREVIOUS version. **It prefers
+  the exact commit over the tag name.** On every successful deploy made
+  while `STYRMAN_UPDATE_REQUIRE_SIGNED=1` (the default), the script records
+  `git rev-parse <tag>^{commit}` at `${STATE_DIR}/deployed-sha`; a deploy
+  made during an opt-out window (`REQUIRE_SIGNED=0`) deliberately does
+  **not** record one, so a "trusted" SHA can never survive an opt-out
+  window into signing being re-enabled. When a usable (full 40-hex) SHA is
+  on record, the rollback calls `deploy()` with a third `trusted` argument
+  that **skips `verify_tag` entirely** — that exact tree was already
+  verified when it was first deployed, and rolling back by SHA is also
+  immune to `git fetch --tags --force` having since re-pointed the tag
+  name. Only when no SHA was recorded (state dir doesn't have one yet, or
+  the previous deploy happened during an opt-out window) does it fall back
+  to rolling back onto the previous TAG, which then must verify exactly
+  like a forward deploy — that fallback would refuse a rollback onto any
+  release made before SSH signing was adopted (v1.14.0–v1.15.0), which is
+  why the SHA-based path, not the tag fallback, is what makes rollback
+  actually work across the signing-adoption boundary. `--force` clears the
+  failed latch (and also forces a redeploy of the current tag even if
+  nothing changed).
 - **Flags**: `styrman-update --check` (report what would happen, changes
   nothing) and `styrman-update --force` (see above).
 

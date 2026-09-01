@@ -12,6 +12,19 @@ Ctrl+C/targeted-tool ADR) is **ADR-041**; confirm the next-free number by
 reading the file's tail before appending — it has climbed within the same
 day multiple times (038→039→040→041 all landed 2026-08-30).
 
+**Update (2026-09-01):** now at **ADR-052** (repo renamed styrman-crew).
+ADR-052 records a durable operating *convention* ("privileged tests never
+touch a production-aliasing path") triggered by an operational incident
+(`.agents/docs/changes/2026-09-01-incident-state-loss.md` — production
+state directory `/var/lib/styrman` emptied and `/etc/styrman` DR-secrets
+directory deleted during root-run updater tests). This is a useful
+precedent distinct from [[audit_entries_pattern]]'s "no ADR by default":
+an *incident* record, unlike an *audit* record, can warrant an ADR when
+the dispatcher identifies a durable decision it should bind future work to
+(here: the scratch-prefix testing rule) — judge each case on whether a
+real forward-looking decision was made, not just findings logged. Always
+re-confirm the tail number before appending; it keeps climbing same-day.
+
 **Tool-access note (2026-08-30):** the changelog subagent has sometimes run
 in a harness with only Read/Grep/Glob/Edit/Write — no Bash/git tool, so
 `git show <hash>` is not available even when a task cites specific commit

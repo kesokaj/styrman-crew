@@ -741,4 +741,68 @@ exact `host-setup.sh` step-8c commands). No changelogs/ADRs/TODO.md touched
 (out of lane per this task's explicit instruction — this was a docs-only
 preflight fix, not a code change).
 
+**2026-09-01 session (fourth pass, same day) — whole-project `/audit` doc
+fixes** (`.agents/docs/reviews/2026-09-01-audit-whole-project.md` +
+`2026-09-01-audit-reviewer.md`). Four narrow, task-specified fixes, each
+verified against code before writing:
+- **`deploy/README.md` had no `update/` bullet** even though `backup/` had
+  one — added, matching the `backup/` bullet's shape (what it is, DISABLED
+  by default + why, runbook pointer to `deploy.md` → Auto-update).
+- **`Project.GitInit` (`internal/project/store.go`) is a dead field** —
+  hard-coded `true`, no reader anywhere (R13 made every project
+  unconditionally git-init'd). Did NOT delete it from `api.md`'s
+  `GET /api/projects` row (the field still round-trips in the JSON — code
+  wasn't touched, only docs), instead annotated it as deprecated/dead-weight
+  in place. `Project.Agent` and `LastActivity` were checked too (grep) and
+  don't appear anywhere in `api.md` — no action needed there.
+- **Four `api.md` description-level mismatches from the reviewer's
+  API-spec-conformance table**, fixed in place: (1) §Notifications
+  undersold the fan-out — code does one goroutine + `ContainerInspect` per
+  project RUNNING OR STOPPED (not just running), uncapped, then one exec per
+  running project; corrected to describe this accurately as a finding, not
+  as acceptable. (2) The credentials-content-viewer row wrongly called it an
+  "admin-only Settings surface" — it's `Authorized`-gated (owner reads their
+  OWN secrets), not admin-gated; reworded. (3) `GET /api/settings`'s row was
+  missing `terminalUsernameChosen` and `setupComplete` (both present in
+  `explorer.go`'s response map) — added. (4) The credential broker
+  (`internal/credbroker`, a SEPARATE listener on `STYRMAN_BROKER_ADDR`) had
+  no route-level documentation anywhere in `api.md`, only the env var — added
+  a new "## Credential broker (separate listener)" section (GET
+  /git,/env,/files,/healthz with wire shapes) between Setup and Misc,
+  pointing to `guide.md` for the prose tier overview.
+- **Testing README + `integration.sh` prereq rebuilt `styrman-runtime:dev`**
+  — the EXACT tag `deploy/.env`'s `STYRMAN_IMAGE` boots in production on
+  this host, so following the documented test loop re-stamps prod (it
+  happened for real during this audit). Changed the default/documented tag
+  to `styrman-runtime:test` in BOTH `.agents/docs/testing/styrman/README.md`
+  (Prereqs bullet, gained an explicit "do NOT build :dev" warning + mentions
+  the new immutable `styrman-runtime:1.16.0` release tag) AND
+  `integration.sh` itself (its `IMAGE="${1:-styrman-runtime:dev}"` default →
+  `:test`, plus a header-comment warning) — `integration.sh` lives inside
+  `.agents/docs/testing/styrman/`, so it's treated as part of the guide, not
+  application source, and is in this subagent's lane to edit (unlike
+  `web/e2e/run.sh`, left alone deliberately — see below).
+- **Flagged, not fixed (out of lane / not asked)**: `web/e2e/run.sh` has the
+  IDENTICAL `IMAGE="${1:-styrman-runtime:dev}"` default — it doesn't rebuild
+  the image (so it can't re-stamp `:dev`), but every e2e run still silently
+  boots real project microVMs against production's tag by default. It lives
+  under `web/e2e/` (source tree), not `.agents/docs/testing/`, so left
+  untouched and flagged in the final report rather than edited unprompted.
+  The reviewer's other 46 findings (unbounded log buffer H1, Caddy admin API
+  H1, credential-sweep symlink, `usernameFromEmail` false-cycle claim, seven
+  duplicated atomic-write blocks, unpinned Caddy/base images, `settings.tsx`
+  god-file, zero frontend unit tests, etc.) are CODE fixes, not doc drift —
+  intentionally left alone; they belong to whoever picks up the audit's
+  "Recommended order" list, not this doc pass.
+
+Files touched this session: `deploy/README.md` (new `update/` bullet),
+`.agents/docs/specs/styrman/api.md` (GitInit deprecation note, Notifications
+fan-out correction, credentials-content-viewer wording, `GET /api/settings`
+row fields, new "## Credential broker" section), `.agents/docs/testing/
+styrman/README.md` (Prereqs bullet — `:test` tag + `:dev`-is-prod warning +
+`1.16.0` mention, Tier-2 default mention), `.agents/docs/testing/styrman/
+integration.sh` (default IMAGE `:dev`→`:test` + header warning). No
+changelogs/ADRs/TODO.md touched (changelog subagent's lane, running in
+parallel per the dispatching task). REQUIREMENTS.md not touched.
+
 See [[feedback-styrman-doc-edits]] for edit-process lessons.

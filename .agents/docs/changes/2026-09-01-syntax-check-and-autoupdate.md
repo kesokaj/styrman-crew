@@ -192,7 +192,9 @@ that never worked:
   is gitignored), which erased the failed-tag latch on every rollback and
   reinstated exactly the retry storm that latch exists to prevent
   (reproduced in a scratch repo, then fixed). They now live outside the
-  work tree entirely, at `/var/lib/styrman/update/`.
+  work tree entirely, at `/etc/styrman/update/` (root 0700 — see §7 for the
+  ownership hardening this location received in the final remediation
+  round).
 - **Python litter fix was inert.** `PYTHONDONTWRITEBYTECODE=1` governs the
   *import system*, not `py_compile`, whose entire job is emitting
   bytecode — measured directly (`python3 -m py_compile` still wrote
@@ -378,6 +380,55 @@ ownership/mode assertions confirmed to reject a world-writable file;
 `/check` and `/format` confirmed to accept an ~6 MiB file and correctly
 413 above 8 MiB.
 
+## 7. Fourth and final remediation round (commit `9d41e55`, same day) — closes the decoy-marker bypass, asserts the update state dir
+
+- **The SSH-signature requirement was bypassable.** `git cat-file tag`
+  prints the tag MESSAGE, which the tag's author fully controls, and git's
+  own `parse_signature` keeps the LAST armor header it finds — so a decoy
+  `-----BEGIN SSH SIGNATURE-----` line placed in the message body passed
+  the §6 plain grep, while a real PGP signature block appended after it
+  still won the parse and `verify-tag` exited 0 with the SSH allowlist
+  never consulted. Fixed: the check now requires the LAST armor header in
+  the tag object to be the SSH one; a PGP-signed tag is refused outright
+  rather than silently falling through to an unverified accept. **Recorded
+  honestly:** the `security` agent reproduced this bypass; I could not —
+  gpg signing failed in my scratch keyring during this pass — so the fix
+  itself is theirs. What I confirmed here is narrower: the fixed logic
+  against synthetic tag objects built with the decoy-then-PGP structure
+  (refused), plus a live control that a genuine SSH-signed tag still
+  verifies cleanly (accepted).
+- **The update state dir was the one trust-bearing input with no
+  assertion.** The `trusted` rollback path skips re-verification based on
+  the recorded `deployed-sha`, and `host-setup.sh` chowns
+  `/var/lib/styrman` to the OPERATOR — so the operator uid (unprivileged
+  relative to root, which is what runs the updater) could plant an
+  arbitrary SHA in that state file and have root build it from the clone's
+  object store with no signature check at all. State moved to
+  `/etc/styrman/update` (root-owned, mode `0700`), created with
+  `install -d` rather than `mkdir -p -m` — the latter only applies the
+  given mode to the deepest directory it creates, leaving parents at their
+  default mode, which is not what the trust boundary needs. Ownership and
+  mode are now asserted on this directory the same way every other
+  trust-bearing input in this updater already is (allowed-signers file,
+  `update.env`, `deploy/.env`).
+- A SHA recorded while `REQUIRE_SIGNED=0` is now cleared rather than kept
+  once signing is re-enabled, so an opt-out window can't leave a
+  `trusted`-but-unverified SHA sitting in state to be silently honored
+  later.
+- `host-setup.sh` no longer prints the
+  `git config --global gpg.ssh.allowedSignersFile` instruction line — it's
+  inert now that the allowlist path is pinned rather than configurable,
+  and as written it also omitted the ownership/mode requirements the
+  script itself now enforces on that path.
+
+Verification: synthetic tag objects with a decoy SSH marker followed by a
+real PGP signature block, refused post-fix; a genuine SSH-signed tag,
+still accepted (non-regression control); `/etc/styrman/update` ownership
+and mode asserted and confirmed to reject a world-readable or
+non-root-owned directory; a SHA planted in state under
+`REQUIRE_SIGNED=0` confirmed cleared, not retained, once signing is
+turned back on.
+
 ## Follow-ups
 
 See ADR-049 (exec stdin contract — never half-close), ADR-050
@@ -385,7 +436,8 @@ See ADR-049 (exec stdin contract — never half-close), ADR-050
 block for the label-based health check that actually shipped), and
 ADR-051 (signed tags required for auto-update, corrected same-day — see
 its "Correction" block for the signer-pinning and keyscan-TOFU fixes in
-§6 above) in `architecture/DECISIONS.md`. TODO.md carries the coverage
+§6 above, plus the decoy-marker bypass and update-state-dir hardening in
+§7) in `architecture/DECISIONS.md`. TODO.md carries the coverage
 gaps and low findings from both the original review and the 2026-09-01
 re-review that remain open (state-file/latch fix aside, which is closed
 above), plus the `TerminalPane` redundant-resize-frame item flagged by

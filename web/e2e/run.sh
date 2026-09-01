@@ -7,7 +7,11 @@
 # Usage: bash web/e2e/run.sh [image-tag]
 set -euo pipefail
 
-IMAGE="${1:-styrman-runtime:dev}"
+# Default to the TEST tag, not :dev — deploy/.env points STYRMAN_IMAGE at
+# styrman-runtime:dev, so defaulting there boots real project microVMs against
+# production's image (and the integration tier's prereq used to REBUILD it,
+# re-stamping what production boots — audit finding 2026-09-01).
+IMAGE="${1:-styrman-runtime:test}"
 PORT="${STYRMAN_E2E_PORT:-18090}"
 STATE="$(mktemp -d /tmp/styrman-e2e-XXXX)"
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"

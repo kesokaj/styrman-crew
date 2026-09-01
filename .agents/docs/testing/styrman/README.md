@@ -7,7 +7,8 @@ No mocks in the orchestrator path.
 
 1. **Unit** — `go test -race ./...` (store, validation; fast, no Docker).
 2. **Integration (60 checks; 3 auto-SKIP on firewall-hardened hosts)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
-   (default `styrman-runtime:dev`). Isolated server (own state dir, port
+   (default `styrman-runtime:test` — see the warning under Prereqs about
+   `:dev`). Isolated server (own state dir, port
    18080) through the full lifecycle: legacy-layout migration, async create
    → microVM boot, terminals (records, rename, pause, close-all),
    WS I/O + reattach, transcripts, file explorer (incl. traversal guards),
@@ -32,7 +33,16 @@ No mocks in the orchestrator path.
 
 ## Prereqs
 
-- `styrman-runtime` image built: `docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/`
+- `styrman-runtime` image built: `docker build -t styrman-runtime:test --build-arg STYRMAN_VERSION=test-$(date +%s) image/`
+
+  **Do NOT build or tag `styrman-runtime:dev` on this host.** `deploy/.env`
+  sets `STYRMAN_IMAGE=styrman-runtime:dev`, so `:dev` is the exact tag
+  production boots — rebuilding it re-stamps what's running in prod. This
+  happened for real during the 2026-09-01 audit (the marker read
+  `dev-1788269597` afterward; restored to `1.16.0`). An immutable
+  `styrman-runtime:1.16.0` release tag also exists now if you need a known-good
+  image to compare against. Use `:test` (or any tag other than `:dev`) for
+  everything in this guide.
 - Kata runtime `mvm` working: `docker run --runtime mvm --rm debian:trixie uname -r`
   (host-setup.sh verifies this; if it fails with "invalid namespace type" see
   ADR-009 — the daemon.json time-namespaces flag is missing)

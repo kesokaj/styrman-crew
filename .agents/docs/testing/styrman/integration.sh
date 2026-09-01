@@ -6,10 +6,16 @@
 # Prereqs: styrman-runtime image built (image/), Kata runtime 'mvm' working.
 # Uses an isolated state dir and port; safe to run alongside a real install.
 #
+# Default image tag is styrman-runtime:test, NOT styrman-runtime:dev — on
+# this host, deploy/.env sets STYRMAN_IMAGE=styrman-runtime:dev, so :dev is
+# what production actually boots. Building/tagging :dev here would re-stamp
+# the production image (it happened during the 2026-09-01 audit). Pass an
+# explicit tag as $1 to target something else.
+#
 # Usage: bash .agents/docs/testing/styrman/integration.sh [image-tag]
 set -euo pipefail
 
-IMAGE="${1:-styrman-runtime:dev}"
+IMAGE="${1:-styrman-runtime:test}"
 PORT=18080
 ME="$(id -un)"        # auth-none mode acts as the OS user
 ID=""                 # project UUID, captured after create
