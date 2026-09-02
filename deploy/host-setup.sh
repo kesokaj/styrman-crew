@@ -385,7 +385,7 @@ else
          sudo install -d -m 700 /etc/styrman
          # paste the token when prompted — read -s: no echo, so it lands in
          # neither shell history nor terminal scrollback/transcripts:
-         sudo sh -c 'umask 077; read -rs t; printf "%s" "\$t" > /etc/styrman/gh-token'
+         sudo bash -c 'umask 077; read -rs t; printf "%s" "\$t" > /etc/styrman/gh-token'
          # HTTPS origin — the token never goes in the URL; the updater feeds
          # it via a credential helper reading that root-only file:
          sudo git -c credential.helper= \\

@@ -421,7 +421,7 @@ operator:
    ```bash
    sudo install -d -m 700 /etc/styrman
    # paste the token when prompted — never into shell history:
-   sudo sh -c 'umask 077; read -r t; printf "%s" "$t" > /etc/styrman/gh-token'
+   sudo bash -c 'umask 077; read -rs t; printf "%s" "$t" > /etc/styrman/gh-token'
    # HTTPS origin; the token never goes in the URL, only through the helper
    # reading that root-only file:
    sudo git -c credential.helper= \
