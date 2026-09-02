@@ -1033,4 +1033,157 @@ clause rewritten for the success/mid-stream-failure symmetry + Recent-chip-
 kept fact). Did NOT touch REQUIREMENTS.md/TODO.md/changelogs/ADRs per task
 scope (changelog subagent's lane).
 
+**2026-09-02 session (third pass, same day) — updater self-install doc sync
++ new govulncheck security tier (v1.17.3 prep).** Verified against
+`deploy/update/styrman-update` (its `self_install()` function + comments),
+`deploy/update/styrman-update.service`, and `deploy/vulncheck.sh` before
+writing. Key facts for next time:
+- **The auto-updater now installs ITSELF** from the verified checkout after
+  ANY health-checked deploy (forward or rollback — `self_install()` is
+  called on both paths): copies `deploy/update/{styrman-update,
+  styrman-update.service,styrman-update.timer}` over the live
+  `/usr/local/bin`/`/etc/systemd/system` copies, atomically (`install` into
+  a same-dir `.new.$$` temp file, then `mv -f`) so the currently-running
+  script keeps its old inode and the new one applies next run
+  (`systemctl daemon-reload`, nothing is restarted mid-deploy). Targets have
+  **no in-script default** — `STYRMAN_UPDATER_BIN`/`STYRMAN_UPDATER_UNIT_DIR`,
+  same ADR-052 shape as the state dir, pinned only by `Environment=` in
+  `styrman-update.service`; unset (hand-run/test) logs "self-install
+  skipped" and does nothing. Closes a real prior gap (TODO.md, tracked since
+  the 2026-09-01/02 incidents) where a release touching `deploy/update/*`
+  deployed the containers but left the OLD updater script/units running.
+  No new ADR exists for this yet (uncommitted work at dispatch time) — cited
+  ADR-052 only, matching the script's own comment.
+- **v1.17.3 (the release introducing this) has a one-time bootstrap gap**:
+  it is deployed by the OLD script (no self-install logic), so it still
+  needs one manual `install`+`daemon-reload` after that single deploy —
+  documented as a one-time exception in both `deploy.md` and `versioning.md`,
+  not a standing procedure. Every release after v1.17.3 self-installs.
+- **New security test tier**: `deploy/vulncheck.sh` runs
+  `govulncheck@v1.7.0` for BOTH Go modules (root `.` and
+  `deploy/caddy/ingress`) inside the SAME pinned `golang` builder image
+  `deploy/Dockerfile.server` uses (parsed from its `FROM golang:... AS
+  builder` line, not hardcoded) — deliberately not the host's `go`, which
+  reported 31 stdlib-only findings the shipped binary never has
+  (2026-09-02 finding, in the script's own header comment). Exit status is
+  govulncheck's own; the accepted baseline is two `docker/docker` findings
+  with no upstream fix (GO-2026-4887/4883 per the script comment), meant to
+  be re-checked, not silently re-accepted, every release. Added as Tier 6 in
+  `.agents/docs/testing/styrman/README.md`'s numbered Tiers list (tiers 1-5
+  already existed: Unit/Integration/Manual/e2e/Harness) and as a `# Security`
+  block in `AGENTS.md`'s Setup Commands, next to Test/Lint — task scoped
+  ONLY these two spots, did not touch AGENTS.md's prose Testing section.
+- **Confirmed no stale "reinstall by hand" guidance existed to remove** —
+  grepped `deploy.md`/`versioning.md` for "reinstall" before writing; the
+  only prior mention of this gap lived in TODO.md (out of lane, not edited),
+  so this pass was purely additive, not a correction.
+
+Files touched this session: `.agents/docs/specs/styrman/deploy.md` (new
+"It installs itself too" + "One-time exception" bullets in the Auto-update
+section, after Rollback and before Flags), `.agents/docs/specs/styrman/
+versioning.md` (short "It also keeps itself current" bullet in "The
+auto-updater, end to end" section), `AGENTS.md` (Setup Commands — new
+`# Security` block), `.agents/docs/testing/styrman/README.md` (new Tier 6
+list item). Did NOT touch REQUIREMENTS.md/TODO.md/changelogs/ADRs per task
+scope (changelog subagent's lane records this as part of the v1.17.3
+release entry).
+
+**2026-09-02 session (fourth pass, same day) — small precision delta on the
+same v1.17.3 self-install/govulncheck material added in pass 3 above.**
+Re-verified against `deploy/update/styrman-update` (the `self_install()`
+function + `REQUIRE_SIGNED` gate) and `deploy/vulncheck.sh` before writing.
+Key facts for next time:
+- **Self-install only fires when signature enforcement is ON**
+  (`REQUIRE_SIGNED=1`, the default) — `self_install()`'s own first check
+  returns early with a log line ("signature enforcement is OFF — an
+  unverified tree must not replace the updater") when the
+  `/etc/styrman/update.env` unsigned-tag opt-out is engaged. Pass 3's
+  entry above didn't call this out explicitly; added to both `deploy.md`
+  and `versioning.md`.
+- **Self-install target validation, not just "no in-script default"**:
+  `self_install()` also (a) requires `basename "${UPDATER_BIN}")` to be
+  exactly `styrman-update` (a rename attempt via env logs a `WARN` and
+  skips), and (b) runs `trusted_dir()` on both `$(dirname
+  "${UPDATER_BIN}")` and `UPDATER_UNIT_DIR` — must exist, be root-owned,
+  not group/world-writable — before installing anything. Added to
+  `deploy.md`'s bullet (this level of detail wasn't there before).
+- **govulncheck exit codes, precisely**: `3` = a called vulnerability in
+  either module, `0` = clean, anything else = the scan itself failed
+  (network/install/broken image) — distinguished from a real finding
+  because the script uses `go install ${GOVULN} && govulncheck ./...`
+  (never `go run`, which would collapse a finding into a generic exit 1).
+  Also documented `GOTOOLCHAIN=local` (scans with the image's own Go, no
+  auto-switch) and the `-v /dev/null:/src/deploy/.env:ro` bind that shadows
+  the gitignored secrets file inside the container. Pass 3's Tier-6 entry
+  only had the loose "exit status is govulncheck's own" framing — this
+  pass made it precise per the task's explicit ask.
+
+Files touched this session: `.agents/docs/specs/styrman/deploy.md`
+("It installs itself too" bullet extended with the REQUIRE_SIGNED gate +
+basename/trusted_dir target validation), `.agents/docs/testing/styrman/
+README.md` (Tier 6 govulncheck item rewritten with the precise 3/0/other
+exit-code table + GOTOOLCHAIN=local + deploy/.env shadow), `.agents/docs/
+specs/styrman/versioning.md` ("It also keeps itself current" bullet gained
+the one-sentence signed-only clause). Did NOT touch REQUIREMENTS.md/
+TODO.md/changelogs/ADRs per task scope.
+
+**2026-09-02 session (fifth pass, same day) — reviewer-driven fix of a
+SUPERSEDED self-install mechanism description (v1.17.3 prep, uncommitted
+tree).** Verified against `deploy/update/styrman-update` (its `self_install`/
+`atomic_install`/`differs`/`trusted_dir` functions) and `deploy/vulncheck.sh`
+before writing. Key facts for next time:
+- **The install-from-checkout description from passes 3/4 above is now
+  WRONG** — code had moved on (already reflected in ADR-057 and, it turns
+  out, already mostly reflected in this file's own testing-README section,
+  which someone/some pass had already updated ahead of `deploy.md`/
+  `versioning.md` catching up — don't assume all three docs drift in
+  lockstep, they can get out of sync with EACH OTHER, not just with code).
+  `self_install()` pins `SELF_HEAD="$(git rev-parse HEAD)"` ONCE, then reads
+  bytes exclusively via `git cat-file -e "${SELF_HEAD}:<path>"` (presence)
+  and `git show "${SELF_HEAD}:<path>"` (content, both for `differs()`'s
+  `cmp` and for writing the temp file) — **the worktree is never read**,
+  closing a real security-review MEDIUM (a local user with write access to
+  the mutable checkout could otherwise swap a file in post-verification).
+  Write path: `git show ... > "<target>.new.$$"` → `chmod`/`chown
+  root:root` → `mv -fT` (the `-T` makes a directory sitting at the target
+  path FAIL instead of silently absorbing the file, unlike a plain `mv -f`).
+  Orphan `<target>.new.*` sweep runs for all three targets up front, every
+  run. The "self-installed" success log line only prints when something
+  changed AND nothing failed. `.git` must now be root-owned AND
+  not-group/world-writable (a NEW bar beyond the pre-existing root-owned-only
+  check) because self-install reads arbitrary paths out of the object
+  store. `systemctl enable` of the timer stays `host-setup.sh`'s job —
+  self-install never enables/disables it (a fact none of the three docs had
+  stated explicitly before this pass).
+- **Testing README's self-install recipe already extracted the right FOUR
+  functions and already had the git()/DEPLOY_DIR-must-be-a-repo shape right**
+  (from an earlier, unlogged-in-my-memory pass — ADR-057 already existed
+  too) — but was missing explicit `REQUIRE_SIGNED=1`/root-owned-0755-dirs
+  setup instructions and TWO of nine test cases (bad basename skips,
+  group-writable unit dir skips). Added both cases, relettered (a)-(i),
+  and collapsed the four separate `sed` invocations into one combined
+  command per the dispatching task's preferred shape. **Lesson: when a task
+  says "these two docs describe a superseded mechanism," verify each one
+  independently before assuming they're equally stale — one may already be
+  ahead of the other.**
+- Confirmed the dispatching task's "remove the obsolete `install -o root`
+  wording" instruction was already moot — grepped the whole `.agents/docs`
+  tree and that phrase only survives in a dated `reviews/2026-09-02-review-
+  v1.17.3.md` entry (out of lane, historical record), not in either doc
+  this pass touched.
+- `versioning.md`'s parallel bullet just needed the phrase "from the
+  verified checkout" → "from the verified git object at the deployed
+  commit — never the checkout's worktree", keeping its existing "see
+  deploy.md for exact mechanics" deferral intact (task's explicit ask).
+
+Files touched this session: `.agents/docs/specs/styrman/deploy.md` ("It
+installs itself too" bullet rewritten for the git-object mechanism, `.git`
+group/world-write bar, `systemctl enable` stays host-setup.sh's job),
+`.agents/docs/testing/styrman/README.md` (self-install recipe: combined sed
+command, explicit REQUIRE_SIGNED=1/root-owned-0755-dirs setup, two new test
+cases, relettered a-i), `.agents/docs/specs/styrman/versioning.md` ("keeps
+itself current" bullet's mechanism phrase). Did NOT touch REQUIREMENTS.md/
+TODO.md/changelogs/ADRs per task scope (ADR-057 already existed and already
+matched code; changelog subagent's lane for a v1.17.3 entry).
+
 See [[feedback-styrman-doc-edits]] for edit-process lessons.

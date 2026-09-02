@@ -31,6 +31,9 @@ go test ./...
 # Lint
 go vet ./...
 
+# Security
+bash deploy/vulncheck.sh   # govulncheck for both modules inside the pinned builder image
+
 # Build runtime image (AMD64, local only)
 docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/  # the version keys harness re-seeding
 

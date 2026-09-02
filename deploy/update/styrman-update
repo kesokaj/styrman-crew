@@ -152,6 +152,11 @@ cd "${DEPLOY_DIR}"
 # code this script builds as root (security review).
 [ "$(stat -c %u "${DEPLOY_DIR}/.git" 2>/dev/null)" = "0" ] \
     || fail "${DEPLOY_DIR}/.git is not root-owned — refusing to build from a tree another user can write"
+# Mode too: HEAD now also decides what is INSTALLED as root (self-install
+# reads the git objects), so .git gets the same group/world-write bar as
+# every other trust input (review).
+[ -z "$(find "${DEPLOY_DIR}/.git" -maxdepth 0 -perm /022 2>/dev/null)" ] \
+    || fail "${DEPLOY_DIR}/.git is group/world-writable — refusing to trust its objects"
 # deploy/.env survives both `checkout --force` and `git clean -d` (it is
 # gitignored) and supplies STYRMAN_ALLOWED_EMAILS to the stack, so it needs the
 # same ownership guarantee as the tree itself (security review).
@@ -348,6 +353,106 @@ if [ "${CHECK_ONLY}" = true ]; then
     exit 0
 fi
 
+# ─── Self-install ───────────────────────────────────────────────────────────
+# The updater deploys the container STACK from the verified checkout, but it
+# lives outside that stack — this script in /usr/local/bin and the two units
+# in /etc/systemd/system, put there by host-setup.sh — so a release that
+# changed deploy/update/* used to deploy everything except the updater itself
+# (bit the operator three times, 2026-09-01/02). After a deploy has been
+# health-checked, install the checkout's copies: the running bash keeps its
+# open (old) inode — the replacement is an atomic rename, never an in-place
+# write — so the new script takes effect on the NEXT run.
+# ADR-052: the targets have NO in-script default; the unit pins them, a
+# hand-run or a test that does not set them gets a log line and no install.
+UPDATER_BIN="${STYRMAN_UPDATER_BIN:-}"
+UPDATER_UNIT_DIR="${STYRMAN_UPDATER_UNIT_DIR:-}"
+SELF_HEAD="" # set by self_install: the verified commit its reads are pinned to
+# trusted_dir <dir> — the same bar every other root-written path in this
+# script meets: exists, root-owned, not group/world-writable.
+trusted_dir() {
+    [ -d "$1" ] && [ "$(stat -c %u "$1")" = "0" ] && [ -z "$(find "$1" -maxdepth 0 -perm /022 2>/dev/null)" ]
+}
+# atomic_install <mode> <git-path> <dst> — content comes from the VERIFIED
+# git object at HEAD (`git show`), never from the worktree: the checkout is a
+# mutable directory that a local user could edit between verification and
+# install (security review). Temp file beside the target + rename = a new
+# inode, so a running copy of the target is never modified in place; -T so a
+# directory sitting at the target path fails instead of swallowing the file
+# (review: mv -f onto a dir "succeeds" by moving the file inside it).
+atomic_install() {
+    local mode="$1" gitpath="$2" dst="$3"
+    git show "${SELF_HEAD}:${gitpath}" > "${dst}.new.$$" \
+        && chmod "${mode}" "${dst}.new.$$" && chown root:root "${dst}.new.$$" \
+        && mv -fT "${dst}.new.$$" "${dst}" \
+        || { rm -f "${dst}.new.$$"; return 1; }
+}
+# differs <git-path> <dst> — true when the verified object and the installed
+# file differ (or the file is absent).
+differs() { ! git show "${SELF_HEAD}:$1" 2>/dev/null | cmp -s - "$2" 2>/dev/null; }
+self_install() {
+    if [ -z "${UPDATER_BIN}" ] || [ -z "${UPDATER_UNIT_DIR}" ]; then
+        log "self-install skipped: STYRMAN_UPDATER_BIN/STYRMAN_UPDATER_UNIT_DIR unset (the unit sets them)"
+        return 0
+    fi
+    # Only a SIGNATURE-VERIFIED tree may replace the updater (security review):
+    # with the REQUIRE_SIGNED opt-out engaged, the deployed tree is unverified
+    # and must not become the thing that decides whether signatures are
+    # checked next time. (The rollback path only skips re-verification for a
+    # SHA this host verified when it was first deployed.)
+    if [ "${REQUIRE_SIGNED}" != "1" ]; then
+        log "self-install skipped: signature enforcement is OFF — an unverified tree must not replace the updater"
+        return 0
+    fi
+    # Targets are root-written from env (unit-pinned): canonicalize, pin the
+    # basenames, and assert the destination dirs like every other root input.
+    local bin bindir unitdir src changed=0 failed=0 f
+    bin="$(realpath -m -- "${UPDATER_BIN}")"; bindir="$(dirname "${bin}")"
+    unitdir="$(realpath -m -- "${UPDATER_UNIT_DIR}")"
+    if [ "$(basename "${bin}")" != "styrman-update" ]; then
+        log "WARN: self-install skipped: STYRMAN_UPDATER_BIN must be named styrman-update (got ${bin})"; return 0
+    fi
+    if ! trusted_dir "${bindir}" || ! trusted_dir "${unitdir}"; then
+        log "WARN: self-install skipped: ${bindir} or ${unitdir} is missing, not root-owned, or group/world-writable"; return 0
+    fi
+    # Pin the verified commit ONCE: every read below resolves against this
+    # SHA, so an operator `git checkout` in the clone mid-run cannot yield a
+    # mixed install (review).
+    SELF_HEAD="$(git rev-parse HEAD 2>/dev/null)" || { log "WARN: cannot resolve HEAD — self-install skipped"; return 0; }
+    src="deploy/update" # git paths, resolved against ${SELF_HEAD}
+    for f in styrman-update styrman-update.service styrman-update.timer; do
+        git cat-file -e "${SELF_HEAD}:${src}/${f}" 2>/dev/null || { log "WARN: ${src}/${f} missing in the verified tree — self-install skipped"; return 0; }
+    done
+    log "self-install targets: ${bin}, ${unitdir}/styrman-update.{service,timer}"
+    # Sweep orphans of ALL three targets up front (an earlier SIGKILLed
+    # attempt), not just the ones that drift this run (review).
+    rm -f "${bin}.new."* "${unitdir}/styrman-update.service.new."* "${unitdir}/styrman-update.timer.new."* 2>/dev/null || true
+    if differs "${src}/styrman-update" "${bin}"; then
+        if atomic_install 755 "${src}/styrman-update" "${bin}"; then changed=1; else failed=1; log "WARN: could not self-install ${bin}"; fi
+    fi
+    for f in styrman-update.service styrman-update.timer; do
+        if differs "${src}/${f}" "${unitdir}/${f}"; then
+            # Keep going on a failure: a partially updated pair still needs the
+            # daemon-reload below for whatever DID land (review).
+            if atomic_install 644 "${src}/${f}" "${unitdir}/${f}"; then changed=1; else failed=1; log "WARN: could not self-install ${unitdir}/${f}"; fi
+        fi
+    done
+    if [ "${changed}" = "1" ]; then
+        # Re-read units now; the new script/units apply on the next run. Not
+        # fatal: a deploy already health-checked must not be reported failed
+        # because of this housekeeping.
+        local out
+        if ! out="$(systemctl daemon-reload 2>&1)"; then
+            log "WARN: systemctl daemon-reload failed after self-install: ${out}"
+        fi
+    fi
+    if [ "${failed}" = "0" ]; then
+        [ "${changed}" = "1" ] && log "updater self-installed from the verified tree (takes effect next run)"
+    else
+        log "WARN: self-install incomplete — the next run may still use the previous updater"
+    fi
+    return 0
+}
+
 # ─── Deploy ─────────────────────────────────────────────────────────────────
 # deploy <tag> — checkout, rebuild both images, bring the stack up.
 # deploy <ref> <version> [trusted]
@@ -456,6 +561,7 @@ if deploy "${LATEST}" "${LATEST#v}" && reports_version "${LATEST#v}"; then
         rm -f "${STATE_SHA}"
     fi
     rm -f "${FAILED}"
+    self_install
     log "OK — ${LATEST} is live"
     exit 0
 fi
@@ -480,6 +586,9 @@ else
 fi
 if deploy "${rollback_ref}" "${PREVIOUS#v}" "${rollback_trust}" && reports_version "${PREVIOUS#v}"; then
     printf '%s' "${PREVIOUS}" > "${STATE}"
+    # The updater must match what is DEPLOYED, so the rolled-back tree's
+    # copies are installed too (this run keeps executing the old inode).
+    self_install
     fail "rolled back to ${PREVIOUS}. ${LATEST} is marked FAILED and will not be retried automatically — fix it and re-run with --force, or push a newer tag."
 fi
 fail "rollback to ${PREVIOUS} ALSO failed — manual intervention required"

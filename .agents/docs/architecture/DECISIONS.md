@@ -2217,3 +2217,49 @@ Verification: .agents/docs/changes/2026-09-01-remove-backups-and-token-auth.md,
 .agents/docs/reviews/2026-09-01-review-no-backups.md,
 .agents/docs/reviews/2026-09-01-security-no-backups.md,
 .agents/docs/testing/2026-09-01-verify-no-backups.md.
+
+---
+
+## ADR-057: The updater installs itself from the verified release — the host's updater and its systemd units are release-controlled state (2026-09-02)
+
+**Context.** Three manual reinstalls of `/usr/local/bin/styrman-update` and its two systemd units
+in two days (2026-09-01/02). The updater deploys the container stack from a signature-verified
+checkout (ADR-051), but its own script and units were `host-setup.sh` provisioning artifacts,
+never touched again after initial install — so any release that changed `deploy/update/*` shipped
+everything except itself, silently reverting to the old updater behavior until an operator noticed
+and hand-copied the new files onto the host.
+
+**Decision.** After a health-checked deploy — both the main path and a successful rollback —
+`self_install()` installs `deploy/update/styrman-update`, `styrman-update.service`, and
+`styrman-update.timer` over the host's copies, installed from the verified git object at HEAD,
+never the worktree: `differs()`/`atomic_install()` read each file via
+`git show "HEAD:deploy/update/<f>"` (`HEAD` being the tag or trusted SHA `deploy()` just checked
+out and verified), not from the checkout directory's on-disk bytes — the checkout stays a mutable,
+writable directory after verification, so reading from the worktree would let a local user with
+write access to it swap a file post-verification and have it installed anyway. A byte-identical
+object is left alone; a changed one is written to a temp file and moved into place with `mv -fT`
+(atomic, new inode, and a directory at the target path fails loudly instead of silently absorbing
+the file), so the currently running script finishes this run on its old inode and the replacement
+takes effect on the next tick; `systemctl daemon-reload` runs only when a unit actually changed.
+Targets are pinned by the systemd unit with no in-script default
+(`Environment=STYRMAN_UPDATER_BIN=/usr/local/bin/styrman-update`,
+`Environment=STYRMAN_UPDATER_UNIT_DIR=/etc/systemd/system`), the same shape ADR-052 already
+established for `STYRMAN_UPDATE_STATE_DIR`. Critically, this only runs when signature enforcement
+is on (`REQUIRE_SIGNED=1`): with the opt-out engaged the deployed tree is by definition
+unverified, and an unverified tree must never become the mechanism that decides whether
+signatures are checked next time.
+
+**Consequences.** No new capability is created — a signed release already runs arbitrary root
+code via `docker build`/`docker compose` on this host, so a hostile signed tag was already a
+total compromise before this change. What does change: a signed release can now also rewrite its
+own hardening and its own replacement mechanism on the very next run, so the signer allowlist
+(`/etc/styrman/allowed_signers`) is now the single trust root for the host's updater
+*configuration*, not just for what gets deployed. Accepted by design (security review). The
+`REQUIRE_SIGNED` opt-out path never self-installs, so an operator who has deliberately disabled
+signing keeps manual control of the updater itself as a deliberate consequence, not an oversight.
+
+Source: deploy/update/styrman-update, deploy/update/styrman-update.service.
+Verification: .agents/docs/changes/2026-09-02-v1.17.3-updater-self-install-and-vulncheck.md,
+.agents/docs/reviews/2026-09-02-review-v1.17.3.md (round 3),
+.agents/docs/reviews/2026-09-02-security-v1.17.3.md (round 3),
+.agents/docs/testing/2026-09-02-verify-v1.17.3-round3.md (final record).

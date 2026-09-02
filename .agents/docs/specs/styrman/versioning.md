@@ -187,6 +187,21 @@ version:
   running `styrman-server` container (`docker inspect`) — not HTTP, since
   production's `STYRMAN_AUTH=header` would 403 an unauthenticated poll and
   make every healthy release look like a failure.
+- **It also keeps itself current — but only when signature enforcement is
+  ON** (`REQUIRE_SIGNED=1`, the default; the `/etc/styrman/update.env`
+  unsigned-tag opt-out never self-installs). After a health-checked deploy
+  (forward OR rollback) made under enforcement, it installs its own
+  `deploy/update/{styrman-update,
+  styrman-update.service,styrman-update.timer}` from the verified git
+  object at the deployed commit — never the checkout's worktree — over the
+  live `/usr/local/bin`/`systemd` copies, atomically (temp file + rename),
+  taking effect on the next tick — see `deploy.md`'s Auto-update section
+  for the exact mechanics. Targets are pinned the same ADR-052 way
+  as the state dir (`STYRMAN_UPDATER_BIN`/`STYRMAN_UPDATER_UNIT_DIR`, no
+  in-script default). **One-time exception**: v1.17.3, the release that
+  introduces this, is deployed by the OLD script and still needs one manual
+  reinstall right after that single deploy — every release after it
+  self-installs.
 
 ## Rollback
 

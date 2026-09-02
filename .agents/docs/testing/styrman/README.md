@@ -30,6 +30,28 @@ No mocks in the orchestrator path.
 5. **Vendored agent harness (`image/harness/`)** — see the Tier 5 section
    below. NOT automated anywhere (integration.sh and the e2e suite have
    zero harness assertions) — run by hand on every harness sync.
+6. **Security (govulncheck)** — `bash deploy/vulncheck.sh`. Runs
+   `govulncheck@v1.7.0` for BOTH Go modules (root, and the vendored Caddy
+   ingress at `deploy/caddy/ingress`) inside the SAME pinned `golang`
+   builder image `deploy/Dockerfile.server` uses, with `GOTOOLCHAIN=local`
+   so the scan always runs against that image's OWN Go rather than
+   auto-switching to whatever a `go` directive asks for — not the host's
+   `go`, which reported 31 stdlib-only findings the shipped binary never
+   has (2026-09-02). The repo is mounted read-only and the one
+   secret-bearing file in it, the gitignored `deploy/.env`, is shadowed
+   with `/dev/null` inside the container — a tool this script downloads and
+   runs must never see the ingress token. Exit status is govulncheck's own,
+   via `go install ... && govulncheck ./...` (not `go run`, which would
+   collapse a real finding into the same exit code as a broken scan): `3` =
+   a called vulnerability in either module, `0` = clean, anything else = the
+   scan itself failed (network, install, or a broken image) rather than a
+   finding. The accepted baseline is the two `docker/docker` findings with
+   no upstream fix, re-checked — not silently re-accepted — every release.
+   Since 2026-09-02 (round 3) the exit across the two modules is WORST-WINS,
+   not last-writer-wins: a broken scan (anything but 0/3) always overrides a
+   prior finding, and a finding (3) is never masked by a later clean module —
+   verified by running the script's own per-module command shape with one
+   module path deliberately broken, in both orderings.
 
 ## Prereqs
 
@@ -87,6 +109,72 @@ creates rather than an existing shared dir like `/tmp` itself, e.g.
 `STYRMAN_UPDATE_STATE_DIR=$(mktemp -d)/state styrman-update --check` (the
 script's own `install -d` only creates what is missing — it never re-modes
 an existing parent — but a nested path keeps the test unambiguous).
+
+### Updater self-install (`self_install()`, ADR-052/ADR-057 shape)
+
+After a health-checked deploy, `styrman-update` pins the verified commit
+ONCE (`SELF_HEAD="$(git rev-parse HEAD)"`) and installs
+`deploy/update/{styrman-update,.service,.timer}` **from that git object**
+over the host copies (`STYRMAN_UPDATER_BIN` / `STYRMAN_UPDATER_UNIT_DIR` —
+no in-script default; the unit alone pins `/usr/local/bin/styrman-update`
+and `/etc/systemd/system`). `atomic_install()`/`differs()` source bytes with
+`git show "${SELF_HEAD}:${gitpath}"` — **the worktree is never read** — so
+**`DEPLOY_DIR` in the harness must be a real git repository**, not a plain
+directory of files: a directory holding uncommitted copies of the three
+files will make every `differs()`/`git cat-file -e` call fail closed
+(nothing installs). Test it in a scratch harness, never against the real
+targets:
+
+```bash
+sed -n '/^trusted_dir()/,/^}/p;/^atomic_install()/,/^}/p;/^differs()/,/^}/p;/^self_install()/,/^}/p' \
+    deploy/update/styrman-update > /tmp/self-install-funcs.sh
+# in a scratch script: source /tmp/self-install-funcs.sh, then set
+# REQUIRE_SIGNED=1, define log(), and a git() wrapper that replicates the
+# real script's cwd-relative one (`git() { command git -C "$DEPLOY_DIR" -c
+# safe.directory="$DEPLOY_DIR" "$@"; }` — the real script instead `cd`s into
+# DEPLOY_DIR before defining an equivalent cwd-relative git()). Export
+# DEPLOY_DIR=<scratch>/deploy_repo — a `git init`'d, root-owned GIT REPO
+# whose HEAD commit has deploy/update/{styrman-update,.service,.timer}
+# COMMITTED, not a plain directory of copies. Set
+# UPDATER_BIN=<scratch>/bin/styrman-update and
+# UPDATER_UNIT_DIR=<scratch>/units, both root-owned, mode 0755 scratch
+# dirs, put a stub `systemctl` that just logs its argv on PATH, then call
+# `self_install`.
+```
+
+Run the sourcing script as root (`chown root:root` on the installed files
+needs it) and assert: (a) targets absent → all three created, mode 755/644,
+root-owned, `daemon-reload` called once, targets logged; (b) run again, HEAD
+unchanged → `differs()` reports false for all three → nothing rewritten
+(same inode via `stat -c %i`), `daemon-reload` NOT called; (c) **edit the
+scratch repo's WORKTREE copy of `styrman-update` WITHOUT committing**, then
+rerun → HEAD unchanged, nothing installed, installed bytes do NOT contain
+the tamper — a deliberate NO-OP (confirms the round-2 security MEDIUM —
+install-from-worktree — stays closed); (d) commit a real change to the
+scratch repo, then rerun → new inode, installed bytes equal the new `HEAD`
+blob, `daemon-reload` called; (e) `STYRMAN_UPDATE_REQUIRE_SIGNED=0`
+(`REQUIRE_SIGNED` in the extracted functions' scope) → skip, nothing
+written, checked BEFORE target validation; (f) rename so `UPDATER_BIN`'s
+basename isn't `styrman-update` → `WARN`, skip, nothing written; (g) make
+`UPDATER_UNIT_DIR` group-writable (`chmod g+w`) → `trusted_dir()` fails,
+`WARN`, skip, nothing written; (h) put a **directory** at `<bin>` before a
+run → `mv -fT` refuses to overwrite it, `WARN: could not self-install`,
+trailing `WARN: self-install incomplete` (the success line is suppressed
+whenever anything failed), `self_install` still returns 0, and the units
+(a different, non-directory target) still install correctly; (i) plant
+`<name>.new.<pid>` orphans for **all three** target names but only commit a
+change to one file → the next run removes all three orphans (the sweep is
+hoisted to the top of `self_install`, not scoped per-file inside
+`atomic_install`).
+
+Separately, hand-run the real script end-to-end against a scratch clone with
+an unreachable `origin` (`git remote set-url origin
+https://example.invalid/...`) and a scratch, root-owned, non-group-writable
+`STYRMAN_UPDATE_STATE_DIR` — the fetch fails before `self_install` is ever
+reached, so the self-install log line must NOT appear and nothing must be
+written outside scratch (confirmed 2026-09-02, rounds 2 and 3:
+`/usr/local/bin/styrman-update`, the real unit files, and
+`/etc/styrman/update` all had unchanged mtimes after the run).
 
 ## Rebuild-and-retest loop
 

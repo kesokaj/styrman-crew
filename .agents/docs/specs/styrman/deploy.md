@@ -398,6 +398,78 @@ disabled for exactly this reason.
   actually work across the signing-adoption boundary. `--force` clears the
   failed latch (and also forces a redeploy of the current tag even if
   nothing changed).
+- **It installs itself too**, so a release that only touches
+  `deploy/update/*` no longer needs a manual step. The script and its units
+  live OUTSIDE the stack they deploy — `/usr/local/bin/styrman-update` plus
+  `styrman-update.{service,timer}` in `/etc/systemd/system`, all placed
+  there once by `host-setup.sh` step 8c — so a prior release that changed
+  only those files deployed every container while leaving the OLD updater
+  running (bit the operator 2026-09-01/02, tracked as a TODO before this
+  closed it). After EITHER a forward deploy or a rollback reports itself
+  healthy, `self_install()` pins the verified commit ONCE
+  (`SELF_HEAD="$(git rev-parse HEAD)"`), so every read below resolves
+  against that exact SHA even if the checkout is mutated mid-run, then for
+  each of `deploy/update/{styrman-update,styrman-update.service,
+  styrman-update.timer}` checks it's present in that commit with
+  `git cat-file -e "${SELF_HEAD}:<path>"` (a missing file skips the whole
+  install with a `WARN`) and, for anything `differs()` reports changed
+  (`git show "${SELF_HEAD}:<path>" | cmp -s - <installed>`), writes
+  `git show "${SELF_HEAD}:<path>" > "<target>.new.$$"`, `chmod`s and
+  `chown root:root`s that temp file, then `mv -fT`s it over the live
+  target. **The worktree is never read** — only the verified git object at
+  `SELF_HEAD`: the checkout stays a writable directory after verification,
+  so reading from it (rather than the object store) would let a local user
+  with write access swap a file in post-verification and have it installed
+  anyway. `-T` makes a directory sitting at the target path FAIL the
+  install rather than silently absorb the file into itself (a plain
+  `mv -f` onto a directory "succeeds" that way). Orphaned
+  `<target>.new.<pid>` files from an earlier interrupted attempt are swept
+  for **all three** targets up front, every run, not just the ones that
+  changed this time. The atomic rename means the currently-running script
+  keeps its own already-open (old) inode and the swap is safe mid-run; the
+  NEW script/units take effect on the NEXT tick (`systemctl daemon-reload`
+  re-reads the units immediately when anything changed — nothing already
+  running is restarted, and `systemctl enable` of the timer stays
+  `host-setup.sh`'s job: self-install never enables or disables it). Since
+  reading `deploy/update/*` now means reading arbitrary paths out of the
+  object store, `${DEPLOY_DIR}/.git` must be root-owned **and** not
+  group/world-writable, not just root-owned — the general trust-input check
+  above only asserted ownership; this is the extra bar self-install added.
+  **It only ever fires when signature enforcement is ON**
+  (`REQUIRE_SIGNED=1`, the default): the `/etc/styrman/update.env` opt-out
+  that accepts unsigned tags NEVER self-installs, logging a skip instead —
+  an unverified tree must not become the thing that decides whether
+  signatures are checked next time (the rollback path's own SHA-trust
+  exception doesn't extend here; it only skips re-verifying a SHA this host
+  already verified when first deploying it). The two install targets are
+  also validated before use, the same trust bar as every other root input
+  in this script: the basename of `STYRMAN_UPDATER_BIN` must be exactly
+  `styrman-update` (a mismatch logs a `WARN` and skips), and both
+  destination directories must exist, be root-owned, and not be
+  group/world-writable (`trusted_dir()`; otherwise `WARN` and skip). A
+  self-install failure — including a partial one where the binary installs
+  but a unit file doesn't, or vice versa — is logged as a `WARN`, never
+  fails an already-verified, already-healthy deploy, and suppresses the
+  "updater self-installed from the verified tree" success line: that line
+  prints only when something changed AND nothing failed. The two targets
+  are pinned the same ADR-052 shape as the state dir above — **no
+  in-script default**: `STYRMAN_UPDATER_BIN`/`STYRMAN_UPDATER_UNIT_DIR`,
+  set only by `Environment=` in `styrman-update.service`
+  (`/usr/local/bin/styrman-update`, `/etc/systemd/system`); a hand run or a
+  test that leaves them unset logs `self-install skipped: ... unset (the
+  unit sets them)` and installs nothing.
+- **One-time exception**: v1.17.3, the release that introduces self-install,
+  is itself deployed by the OLD `styrman-update` already running on the
+  host — the one without this logic — so it still needs one FINAL manual
+  reinstall right after that one deploy completes:
+  ```bash
+  cd /opt/styrman
+  sudo install -m 755 -o root -g root deploy/update/styrman-update /usr/local/bin/styrman-update
+  sudo install -m 644 -o root -g root deploy/update/styrman-update.service deploy/update/styrman-update.timer /etc/systemd/system/
+  sudo systemctl daemon-reload
+  ```
+  Every release after v1.17.3 self-installs from its own verified git object;
+  this manual step is never needed again.
 - **Flags**: `styrman-update --check` (report what would happen, changes
   nothing) and `styrman-update --force` (see above).
 

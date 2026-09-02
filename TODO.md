@@ -110,7 +110,15 @@ Add new items below as they arise.
 - [ ] 🟡 `formatInPlace` has no test coverage, unlike its analog
   `checkerFor`. (2026-09-01 whole-project audit)
 - [ ] 🟡 Add `deploy/caddy/ingress` to `/preflight`'s verification — no
-  gate scans it today. (2026-09-01 whole-project audit)
+  gate scans it today. (2026-09-01 whole-project audit) PARTIALLY closed
+  2026-09-02: `deploy/vulncheck.sh` now scans both Go modules (`.` and
+  `deploy/caddy/ingress`) for vulnerabilities — see
+  `.agents/docs/changes/2026-09-02-v1.17.3-updater-self-install-and-vulncheck.md`.
+  REOPENED, narrowed: `/preflight`'s `go vet ./...` and `go test ./...`
+  still run at the repo root only and do not cross into
+  `deploy/caddy/ingress` as its own module — vulncheck does not cover
+  vet/test, only vulnerability scanning. Add `deploy/caddy/ingress` to the
+  preflight verifier brief's `go vet`/`go test` steps.
 - [ ] 🟢 Dead code: `LastActivity`, `Project.Agent`, `Project.GitInit`.
   (2026-09-01 whole-project audit)
 - [ ] 🟢 Coverage: zero frontend unit tests (8,254 LOC);
@@ -151,13 +159,16 @@ Add new items below as they arise.
   active file stays active across explorer navigation until explicitly
   closed, rather than tracking explorer selection), was not part of what
   shipped — re-raise separately if still wanted.
-- [ ] 🟡 The updater does not reinstall ITSELF: a release that changes
+- [x] 🟡 The updater does not reinstall ITSELF: a release that changes
   `deploy/update/*` deploys the stack but leaves the OLD
   `/usr/local/bin/styrman-update` + units installed (bit a THIRD time in the
   v1.17.2 code-review-fix release — the round-2 `/run/*`-only `DOCKER_CONFIG`
   script had to be hand-installed on the host again). Fix idea: `deploy()`
   installs the checkout's updater script+units after a successful health
-  check (takes effect next run).
+  check (takes effect next run). SHIPPED 2026-09-02 (v1.17.3) —
+  `self_install()`, cmp-gated atomic rename, one-time manual reinstall
+  caveat noted; see
+  `.agents/docs/changes/2026-09-02-v1.17.3-updater-self-install-and-vulncheck.md`.
 - [ ] 🟢 The currently-open file's row in the file explorer
   (`bg-accent-soft`, `isOpen` branch, `FileExplorer.tsx:333-337`) has no
   `hover:` class, unlike every other row — carried over from
@@ -191,14 +202,19 @@ Add new items below as they arise.
   success for an upload that never happened; a plain 401 surfaces as a raw
   toast instead of running `reAuthOnce()`. (v1.17.2 round-4 review, low,
   `.agents/docs/reviews/2026-09-02-review-v1.17.2-fixes.md`)
-- [ ] 🟢 Run `govulncheck` inside the builder image (or pin the host
+- [x] 🟢 Run `govulncheck` inside the builder image (or pin the host
   toolchain to match) so the security gate measures what actually ships —
   it currently runs against this host's go1.25.0 while
   `deploy/Dockerfile.server` pins `golang:1.25.13-trixie`; the shipped
   artifact is unaffected (every stdlib fix the host scan surfaces is
   ≤ 1.25.13) but the 31-finding noise floor from the toolchain mismatch is
   where a future real advisory would hide. (v1.17.2 round-3 security delta,
-  `.agents/docs/reviews/2026-09-02-security-v1.17.2-fixes.md`)
+  `.agents/docs/reviews/2026-09-02-security-v1.17.2-fixes.md`) SHIPPED
+  2026-09-02 (v1.17.3) — `deploy/vulncheck.sh` runs govulncheck@v1.7.0
+  inside the Dockerfile-pinned `golang:1.25.13-trixie` image; baseline is
+  zero stdlib findings, confirming the 31 host-toolchain findings were
+  artifacts. See
+  `.agents/docs/changes/2026-09-02-v1.17.3-updater-self-install-and-vulncheck.md`.
 - [ ] 🟢 Bearer-token possession-binding trade, accepted risk recorded in
   ADR-056: `/etc/styrman/gh-token` grants full repo-read from any machine
   that reads it once, with no host-key/client-cert/IP anchor the way the
