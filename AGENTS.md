@@ -101,8 +101,8 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
   isolated state dir, then runs `web/e2e/run.mjs`'s Playwright checks against
   it — production has no auth-bypass listener to test against instead;
   prereq `npx playwright install chromium`; check counts:
-  `.agents/docs/testing/styrman/README.md`, the source of truth — currently
-  54 passed + 2 auto-SKIP).
+  `.agents/docs/testing/styrman/README.md`, the source of truth (the count
+  changes often — do not restate it here).
 - Spike results (Phase 0) in `.agents/docs/testing/spikes/`.
 - Any privileged (root) test must point state/target dirs at a scratch
   prefix, never a default that aliases `/var/lib/styrman`/`/etc/styrman` —

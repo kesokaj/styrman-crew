@@ -1,5 +1,16 @@
 .env
 *.env
+# `*.env` does NOT match `.env.local` / `.env.production` — those end in the
+# suffix, not in `.env`. deploy/.env holds BASE_DOMAIN, the Cloudflare token,
+# the Google OAuth secret, the ingress token and the JWT key, so the pattern
+# has to cover every sibling shape (audit 2026-09-02).
+.env.*
+# Secret-shaped paths that have no business in this repo.
+*.pem
+*.key
+*.tfvars
+*.tfstate
+# Keep the checked-in template. MUST stay last — gitignore is last-match-wins.
 !.env.example
 web/node_modules/
 

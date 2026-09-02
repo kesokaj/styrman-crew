@@ -219,14 +219,20 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   cloning or running `gh repo create` — attach used to run LAST, after
   provisioning, so every credentialed create ran against an unreachable
   broker and silently degraded to an empty repo (no ssh key, no `GH_TOKEN`,
-  no git identity). Provisioning itself (the clone / commit / `gh` commands)
+  no git identity). The OTHER way provisioning can fail — the microVM never
+  boots at all — is handled by a sibling function, `bootFailed`, built from
+  the SAME `provisionSpec` so the two outcomes can never disagree about what
+  was asked for: before v1.18.1 a boot failure on the GitHub-create arm
+  reported nothing at all (the clone arm's R13 fallback masked it), the same
+  silent-failure defect class the attach-ordering fix above exists to
+  prevent. Provisioning itself (the clone / commit / `gh` commands)
   still runs in a login shell so
   `/etc/profile.d/zz-styrman-credentials.sh` materializes those credentials
   first. Neither step does anything in host-mode dev (no self-container, no
   bridge, no broker — `EnsureSelfAttached` no-ops and `waitForBroker`
   returns false immediately), so that mode can only prove the clone
   ORDERING, never real credential delivery — see the Tier 4 e2e note in
-  `testing/styrman/README.md`. A provisioning failure surfaces as
+  `.agents/docs/testing/styrman/README.md`. A provisioning failure surfaces as
   `provisionError` in the project
   list/get views (mirrors `deleteError`) — the sidebar shows a red "repo
   setup failed" badge with the message as its title; the guest output behind
@@ -357,18 +363,19 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) 
 # Dev (no auth, loopback; needs a Go 1.25+ toolchain — host-setup.sh does NOT install one):
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
 
-# Production (Google OAuth + HTTPS + reboot-safe; needs neither Go nor Node —
-# build the runtime image at the RELEASE version, then bring the stack up at
-# that same version; no mutable tags — full procedure: versioning.md):
+# Production (Google OAuth + HTTPS + reboot-safe; needs neither Go nor Node):
 vi deploy/.env    # BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET, CLOUDFLARE_API_TOKEN,
                   # ADMIN_EMAIL, STYRMAN_ALLOWED_EMAILS, STYRMAN_HOSTNAME (default
                   # styrman; the live deploy uses crew) (redirect URI:
                   # https://auth.<domain>/oauth2/google/authorization-code-callback)
-STYRMAN_VERSION=$(git describe --tags --always)
-docker build -t styrman-runtime:${STYRMAN_VERSION} \
-  --build-arg STYRMAN_VERSION=${STYRMAN_VERSION} image/
-STYRMAN_VERSION=${STYRMAN_VERSION} \
-  docker compose -f deploy/docker-compose.yml up -d --build
+# The version derivation + build/deploy commands are NOT restated here — see
+# versioning.md's "Release procedure" for the exact steps (commit, verify the
+# COMMIT not the working tree, sign + push a vX.Y.Z tag, let the auto-updater
+# deploy it) and its "Manual / break-glass fallback" for the one-time,
+# no-updater-yet path a from-scratch install actually needs. Do NOT derive
+# the version with `git describe --tags --always` — versioning.md explains
+# why that command's SHA-suffixed fallback breaks the no-mutable-tags rule
+# (ADR-053).
 # DNS records + certs are automatic → https://<STYRMAN_HOSTNAME>.<domain>
 ```
 
@@ -407,7 +414,11 @@ rotated token, or a tool signed into inside a project instead of at setup).
   one, or create+push a fresh GitHub repo via `gh`) → ~3 s to a live
   terminal; type `claude` or `agy`. Cloning auto-fills the name field from
   the repo URL's own basename (slugged to the project-name rules, `.git`
-  stripped) until you type your own name, which then wins. Every workspace
+  stripped) until you type your own name, which then wins. A clone URL
+  carrying an embedded credential (`https://user:token@host/...`) is refused
+  inline — the Create button stays disabled with an explanation until the
+  token is removed (server-side: `cloneURLHasSecret`, api.md); nothing needs
+  one, styrman supplies git credentials automatically. Every workspace
   is a git repo from creation, no exceptions (R13). Rename any time (⋯ →
   Rename); delete via the type-"delete" dialog (wipe checkbox controls
   files).

@@ -200,6 +200,43 @@ func TestStripControlsAndClampBytes(t *testing.T) {
 	}
 }
 
+// A clone URL must never carry a secret: git writes the remote verbatim into
+// .git/config on the host, where nothing redacts it, and nothing needs it —
+// the broker already supplies the ssh key and answers git's credential helper
+// per host. A bare username is not a secret and must keep working.
+func TestCloneURLHasSecret(t *testing.T) {
+	rejected := []string{
+		"https://user:ghp_secret@github.com/o/r.git",
+		"https://x-access-token:tok@github.com/o/r.git",
+		"ssh://git:key@host/o/r",
+		"https://user:@github.com/o/r.git", // empty password is still userinfo
+	}
+	allowed := []string{
+		"https://github.com/o/r.git",
+		"git@github.com:o/r.git", // scp-style: "git" is a username
+		"ssh://git@host/o/r",     // standard SSH form, username only
+		"https://user@github.com/o/r.git",
+		"https://github.com/o/r@v1.git", // "@" in the PATH is not userinfo
+	}
+	for _, u := range rejected {
+		if !cloneURLHasSecret(u) {
+			t.Errorf("clone URL %q embeds a credential and must be refused", u)
+		}
+	}
+	for _, u := range allowed {
+		if cloneURLHasSecret(u) {
+			t.Errorf("clone URL %q carries no secret and must be accepted", u)
+		}
+	}
+	// Everything refused here must still be a shape cloneURLRe accepts —
+	// otherwise the check is dead code behind the regex.
+	for _, u := range rejected {
+		if !cloneURLRe.MatchString(u) {
+			t.Errorf("%q is rejected by cloneURLRe already; the secret check never runs for it", u)
+		}
+	}
+}
+
 func TestCloneURLValidation(t *testing.T) {
 	ok := []string{
 		"https://github.com/o/r.git",

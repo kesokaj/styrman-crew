@@ -91,7 +91,7 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.14.1**, deployed: https://crew.styrman.xyz (Google sign-in).
+**v1.18.1**, deployed: https://crew.styrman.xyz (Google sign-in).
 
 - The 2026-08-30 marathon shipped an ops row + microVM logs on the
   dashboard, sidebar git badges, project-scoped env vars, and a sticky stop
@@ -129,18 +129,15 @@ sudo bash deploy/host-setup.sh --user $USER
 # 2. FRESH HOST ONLY: log out and back in (or `newgrp docker`) — the docker
 #    group added in step 1 is not active in your current shell yet.
 
-# Production (Google OAuth, HTTPS, reboot-safe) — no mutable tags: build the
-# runtime image at the RELEASE version, then bring the stack up at that same
-# version. Fill the OAuth/Cloudflare/domain values first:
+# Production (Google OAuth, HTTPS, reboot-safe) — no mutable tags. Fill the
+# OAuth/Cloudflare/domain values first:
 vi deploy/.env
-# --abbrev=0 + sed: the newest release tag, WITHOUT the v prefix — the same
-# X.Y.Z string names all three images (a v-prefixed or SHA-suffixed value
-# would land the build in a different tag namespace than the auto-updater's).
-STYRMAN_VERSION=$(git describe --tags --abbrev=0 | sed 's/^v//')
-docker build -t styrman-runtime:${STYRMAN_VERSION} \
-  --build-arg STYRMAN_VERSION=${STYRMAN_VERSION} image/
-STYRMAN_VERSION=${STYRMAN_VERSION} \
-  docker compose -f deploy/docker-compose.yml up -d --build
+# The version derivation + build/deploy commands live in ONE place, not
+# restated here — versioning.md's "Release procedure" (commit, verify the
+# COMMIT not the working tree, sign + push a vX.Y.Z tag, let the auto-updater
+# deploy it) is the real day-to-day path; its "Manual / break-glass fallback"
+# has the exact commands for a from-scratch host where the updater isn't set
+# up yet.
 
 # Dev (loopback, no auth; needs Go 1.25+) — builds its OWN image tag so
 # experiments never touch the production one (~10 min first build):
@@ -150,8 +147,8 @@ STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1
 
 Full walkthrough, operations, and troubleshooting:
 `.agents/docs/specs/styrman/guide.md`. Image lineup, versioning scheme, the
-manual/auto release procedures, and rollback:
-`.agents/docs/specs/styrman/versioning.md`.
+release procedure (tag + auto-updater, plus the manual break-glass
+fallback), and rollback: `.agents/docs/specs/styrman/versioning.md`.
 
 ## Lineage
 

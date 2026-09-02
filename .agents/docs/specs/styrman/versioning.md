@@ -71,12 +71,42 @@ respectively (`STYRMAN_IMAGE` is always set explicitly for both, never left
 to a default). The rule is about what a compose/production deploy is allowed
 to run, not a ban on mutable tags everywhere.
 
-## Manual release procedure
+## Release procedure
+
+**The auto-updater is the real path — there is no manual `docker compose`
+step in normal operation.** This is how v1.18.1 actually shipped: commit,
+verify the commit, sign and push a tag, and `deploy/update/styrman-update`
+(run every 5 min by `styrman-update.timer` against the dedicated clone at
+`/opt/styrman`) picks it up, verifies its SSH signature, builds all three
+images, and deploys — see "The auto-updater, end to end" below for the full
+mechanics. Running `docker compose up` by hand against a live host is a
+break-glass fallback (below), not the documented path, and running it from
+the wrong directory is exactly what took production down on 2026-09-02: see
+that section for why.
 
 1. Land the change (commit; the review/security/verifier gates and
    `/preflight` are a separate concern from this doc — see `AGENTS.md`'s
    Definition of Done).
-2. Sign and push the tag — SSH signing isn't cosmetic here, it's the exact
+2. **REQUIRED: verify the COMMIT, not the working tree, before tagging it.**
+   `go build`/`go test`/`docker build` run against whatever is currently
+   checked out — including anything staged but not yet committed — which is
+   NOT what a tag points at. This is exactly how v1.18.0 broke: it was
+   tagged from a working tree where every local gate passed, but the
+   COMMIT it pointed at was missing `bootFailed`'s definition (a file had
+   been edited but never `git add`ed) — the auto-updater built a fresh
+   checkout of the pushed tag, that checkout failed to compile, and it
+   auto-rolled production back to v1.17.3. Verify a detached worktree of the
+   exact commit instead, not the directory you've been editing in:
+   ```bash
+   git worktree add --detach /tmp/verify-tag <commit-sha>
+   cd /tmp/verify-tag
+   go build ./... && go test -race ./...
+   docker build -f deploy/Dockerfile.server .
+   cd - && git worktree remove /tmp/verify-tag   # cleanup
+   ```
+   Only a green result against THIS checkout says the commit is safe to tag
+   — a green result against your editing working tree does not.
+3. Sign and push the tag — SSH signing isn't cosmetic here, it's the exact
    signature shape the auto-updater's `verify_tag` requires (below), so an
    unsigned or PGP-signed tag can only ever be deployed manually:
    ```bash
@@ -84,37 +114,69 @@ to run, not a ban on mutable tags everywhere.
    git tag -s vX.Y.Z -m "styrman vX.Y.Z"
    git push origin vX.Y.Z
    ```
-3. Build all three images and bring the stack up at that version:
-   ```bash
-   STYRMAN_VERSION=X.Y.Z
-   docker build -t styrman-runtime:${STYRMAN_VERSION} \
-     --build-arg STYRMAN_VERSION=${STYRMAN_VERSION} image/
-   STYRMAN_VERSION=${STYRMAN_VERSION} \
-     docker compose -f deploy/docker-compose.yml up -d --build
-   ```
-   (compose's `build:` blocks point at `deploy/Dockerfile.server` /
-   `deploy/caddy/Dockerfile` — `styrman-runtime` is never built by compose,
-   the first `docker build` line above is not optional.)
-4. Verify: `curl -fsS https://styrman.<domain>/api/health`, confirm the
+4. That's the whole normal path. Within one `styrman-update.timer` tick
+   (~5 min) the updater verifies the tag, builds `styrman-runtime`,
+   `styrman-server`, and `styrman-caddy` at that version, and brings the
+   stack up at `/opt/styrman` — no manual compose step, and nothing manual
+   should be run against a host where the timer is enabled.
+5. Verify: `curl -fsS https://styrman.<domain>/api/health`, confirm the
    Settings page shows `X.Y.Z`, sign out/in once to confirm the Google OAuth
    portal still redirects correctly (caddy-security surviving a version bump
    is the highest-risk step — an existing session staying logged in is NOT
    proof, test a fresh login), and open/close a project to confirm it boots
    on the new runtime tag.
 
+### If the deploy fails
+
+A tag that doesn't report itself healthy within
+`STYRMAN_UPDATE_HEALTH_TIMEOUT` (default 120s) is rolled back automatically
+to the previous version (mechanics: "Rollback" below). The failed tag is
+latched at `${STATE_DIR}/failed-version` and is **NOT retried automatically**
+on later ticks — only `styrman-update --force` (rebuild the same tag) or
+pushing a NEWER tag clears the latch. This is exactly what happened
+2026-09-02: v1.18.0 failed to build and auto-rolled-back to v1.17.3; the fix
+was a newer tag, v1.18.1 — not a `--force` retry of the broken v1.18.0.
+
+## Manual / break-glass fallback
+
+Only for a host where the auto-updater isn't enabled yet, or is itself
+broken. **MUST be run from `/opt/styrman/deploy`** — the dedicated
+production clone, which owns the live `deploy/.env` — **never from a dev
+checkout**. `docker compose` resolves `.env` from the process's WORKING
+DIRECTORY, not from wherever the images happen to be built: running this
+from a dev clone (which has no `.env`, or an unrelated one) starts caddy
+with no `BASE_DOMAIN` set and it crash-loops. This took production down for
+real on 2026-09-02 — the stack had to be brought back up from
+`/opt/styrman/deploy` to recover.
+
+```bash
+cd /opt/styrman                # the production clone — NOT a dev checkout
+STYRMAN_VERSION=X.Y.Z
+docker build -t styrman-runtime:${STYRMAN_VERSION} \
+  --build-arg STYRMAN_VERSION=${STYRMAN_VERSION} image/
+cd deploy                      # deploy/.env lives here; compose reads it from cwd
+STYRMAN_VERSION=${STYRMAN_VERSION} \
+  docker compose -f docker-compose.yml up -d --build
+```
+
+(compose's `build:` blocks point at `deploy/Dockerfile.server` /
+`deploy/caddy/Dockerfile` — `styrman-runtime` is never built by compose, the
+first `docker build` line above is not optional.) Verify the same way as
+step 5 above afterward.
+
 ## Updating a single image out-of-band
 
 Bumping just the Caddy build (a plugin pin, a CVE fix) doesn't need a full
 feature release of the server — but it still ships through the normal
-version tag, not a side channel:
+release procedure above, not a side channel:
 
 1. Edit `deploy/caddy/Dockerfile` — pins only, never a floating base
    (e.g. `caddy:2.11.4-builder`/`caddy:2.11.4`,
    `--with github.com/greenpau/caddy-security@v1.1.64`).
 2. Rebuild it as part of the **next** release version — `docker-compose.yml`'s
    `image:` line is `styrman-caddy:${STYRMAN_VERSION}`, so a caddy-only
-   change still goes out through the manual release procedure above; there
-   is no separate versioning axis for one image.
+   change still goes out by tagging + pushing (or the break-glass fallback);
+   there is no separate versioning axis for one image.
 3. Smoke test before calling it done — not optional for a Caddy bump
    specifically: `docker compose build caddy`, `caddy version` inside the
    built image, `caddy list-modules | grep -E
@@ -167,7 +229,7 @@ version:
   own working tree, so an automatic `git checkout <tag>` can never stomp
   in-progress work.
 - On every tag it builds `styrman-runtime:X.Y.Z` AND both compose images
-  (server + caddy) — never a floating tag, same rule as the manual
+  (server + caddy) — never a floating tag, same rule as the release
   procedure above.
 - **Run-state (`deployed-version`, `deployed-sha`, `failed-version`) lives
   ONLY at `/etc/styrman/update`, pinned by `Environment=` in
@@ -205,9 +267,10 @@ version:
 
 ## Rollback
 
-- **Manual**: images are immutable once built, so rollback needs no
-  rebuild — `STYRMAN_VERSION=<old-x.y.z> docker compose -f
-  deploy/docker-compose.yml up -d` re-points every `image:` line at the
+- **Manual**: images are immutable once built, so rollback needs no rebuild
+  — from `/opt/styrman/deploy` (never a dev checkout — see "Manual /
+  break-glass fallback" above for why), `STYRMAN_VERSION=<old-x.y.z> docker
+  compose -f docker-compose.yml up -d` re-points every `image:` line at the
   already-built tag. Confirm the old `styrman-runtime:<old-x.y.z>` tag
   wasn't pruned (`docker image ls`) before relying on this.
 - **Automatic**: if the newly-deployed tag doesn't report itself healthy

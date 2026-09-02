@@ -163,11 +163,16 @@ vi deploy/.env                                # fill: BASE_DOMAIN, GOOGLE_CLIENT
                                               #       STYRMAN_ALLOWED_EMAILS
                                               #       (+ optional STYRMAN_PUBLIC_DOMAIN /
                                               #       STYRMAN_PRIVATE_DOMAIN)
-STYRMAN_VERSION=$(git describe --tags --always)
-docker build -t styrman-runtime:${STYRMAN_VERSION} \
-  --build-arg STYRMAN_VERSION=${STYRMAN_VERSION} image/
-STYRMAN_VERSION=${STYRMAN_VERSION} \
-  docker compose -f deploy/docker-compose.yml up -d --build
+# Build + deploy at the release version — the exact commands (and why
+# `git describe --tags --always` must NOT be used here: its SHA-suffixed
+# fallback is a mutable-tag violation, ADR-053, precisely the mistake the
+# compose `image:` lines' `${STYRMAN_VERSION:?...}` guard exists to catch)
+# live in versioning.md's "Release procedure" / "Manual / break-glass
+# fallback" — this first bring-up IS the break-glass case, since no
+# auto-updater clone exists yet to do it for you. If this checkout has no
+# reachable vX.Y.Z tag at all, pass STYRMAN_VERSION explicitly
+# (e.g. STYRMAN_VERSION=0.1.0) rather than deriving one — a derived value
+# must always be a real version, never a bare commit sha.
 # → https://styrman.<BASE_DOMAIN>  (Google sign-in via auth.<BASE_DOMAIN>)
 ```
 

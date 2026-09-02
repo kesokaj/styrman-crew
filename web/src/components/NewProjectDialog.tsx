@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "../lib/toast";
-import { api, projectNameError, projectNameFromRepoURL } from "../lib/api";
+import { api, cloneURLError, projectNameError, projectNameFromRepoURL } from "../lib/api";
 import { useModalA11y } from "./ui";
 
 type Repo = "local" | "private" | "public" | "clone";
@@ -38,7 +38,10 @@ export function NewProjectDialog({
   const nameValid = !projectNameError(effectiveName);
   // Mirror the server's cloneURLRe so the client rejects the same shapes.
   const cloneValid = /^(https:\/\/|ssh:\/\/|git@)[\w.@:/~+-]+$/.test(cloneUrl);
-  const valid = nameValid && (repo !== "clone" || cloneValid);
+  // The server refuses a URL carrying a token; say so here rather than letting
+  // it come back as a 400 after the user has committed to the form.
+  const cloneSecret = cloneURLError(cloneUrl);
+  const valid = nameValid && (repo !== "clone" || (cloneValid && !cloneSecret));
 
   const create = async () => {
     setBusy(true);
@@ -151,10 +154,14 @@ export function NewProjectDialog({
           />
         )}
         {repo === "clone" && (
-          <p className="mb-3 text-[11px] text-text-dim">
-            {nameEdited || !derivedName
-              ? "The repo is cloned into the project workspace."
-              : `Named after the repo: ${derivedName}`}
+          <p
+            className={`mb-3 text-[11px] ${cloneSecret ? "text-warn" : "text-text-dim"}`}
+          >
+            {cloneSecret
+              ? cloneSecret
+              : nameEdited || !derivedName
+                ? "The repo is cloned into the project workspace."
+                : `Named after the repo: ${derivedName}`}
           </p>
         )}
         {!ghReady && (

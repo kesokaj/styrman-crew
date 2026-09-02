@@ -2305,3 +2305,17 @@ Verification: .agents/docs/changes/2026-09-02-v1.18.0-project-create-provisionin
 .agents/docs/reviews/2026-09-02-security-project-create-provisioning.md,
 .agents/docs/testing/2026-09-02-verify-project-create-provisioning.md,
 .agents/docs/testing/2026-09-02-verify-project-create-provisioning-rerun.md.
+
+---
+
+## ADR-059: Credential-bearing URLs are refused at the API boundary, not accepted and redacted (2026-09-02)
+
+**Context:** Clone URLs that embed a password or token (`https://user:token@host/repo`) are accepted by the clone endpoint and then redacted from logs. The security review discovered that `git clone` persists the entire URL — including the userinfo — verbatim into the cloned project's `.git/config` on the host, where nothing redacts it. A later push to that host keeps the token as git history. The credential broker (ADR-030/032) makes embedded credentials unnecessary: it delivers the user's ssh key per request and answers git-credential-helper queries per HOST, so `PutGit(user, GitCred{Host})` onboards any host via `gh auth token --hostname HOST` without the user typing anything into a URL.
+
+**Decision:** Clone URLs that contain userinfo with a password character (`:`) are REFUSED at the `POST /api/projects` API boundary with a 400 Bad Request — the entire class of vulnerability is deleted rather than mitigated with redaction. The check is dual-sided: `cloneURLHasSecret` in `internal/httpapi/server.go` (authority parsing via `net/url.Parse`, userinfo split at the LAST `@` of the authority like git/curl do) at the server, and `cloneURLError` in `web/src/lib/api.ts` client-side for immediate feedback before the round trip. A bare USERNAME is still allowed (`ssh://git@host/o/r` is the standard SSH form, and usernames without `:` are not credentials). The check is specific to credential-bearing USERINFO, not to arbitrary URLs containing the character `:` — `http://host:8080/repo` and `https://host:443/repo` are accepted.
+
+**Consequences:** No project can clone a URL with embedded credentials, closing the `.git/config` persistence class entirely. The credential broker is now the ONLY credential path (other than manual git config or SSH key discovery on the agent runner). The operator's test case: SSH clone of `git@github.com:kesokaj/styrman-harness.git` succeeds (populated the workspace, no provisioning error) after the v1.18.0 provision-order fix, demonstrating that the credential broker is sufficient for the tested scenario. An SSH clone of a repo on an unknown host (where the broker has never seen a credential) would fail at git-permission time, not at clone-acceptance time — the test case does not cover that edge, which remains a constraint recorded in the operational docs: any host needs a seeded credential (`gh auth token --hostname HOST`) before first clone.
+
+Source: internal/httpapi/server.go, web/src/lib/api.ts.
+Verification: .agents/docs/changes/2026-09-02-v1.18.1-project-create-and-secure-clone-urls.md,
+.agents/docs/reviews/2026-09-02-security-project-create-provisioning.md (section on credential URL handling).

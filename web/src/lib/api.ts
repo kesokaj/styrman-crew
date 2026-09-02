@@ -220,6 +220,23 @@ export function projectNameFromRepoURL(url: string): string {
     .replace(/-+$/, ""); // the slice can leave a trailing dash
 }
 
+/**
+ * Mirrors the server's cloneURLHasSecret: a clone URL must not embed a
+ * password. Nothing needs one — styrman delivers the ssh key and answers git's
+ * credential helper per host — and git would write the token verbatim into the
+ * project's .git/config. A bare username (ssh://git@host) is not a secret.
+ * Returns an error message, or undefined when the URL is fine.
+ */
+export function cloneURLError(url: string): string | undefined {
+  const raw = url.trim();
+  if (!raw) return undefined;
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/]*)@/i.exec(raw);
+  if (m?.[1]?.includes(":")) {
+    return "Remove the token from the URL — styrman supplies your git credentials automatically.";
+  }
+  return undefined;
+}
+
 /** Run a UI action; surface API failures instead of swallowing the rejection. */
 export async function tryUI(action: () => Promise<void>): Promise<void> {
   try {

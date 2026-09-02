@@ -185,7 +185,7 @@ go test ./... && bash .agents/docs/testing/styrman/integration.sh
 Image changes: rebuild the image first; the integration script always creates
 fresh containers so it picks the new image up automatically.
 
-## Tier 4 — Browser e2e (Playwright, 61 checks + a final client-error gate; firewall-hardened hosts run 60 + 2 auto-SKIP — measured, not counted: `passed=60 failed=0 skipped=2` on a real run against `styrman-runtime:test` on 2026-09-02, the first session this tier was actually executed rather than counted)
+## Tier 4 — Browser e2e (Playwright, 62 checks + a final client-error gate; firewall-hardened hosts run 61 + 2 auto-SKIP. The 2026-09-02 measured run — `passed=60 failed=0 skipped=2` against `styrman-runtime:test`, the first session this tier was actually executed rather than counted — predates the newest check below ("a clone URL carrying a token is refused") and is one short of the current 62/61 totals; re-measure before citing it as current)
 
 `bash web/e2e/run.sh [image-tag]` — self-hosts: builds the web SPA
 (`cd web && npm run build`) FIRST, then the server, then starts its own
@@ -227,9 +227,15 @@ deleting the project copy while the pane holds the home copy asserts the
 project chip is gone, the home chip and its content survive, and the pane
 stays put — the scope-flip regression), and the on-disk recents list is capped at 8
 on READ, not just on write (seed a 20-entry `styrman.recentFiles.<project>`
-blob in localStorage, reload, assert only 8 chips render), plus two more
-checks added 2026-09-02 for the New-project dialog's clone-name derivation
-(operator expectation: "clone a repo = use the same name as the repo"): the
+blob in localStorage, reload, assert only 8 chips render), plus one more
+check added 2026-09-02, "a clone URL carrying a token is refused" (the
+server-side `cloneURLHasSecret` 400, api.md's `POST /api/projects` row):
+filling the New-project dialog's clone URL with an embedded
+`user:token@host` credential must surface "Remove the token from the URL"
+and keep the Create button disabled — never a project actually created,
+never can auto-SKIP — plus two more checks added 2026-09-02 for the
+New-project dialog's clone-name derivation (operator expectation: "clone a
+repo = use the same name as the repo"): the
 name field derives from the repo URL the moment "Clone a repo" is picked and
 a URL is typed, and a name the user types by hand overrides the derived one
 even when the URL then changes — both assert against the open dialog and
@@ -267,7 +273,7 @@ attach-before-provisioning ORDERING** — see `provision.go`'s doc comment and
 `guide.md`'s "Project creation is async" bullet for the credential-delivery
 path itself, which only Tier 3 (real Kata, real broker) or manual testing
 against a containerized server can exercise — and full
-cleanup — 61 checks + the client-error gate (60 pass on firewall-hardened
+cleanup — 62 checks + the client-error gate (61 pass on firewall-hardened
 hosts, plus 2 auto-SKIP) plus a final no-client-errors gate + screenshots.
 Prereq: `cd web && npm i && npx playwright install chromium` (once).
 Self-cleaning: deletes any leftover `e2e-ui` project at start.

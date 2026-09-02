@@ -100,6 +100,15 @@ try {
   // user types their own, which then wins. No project is created here — the
   // dialog is closed again before the real create below.
   await page.click("aside >> text=New project");
+  await check("a clone URL carrying a token is refused", async () => {
+    await page.click('button:has-text("Clone a repo")');
+    await page.fill('input[aria-label="Repository URL to clone"]',
+      "https://user:ghp_notarealtoken@github.com/o/r.git");
+    await page.waitForSelector("text=Remove the token from the URL", { timeout: 5000 });
+    const armed = await page.locator('button:has-text("Create")').isEnabled();
+    if (armed) throw new Error("Create stayed enabled for a credential-bearing URL");
+    await page.fill('input[aria-label="Repository URL to clone"]', "");
+  });
   await check("clone mode derives the project name from the repo URL", async () => {
     await page.click('button:has-text("Clone a repo")');
     await page.fill('input[aria-label="Repository URL to clone"]',

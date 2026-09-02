@@ -236,18 +236,27 @@ Add new items below as they arise.
   touches `/var/lib/styrman` (ADR-052).
   (`.agents/docs/changes/2026-09-01-remove-backups-and-token-auth.md`)
 
-- [ ] `cloneURLRe` (`internal/httpapi/server.go`) still accepts credential-bearing clone URLs
-  (`https://user:token@host/repo`), and `git clone` persists the token verbatim into
-  `<workspace>/.git/config` on the host. Three options: (1) reject userinfo at the boundary since
-  the credential broker makes it unnecessary, but this blocks cloning a private repo on a host the
-  broker does not know; (2) keep accepting the URL but strip userinfo from the PERSISTED remote
-  after clone (`git remote set-url origin <scrubbed>`), but then a later `git push` to an unknown
-  host would have no credential; (3) keep the status quo. Needs an operator decision. (security
-  review 2026-09-02)
-- [ ] `deploy/vulncheck.sh:38` cannot run on a checkout without `deploy/.env`: `-v /dev/null:/src/deploy/.env:ro`
-  over a `:ro` source mount fails in runc with exit 125. It fails closed, but a caller testing only
-  `!= 3` would read a broken scan as clean — a release gate that fails open on a clean checkout is
-  worse than no gate at all. (security review 2026-09-02; fix scope: v1.18.1)
+- [x] `cloneURLRe` (`internal/httpapi/server.go`) credential-bearing URLs handling. **DONE
+  2026-09-02** — **OPTION 1 CHOSEN: reject at the boundary**. Clone URLs with embedded credentials
+  (`https://user:token@host/repo`) are now refused with a 400 Bad Request at the API boundary
+  (`cloneURLHasSecret` in `internal/httpapi/server.go`), removing the entire class rather than
+  trying to redact it. Rationale: git persists the token verbatim into `.git/config` on the host,
+  the credential broker makes embedded credentials unnecessary (ADR-030/032 deliver ssh keys and
+  answer git-credential-helper), and refusing at the boundary is stronger than redaction. See
+  ADR-059 and `.agents/docs/changes/2026-09-02-v1.18.1-project-create-and-secure-clone-urls.md`.
+  (security review recommendation, operator decision 2026-09-02)
+- [ ] **Enforce commit-tree verification in the release path** (process gap, not a code bug).
+  On 2026-09-02, commit `b321f35` was tagged v1.18.0 and pushed without being verified against the
+  running tree — the commit staged `server.go` but not `provision.go`, so the tag's tree would not
+  build even though every local gate passed (they all ran against the WORKING TREE, which was
+  complete). The updater fetched v1.18.0, verified the signature (ADR-051), checked out the tree,
+  attempted to build it, and failed with a compile error — the first place where commit/tree
+  divergence surfaced. The `/preflight` gate already builds the artifact and runs tests against
+  `HEAD`, verifying the commit; what is missing is a **pre-tag enforcement** that the commit being
+  tagged actually builds without a working tree. Addition scope (documented in `specs/styrman/versioning.md`
+  by the documentation agent): add a `git worktree` build step to the release gate, or add it as a
+  pre-push hook to prevent hand-tagging without verification, so this divergence cannot happen
+  again. (incident: v1.18.0 build failure, root cause: commit not verified before tag and push)
 - [ ] A project home (`ProjectHome`) survives a `DELETE` without `wipe=true`, with no sweeper and no
   remaining UI path — the clone and GitHub initial commit both run `bash -lc` login shells inside
   the guest, which materializes the user's ssh private key, gcloud ADC, and agent tokens into the

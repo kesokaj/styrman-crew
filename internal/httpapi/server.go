@@ -627,6 +627,29 @@ type createProjectRequest struct {
 // as a bare argv element after "--".
 var cloneURLRe = regexp.MustCompile(`^(https://|ssh://|git@)[\w.@:/~+-]+$`)
 
+// cloneURLHasSecret reports whether a clone URL embeds a PASSWORD — a token or
+// secret in the URL itself.
+//
+// Such a URL is refused rather than redacted. Nothing needs it: the credential
+// broker already delivers the user's ssh key (so `git@host:path` works) and
+// answers git's credential helper per HOST (so `https://host/...` works for any
+// host onboarded via `gh auth token --hostname`, ADR-030/032). A token in the
+// URL is a second, worse path that git writes verbatim into the project's
+// .git/config on the host, where nothing redacts it — and refusing it at the
+// boundary deletes that whole class rather than mitigating it (operator
+// decision 2026-09-02, on the security review's recommendation).
+//
+// A bare USERNAME is not a secret and stays allowed: `ssh://git@host/o/r` is
+// the standard SSH form, and `git@host:path` carries no scheme at all.
+func cloneURLHasSecret(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return false // shape is already gated by cloneURLRe
+	}
+	_, hasPassword := u.User.Password()
+	return hasPassword
+}
+
 // userinfoRe matches the userinfo of a scheme-bearing URL — where a token
 // rides when someone clones `https://user:tok@host/...` (R10). The scp-style
 // `git@host:path` form carries a USERNAME, not a secret, and is deliberately
@@ -662,9 +685,18 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if req.CloneURL != "" && !cloneURLRe.MatchString(req.CloneURL) {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid clone URL"))
-		return
+	if req.CloneURL != "" {
+		if !cloneURLRe.MatchString(req.CloneURL) {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid clone URL"))
+			return
+		}
+		if cloneURLHasSecret(req.CloneURL) {
+			writeErr(w, http.StatusBadRequest, errors.New(
+				"remove the credential from the clone URL — styrman supplies your git "+
+					"credentials automatically (ssh key and gh login, from first-time setup). "+
+					"A token in the URL would be written into the project's .git/config"))
+			return
+		}
 	}
 	p, err := sp.projects.Add(project.Project{Name: req.Name, GitInit: true, CreatedAt: time.Now().UTC()})
 	if err != nil {
