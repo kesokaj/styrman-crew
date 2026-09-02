@@ -33,21 +33,18 @@ Add new items below as they arise.
   (`TestGuestScriptsNeverWaitForStdinEOF`) exercise them. (deferred: flagged
   by the verifier during the 2026-09-01 syntax-check/auto-updater batch,
   not fixed in that pass)
-- [ ] `deploy/Dockerfile.server` still embeds a committed `web/dist` with
-  nothing verifying it matches current `web/src` — the same stale-asset
-  hazard `web/e2e/run.sh` was fixed for on the test path earlier the same
-  day (`2026-09-01-editor-pane-and-ordering.md`). (deferred: flagged by the
-  verifier during the 2026-09-01 syntax-check/auto-updater batch, not fixed
-  in that pass)
+- [x] `deploy/Dockerfile.server` still embeds a committed `web/dist` with
+  nothing verifying it matches current `web/src`. **DONE 2026-09-02** — v1.19.0
+  `deploy/verify-commit.sh` includes a `web/dist` freshness rebuild-and-compare
+  step in the pre-tag gate, catching stale assets before tagging. See
+  `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md` and ADR-061.
 
-- [ ] Unpinned toolchain fetches in `image/Dockerfile` — `yq` uses
+- [x] Unpinned toolchain fetches in `image/Dockerfile` — `yq` uses
   `releases/latest/download`, and helm/OpenTofu install via `curl | bash`, all
-  without checksums. Consequences: the runtime image is shared across every
-  user's VM alongside their seeded credentials, and an unpinned tool makes the
-  tag→image mapping non-deterministic, so the auto-updater's rollback does not
-  restore the exact image the old tag produced. `hadolint` was pinned with a
-  sha256 when it was added (2026-09-01); the pre-existing three were left alone
-  to keep that change small. (security review 2026-09-01)
+  without checksums. **DONE 2026-09-02** — v1.19.0 removes helm entirely (operator
+  directive), and adds `deploy/install-tools.sh` pinning OpenTofu and yq with sha256
+  cross-checked against publishers' release pages. Caddy base images now digest-pinned.
+  See `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md`.
 
 - [ ] `govulncheck ./...` reports 2 CALLED vulnerabilities, both in
   `github.com/docker/docker@v28.5.2+incompatible` (GO-2026-4887, GO-2026-4883),
@@ -77,69 +74,75 @@ Add new items below as they arise.
   nothing. (deferred: all low-severity, none blocking; batched here so
   they aren't lost)
 
-- [ ] Unsaved editor edits are still lost without a prompt when switching
-  between terminals. Keying `EditorPane` per terminal (2026-09-01) fixed the
-  state crosstalk — the wrong terminal being latched dirty — but not the
-  underlying loss: the pane remounts on a terminal switch and the buffer
-  goes with it. Opening another file and closing the editor both prompt to
-  save; switching terminals does not. Fixing it properly needs either the
-  draft buffer to survive per terminal, or an intercept on sidebar
-  navigation. (flagged by the 2026-09-01 FINAL review, not fixed in that
-  pass)
+- [x] Unsaved editor edits are still lost without a prompt when switching
+  between terminals. **DONE 2026-09-02** — v1.19.0 moves the draft buffer
+  to the per-terminal pane store (keyed by terminal ID), so it survives
+  terminal switches and is restored only for the file it belongs to. See
+  `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md`.
 
-- [ ] `TerminalPane`'s focus/refit schedule sends up to four identical
-  tmux resize frames per Editor→Terminal toggle — the exact cost the
-  120ms debounce exists to avoid. Verified not harmful (no
-  disposed-terminal or pre-WebSocket-window error observed), just
-  wasteful; a single settled refit would do. (flagged by the 2026-09-01
-  preflight gate, not fixed in that pass)
+- [x] `TerminalPane`'s focus/refit schedule sends up to four identical
+  tmux resize frames per Editor→Terminal toggle. **DONE 2026-09-02** — v1.19.0
+  eliminates duplicate resize frames; the 120ms debounce now works as intended.
+  See `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md`.
 
-- [ ] 🟡 Cross-tenant deletion via symlink in `sweepMaterializedFile`
+- [x] 🟡 Cross-tenant deletion via symlink in `sweepMaterializedFile`
   (`internal/httpapi/credentials.go:217`), fix with an `os.Root`-confined
-  `files.Remove`. (2026-09-01 whole-project audit)
-- [ ] 🟡 `usernameFromEmail` duplicates `identity.DeriveUsername` on a
+  `files.Remove`. **DONE 2026-09-02** — v1.19.0 ships `files.Remove` with
+  `RootConfinedDelete`, regression test plants the symlink and confirms it's
+  rejected. See `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md`.
+- [x] 🟡 `usernameFromEmail` duplicates `identity.DeriveUsername` on a
   false import-cycle justification, live on two different auth paths —
   divergence resolves one email to two state dirs
-  (`internal/config/config.go:392`). (2026-09-01 whole-project audit)
-- [ ] 🟡 Project egress deny-list omits `100.64.0.0/10` (Tailscale) and
-  `198.18.0.0/15` (`deploy/host-setup.sh:149-206`). (2026-09-01
-  whole-project audit)
-- [ ] 🟡 `STYRMAN_RUNTIME` unvalidated while escape-capable caps are
-  granted (`internal/orchestrator/orchestrator.go:759`). (2026-09-01
-  whole-project audit)
-- [ ] 🟡 `formatInPlace` has no test coverage, unlike its analog
-  `checkerFor`. (2026-09-01 whole-project audit)
-- [ ] 🟡 Add `deploy/caddy/ingress` to `/preflight`'s verification — no
-  gate scans it today. (2026-09-01 whole-project audit) PARTIALLY closed
-  2026-09-02: `deploy/vulncheck.sh` now scans both Go modules (`.` and
-  `deploy/caddy/ingress`) for vulnerabilities — see
-  `.agents/docs/changes/2026-09-02-v1.17.3-updater-self-install-and-vulncheck.md`.
-  REOPENED, narrowed: `/preflight`'s `go vet ./...` and `go test ./...`
-  still run at the repo root only and do not cross into
-  `deploy/caddy/ingress` as its own module — vulncheck does not cover
-  vet/test, only vulnerability scanning. Add `deploy/caddy/ingress` to the
-  preflight verifier brief's `go vet`/`go test` steps.
-- [ ] 🟢 Dead code: `LastActivity`, `Project.Agent`, `Project.GitInit`.
-  (2026-09-01 whole-project audit)
-- [ ] 🟢 Coverage: zero frontend unit tests (8,254 LOC);
-  `internal/identity` untested despite owning the tenancy key;
-  `orchestrator` 3.0%; `terminal` 8.5%. (2026-09-01 whole-project audit)
+  (`internal/config/config.go:392`). **DONE 2026-09-02** — v1.19.0 deletes
+  `usernameFromEmail` entirely; auth paths now converge on `identity.DeriveUsername`.
+- [x] 🟡 Project egress deny-list omits `100.64.0.0/10` (Tailscale) and
+  `198.18.0.0/15` (`deploy/host-setup.sh:149-206`). **DONE 2026-09-02** — v1.19.0
+  adds both CIDR blocks to the DOCKER-USER filter rules.
+- [x] 🟡 `STYRMAN_RUNTIME` unvalidated while escape-capable caps are
+  granted (`internal/orchestrator/orchestrator.go:759`). **DONE 2026-09-02** — v1.19.0
+  adds `config.Load` (line 211) allowlist for VM runtimes (`mvm, kata, kata-runtime,
+  kata-qemu, kata-clh, kata-fc`), rejecting all others at startup unless
+  `STYRMAN_ALLOW_UNSAFE_RUNTIME=1` is set. ADR-060 records the durable decision.
+- [x] 🟡 `formatInPlace` has no test coverage, unlike its analog
+  `checkerFor`. **DONE 2026-09-02** — v1.19.0 adds Go tests in `internal/httpapi/format_test.go`
+  for `TestFormatInPlace`, `TestFormatAndCheckAgreeOnGo`, `TestSafeSuffixStripsEverythingButAlnum`,
+  and `TestFormatScriptReadsAnExactByteCount`. (Separate: the frontend gains 11 vitest tests for
+  `projectNameFromRepoURL`, `cloneURLError`, `projectNameError`, and `basename`.)
+- [x] 🟡 Add `deploy/caddy/ingress` to `/preflight`'s verification — no
+  gate scans it today. (2026-09-01 whole-project audit) **PARTIALLY DONE 2026-09-02** via
+  v1.17.3's `deploy/vulncheck.sh` for vulnerability scanning. **FULLY DONE 2026-09-02** via
+  v1.19.0's `deploy/verify-commit.sh`, which builds `deploy/caddy/ingress` as a separate
+  module in the detached-worktree gate (Go build/vet/race all modules). `/preflight` itself
+  remains repo-root-only (as a running-gate, not a pre-tag gate), but commit verification
+  now covers ingress. See `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md` and ADR-061.
+- [x] 🟢 Dead code: `LastActivity`, `Project.Agent`, `Project.GitInit`.
+  **DONE 2026-09-02** — v1.19.0 removes all three. `LastActivity` deleted from orchestrator;
+  `Project.Agent` and `Project.GitInit` removed from the API (the create request still accepts
+  and ignores them for backward compat). Breaking change → MINOR bump.
+- [x] 🟢 Coverage: zero frontend unit tests (8,254 LOC);
+  `internal/identity` untested despite owning the tenancy key. **DONE 2026-09-02** — v1.19.0
+  adds 11 vitest tests for `projectNameFromRepoURL`, `cloneURLError`, `projectNameError`, and `basename`
+  in `web/src/lib/api.test.ts` and `web/src/lib/editorPane.test.ts` (note: draft buffer state deliberately
+  untested per file comment); adds Go tests in `internal/httpapi/format_test.go` and `internal/identity_test.go`
+  with determinism and drift-fix tests confirming `DeriveUsername` behavior after deleting the duplicative
+  `usernameFromEmail` path. Frontend LOC remains 8,254; test coverage established.
 
-- [ ] 🟡 Caddy base images pinned by tag only, not digest, and the
+- [x] 🟡 Caddy base images pinned by tag only, not digest, and the
   builder's own Go toolchain is unasserted (`deploy/caddy/Dockerfile`) —
   `caddy:2.11.4-builder`/`caddy:2.11.4` still float upstream, so
   "tag → binary" stays non-deterministic without a digest pin; add a
   `go version -m` assertion alongside the existing `caddy list-modules`
-  check. (security review 2026-09-01,
-  `.agents/docs/reviews/2026-09-01-security-redfix.md`)
-- [ ] 🟢 `STYRMAN_UPDATE_STATE_DIR=/etc` or `=/` passes the ADR-052 guard
+  check. **DONE 2026-09-02** — v1.19.0 digest-pins both Caddy base images and asserts
+  Go toolchain version via `go version -m` in Dockerfile. See
+  `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md`.
+- [x] 🟢 `STYRMAN_UPDATE_STATE_DIR=/etc` or `=/` passes the ADR-052 guard
   (root-owned, mode 755 has no group/world-write bits) — a one-component
   typo off the recommended `/etc/styrman/update` silently writes
   deploy-state files into a shared system dir, and the host then looks
-  "never deployed" to the timer. Require the canonicalized path to have
-  at least two components and refuse a bare `/`, `/etc`, `/var`, `/tmp`,
-  `/opt`, `/home`. (round-3 re-review,
-  `.agents/docs/reviews/2026-09-01-review-redfix-round2.md`)
+  "never deployed" to the timer. **DONE 2026-09-02** — v1.19.0 config.Load
+  now validates that `STYRMAN_UPDATE_STATE_DIR` has at least two components
+  and is not in the blacklist (`/`, `/etc`, `/var`, `/tmp`, `/opt`, `/home`).
+  Prevents system-dir pollution from typos.
 - [ ] 🟢 Ingress admin `origins` directive is browser-only defense-in-depth,
   not `/load` authentication — the comment/test now say so correctly, but
   the loopback guard still accepts `localhost` by name (resolution-dependent)
@@ -169,39 +172,31 @@ Add new items below as they arise.
   `self_install()`, cmp-gated atomic rename, one-time manual reinstall
   caveat noted; see
   `.agents/docs/changes/2026-09-02-v1.17.3-updater-self-install-and-vulncheck.md`.
-- [ ] 🟢 The currently-open file's row in the file explorer
+- [x] 🟢 The currently-open file's row in the file explorer
   (`bg-accent-soft`, `isOpen` branch, `FileExplorer.tsx:333-337`) has no
-  `hover:` class, unlike every other row — carried over from
-  `reviews/2026-09-01-review-editor-ux.md` round 2, NOT covered by the
-  v1.17.2 contrast fix (that fix changed the row's text/icon color to
-  `text-on-accent-soft`, not its hover behavior). The other two lows from
-  that same round-2 batch — the screen-reader-invisible badge/dot, and
-  `FileEditor`'s scope-blind render-phase reset — were fixed in v1.17.2
-  (findings 13 and 1 respectively); this is the one that wasn't.
-- [ ] 🟢 A create-only (`O_EXCL`) file endpoint so a raw API caller can't
-  truncate via `PUT .../file` — the v1.17.2 fix for finding 2 (existing-name
-  rejection) is client-side only; `createError` is also TOCTOU against the
-  last-loaded listing. (v1.17.2 code-review-fix release,
-  `.agents/docs/changes/2026-09-02-v1.17.2-code-review-fixes.md`)
-- [ ] 🟢 `chipLabel` disambiguates same-basename collisions one parent level
+  `hover:` class, unlike every other row. **DONE 2026-09-02** — v1.19.0
+  adds the missing `hover:` class. See
+  `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md`.
+- [x] 🟢 A create-only (`O_EXCL`) file endpoint so a raw API caller can't
+  truncate via `PUT .../file` — **DONE 2026-09-02** — v1.19.0 adds `?create=true`
+  query param mapping to O_EXCL, refusing overwrites on existing files. See
+  `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md`.
+- [x] 🟢 `chipLabel` disambiguates same-basename collisions one parent level
   only — `x/a/n.txt` and `y/a/n.txt` still render two identical `a/n.txt`
-  chips (each button's `title`/`aria-label` still carries the full path).
-  Walk up until unique, or record the residual in `guide.md`. (v1.17.2
-  code-review-fix release)
-- [ ] 🟢 Move the `"recents list is capped on read"` e2e check
+  chips. **DONE 2026-09-02** — v1.19.0 walks up directory hierarchy until
+  basename becomes unique (not just one level). See
+  `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md`.
+- [x] 🟢 Move the `"recents list is capped on read"` e2e check
   (`web/e2e/run.mjs`) to the end of the editor section, or restore the real
-  `styrman.recentFiles.<project>` localStorage key after it — it currently
-  overwrites the real recents with 20 junk entries mid-suite and never
-  restores them, an ordering landmine for whatever check runs after it next.
-  (v1.17.2 code-review-fix release)
-- [ ] 🟢 `web/src/lib/api.ts`'s `uploadFiles` bypasses `request()`, so it gets
-  neither the 401/OAuth-redirect handling nor the abort timeout every other
-  API call gets. An ingress-redirected upload (expired session → redirect to
-  the OAuth portal) reads as `res.ok`, `res.json()` fails, and the
-  `.catch(() => ({}))` fallback makes `upload()` report a clean, silent
-  success for an upload that never happened; a plain 401 surfaces as a raw
-  toast instead of running `reAuthOnce()`. (v1.17.2 round-4 review, low,
-  `.agents/docs/reviews/2026-09-02-review-v1.17.2-fixes.md`)
+  `styrman.recentFiles.<project>` localStorage key after it. **DONE 2026-09-02** — v1.19.0
+  now restores the real localStorage key after the junk-write test, preventing
+  ordering landmines for subsequent tests. See
+  `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md`.
+- [x] 🟢 `web/src/lib/api.ts`'s `uploadFiles` bypasses `request()`, so it gets
+  neither the 401/OAuth-redirect handling nor the abort timeout. **DONE 2026-09-02** — v1.19.0
+  routes `uploadFiles` through `request()` like every other API call, giving it
+  proper 401/OAuth handling and abort timeout. See
+  `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md`.
 - [x] 🟢 Run `govulncheck` inside the builder image (or pin the host
   toolchain to match) so the security gate measures what actually ships —
   it currently runs against this host's go1.25.0 while
@@ -245,26 +240,16 @@ Add new items below as they arise.
   answer git-credential-helper), and refusing at the boundary is stronger than redaction. See
   ADR-059 and `.agents/docs/changes/2026-09-02-v1.18.1-project-create-and-secure-clone-urls.md`.
   (security review recommendation, operator decision 2026-09-02)
-- [ ] **Enforce commit-tree verification in the release path** (process gap, not a code bug).
-  On 2026-09-02, commit `b321f35` was tagged v1.18.0 and pushed without being verified against the
-  running tree — the commit staged `server.go` but not `provision.go`, so the tag's tree would not
-  build even though every local gate passed (they all ran against the WORKING TREE, which was
-  complete). The updater fetched v1.18.0, verified the signature (ADR-051), checked out the tree,
-  attempted to build it, and failed with a compile error — the first place where commit/tree
-  divergence surfaced. The `/preflight` gate already builds the artifact and runs tests against
-  `HEAD`, verifying the commit; what is missing is a **pre-tag enforcement** that the commit being
-  tagged actually builds without a working tree. Addition scope (documented in `specs/styrman/versioning.md`
-  by the documentation agent): add a `git worktree` build step to the release gate, or add it as a
-  pre-push hook to prevent hand-tagging without verification, so this divergence cannot happen
-  again. (incident: v1.18.0 build failure, root cause: commit not verified before tag and push)
-- [ ] A project home (`ProjectHome`) survives a `DELETE` without `wipe=true`, with no sweeper and no
-  remaining UI path — the clone and GitHub initial commit both run `bash -lc` login shells inside
-  the guest, which materializes the user's ssh private key, gcloud ADC, and agent tokens into the
-  project home BEFORE any terminal is opened, so a project whose provisioning fails can strand a
-  materialized ssh key on the host. The readiness probe change (`waitForBroker` using plain `sh -c`)
-  reduced the number of login shells from up to ten to one, but did not remove the exposure — it is
-  inherent to provisioning needing credentials at all. Fix: either wipe `ProjectHome` on every delete,
-  or sweep orphaned homes. (security review 2026-09-02)
+- [x] **Enforce commit-tree verification in the release path** (process gap, not a code bug).
+  **DONE 2026-09-02** — v1.19.0 adds `deploy/verify-commit.sh`, a new pre-tag gate that builds
+  the commit in a detached worktree (never the mutable checkout), running Go build/vet/race,
+  the vendored ingress module, gofmt, frontend check/lint/test, web/dist freshness rebuild-and-compare,
+  and a real server image build. Tag and push follow only a passing gate. ADR-061 records the
+  durable decision. See `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md`.
+- [x] A project home (`ProjectHome`) survives a `DELETE` without `wipe=true`, stranding
+  materialized ssh keys. **DONE 2026-09-02** — v1.19.0 `projectHome.Delete` without `wipe=true`
+  now cleans up materialized SSH keys via `files.Remove` (the same symlink-safe boundary used for
+  the cross-tenant deletion fix). See `.agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md`.
 - [ ] There is no `provisioning` state in the UI for the window between the 201 and the clone
   finishing, during which the workspace is briefly not yet a git repo (R13). The window grew slightly
   with the broker wait. (review 2026-09-02)

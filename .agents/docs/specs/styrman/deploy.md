@@ -293,7 +293,17 @@ disabled for exactly this reason.
   by convention (ADR-052):** `styrman-update` has NO in-script default for
   `STYRMAN_UPDATE_STATE_DIR` at all — an unset value is a hard `fail`, not a
   fallback — and it explicitly REFUSES any value that is `/var/lib/styrman`
-  or lives under it. The ONLY place the production path
+  or lives under it (canonicalized with `realpath -m` first, so
+  `//var/lib/styrman/x` and relative paths can't slip past a literal-prefix
+  match). It ALSO refuses the filesystem root (`/`) and any other bare
+  top-level directory (`/etc`, a typo'd single-component path off the
+  recommended `/etc/styrman/update`) — the original ADR-052 guard only
+  checked the `/var/lib/styrman` prefix, so a one-component path passed it
+  cleanly (root-owned, `0755`, no group/world-write bits) and scattered
+  `deployed-version`/`deployed-sha`/`failed-version` into a shared system
+  directory where nothing would ever find them (2026-09-02 audit). The state
+  dir must resolve to at least two path components under `/`. The ONLY place
+  the production path
   (`/etc/styrman/update`) is pinned is `Environment=` in
   `styrman-update.service`; a hand run or a test MUST pass its own value
   (production: `systemctl start styrman-update.service`; tests: a scratch

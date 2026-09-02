@@ -34,6 +34,10 @@ go vet ./...
 # Security
 bash deploy/vulncheck.sh   # govulncheck for both modules inside the pinned builder image
 
+# Frontend
+cd web && npm run check && npm run lint && npm test   # tsc -b / oxlint / vitest — counts + scope: testing README's Tier 1
+cd -
+
 # Build runtime image (AMD64, local only)
 docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/  # the version keys harness re-seeding
 
@@ -44,6 +48,11 @@ STYRMAN_VERSION=<x.y.z> docker compose -f deploy/docker-compose.yml up -d --buil
 # runtime image must be built separately at the SAME version first — full
 # release/rollback procedure + the three-image lineup:
 # .agents/docs/specs/styrman/versioning.md
+
+# Verify a COMMIT (not the working tree) before signing a release tag —
+# builds/tests a detached worktree of that exact commit; see versioning.md's
+# "Release procedure"
+deploy/verify-commit.sh [commit-ish]   # default HEAD; SKIP_WEB_FRESHNESS=1 skips the npm-dependent steps
 
 # Test suites
 bash .agents/docs/testing/styrman/integration.sh   # 60 checks; counts live in .agents/docs/testing/styrman/README.md vs real Kata

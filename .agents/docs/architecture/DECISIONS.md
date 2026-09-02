@@ -2319,3 +2319,29 @@ Verification: .agents/docs/changes/2026-09-02-v1.18.0-project-create-provisionin
 Source: internal/httpapi/server.go, web/src/lib/api.ts.
 Verification: .agents/docs/changes/2026-09-02-v1.18.1-project-create-and-secure-clone-urls.md,
 .agents/docs/reviews/2026-09-02-security-project-create-provisioning.md (section on credential URL handling).
+
+---
+
+## ADR-060: A microVM runtime is a precondition of the containment model, asserted at load (2026-09-02)
+
+**Context:** ADR-001 built the security model around Kata microVMs as the isolation boundary — projects run with `CapAdd: SYS_ADMIN, NET_ADMIN, NET_RAW` and `apparmor=unconfined` (`internal/orchestrator/orchestrator.go:759`), which are escape vectors unless confined to a guest kernel. The runtime was an unvalidated free string (`STYRMAN_RUNTIME` env var, defaulting to `mvm`), and the system assumed it was a Kata variant only through code review discipline, never through validation at startup. A typo or misconfiguration could silently set `STYRMAN_RUNTIME=runc`, keeping all the caps but losing the microVM boundary — a critical containment failure.
+
+**Decision:** `config.Load()` (line 211 onward) now allowlists VM runtimes at system startup: `mvm, kata, kata-runtime, kata-qemu, kata-clh, kata-fc`. `mvm` is this deployment's Kata runtime name (registered in daemon.json by `deploy/host-setup.sh`); the `kata-*` names are upstream's defaults. Any other value is rejected with a fatal error before any project containers are created, unless `STYRMAN_ALLOW_UNSAFE_RUNTIME=1` is explicitly set (which logs a loud warning to stderr and proceeds). This is not optional for normal deployment: a microVM is the ONLY safe runtime for this architecture.
+
+**Consequences:** The containment model is now asserted, not assumed — a misconfigured host cannot boot styrman with a non-VM runtime unless the operator explicitly overrides and accepts the risk. The cost is one allowed-values list that must stay in sync with the vendors' actual microVM runtime names. A future runtime change (e.g., gVisor, firecracker) requires this list to be updated, not inferred from environment state. The escape hatch (`STYRMAN_ALLOW_UNSAFE_RUNTIME=1`) exists for development scenarios (e.g., testing on runc locally) and is intentionally noisy to prevent accidental production misconfigurations. Enforced in v1.19.0.
+
+Source: internal/config/config.go, internal/orchestrator/orchestrator.go, cmd/styrman/main.go.
+Verification: .agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md (STYRMAN_RUNTIME allowlist section).
+
+---
+
+## ADR-061: A release tag is verified against the COMMIT, never the working tree (2026-09-02)
+
+**Context:** v1.18.0 was tagged on 2026-09-02 at 14:38. The commit `b321f35` staged `server.go` (which called a new method) but NOT `provision.go` (which defined it). Every local `/preflight` gate passed because they all ran against the complete WORKING TREE, which was correct. The commit itself was a subset — this commit/tree divergence was silent at tag time and only surfaced when the auto-updater fetched the tag and attempted to build the committed tree, which failed with a compile error. Every released artifact since then has been built and verified against working trees that happened to be correct, never against the commits that were actually tagged.
+
+**Decision:** A new `deploy/verify-commit.sh` script, run as a pre-tag/pre-push gate in the release path, builds the commit in a detached worktree (never the mutable checkout). The gate runs: Go build/vet/race, the separate vendored ingress module, gofmt, frontend check/lint/test, a `web/dist` freshness rebuild-and-compare, and a real server image build against the committed tree. If any step fails, the commit is rejected and will not be tagged. This replaces the assumption "the working tree is correct" with a hard requirement "the commit being tagged IS the thing that was verified." Tag and push only follow a passing gate.
+
+**Consequences:** Commits that are syntactically broken or whose `web/dist` is stale are caught before tagging, not during operator rollback or after the failed deploy is already public. The cost is a second build pass (working tree build for the gate, commit build for the release); the benefit is that tag → deployed artifact becomes deterministic and idempotent. Commits are no longer publishable before they have been verified to build on their own. Enforced in v1.19.0.
+
+Source: deploy/verify-commit.sh, .agents/docs/changes/2026-09-02-v1.19.0-security-hardening-dead-code-toolchain.md (Verification section).
+Verification: v1.18.0 incident (root cause: commit not verified before tag); v1.19.0 pre-tag gate confirms `deploy/verify-commit.sh` runs successfully on the three bundled commits.

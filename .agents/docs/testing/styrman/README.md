@@ -5,7 +5,7 @@ No mocks in the orchestrator path.
 
 ## Tiers
 
-1. **Unit** — `go build ./...`, `go vet ./...`, `go test -race ./...` (store, validation; fast, no Docker). The vendored Caddy ingress is a SEPARATE Go module and is not covered by the root `go test ./...` run — test it explicitly: `(cd deploy/caddy/ingress && go test ./...)`. Frontend: `cd web && npm run check` (tsc -b) and `npm run lint` (oxlint); `web/` has no unit-test framework (no vitest/jest — verified 2026-09-02), so TypeScript/React logic changes are covered only by type-checking + lint plus, where applicable, Tier 4 e2e — a changed function/component with no e2e exercise has no automated coverage at all, note it explicitly when verifying.
+1. **Unit** — `go build ./...`, `go vet ./...`, `go test -race ./...` (store, validation; fast, no Docker). The vendored Caddy ingress is a SEPARATE Go module and is not covered by the root `go test ./...` run — test it explicitly: `(cd deploy/caddy/ingress && go test ./...)`. Frontend: `cd web && npm run check` (tsc -b), `npm run lint` (oxlint), and `npm test` (`vitest run` — added 2026-09-02; `web` previously had no unit-test framework at all) — 11 tests across two files: `web/src/lib/api.test.ts` (`projectNameFromRepoURL`, `cloneURLError`, `projectNameError` — pure, security- or UX-load-bearing string logic that was the frontend's entire test-coverage story before this) and `web/src/lib/editorPane.test.ts` (`basename`). Deliberately NOT unit-tested: the editor pane store's per-terminal draft behavior (parked on unmount, restored only for the file it belongs to, dropped when that file closes or is evicted) — its state lives in a module-level `Map` that is not exported, so reaching it from a unit test would mean either widening the module's API just for tests or pulling in a React renderer; `editorPane.test.ts`'s own header comment says so explicitly rather than faking coverage with an assertion that would always pass. That behavior is covered by Tier 4 e2e instead. Outside these two files, most TypeScript/React logic is still covered only by type-checking + lint plus, where applicable, Tier 4 e2e — a changed function/component with no unit test and no e2e exercise has no automated coverage at all, note it explicitly when verifying.
 2. **Integration (60 checks; 3 auto-SKIP on firewall-hardened hosts)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
    (default `styrman-runtime:test` — see the warning under Prereqs about
    `:dev`). Isolated server (own state dir, port
@@ -37,16 +37,25 @@ No mocks in the orchestrator path.
    so the scan always runs against that image's OWN Go rather than
    auto-switching to whatever a `go` directive asks for — not the host's
    `go`, which reported 31 stdlib-only findings the shipped binary never
-   has (2026-09-02). The repo is mounted read-only and the one
-   secret-bearing file in it, the gitignored `deploy/.env`, is shadowed
-   with `/dev/null` inside the container — a tool this script downloads and
-   runs must never see the ingress token. Exit status is govulncheck's own,
-   via `go install ... && govulncheck ./...` (not `go run`, which would
-   collapse a real finding into the same exit code as a broken scan): `3` =
-   a called vulnerability in either module, `0` = clean, anything else = the
-   scan itself failed (network, install, or a broken image) rather than a
-   finding. The accepted baseline is the two `docker/docker` findings with
-   no upstream fix, re-checked — not silently re-accepted — every release.
+   has (2026-09-02). The repo is mounted read-only, and, WHEN `deploy/.env`
+   exists, the one secret-bearing file in it is shadowed with `/dev/null`
+   inside the container — a tool this script downloads and runs must never
+   see the ingress token. That shadow is now conditional (2026-09-02 audit
+   fix): bind-mounting `/dev/null` over a path absent from the tree fails in
+   runc with exit 125, which made the script unrunnable on a checkout with no
+   `deploy/.env` at all — a fresh clone, or any CI checkout — because a
+   release gate that cannot run there is worse than no gate; a checkout with
+   no `deploy/.env` has no secret to hide anyway, so it now runs cleanly
+   instead. Exit status is govulncheck's own, via `go install ... &&
+   govulncheck ./...` (not `go run`, which would collapse a real finding into
+   the same exit code as a broken scan): `3` = a called vulnerability in
+   either module, `0` = clean, anything else = the scan itself failed
+   (network, install, or a broken image) rather than a finding. **Expected
+   exit on this repo today is `3`** — the accepted baseline of two
+   `docker/docker` findings with no upstream fix, re-checked — not silently
+   re-accepted — every release; `0` would mean that baseline shrank (good,
+   update the accepted count) and anything else is a broken scan, not a new
+   finding.
    Since 2026-09-02 (round 3) the exit across the two modules is WORST-WINS,
    not last-writer-wins: a broken scan (anything but 0/3) always overrides a
    prior finding, and a finding (3) is never masked by a later clean module —
@@ -185,7 +194,7 @@ go test ./... && bash .agents/docs/testing/styrman/integration.sh
 Image changes: rebuild the image first; the integration script always creates
 fresh containers so it picks the new image up automatically.
 
-## Tier 4 — Browser e2e (Playwright, 62 checks + a final client-error gate; firewall-hardened hosts run 61 + 2 auto-SKIP. The 2026-09-02 measured run — `passed=60 failed=0 skipped=2` against `styrman-runtime:test`, the first session this tier was actually executed rather than counted — predates the newest check below ("a clone URL carrying a token is refused") and is one short of the current 62/61 totals; re-measure before citing it as current)
+## Tier 4 — Browser e2e (Playwright, 62 checks + a final client-error gate; firewall-hardened hosts run 60 + 2 auto-SKIP. A 2026-09-02 measured run — `passed=60 failed=0 skipped=2` against `styrman-runtime:test`, the first session this tier was actually executed rather than counted — matches the current 62-check total; re-measure after any further check additions before citing it as current)
 
 `bash web/e2e/run.sh [image-tag]` — self-hosts: builds the web SPA
 (`cd web && npm run build`) FIRST, then the server, then starts its own
@@ -273,7 +282,7 @@ attach-before-provisioning ORDERING** — see `provision.go`'s doc comment and
 `guide.md`'s "Project creation is async" bullet for the credential-delivery
 path itself, which only Tier 3 (real Kata, real broker) or manual testing
 against a containerized server can exercise — and full
-cleanup — 62 checks + the client-error gate (61 pass on firewall-hardened
+cleanup — 62 checks + the client-error gate (60 pass on firewall-hardened
 hosts, plus 2 auto-SKIP) plus a final no-client-errors gate + screenshots.
 Prereq: `cd web && npm i && npx playwright install chromium` (once).
 Self-cleaning: deletes any leftover `e2e-ui` project at start.

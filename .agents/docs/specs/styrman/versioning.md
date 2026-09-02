@@ -87,7 +87,8 @@ that section for why.
 1. Land the change (commit; the review/security/verifier gates and
    `/preflight` are a separate concern from this doc — see `AGENTS.md`'s
    Definition of Done).
-2. **REQUIRED: verify the COMMIT, not the working tree, before tagging it.**
+2. **REQUIRED: verify the COMMIT, not the working tree, before tagging it —
+   run `deploy/verify-commit.sh [commit-ish]` (default `HEAD`).**
    `go build`/`go test`/`docker build` run against whatever is currently
    checked out — including anything staged but not yet committed — which is
    NOT what a tag points at. This is exactly how v1.18.0 broke: it was
@@ -95,17 +96,23 @@ that section for why.
    COMMIT it pointed at was missing `bootFailed`'s definition (a file had
    been edited but never `git add`ed) — the auto-updater built a fresh
    checkout of the pushed tag, that checkout failed to compile, and it
-   auto-rolled production back to v1.17.3. Verify a detached worktree of the
-   exact commit instead, not the directory you've been editing in:
-   ```bash
-   git worktree add --detach /tmp/verify-tag <commit-sha>
-   cd /tmp/verify-tag
-   go build ./... && go test -race ./...
-   docker build -f deploy/Dockerfile.server .
-   cd - && git worktree remove /tmp/verify-tag   # cleanup
-   ```
-   Only a green result against THIS checkout says the commit is safe to tag
-   — a green result against your editing working tree does not.
+   auto-rolled production back to v1.17.3. `deploy/verify-commit.sh` checks
+   out the exact commit into a detached worktree under `/tmp` and runs the
+   full gate against THAT tree, never the directory you've been editing in:
+   `go build`/`go vet`/`go test -race` for the root module, the vendored
+   ingress module (`deploy/caddy/ingress`, a separate `go.mod` the root
+   `./...` never reaches), `gofmt -l`, a `web/dist` freshness check (rebuilds
+   the frontend from the commit's own `web/src` and compares file lists —
+   `web/embed.go` embeds the committed `dist/client`, so an uncommitted
+   frontend build would ship a UI that silently predates its API), the
+   frontend `check`/`lint`/unit-test trio (`npm run check && npm run lint &&
+   npm test`), and finally the real server image build
+   (`deploy/Dockerfile.server`) — the exact build the auto-updater runs, and
+   what failed for v1.18.0. `SKIP_WEB_FRESHNESS=1` skips every npm-dependent
+   step (freshness rebuild + check/lint/test) for a quick Go-only pass; never
+   set it before actually tagging a release that touched `web/`. Only a
+   green result against THIS checkout says the commit is safe to tag — a
+   green result against your editing working tree does not.
 3. Sign and push the tag — SSH signing isn't cosmetic here, it's the exact
    signature shape the auto-updater's `verify_tag` requires (below), so an
    unsigned or PGP-signed tag can only ever be deployed manually:
@@ -202,7 +209,13 @@ deliberately and together, not piecemeal under time pressure:
 
 - `deploy/caddy/Dockerfile`: `caddy:X.Y.Z-builder`/`caddy:X.Y.Z`,
   `caddy-security@vX.Y.Z`, `caddy-dns/cloudflare@vX.Y.Z`,
-  `mholt/caddy-ratelimit@vX.Y.Z`.
+  `mholt/caddy-ratelimit@vX.Y.Z`. Both the builder and runtime `FROM` lines
+  are digest-pinned (`@sha256:...`) as well as tag-pinned (2026-09-02 audit)
+  — a tag alone is mutable, so two builds of the same styrman version could
+  otherwise ship different Caddy binaries, exactly what the no-mutable-tags
+  rule (ADR-053) exists to prevent one layer down. Bump the tag and the
+  digest together for BOTH `FROM` lines, then re-run the Caddy smoke test
+  below.
 - `deploy/Dockerfile.server`: `golang:X.Y.Z-trixie`.
 - `image/Dockerfile`: base image + tool versions — see `runtime-image.md`.
 

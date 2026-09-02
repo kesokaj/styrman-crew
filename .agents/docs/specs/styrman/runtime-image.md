@@ -11,20 +11,37 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> image/
 
 - Base: git, gh, tmux, jq, ripgrep, fd, bat, build-essential, python3, vim/nano
 - Docker CE + buildx + compose (per-project DinD, ADR-004)
-- gcloud + gke-gcloud-auth-plugin + kubectl, helm, yq
-- OpenTofu, via the official `get.opentofu.org` installer script
-  (`--install-method standalone`), which verifies the release signature
-  itself before installing (M32)
-- `shellcheck` (apt) and `hadolint` (GitHub release binary, same "latest
-  release" pattern as `yq`) — the shell and Dockerfile syntax checkers
-  backing the editor's Check feature (`internal/httpapi/check.go`,
-  `POST /api/projects/{id}/check`), which runs the language's real checker
-  INSIDE the project VM, the same shape as `format` (see api.md's "Format
-  (server-side)" section). Full checker table
-  by extension: `gofmt` (go), `shellcheck` falling back to `bash -n` on an
-  image predating it (sh/bash), `python3 -m py_compile` (py), `node --check`
-  (js/jsx/mjs/cjs), `jq empty` (json), `yq e .` (yaml/yml), `tofu fmt -check`
-  (tf/tfvars/hcl), `hadolint -f json` (Dockerfile/Containerfile/`*.dockerfile`)
+- gcloud + gke-gcloud-auth-plugin + kubectl. **helm is NOT installed**
+  (removed 2026-09-02, operator directive): it was the worst of the image's
+  unpinned fetches (`curl … get-helm-3 | bash`) and isn't wanted in the base
+  image at all — a project that needs it installs it itself.
+- OpenTofu, yq, and hadolint are ALL pinned by exact version + sha256 —
+  `ARG TOFU_VERSION`/`TOFU_SHA256`, `ARG YQ_VERSION`/`YQ_SHA256`, `ARG
+  HADOLINT_VERSION`/`HADOLINT_SHA256` in `image/Dockerfile` — none is a
+  `curl | bash` installer or a `releases/latest/download` fetch. OpenTofu
+  used to run the official `get.opentofu.org` installer script
+  (`--install-method standalone`) and yq used `releases/latest/download`;
+  both were replaced with a pinned download + `sha256sum -c` (2026-09-02
+  audit, matching hadolint's existing pin) because an unpinned tool makes the
+  tag→image mapping non-deterministic — the auto-updater's rollback would not
+  restore the image the old tag actually produced. Every checksum was
+  cross-checked against the publisher's own published sums, not just
+  computed from whatever the download returned. **Bump procedure** (same for
+  all three): bump the `ARG …_VERSION`, fetch the new release, verify its
+  sha256 against the publisher's OWN published checksum file/release page
+  (never trust a sha256 computed only from the download itself), then update
+  the matching `ARG …_SHA256` — version and checksum move together in one
+  commit.
+- `shellcheck` (apt) and `hadolint` (GitHub release binary, pinned as above)
+  — the shell and Dockerfile syntax checkers backing the editor's Check
+  feature (`internal/httpapi/check.go`, `POST /api/projects/{id}/check`),
+  which runs the language's real checker INSIDE the project VM, the same
+  shape as `format` (see api.md's "Format (server-side)" section). Full
+  checker table by extension: `gofmt` (go), `shellcheck` falling back to
+  `bash -n` on an image predating it (sh/bash), `python3 -m py_compile` (py),
+  `node --check` (js/jsx/mjs/cjs), `jq empty` (json), `yq e .` (yaml/yml),
+  `tofu fmt -check` (tf/tfvars/hcl), `hadolint -f json`
+  (Dockerfile/Containerfile/`*.dockerfile`)
 - Go (latest stable at build time), Node 22
 - Agents: `claude` (npm `@anthropic-ai/claude-code`), `agy` (official installer → `/usr/local/bin/agy`)
 - dbus, gnome-keyring, libsecret-tools — originally installed for agy's Secret
