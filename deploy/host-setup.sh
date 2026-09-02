@@ -200,7 +200,12 @@ ensure_jump  INPUT sdb-+ STYRMAN-IN
 ensure_chain STYRMAN-FWD
 ensure_rule  STYRMAN-FWD -m physdev --physdev-is-bridged -j RETURN 2>/dev/null \
     || echo "styrman-firewall: WARN xt_physdev unavailable — broker may be blocked" >&2
-for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
+# 100.64.0.0/10 is CGNAT — where Tailscale/headscale put their tailnet, so a
+# project could otherwise reach the operator's whole private mesh; 198.18.0.0/15
+# is the benchmark range some VPNs and container fabrics route real traffic on.
+# Both were missing from the original RFC1918 list (2026-09-01 audit).
+for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 \
+           100.64.0.0/10 198.18.0.0/15; do
     ensure_rule STYRMAN-FWD -d "$net" -j DROP
 done
 ensure_jump  DOCKER-USER sdb-+ STYRMAN-FWD

@@ -383,6 +383,25 @@ func Rename(root, oldRel, newRel string) error {
 	return rt.Rename(cleanRel(oldRel), dst)
 }
 
+// Remove deletes a single file at rel under root, confined — a symlinked
+// component escaping the root is refused. Unlike RemoveAll it never recurses,
+// which is what revoking one credential file wants: the caller means "delete
+// this file", not "delete this subtree".
+//
+// os.Root refuses to traverse a symlink out of the root, which is the whole
+// point here: the per-project homes are bind-mounted into microVMs where the
+// guest is root, so a guest can replace an intermediate directory with a
+// symlink into ANOTHER tenant's home. filepath.Rel-style string checks do not
+// see that — they validate the path, not what it resolves through.
+func Remove(root, rel string) error {
+	rt, err := openRoot(root)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+	return rt.Remove(cleanRel(rel))
+}
+
 // RemoveAll removes rel and its contents under root, confined — a symlinked
 // component escaping the root is refused, so a wipe cannot recurse into
 // another tenant's home.

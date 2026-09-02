@@ -22,6 +22,16 @@ IMAGE="$(sed -n 's/^FROM \(golang:[^ ]*\) AS builder$/\1/p' "${ROOT}/deploy/Dock
 GOVULN="golang.org/x/vuln/cmd/govulncheck@v1.7.0"
 rc=0
 r=0
+# Shadow the one secret-bearing file in the tree so a container that downloads
+# and runs a tool never sees the ingress token — but ONLY when it exists.
+# Bind-mounting /dev/null over a path that is not in the tree fails in runc
+# with exit 125, which made this script unrunnable on any clean checkout: a
+# release gate that cannot run on CI or a fresh clone is worse than no gate
+# (audit 2026-09-02). A checkout with no deploy/.env has no secret to hide.
+ENV_SHADOW=()
+if [ -f "${ROOT}/deploy/.env" ]; then
+    ENV_SHADOW=(-v /dev/null:/src/deploy/.env:ro)
+fi
 for mod in . deploy/caddy/ingress; do
     echo "==> govulncheck ${mod} (in ${IMAGE})"
     # `go install` then run the binary — NOT `go run`, which collapses
@@ -35,7 +45,7 @@ for mod in . deploy/caddy/ingress; do
     # that downloads and runs a tool must never see the ingress token
     # (security review).
     docker run --rm \
-        -v "${ROOT}:/src:ro" -v /dev/null:/src/deploy/.env:ro -w "/src/${mod}" \
+        -v "${ROOT}:/src:ro" "${ENV_SHADOW[@]}" -w "/src/${mod}" \
         -v styrman-vulncheck-cache:/go/pkg/mod \
         -v styrman-vulncheck-gocache:/root/.cache \
         -e GOTOOLCHAIN=local \

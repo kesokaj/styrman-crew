@@ -5,7 +5,7 @@
 # what actually ran. These pins are what the 2026-09-01 smoke-tested build
 # resolved; bump them together and re-run that smoke test (OAuth login) when
 # raising the Caddy version.
-FROM caddy:2.11.4-builder AS builder
+FROM caddy:2.11.4-builder@sha256:e04bd0aadab74d4ff446980f956fe3c63be24678f1838906962b56a7cab2d028 AS builder
 
 COPY ingress/ /src/caddy-ingress/
 
@@ -16,7 +16,11 @@ RUN xcaddy build \
     --with github.com/spgo/devbox/caddy/ingress=/src/caddy-ingress
 
 # Stage 2: Runtime
-FROM caddy:2.11.4
+# Digest-pinned as well as tag-pinned (audit 2026-09-02): a tag is mutable, so
+# two builds of the same styrman version could otherwise ship different Caddy
+# binaries — which is exactly what the no-mutable-tags rule (ADR-053) exists
+# to prevent, one layer down. Bump the tag and the digest together.
+FROM caddy:2.11.4@sha256:df7f1c2fb114453b951de51a98efc010db1655a92c2e86be6706714e2417a78d
 
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 

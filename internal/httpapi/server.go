@@ -870,6 +870,11 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 			s.deletingMu.Unlock()
 			return
 		}
+		// Credentials go with the record either way. A non-wipe delete keeps
+		// the user's WORK (the workspace) but must not leave their ssh private
+		// key and tokens in an orphaned home nothing can reach (security
+		// review 2026-09-02). Harmless when wiping — the dir goes next.
+		s.sweepProjectCredentials(u.Username, p.ID)
 		// wipe=true also removes the workspace, docker storage, transcripts,
 		// and apt manifest — irreversible, so it is opt-in per request.
 		if wipe {

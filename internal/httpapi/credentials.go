@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/kesokaj/styrman-crew/internal/credstore"
+	"github.com/kesokaj/styrman-crew/internal/files"
 	"github.com/kesokaj/styrman-crew/internal/identity"
 )
 
@@ -210,6 +211,45 @@ func (s *Server) importCredentials(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"report": report})
 }
 
+// sweepProjectCredentials removes every materialized file-tier credential from
+// ONE project's home. Called on delete, wipe or not.
+//
+// A plain (non-wipe) delete removes the project RECORD but leaves its home on
+// disk, and that home holds whatever the credential broker materialized into
+// it — the user's ssh private key, gcloud ADC, agent tokens. With the record
+// gone there is no UI path to it and no sweeper, so the key simply stays there
+// (security review 2026-09-02). The narrow fix is to take the credentials with
+// the record and leave the rest alone: user work lives in the WORKSPACE, which
+// only wipe=true removes, and deleting credentials costs nothing because the
+// broker re-materializes them into any project on its next login shell.
+func (s *Server) sweepProjectCredentials(user, projectID string) {
+	if s.creds == nil {
+		return
+	}
+	home := s.cfg.ProjectHome(user, projectID)
+	if _, err := os.Stat(home); err != nil {
+		return // never created, or already wiped
+	}
+	creds, err := s.creds.AllFiles(user)
+	if err != nil {
+		s.logger.Warn("delete: could not list file credentials to sweep", "user", user, "error", err)
+		return
+	}
+	for _, c := range creds {
+		rel := strings.TrimPrefix(strings.TrimPrefix(c.Path, "~/"), "/")
+		if rel == "" {
+			continue
+		}
+		// files.Remove is os.Root-confined: the home was bind-mounted into a
+		// microVM where the guest was root, so an intermediate component may
+		// be a symlink the guest planted.
+		if err := files.Remove(home, rel); err != nil && !os.IsNotExist(err) {
+			s.logger.Warn("delete: could not remove materialized credential",
+				"user", user, "project", projectID, "rel", rel, "error", err)
+		}
+	}
+}
+
 // sweepMaterializedFile best-effort removes a file credential's already-
 // materialized copies from the user's base home and every per-project home, so
 // deleting the credential actually revokes it rather than only stopping future
@@ -222,13 +262,16 @@ func (s *Server) sweepMaterializedFile(user, homePath string) {
 	homes, _ := filepath.Glob(filepath.Join(s.cfg.HomesDir, user, "p", "*"))
 	homes = append(homes, s.cfg.UserHome(user))
 	for _, h := range homes {
-		target := filepath.Join(h, rel)
-		// Never let a crafted stored path escape the home root.
-		if rp, err := filepath.Rel(h, target); err != nil || rp == ".." || strings.HasPrefix(rp, ".."+string(os.PathSeparator)) {
-			continue
-		}
-		if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-			s.logger.Warn("credential revoke: could not remove materialized copy", "user", user, "path", target, "error", err)
+		// files.Remove is os.Root-confined. The previous filepath.Rel check
+		// validated the path STRING, which a symlink defeats: these homes are
+		// bind-mounted into microVMs where the guest is root, so a guest could
+		// replace an intermediate directory (say ~/.config) with a symlink
+		// into another tenant's home and have this sweep delete THEIR file
+		// (cross-tenant deletion, 2026-09-01 audit). os.Root refuses to
+		// traverse a symlink out of the root, so the escape simply fails.
+		if err := files.Remove(h, rel); err != nil && !os.IsNotExist(err) {
+			s.logger.Warn("credential revoke: could not remove materialized copy",
+				"user", user, "home", h, "rel", rel, "error", err)
 		}
 	}
 }

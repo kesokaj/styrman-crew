@@ -11,11 +11,14 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/kesokaj/styrman-crew/internal/identity"
 )
 
 // Container labels. LabelManaged marks containers styrman owns; state recovery
@@ -198,6 +201,28 @@ func Load() (*Config, error) {
 	if c.Image == "" {
 		return nil, fmt.Errorf("STYRMAN_IMAGE is not set — deploys use styrman-runtime:<x.y.z> (compose derives it from STYRMAN_VERSION); local dev: STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman")
 	}
+	// The containment model ASSUMES a VM runtime, so assert it. Every project
+	// container is created with CAP_SYS_ADMIN + NET_ADMIN + NET_RAW and
+	// apparmor=unconfined (orchestrator.create) — safe only because a Kata
+	// microVM, not the host kernel, is the boundary. Under runc those exact
+	// flags hand every project user host root. Runtime used to be a free
+	// string in a Load that otherwise fails closed on the image, the auth mode
+	// and the ingress token (2026-09-01 audit).
+	if !vmRuntimes[c.Runtime] {
+		if os.Getenv("STYRMAN_ALLOW_UNSAFE_RUNTIME") != "1" {
+			return nil, fmt.Errorf(
+				"STYRMAN_RUNTIME=%q is not a VM runtime (known: %s) — project containers "+
+					"get CAP_SYS_ADMIN and apparmor=unconfined, which is containment only "+
+					"when the runtime is a microVM; set STYRMAN_ALLOW_UNSAFE_RUNTIME=1 to "+
+					"override deliberately", c.Runtime, strings.Join(knownVMRuntimes(), ", "))
+		}
+		// Deliberate override: say so loudly and exactly once, at boot.
+		fmt.Fprintf(os.Stderr,
+			"styrman: WARNING — STYRMAN_RUNTIME=%q is not a VM runtime and "+
+				"STYRMAN_ALLOW_UNSAFE_RUNTIME=1 is set. Project containers get "+
+				"CAP_SYS_ADMIN with AppArmor disabled; on a non-VM runtime that is "+
+				"host root for every project user.\n", c.Runtime)
+	}
 	// The shared home's owner is authoritative for the in-guest uid/gid.
 	if st, err := os.Stat(c.HomeDir); err == nil {
 		if sys, ok := st.Sys().(*syscall.Stat_t); ok {
@@ -367,33 +392,31 @@ func (c *Config) UserStateDir(user string) string {
 // admin), else the OS operator.
 func (c *Config) DefaultUser() (email, username string) {
 	if len(c.AllowedEmails) > 0 {
-		return c.AllowedEmails[0], usernameFromEmail(c.AllowedEmails[0])
+		return c.AllowedEmails[0], identity.DeriveUsername(c.AllowedEmails[0])
 	}
 	return "", c.Username
 }
 
-// usernameFromEmail mirrors identity.DeriveUsername (config is imported by
-// identity consumers early in boot; the tiny duplicate beats the coupling).
-func usernameFromEmail(email string) string {
-	name, _, _ := strings.Cut(email, "@")
-	name = strings.ReplaceAll(name, ".", "-")
-	name = strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
-			return r
-		case r >= 'A' && r <= 'Z':
-			return r + 32
-		default:
-			return -1
-		}
-	}, name)
-	if name == "" || name[0] < 'a' || name[0] > 'z' {
-		name = "user-" + name
+// vmRuntimes are the Docker runtimes that put a project in its OWN kernel.
+// "mvm" is this deployment's Kata runtime name (deploy/host-setup.sh registers
+// it in daemon.json); the kata-* names are the upstream defaults.
+var vmRuntimes = map[string]bool{
+	"mvm":          true,
+	"kata":         true,
+	"kata-runtime": true,
+	"kata-qemu":    true,
+	"kata-clh":     true,
+	"kata-fc":      true,
+}
+
+// knownVMRuntimes lists them in a stable order for the error message.
+func knownVMRuntimes() []string {
+	out := make([]string, 0, len(vmRuntimes))
+	for r := range vmRuntimes {
+		out = append(out, r)
 	}
-	if len(name) > 32 {
-		name = name[:32]
-	}
-	return name
+	sort.Strings(out)
+	return out
 }
 
 // ContainerName returns the container name for a project. Identity is the

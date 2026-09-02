@@ -123,3 +123,53 @@ func TestLoadRequiresExplicitImage(t *testing.T) {
 		t.Fatalf("Image = %q, want the explicit value", c.Image)
 	}
 }
+
+// Every project container is created with CAP_SYS_ADMIN, NET_ADMIN, NET_RAW
+// and apparmor=unconfined. That is containment ONLY when the runtime is a
+// microVM; under runc the same flags are host root for every project user.
+// Load must therefore refuse a non-VM runtime rather than assume one
+// (2026-09-01 audit: Runtime was a free string in a Load that otherwise fails
+// closed on the image, the auth mode and the ingress token).
+func TestLoadRefusesNonVMRuntime(t *testing.T) {
+	base := func(t *testing.T) {
+		t.Helper()
+		t.Setenv("STYRMAN_IMAGE", "styrman-runtime:test")
+		t.Setenv("STYRMAN_STATE_DIR", t.TempDir())
+		t.Setenv("STYRMAN_AUTH", "none")
+	}
+
+	// NB: not "" — an unset STYRMAN_RUNTIME correctly falls back to "mvm".
+	// Case and whitespace variants ARE refused: they are typos, not runtimes.
+	for _, rt := range []string{"runc", "crun", "MVM", "kata ", "runsc", "docker-runc"} {
+		t.Run("refuses "+rt, func(t *testing.T) {
+			base(t)
+			t.Setenv("STYRMAN_RUNTIME", rt)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load accepted STYRMAN_RUNTIME=%q — escape-capable caps on a non-VM runtime", rt)
+			} else if !strings.Contains(err.Error(), "not a VM runtime") {
+				t.Errorf("unhelpful error for %q: %v", rt, err)
+			}
+		})
+	}
+
+	for _, rt := range []string{"mvm", "kata", "kata-qemu", "kata-clh"} {
+		t.Run("accepts "+rt, func(t *testing.T) {
+			base(t)
+			t.Setenv("STYRMAN_RUNTIME", rt)
+			if _, err := Load(); err != nil {
+				t.Errorf("Load rejected VM runtime %q: %v", rt, err)
+			}
+		})
+	}
+
+	// The override exists so a deliberate operator is not locked out, but it
+	// has to be explicit — not a typo-friendly default.
+	t.Run("explicit override is honoured", func(t *testing.T) {
+		base(t)
+		t.Setenv("STYRMAN_RUNTIME", "runc")
+		t.Setenv("STYRMAN_ALLOW_UNSAFE_RUNTIME", "1")
+		if _, err := Load(); err != nil {
+			t.Errorf("explicit override still refused: %v", err)
+		}
+	})
+}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kesokaj/styrman-crew/internal/config"
+	"github.com/kesokaj/styrman-crew/internal/credstore"
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 	"github.com/kesokaj/styrman-crew/internal/project"
 	"github.com/kesokaj/styrman-crew/internal/userstore"
@@ -466,4 +467,50 @@ func TestBootFailedReportsAndKeepsR13(t *testing.T) {
 			t.Error("bootFailed initialised a repo for a project that needs no guest work")
 		}
 	})
+}
+
+// A plain (non-wipe) delete removes the project record but keeps the
+// workspace. It must NOT keep the credentials: with the record gone there is
+// no UI path to that home and no sweeper, so a materialized ssh private key
+// would simply sit there (security review 2026-09-02).
+func TestSweepProjectCredentialsClearsTheHome(t *testing.T) {
+	s := testServer(t)
+	store, err := credstore.New(filepath.Join(t.TempDir(), "credentials"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetCredStore(store)
+
+	if err := store.PutFile("tester", credstore.FileCred{
+		ID: "ssh-id_ed25519", Path: "~/.ssh/id_ed25519", Mode: "0600", Data: []byte("PRIVATE KEY"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	id := newProject(t, s, "proj")
+	home := s.cfg.ProjectHome("tester", id)
+	if err := os.MkdirAll(filepath.Join(home, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	key := filepath.Join(home, ".ssh", "id_ed25519")
+	if err := os.WriteFile(key, []byte("PRIVATE KEY"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Something the user authored, in the same home — must survive.
+	keep := filepath.Join(home, "notes.md")
+	if err := os.WriteFile(keep, []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s.sweepProjectCredentials("tester", id)
+
+	if _, err := os.Stat(key); !os.IsNotExist(err) {
+		t.Errorf("materialized private key survived the delete: %v", err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("sweep removed something that was not a credential: %v", err)
+	}
+	// Idempotent: a second sweep (or a home that never existed) is a no-op.
+	s.sweepProjectCredentials("tester", id)
+	s.sweepProjectCredentials("tester", "no-such-project")
 }

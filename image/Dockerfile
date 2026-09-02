@@ -39,21 +39,40 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 # hadolint is PINNED with a checksum, unlike the `latest` fetches around it:
 # an unpinned tool makes the tag->image mapping non-deterministic, so the
 # auto-updater's rollback would not restore the image the old tag produced
-# (security review, 2026-09-01). The pre-existing yq/helm/tofu fetches carry
-# the same risk and are tracked in TODO.md.
+# (security review, 2026-09-01).
+#
+# Every remaining tool is pinned by version AND verified by sha256 (audit
+# 2026-09-02). OpenTofu was a `curl | bash` installer script — an
+# unauthenticated remote shell script running as root at build time, fetching
+# whatever version was current that day — and yq used
+# `releases/latest/download`. Every checksum
+# below was cross-checked against the publisher's own published sums, not just
+# computed from whatever the download returned. Bump these deliberately and
+# together (specs/styrman/runtime-image.md).
+ARG TOFU_VERSION=1.12.6
+ARG TOFU_SHA256=5dc43da4f750f33873dc25e94587128709e819e544b7be9016b255316153c3a8
+ARG YQ_VERSION=4.53.6
+ARG YQ_SHA256=c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385
 ARG HADOLINT_VERSION=2.15.1
 ARG HADOLINT_SHA256=c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
-# Helm + OpenTofu + yq + hadolint
+# OpenTofu + yq + hadolint
 # hadolint is the Dockerfile checker behind the editor's lint gutter
 # (internal/httpapi/check.go); shellcheck, its shell counterpart, comes from
-# apt above.
-RUN curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash && \
-    curl -fsSL https://get.opentofu.org/install-opentofu.sh | bash -s -- --install-method standalone && \
-    curl -fsSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq && \
-    chmod +x /usr/local/bin/yq && \
-    curl -fsSL https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64 -o /usr/local/bin/hadolint && \
-    echo "${HADOLINT_SHA256}  /usr/local/bin/hadolint" | sha256sum -c - && \
-    chmod +x /usr/local/bin/hadolint
+# apt above. Helm was REMOVED (operator directive 2026-09-02) — it was the
+# worst of the unpinned fetches (`curl … get-helm-3 | bash`) and is not wanted
+# in the image; a project that needs it can install it itself.
+RUN set -eux; \
+    curl -fsSL -o /tmp/tofu.zip "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_amd64.zip"; \
+    echo "${TOFU_SHA256}  /tmp/tofu.zip" | sha256sum -c -; \
+    unzip -q -o -d /tmp/tofu /tmp/tofu.zip; \
+    install -m 0755 /tmp/tofu/tofu /usr/local/bin/tofu; \
+    curl -fsSL -o /usr/local/bin/yq "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"; \
+    echo "${YQ_SHA256}  /usr/local/bin/yq" | sha256sum -c -; \
+    chmod 0755 /usr/local/bin/yq; \
+    curl -fsSL -o /usr/local/bin/hadolint "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64"; \
+    echo "${HADOLINT_SHA256}  /usr/local/bin/hadolint" | sha256sum -c -; \
+    chmod 0755 /usr/local/bin/hadolint; \
+    rm -rf /tmp/tofu.zip /tmp/tofu
 
 # Go (latest stable) + Node 22
 RUN GO_VERSION=$(curl -fsSL 'https://go.dev/dl/?mode=json' | jq -r '.[0].version') && \
