@@ -8,7 +8,8 @@
     "build": "vite build && tsc -b",
     "lint": "oxlint",
     "preview": "vite preview",
-    "check": "tsc -b"
+    "check": "tsc -b",
+    "test": "vitest run"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
@@ -58,6 +59,7 @@
     "oxlint": "^1.79.0",
     "playwright": "^1.62.1",
     "typescript": "~6.0.2",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
   }
 }

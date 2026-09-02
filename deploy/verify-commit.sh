@@ -41,9 +41,33 @@ echo "==> go test -race"; ( cd "${WT}" && go test -race -count=1 ./... )
 echo "==> vendored ingress module (separate go.mod)"
 ( cd "${WT}/deploy/caddy/ingress" && go vet ./... && go test ./... )
 
+# The Go binary EMBEDS web/dist (web/embed.go), and web/dist is committed. So a
+# frontend change whose build output was never committed ships a server whose
+# UI silently predates its API. Rebuild from the commit's own web/src and
+# compare: vite's content hashes are derived from content, so a matching build
+# produces identical filenames (TODO 2026-09-01; hit for real 2026-09-02).
+if [ -z "${SKIP_WEB_FRESHNESS:-}" ] && command -v npm >/dev/null 2>&1; then
+    echo "==> web/dist freshness (rebuild and compare)"
+    committed="$(cd "${WT}/web/dist" && find . -type f | sort)"
+    ( cd "${WT}/web" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1 )
+    rebuilt="$(cd "${WT}/web/dist" && find . -type f | sort)"
+    if [ "${committed}" != "${rebuilt}" ]; then
+        echo "FAIL: committed web/dist does not match a build of this commit's web/src." >&2
+        echo "      Run 'cd web && npm run build' and commit web/dist." >&2
+        diff <(printf '%s\n' "${committed}") <(printf '%s\n' "${rebuilt}") | head -20 >&2
+        exit 1
+    fi
+    echo "    committed assets match a fresh build"
+fi
+
 echo "==> gofmt"
 fmt="$(cd "${WT}" && gofmt -l internal/ cmd/)"
 [ -z "${fmt}" ] || { echo "gofmt would reformat:"; echo "${fmt}"; exit 1; }
+
+if [ -z "${SKIP_WEB_FRESHNESS:-}" ] && command -v npm >/dev/null 2>&1; then
+    echo "==> frontend check / lint / unit tests"
+    ( cd "${WT}/web" && npm run check >/dev/null && npm run lint >/dev/null && npm test >/dev/null )
+fi
 
 # The build the auto-updater actually runs. This is what failed for v1.18.0.
 echo "==> server image (the build the updater runs)"

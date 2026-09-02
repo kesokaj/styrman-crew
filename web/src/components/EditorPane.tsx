@@ -29,7 +29,7 @@ export function EditorPane({
   /** Switch the pane back to the terminal view. */
   onShowTerminal: () => void;
 }) {
-  const { state, setFile, setDirty } = useEditorPane(project, term);
+  const { state, setFile, setDirty, setDraft } = useEditorPane(project, term);
   const wanted = state.file;
   const [loaded, setLoaded] = useState<{
     file: FileContent;
@@ -52,6 +52,31 @@ export function EditorPane({
   useEffect(() => {
     setDirty(st.dirty);
   }, [st.dirty, setDirty]);
+
+  // Park the unsaved buffer in the per-terminal store so it survives THIS
+  // pane unmounting. Switching terminals used to discard it silently — the
+  // one editor exit that did not prompt (2026-09-01 FINAL review).
+  const openPath = loaded?.req.path;
+  useEffect(() => {
+    if (!openPath) return;
+    setDraft(st.dirty ? { path: openPath, text: st.text } : null);
+  }, [st.dirty, st.text, openPath, setDraft]);
+
+  // Coming back to this terminal: restore the parked buffer, but only when it
+  // belongs to the file actually open now.
+  const restoredRef = useRef<string | null>(null);
+  useEffect(() => {
+    const d = state.draft;
+    if (!d || !openPath || d.path !== openPath) return;
+    if (restoredRef.current === openPath) return; // once per open
+    restoredRef.current = openPath;
+    if (d.text === st.text) return;
+    // setText alone is not enough: CodeMirror takes its document from `value`
+    // on MOUNT only (see FileEditor), so the buffer has to be pushed into the
+    // live editor too — the same way doFormat does it.
+    st.setText(d.text);
+    st.editorRef.current?.setContent(d.text);
+  }, [state.draft, openPath, st]);
 
   // Load whatever the pane store points at. A different file arriving while
   // the current one has unsaved edits parks it in `pending` behind a confirm

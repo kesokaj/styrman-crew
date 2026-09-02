@@ -489,13 +489,33 @@ export const api = {
   uploadFiles: async (scope: Scope, dir: string, fileList: File[]) => {
     const form = new FormData();
     for (const f of fileList) form.append("files", f, f.name);
-    const res = await fetch(
-      `${scopeBase(scope)}/upload?path=${encodeURIComponent(dir)}`,
-      {
+    // This call cannot go through request(): it must not throw (see below) and
+    // it posts FormData, not JSON. It therefore has to repeat request()'s two
+    // safety nets by hand, which it previously did not (2026-09-01 audit):
+    // an upload with an expired session followed the ingress redirect to the
+    // OAuth portal, came back res.ok with an HTML body, and read as SUCCESS
+    // that saved nothing; and it could hang forever against a wedged server.
+    let res: Response;
+    try {
+      res = await fetch(`${scopeBase(scope)}/upload?path=${encodeURIComponent(dir)}`, {
         method: "POST",
         body: form,
-      },
-    );
+        signal: AbortSignal.timeout(120000), // uploads are big; generous, not absent
+      });
+    } catch (e) {
+      const aborted = e instanceof DOMException && e.name === "TimeoutError";
+      return {
+        saved: [],
+        error: new ApiError(aborted ? "upload timed out" : "upload failed", 0),
+      };
+    }
+    if (res.status === 401 || (res.redirected && res.url.includes("/oauth2/"))) {
+      reAuthOnce();
+      return {
+        saved: [],
+        error: new ApiError("session expired — reloading to sign in", res.status || 401),
+      };
+    }
     // Unlike the other calls this does NOT throw on failure: the server
     // reports the BASE NAMES it wrote under `dir` on EVERY exit (it base-names
     // each part; a mid-stream failure lists only what landed), and the caller

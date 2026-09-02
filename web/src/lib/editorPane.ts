@@ -31,9 +31,19 @@ export type PaneState = {
    * because it blocked the screen.
    */
   dirty: boolean;
+  /**
+   * The unsaved editor buffer, parked here so it SURVIVES the pane unmounting.
+   *
+   * Keying EditorPane per terminal (2026-09-01) stopped terminal A's dirty
+   * state leaking onto B, but the buffer itself still died with the remount:
+   * opening another file prompts to save, closing the editor prompts to save,
+   * switching terminals silently threw the edits away. The draft carries its
+   * own path so a stale buffer can never be restored over a different file.
+   */
+  draft: { path: string; text: string } | null;
 };
 
-const DEFAULT: PaneState = { view: "terminal", file: null, dirty: false };
+const DEFAULT: PaneState = { view: "terminal", file: null, dirty: false, draft: null };
 
 const states = new Map<string, PaneState>();
 const listeners = new Set<() => void>();
@@ -83,10 +93,14 @@ export function openFileInPane(
   // (unsaved edits), the previous file's edits still exist — resetting the
   // flag here hid the unsaved dot exactly while it mattered (review finding).
   // The pane republishes the real flag once a load actually lands.
+  // PRESERVE the draft for the same reason as `dirty`: when this open is
+  // parked behind the discard-confirm, the previous file's unsaved buffer must
+  // still be there if the user backs out.
   set(project, term, {
     view: "editor",
     file: { scope, path },
     dirty: get(project, term).dirty,
+    draft: get(project, term).draft,
   });
 }
 
@@ -256,7 +270,9 @@ export function evictFromPanes(
       continue;
     // Keep the view where it is; just drop the file. The pane then shows its
     // "no file open" state rather than silently flipping to the terminal.
-    states.set(key, { ...st, file: null, dirty: false });
+    // The draft goes with the file: a buffer for a path that no longer exists
+    // must never be restored into whatever opens next.
+    states.set(key, { ...st, file: null, dirty: false, draft: null });
     changed = true;
   }
   if (changed) emit();
@@ -307,5 +323,12 @@ export function useEditorPane(project: string, term: string) {
     },
     [project, term],
   );
-  return { state, setView, setFile, setDirty };
+  /** Park (or clear, with null) the unsaved buffer for this terminal. */
+  const setDraft = useCallback(
+    (draft: PaneState["draft"]) => {
+      set(project, term, { ...get(project, term), draft });
+    },
+    [project, term],
+  );
+  return { state, setView, setFile, setDirty, setDraft };
 }
