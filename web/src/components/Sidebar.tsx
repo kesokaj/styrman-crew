@@ -277,6 +277,14 @@ export function Sidebar({
                   delete failed
                 </span>
               )}
+              {p.provisionError && !p.deleteError && p.state !== "deleting" && (
+                <span
+                  className="shrink-0 text-[10px] text-danger"
+                  title={p.provisionError}
+                >
+                  repo setup failed
+                </span>
+              )}
               <button
                 className="invisible inline-flex h-6 w-6 items-center justify-center rounded-md text-text-dim hover:bg-bg-active hover:text-text group-hover:visible group-focus-within:visible"
                 onClick={(e) => {

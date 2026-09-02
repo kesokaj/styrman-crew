@@ -94,6 +94,31 @@ try {
   });
   await shot("01-home");
 
+  // ── New-project dialog: a clone takes the REPO's name ───────────────────
+  // Operator expectation (2026-09-02): "Clone a repo = use the same name of
+  // the repo who is cloned". The name field auto-fills from the URL until the
+  // user types their own, which then wins. No project is created here — the
+  // dialog is closed again before the real create below.
+  await page.click("aside >> text=New project");
+  await check("clone mode derives the project name from the repo URL", async () => {
+    await page.click('button:has-text("Clone a repo")');
+    await page.fill('input[aria-label="Repository URL to clone"]',
+      "git@github.com:kesokaj/styrman-harness.git");
+    await page.waitForFunction(
+      () => document.querySelector("#np-name")?.value === "styrman-harness",
+      null, { timeout: 5000 });
+  });
+  await check("a name the user types overrides the derived one", async () => {
+    await page.fill("#np-name", "my-own-name");
+    await page.fill('input[aria-label="Repository URL to clone"]',
+      "https://github.com/kesokaj/other-repo.git");
+    await page.waitForTimeout(200);
+    const v = await page.inputValue("#np-name");
+    if (v !== "my-own-name") throw new Error(`name field = ${v}, want my-own-name`);
+  });
+  await shot("02a-clone-name-derivation");
+  await page.keyboard.press("Escape");
+
   // ── Create a project (boots a real microVM) ─────────────────────────────
   await page.click("aside >> text=New project");
   await page.fill("#np-name", PROJECT);
@@ -816,6 +841,117 @@ try {
     ),
   );
   await shot("10-after-cleanup");
+
+  // ── A clone that fails must SAY SO, not present as an empty project ─────
+  // The 2026-09-02 outage was silent: provisioning ran before the server had
+  // joined the project's bridge, so every clone failed for want of
+  // credentials and the UI showed a normal, empty project. The badge is the
+  // only channel back to the user (POST /api/projects answers 201 long before
+  // the clone runs), so it is worth a real microVM boot to prove it appears.
+  const BADPROJ = "e2e-badclone";
+  await fetch(`${BASE}/api/projects/${BADPROJ}?wipe=true`, { method: "DELETE" })
+    .catch(() => {});
+  const badCreate = await fetch(`${BASE}/api/projects`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name: BADPROJ,
+      // Unreachable by construction: no credentials and no such repo, so this
+      // fails the same way with or without network access.
+      cloneUrl: "https://github.com/kesokaj/e2e-no-such-repo-styrman.git",
+    }),
+  });
+  const BADID = badCreate.ok ? (await badCreate.json()).id : "";
+  if (!BADID) {
+    skip("failed clone reports provisionError", "project create failed");
+    skip("failed clone still leaves a git repo (R13)", "project create failed");
+  } else {
+    await check("failed clone reports provisionError", async () => {
+      const deadline = Date.now() + 120000;
+      for (;;) {
+        const r = await (await fetch(`${BASE}/api/projects`)).json();
+        const p = r.projects.find((x) => x.id === BADID);
+        if (p?.provisionError) {
+          if (!/clone/i.test(p.provisionError))
+            throw new Error(`unexpected message: ${p.provisionError}`);
+          return;
+        }
+        if (Date.now() > deadline)
+          throw new Error("no provisionError after 120s");
+        await page.waitForTimeout(2000);
+      }
+    });
+    await check("sidebar shows the repo setup failed badge", async () => {
+      await page.goto(BASE + "/");
+      await page.waitForSelector('nav >> text=repo setup failed', { timeout: 30000 });
+    });
+    // R13: the workspace is a git repo from second zero even when the clone
+    // could not fill it — the fallback init has to have run.
+    await check("failed clone still leaves a git repo (R13)", async () => {
+      const r = await fetch(`${BASE}/api/projects/${BADID}/files?path=`);
+      if (!r.ok) throw new Error(`files listing ${r.status}`);
+      const names = ((await r.json()).entries ?? []).map((e) => e.name);
+      if (!names.includes(".git"))
+        throw new Error(`no .git in workspace: ${JSON.stringify(names)}`);
+    });
+    await shot("11-clone-failure-badge");
+    await fetch(`${BASE}/api/projects/${BADID}?wipe=true`, { method: "DELETE" })
+      .catch(() => {});
+  }
+
+  // ── And the happy path: a clone that WORKS actually fills the workspace ──
+  // This is the fix itself. The repo MUST be public: this harness runs a
+  // host-mode server, which has no credential broker by design, so a private
+  // repo fails here for want of credentials (it did, on the first attempt —
+  // the suite caught it). A public https clone needs none, which makes this a
+  // clean test of the ORDER (attach → broker wait → login-shell clone) rather
+  // than of credential delivery.
+  const OKPROJ = "e2e-clone-ok";
+  await fetch(`${BASE}/api/projects/${OKPROJ}?wipe=true`, { method: "DELETE" })
+    .catch(() => {});
+  const okCreate = await fetch(`${BASE}/api/projects`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name: OKPROJ,
+      cloneUrl: "https://github.com/octocat/Hello-World.git",
+    }),
+  });
+  const OKID = okCreate.ok ? (await okCreate.json()).id : "";
+  if (!OKID) {
+    skip("successful clone fills the workspace", "project create failed");
+  } else {
+    // A host with no route to github cannot test this; that is a SKIP, not a
+    // failure. Anything else is a real regression.
+    const OFFLINE = /could not resolve host|unable to access|connection (refused|timed out)/i;
+    let outcome = null;
+    const deadline = Date.now() + 180000;
+    while (outcome === null) {
+      const r = await fetch(`${BASE}/api/projects/${OKID}/files?path=`);
+      if (r.ok) {
+        const names = ((await r.json()).entries ?? []).map((e) => e.name);
+        // The R13 fallback leaves ONLY .git; a real clone brings payload with it.
+        if (names.some((n) => n !== ".git")) outcome = { ok: true, names };
+      }
+      if (outcome === null) {
+        const list = await (await fetch(`${BASE}/api/projects`)).json();
+        const err = list.projects.find((x) => x.id === OKID)?.provisionError;
+        if (err) outcome = { ok: false, err };
+        else if (Date.now() > deadline)
+          outcome = { ok: false, err: "clone did not finish in 180s" };
+        else await page.waitForTimeout(3000);
+      }
+    }
+    if (!outcome.ok && OFFLINE.test(outcome.err)) {
+      skip("successful clone fills the workspace", "no route to github from the guest");
+    } else {
+      await check("successful clone fills the workspace", () => {
+        if (!outcome.ok) throw new Error(outcome.err);
+      });
+    }
+    await fetch(`${BASE}/api/projects/${OKID}?wipe=true`, { method: "DELETE" })
+      .catch(() => {});
+  }
 } catch (e) {
   bad("unexpected error", e.message.split("\n")[0]);
   await shot("99-failure");

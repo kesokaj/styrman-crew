@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/kesokaj/styrman-crew/internal/config"
@@ -74,14 +75,18 @@ type Server struct {
 	// onboarding endpoints. Set by main after construction.
 	creds *credstore.Store
 
-	// deletingMu guards both maps (key user+"/"+projectID): deleting tracks
+	// deletingMu guards these maps (key user+"/"+projectID): deleting tracks
 	// in-flight background destroys so the UI can show a "deleting" state, a
 	// repeated DELETE is idempotent, and boot paths refuse to resurrect the
 	// container mid-destroy; deleteErrs keeps the last failed destroy's
-	// message so a 202'd delete that later fails is not silently invisible.
-	deletingMu sync.Mutex
-	deleting   map[string]bool
-	deleteErrs map[string]string
+	// message so a 202'd delete that later fails is not silently invisible;
+	// provisionErrs does the same for the background repo provisioning that
+	// runs after the 201 (clone / GitHub repo create) — without it a failed
+	// clone presents as a project that silently ignored the request.
+	deletingMu    sync.Mutex
+	deleting      map[string]bool
+	deleteErrs    map[string]string
+	provisionErrs map[string]string
 
 	// previewOwners memoizes projectID→owner for the preview proxy's
 	// cross-owner resolution (hits are re-validated against the live record;
@@ -95,6 +100,13 @@ type Server struct {
 	// requested while one is in flight (see credharvest.go).
 	credPushing   map[string]bool
 	credPushRerun map[string]bool
+
+	// provisionDelay and brokerProbeInterval pace the background repo
+	// provisioning (see provisionRepo). Fields rather than package globals so
+	// a test can drive the sequence without sleeping AND without mutating
+	// state shared with every other test in the package.
+	provisionDelay      time.Duration
+	brokerProbeInterval time.Duration
 }
 
 // notifCacheEntry is one user's memoized notifications payload.
@@ -114,8 +126,12 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		spaces:        map[string]*userSpace{},
 		deleting:      map[string]bool{},
 		deleteErrs:    map[string]string{},
-		credPushing:   map[string]bool{},
-		credPushRerun: map[string]bool{},
+		provisionErrs: map[string]string{},
+
+		provisionDelay:      time.Second,
+		brokerProbeInterval: 500 * time.Millisecond,
+		credPushing:         map[string]bool{},
+		credPushRerun:       map[string]bool{},
 	}
 	// Public preview-link store (best-effort: a load failure degrades to
 	// no-links, never blocks server start).
@@ -525,6 +541,45 @@ type projectView struct {
 	// the DELETE already answered 202, so this is the only way the user
 	// learns the delete didn't stick.
 	DeleteError string `json:"deleteError,omitempty"`
+	// ProvisionError carries the last failed background repo provisioning
+	// (clone / GitHub repo create). Same reason as DeleteError: POST
+	// /api/projects answers 201 the moment the record exists, long before the
+	// clone runs, so this is the only channel back to the user. A project
+	// whose clone failed still exists as an empty repo (R13) — the message is
+	// what tells them why it is empty.
+	ProvisionError string `json:"provisionError,omitempty"`
+}
+
+// guestErrMaxBytes caps how much guest-controlled text reaches the API.
+const guestErrMaxBytes = 300
+
+// guestErrMessage condenses a guest command's output into something a user can
+// act on. The guest is untrusted and controls this text, so it is stripped of
+// control and formatting characters, redacted (a token can ride in a remote
+// URL) and capped — it is rendered as React text, never as markup.
+func guestErrMessage(prefix, out string) string {
+	msg := ""
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(strings.ReplaceAll(line, "\r", ""))
+		// git's useful line is the diagnosis, not the "Cloning into…" banner.
+		if line == "" || strings.HasPrefix(line, "Cloning into") {
+			continue
+		}
+		msg = line
+		if strings.HasPrefix(line, "fatal:") || strings.HasPrefix(line, "ERROR:") {
+			break
+		}
+	}
+	// Strip FIRST: a control byte planted inside a URL would otherwise break
+	// userinfoRe's match and leave the credential in the clear (review nit).
+	msg = redactSecrets(stripControls(msg))
+	if len(msg) > guestErrMaxBytes {
+		msg = clampBytes(msg, guestErrMaxBytes) + "…"
+	}
+	if msg == "" {
+		return prefix
+	}
+	return prefix + ": " + msg
 }
 
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
@@ -548,7 +603,8 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 		if inFlight {
 			state = "deleting"
 		}
-		out = append(out, projectView{Project: p, State: state, DeleteError: delErr})
+		out = append(out, projectView{Project: p, State: state, DeleteError: delErr,
+			ProvisionError: s.provisionError(u.Username, p.ID)})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": out})
 }
@@ -571,15 +627,24 @@ type createProjectRequest struct {
 // as a bare argv element after "--".
 var cloneURLRe = regexp.MustCompile(`^(https://|ssh://|git@)[\w.@:/~+-]+$`)
 
-// redactURL strips any userinfo (a token embedded as https://user:tok@host)
-// before the URL reaches a log line (R10).
-func redactURL(u string) string {
-	if at := strings.LastIndex(u, "@"); at != -1 {
-		if slash := strings.Index(u, "//"); slash != -1 && slash+2 < at {
-			return u[:slash+2] + "***@" + u[at+1:]
-		}
-	}
-	return u
+// userinfoRe matches the userinfo of a scheme-bearing URL — where a token
+// rides when someone clones `https://user:tok@host/...` (R10). The scp-style
+// `git@host:path` form carries a USERNAME, not a secret, and is deliberately
+// left readable.
+var userinfoRe = regexp.MustCompile(`(?i)\b(https?|ssh|git)://[^\s/]*@`)
+
+// redactSecrets strips userinfo from EVERY scheme-bearing URL in a string.
+// It replaced an earlier positional scan (find the last "@" after "//") that
+// was both lossy — it mangled a legitimate `https://host/o/r@v1.git` into
+// `https://***@v1.git` — and wrong for guest command output, which is many
+// lines and can name a remote more than once.
+//
+// `[^\s/]*@` is greedy and stops at the path, so it consumes up to the LAST
+// "@" of the AUTHORITY — the same split git, curl and net/url use. Anchoring
+// on the first "@" instead would leave the tail of a password containing "@"
+// in the clear (security review 2026-09-02).
+func redactSecrets(text string) string {
+	return userinfoRe.ReplaceAllString(text, "$1://***@")
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -664,17 +729,20 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			s.logger.Info("background boot skipped — delete in flight", "project", p.Name)
 			return
 		}
+		spec := provisionSpec{
+			user:     u.Username,
+			project:  p.ID,
+			name:     p.Name,
+			workdir:  workdir,
+			cloneURL: req.CloneURL,
+			github:   req.GitHub,
+			attach:   func() bool { return s.orch.EnsureSelfAttached(u.Username, p.ID) },
+		}
 		containerID, err := s.orch.EnsureRunning(ctx, u.Username, p.ID,
 			orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest})
 		if err != nil {
 			s.logger.Error("background project boot failed", "project", p.Name, "error", err)
-			// R13 must hold even if the microVM never booted: a clone can't
-			// run without the guest, so leave an empty repo behind.
-			if req.CloneURL != "" {
-				if e := gitrepo.EnsureRepo(ctx, workdir); e != nil {
-					s.logger.Error("R13 fallback init failed", "project", p.Name, "error", e)
-				}
-			}
+			s.bootFailed(ctx, spec)
 			return
 		}
 		// Repo provisioning runs in-guest as the user so their gitconfig,
@@ -690,35 +758,8 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 				Cmd:     cmd,
 			})
 		}
-		switch {
-		case req.CloneURL != "":
-			// StrictHostKeyChecking=accept-new is deliberate TOFU: first
-			// contact with a new host is trusted, later key changes are not.
-			if code, out, err := run("git",
-				"-c", "core.sshCommand=ssh -o StrictHostKeyChecking=accept-new",
-				"clone", "--", req.CloneURL, "."); err != nil || code != 0 {
-				s.logger.Warn("clone failed — falling back to empty repo",
-					"project", p.Name, "url", redactURL(req.CloneURL), "exit", code, "output", out, "error", err)
-				if err := gitrepo.EnsureRepo(ctx, workdir); err != nil {
-					s.logger.Error("fallback git init failed", "project", p.Name, "error", err)
-				}
-			}
-		case req.GitHub == "private" || req.GitHub == "public":
-			// Needs the user's gh login (styrman-setup); logged, not fatal —
-			// the local repo exists either way.
-			if code, out, err := run("git", "commit", "--allow-empty", "-m", "Initialize styrman project"); err != nil || code != 0 {
-				s.logger.Warn("initial commit failed", "project", p.Name, "exit", code, "output", out, "error", err)
-			}
-			vis := "--" + req.GitHub
-			if code, out, err := run("bash", "-lc",
-				"gh repo create "+p.Name+" "+vis+" --source=. --remote=origin --push"); err != nil || code != 0 {
-				s.logger.Warn("github repo create failed (is gh signed in?)",
-					"project", p.Name, "exit", code, "output", out, "error", err)
-			}
-		}
-		// Pre-attach for port-preview while nothing depends on it (a fresh
-		// attach can kill in-flight connections through this container).
-		s.orch.EnsureSelfAttached(u.Username, p.ID)
+		spec.run = run
+		s.provisionRepo(ctx, spec)
 	}()
 	writeJSON(w, http.StatusCreated, projectView{Project: p, State: "creating"})
 }
@@ -739,7 +780,8 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 	if inFlight {
 		state = "deleting"
 	}
-	writeJSON(w, http.StatusOK, projectView{Project: p, State: state, DeleteError: delErr})
+	writeJSON(w, http.StatusOK, projectView{Project: p, State: state, DeleteError: delErr,
+		ProvisionError: s.provisionError(u.Username, p.ID)})
 }
 
 // deleteProject responds 202 and destroys in the background: a Kata VM
@@ -761,7 +803,8 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.deleting[key] = true
-	delete(s.deleteErrs, key) // a fresh attempt clears the previous failure
+	delete(s.deleteErrs, key)    // a fresh attempt clears the previous failure
+	delete(s.provisionErrs, key) // the record is going away; so does its message
 	s.deletingMu.Unlock()
 	wipe := r.URL.Query().Get("wipe") == "true"
 	go func() {
@@ -1095,19 +1138,34 @@ func writeErr(w http.ResponseWriter, status int, err error) {
 
 // clampTitle bounds a terminal title (N25): titles land in conversations.json
 // and every list response, so cap the length and strip control characters.
-func clampTitle(t string) string {
-	t = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+func clampTitle(t string) string { return clampBytes(stripControls(t), 120) }
+
+// stripControls drops the characters that let untrusted text lie about itself.
+// Two whole Unicode categories rather than a hand-listed set: Cc (C0, DEL and
+// the C1 block) via unicode.IsControl, and Cf — every invisible formatting
+// character, which is what the bidi overrides and isolates (U+202A-U+202E,
+// U+2066-U+2069), the zero-width marks (U+200B-U+200F) and the BOM all are.
+// The enumerated version of this shipped missing U+061C and drifts by
+// construction; categories cannot. U+2028/U+2029 are Zl/Zp rather than Cf, so
+// they are named explicitly — they are line breaks, and this text is rendered
+// as a single line.
+func stripControls(t string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == 0x2028 || r == 0x2029 {
 			return -1
 		}
 		return r
 	}, t)
-	if len(t) > 120 {
-		cut := 120
-		for cut > 0 && !utf8.RuneStart(t[cut]) {
-			cut-- // never split a multi-byte rune (audit nit)
-		}
-		t = t[:cut]
+}
+
+// clampBytes truncates to max BYTES without ever splitting a multi-byte rune.
+func clampBytes(t string, max int) string {
+	if len(t) <= max {
+		return t
 	}
-	return t
+	cut := max
+	for cut > 0 && !utf8.RuneStart(t[cut]) {
+		cut-- // never split a multi-byte rune (audit nit)
+	}
+	return t[:cut]
 }

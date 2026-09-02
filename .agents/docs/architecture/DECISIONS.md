@@ -2263,3 +2263,45 @@ Verification: .agents/docs/changes/2026-09-02-v1.17.3-updater-self-install-and-v
 .agents/docs/reviews/2026-09-02-review-v1.17.3.md (round 3),
 .agents/docs/reviews/2026-09-02-security-v1.17.3.md (round 3),
 .agents/docs/testing/2026-09-02-verify-v1.17.3-round3.md (final record).
+
+---
+
+## ADR-058: Project repo provisioning must run after the credential-broker attach and inside a login shell (2026-09-02)
+
+**Context.** Live incident: in `createProject`'s background goroutine, `EnsureSelfAttached` —
+which joins the styrman-server container to the project's bridge, the ONLY route to the credential
+broker (ADR-030/032) — ran AFTER repo provisioning. Every `cloneUrl` clone and every
+`github: private|public` repo create ran against an unreachable broker: no ssh key materialized,
+no git-credential-helper answer, no GH_TOKEN. Confirmed in the live server log: `13:42:04.888
+clone failed … Permission denied (publickey)` followed 35ms LATER by `13:42:04.923 cred broker:
+served env credentials`, and `13:44:20.168 clone failed … could not read Username` followed 32ms
+later by the broker's first successful serve. The failure was logged at `logger.Warn` only,
+silently degrading to an empty repo with nothing shown in the UI (no provisioning error reported
+to the user, no fallback message, no diagnostic).
+
+**Decision.** Project repo provisioning is split into an ordered sequence that MUST be
+testable without a Docker daemon: (1) pause briefly so the 201 response lands before the
+network reconfigures, (2) attach to the credential-broker bridge, (3) wait from INSIDE the guest
+until the broker answers via `curl $STYRMAN_CRED_BROKER/healthz` in a plain (not login) shell,
+(4) run the clone or GitHub repo create in a LOGIN shell so `/etc/profile.d/zz-styrman-credentials.sh`
+materializes the ssh key and git identity. Step 1 is a deployment artifact (provisionDelay tuned at
+runtime); steps 2–4 are correctness constraints. The regression test `TestProvisionRepoAttachesBeforeAnyCredentialedCommand`
+directly asserts the attach→broker-wait→provision order on every build; if the order regresses,
+the test fails immediately (no live incident, no operator discovery path).
+
+**Consequences.** Extraction of `provisionSpec` and `provisionRepo` into `internal/httpapi/provision.go`
+and a new test file `provision_test.go` makes the step order explicit and testable. Tests run the
+real provisioning logic with injected attach/run funcs, so they exercise every condition and edge case
+(clone failure, GitHub repo create, plain init) without a working Docker daemon. A provisioning failure
+now surfaces as a `provisionError` field on the project API and a red sidebar badge so the user sees
+WHY a project came up empty instead of guessing. Accepted: every clone failure is now visible; the
+fallback `git init` still leaves a usable workspace (R13); the code is testable and its correctness
+cannot regress.
+
+Source: internal/httpapi/provision.go, internal/httpapi/provision_test.go.
+Verification: .agents/docs/changes/2026-09-02-v1.18.0-project-create-provisioning.md,
+.agents/docs/reviews/2026-09-02-review-project-create-provisioning.md,
+.agents/docs/reviews/2026-09-02-review-project-create-provisioning-rereview.md,
+.agents/docs/reviews/2026-09-02-security-project-create-provisioning.md,
+.agents/docs/testing/2026-09-02-verify-project-create-provisioning.md,
+.agents/docs/testing/2026-09-02-verify-project-create-provisioning-rerun.md.

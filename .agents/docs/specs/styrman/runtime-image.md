@@ -252,6 +252,20 @@ broker endpoint, or shell step references it anymore.
   rootfs came from an older build of the runtime image is recreated at boot
   (v1.5 review fix). Running containers keep their rootfs until stopped. The
   apt manifest (ADR-028) replays what the user installed.
+- **Guest hostname is the project's own name, never platform-prefixed**:
+  `internal/orchestrator.guestHostname(name)` trims a trailing dash
+  (`ValidateName` permits one; a hostname must not end in one) and falls back
+  to `"project"` if that empties the string. It shows on the shell prompt
+  (`\h` in `image/skel/bashrc`) and as `host` in `GET /api/projects/{id}/stats`
+  and the terminal status bar. It used to be `"styrman-" + name`, which read
+  as `styrman-styrman-harness` for a project named after its own repo — the
+  platform's own name is not information the operator needs on every prompt
+  line (operator directive 2026-09-02). The hostname is set at container
+  creation, not baked into the image, so it only takes effect on the next
+  recreate: an existing project keeps its OLD hostname until it is recreated,
+  which happens automatically the next time the "image upgrades apply on
+  stop/start" rule above fires. The hidden onboarding VM keeps the hostname
+  `styrman-setup` deliberately — it is not a project.
 - Agent conversations are exec'd as `bash -lc 'exec <agent>'` so
   `/etc/profile.d` (the credential-materialization snippet) always applies.
 - The image never contains secrets; credentials arrive over the broker on

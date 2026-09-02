@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "../lib/toast";
-import { api, projectNameError } from "../lib/api";
+import { api, projectNameError, projectNameFromRepoURL } from "../lib/api";
 import { useModalA11y } from "./ui";
 
 type Repo = "local" | "private" | "public" | "clone";
@@ -14,6 +14,10 @@ export function NewProjectDialog({
   onCreated: (project: string, termId: string) => void;
 }) {
   const [name, setName] = useState("");
+  // A cloned project takes the repository's own name (operator expectation),
+  // so the name field auto-fills from the URL — until the user types their
+  // own, which always wins from then on.
+  const [nameEdited, setNameEdited] = useState(false);
   const [repo, setRepo] = useState<Repo>("local");
   const [cloneUrl, setCloneUrl] = useState("");
   const [ghReady, setGhReady] = useState(false);
@@ -28,7 +32,10 @@ export function NewProjectDialog({
       .catch(() => {});
   }, []);
 
-  const nameValid = !projectNameError(name);
+  const derivedName = repo === "clone" ? projectNameFromRepoURL(cloneUrl) : "";
+  // The effective name: derived from the repo URL unless the user overrode it.
+  const effectiveName = !nameEdited && derivedName ? derivedName : name;
+  const nameValid = !projectNameError(effectiveName);
   // Mirror the server's cloneURLRe so the client rejects the same shapes.
   const cloneValid = /^(https:\/\/|ssh:\/\/|git@)[\w.@:/~+-]+$/.test(cloneUrl);
   const valid = nameValid && (repo !== "clone" || cloneValid);
@@ -37,7 +44,7 @@ export function NewProjectDialog({
     setBusy(true);
     setError(undefined);
     try {
-      const p = await api.createProject(name, {
+      const p = await api.createProject(effectiveName, {
         github: repo === "private" || repo === "public" ? repo : "none",
         cloneUrl: repo === "clone" ? cloneUrl.trim() : undefined,
       });
@@ -95,14 +102,17 @@ export function NewProjectDialog({
           autoCorrect="off"
           autoComplete="off"
           spellCheck={false}
-          value={name}
-          onChange={(e) => setName(e.target.value.toLowerCase())}
+          value={effectiveName}
+          onChange={(e) => {
+            setNameEdited(true);
+            setName(e.target.value.toLowerCase());
+          }}
           onKeyDown={(e) => e.key === "Enter" && valid && !busy && create()}
           placeholder="my-project"
           className="mb-1 w-full rounded-md border border-border bg-bg px-2 py-1.5 outline-none focus:border-accent"
         />
         <p className="mb-3 min-h-4 text-[11px] text-warn">
-          {name && !nameValid
+          {effectiveName && !nameValid
             ? "Must start with a letter; only a-z, 0-9 and dashes."
             : " "}
         </p>
@@ -137,8 +147,15 @@ export function NewProjectDialog({
             value={cloneUrl}
             onChange={(e) => setCloneUrl(e.target.value)}
             placeholder="git@github.com:user/repo.git or https://…"
-            className="mb-3 w-full rounded-md border border-border bg-bg px-2 py-1.5 text-xs outline-none focus:border-accent"
+            className="mb-1 w-full rounded-md border border-border bg-bg px-2 py-1.5 text-xs outline-none focus:border-accent"
           />
+        )}
+        {repo === "clone" && (
+          <p className="mb-3 text-[11px] text-text-dim">
+            {nameEdited || !derivedName
+              ? "The repo is cloned into the project workspace."
+              : `Named after the repo: ${derivedName}`}
+          </p>
         )}
         {!ghReady && (
           <p className="mb-3 text-[11px] text-text-dim">

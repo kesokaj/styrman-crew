@@ -5,7 +5,7 @@ No mocks in the orchestrator path.
 
 ## Tiers
 
-1. **Unit** — `go test -race ./...` (store, validation; fast, no Docker).
+1. **Unit** — `go build ./...`, `go vet ./...`, `go test -race ./...` (store, validation; fast, no Docker). The vendored Caddy ingress is a SEPARATE Go module and is not covered by the root `go test ./...` run — test it explicitly: `(cd deploy/caddy/ingress && go test ./...)`. Frontend: `cd web && npm run check` (tsc -b) and `npm run lint` (oxlint); `web/` has no unit-test framework (no vitest/jest — verified 2026-09-02), so TypeScript/React logic changes are covered only by type-checking + lint plus, where applicable, Tier 4 e2e — a changed function/component with no e2e exercise has no automated coverage at all, note it explicitly when verifying.
 2. **Integration (60 checks; 3 auto-SKIP on firewall-hardened hosts)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
    (default `styrman-runtime:test` — see the warning under Prereqs about
    `:dev`). Isolated server (own state dir, port
@@ -185,7 +185,7 @@ go test ./... && bash .agents/docs/testing/styrman/integration.sh
 Image changes: rebuild the image first; the integration script always creates
 fresh containers so it picks the new image up automatically.
 
-## Tier 4 — Browser e2e (Playwright, 55 checks + a final client-error gate; firewall-hardened hosts run 54 + 2 auto-SKIP)
+## Tier 4 — Browser e2e (Playwright, 61 checks + a final client-error gate; firewall-hardened hosts run 60 + 2 auto-SKIP — measured, not counted: `passed=60 failed=0 skipped=2` on a real run against `styrman-runtime:test` on 2026-09-02, the first session this tier was actually executed rather than counted)
 
 `bash web/e2e/run.sh [image-tag]` — self-hosts: builds the web SPA
 (`cd web && npm run build`) FIRST, then the server, then starts its own
@@ -227,8 +227,47 @@ deleting the project copy while the pane holds the home copy asserts the
 project chip is gone, the home chip and its content survive, and the pane
 stays put — the scope-flip regression), and the on-disk recents list is capped at 8
 on READ, not just on write (seed a 20-entry `styrman.recentFiles.<project>`
-blob in localStorage, reload, assert only 8 chips render) — and full
-cleanup — 55 checks + the client-error gate (54 pass on firewall-hardened
+blob in localStorage, reload, assert only 8 chips render), plus two more
+checks added 2026-09-02 for the New-project dialog's clone-name derivation
+(operator expectation: "clone a repo = use the same name as the repo"): the
+name field derives from the repo URL the moment "Clone a repo" is picked and
+a URL is typed, and a name the user types by hand overrides the derived one
+even when the URL then changes — both assert against the open dialog and
+close it with Escape rather than creating a project, so neither can
+auto-SKIP — plus three more checks added 2026-09-02, "A clone that fails
+must SAY SO, not present as an empty project" (the 2026-09-02 outage was
+silent: provisioning used to run before the server had joined the project's
+bridge, so every clone failed for want of credentials and the UI showed a
+normal, empty project): these create a real project via the API with a
+deliberately unreachable `cloneUrl`
+(`https://github.com/kesokaj/e2e-no-such-repo-styrman.git`) and boot a real
+microVM to prove the whole failure path — `GET /api/projects` eventually
+carries a clone-related `provisionError` for it, the sidebar's red "repo
+setup failed" badge appears, and the workspace still has a `.git` entry (R13:
+the fallback init ran even though the clone didn't) — then clean up after
+themselves (`DELETE .../{id}?wipe=true`) — plus one more check added
+2026-09-02, "successful clone fills the workspace": the happy path, which
+nothing above exercised. Creates a real project with
+`cloneUrl: https://github.com/octocat/Hello-World.git`, boots a real
+microVM, and asserts the workspace ends up with entries beyond `.git` (the
+R13 fallback init leaves ONLY `.git`, so "more than `.git`" is what
+distinguishes a real clone from the fallback) — then cleans up
+(`DELETE .../{id}?wipe=true`). SKIPs rather than fails when the guest has no
+route to github (its `provisionError` matches `could not resolve host`/
+`unable to access`/`connection refused`/`connection timed out`). **The repo
+this check clones from MUST be public**: `web/e2e/run.sh` runs the server in
+HOST MODE (`STYRMAN_SELF_CONTAINER` unset), where there is no credential
+broker by design — `EnsureSelfAttached` no-ops and `waitForBroker` returns
+false immediately when `cfg.SelfContainer == ""`
+(`internal/httpapi/provision.go`). A first attempt at this check used the private
+`kesokaj/styrman-harness` and failed, correctly, with `fatal: could not read
+Username for 'https://github.com'`. This is a hard limit of Tier 4, not a bug
+to fix here: **the e2e tier can never test credentialed clones — only the
+attach-before-provisioning ORDERING** — see `provision.go`'s doc comment and
+`guide.md`'s "Project creation is async" bullet for the credential-delivery
+path itself, which only Tier 3 (real Kata, real broker) or manual testing
+against a containerized server can exercise — and full
+cleanup — 61 checks + the client-error gate (60 pass on firewall-hardened
 hosts, plus 2 auto-SKIP) plus a final no-client-errors gate + screenshots.
 Prereq: `cd web && npm i && npx playwright install chromium` (once).
 Self-cleaning: deletes any leftover `e2e-ui` project at start.

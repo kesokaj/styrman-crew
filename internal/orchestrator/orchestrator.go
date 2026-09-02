@@ -276,7 +276,7 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 		id, err = o.create(ctx, createSpec{
 			name:          name,
 			netName:       config.NetworkName(project),
-			hostname:      "styrman-" + opts.Name,
+			hostname:      guestHostname(opts.Name),
 			guestUser:     opts.GuestUser,
 			homePath:      phome,
 			workspacePath: ws,
@@ -312,6 +312,24 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 	// deliberately-stopped marker so terminals reconnect normally again.
 	o.stopped.Delete(key(user, project))
 	return id, nil
+}
+
+// guestHostname is the hostname a project's microVM reports — it is what the
+// shell prompt (\h) and the terminal status bar show, so it is the project's
+// OWN name and nothing else. It used to be prefixed "styrman-", which read as
+// "styrman-styrman-harness" for a project named after its repo: the platform's
+// name is not information the operator needs on every prompt line (operator
+// directive 2026-09-02).
+//
+// ValidateName already constrains the name to a valid DNS label except that it
+// permits a trailing dash, which is not a legal hostname; trim it, and keep a
+// non-empty fallback so a hostname is never blank.
+func guestHostname(name string) string {
+	h := strings.Trim(name, "-")
+	if h == "" {
+		return "project"
+	}
+	return h
 }
 
 // brokerIPForSubnet returns the fixed broker host address for a bridge:

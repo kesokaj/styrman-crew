@@ -197,12 +197,41 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   `ostling-simon`); the _terminal username_ inside guests defaults to the
   slug but is user-configurable (Settings → Account; applies to VMs started
   after the change).
+- **Guest hostname is the project's own name** (shell prompt, terminal status
+  bar) — no `styrman-` prefix; see runtime-image.md's Invariants for the
+  exact derivation and why an existing container keeps its old hostname
+  until next recreated.
 - **State recovery** (ADR-007): containers carry `styrman.*` labels
   (project UUID, user, name) and are re-adopted at boot; legacy layouts are
   migrated automatically (single home → per-user; name-keyed → UUID).
 - **Project creation is async**: the API returns instantly
   (`state:"creating"`); the microVM boots in the background (~3 s) and the
-  first terminal attach waits on readiness.
+  first terminal attach waits on readiness. A `cloneUrl`/`github` create needs
+  credentials, so once the microVM is up the background boot calls
+  `provisionRepo` (`internal/httpapi/provision.go` — split out of
+  `server.go` so the sequence lives next to `provision_test.go`, which pins
+  the step ORDER; attach and exec are injected as funcs so that order is
+  unit-testable without a Docker daemon), which joins the project's own
+  bridge to the credential broker (`EnsureSelfAttached`) and polls
+  `$STYRMAN_CRED_BROKER/healthz` from inside the guest over a PLAIN shell
+  (`waitForBroker` — a login shell would re-materialize credentials into the
+  project home on every probe, just to ask "is the broker up?") BEFORE
+  cloning or running `gh repo create` — attach used to run LAST, after
+  provisioning, so every credentialed create ran against an unreachable
+  broker and silently degraded to an empty repo (no ssh key, no `GH_TOKEN`,
+  no git identity). Provisioning itself (the clone / commit / `gh` commands)
+  still runs in a login shell so
+  `/etc/profile.d/zz-styrman-credentials.sh` materializes those credentials
+  first. Neither step does anything in host-mode dev (no self-container, no
+  bridge, no broker — `EnsureSelfAttached` no-ops and `waitForBroker`
+  returns false immediately), so that mode can only prove the clone
+  ORDERING, never real credential delivery — see the Tier 4 e2e note in
+  `testing/styrman/README.md`. A provisioning failure surfaces as
+  `provisionError` in the project
+  list/get views (mirrors `deleteError`) — the sidebar shows a red "repo
+  setup failed" badge with the message as its title; the guest output behind
+  that message is redacted (`redactSecrets`) before it reaches the message
+  or a server log.
 - **Isolation** (R12): per-project bridges (`sdb-<uuid>`, named
   `sdb-<11hex>` at the Linux interface level via `config.BridgeNameFor` —
   Docker's default `br-<hash>` interface name would slip past the firewall
@@ -376,9 +405,12 @@ rotated token, or a tool signed into inside a project instead of at setup).
 
 - **New project**: name + repo choice (empty git repo, clone an existing
   one, or create+push a fresh GitHub repo via `gh`) → ~3 s to a live
-  terminal; type `claude` or `agy`. Every workspace is a git repo from
-  creation, no exceptions (R13). Rename any time (⋯ → Rename); delete via
-  the type-"delete" dialog (wipe checkbox controls files).
+  terminal; type `claude` or `agy`. Cloning auto-fills the name field from
+  the repo URL's own basename (slugged to the project-name rules, `.git`
+  stripped) until you type your own name, which then wins. Every workspace
+  is a git repo from creation, no exceptions (R13). Rename any time (⋯ →
+  Rename); delete via the type-"delete" dialog (wipe checkbox controls
+  files).
 - **Git**: the Git tab is a real client (v1.7.0) — branch bar with Push, a
   commit-message box, "Staged"/"Changes" file lists with per-file stage/
   unstage/discard, and a colored per-file diff viewer. (Automatic

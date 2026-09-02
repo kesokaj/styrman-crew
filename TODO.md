@@ -235,3 +235,30 @@ Add new items below as they arise.
   claude/agy tokens) with no code path left to list or delete it; no agent
   touches `/var/lib/styrman` (ADR-052).
   (`.agents/docs/changes/2026-09-01-remove-backups-and-token-auth.md`)
+
+- [ ] `cloneURLRe` (`internal/httpapi/server.go`) still accepts credential-bearing clone URLs
+  (`https://user:token@host/repo`), and `git clone` persists the token verbatim into
+  `<workspace>/.git/config` on the host. Three options: (1) reject userinfo at the boundary since
+  the credential broker makes it unnecessary, but this blocks cloning a private repo on a host the
+  broker does not know; (2) keep accepting the URL but strip userinfo from the PERSISTED remote
+  after clone (`git remote set-url origin <scrubbed>`), but then a later `git push` to an unknown
+  host would have no credential; (3) keep the status quo. Needs an operator decision. (security
+  review 2026-09-02)
+- [ ] `deploy/vulncheck.sh:38` cannot run on a checkout without `deploy/.env`: `-v /dev/null:/src/deploy/.env:ro`
+  over a `:ro` source mount fails in runc with exit 125. It fails closed, but a caller testing only
+  `!= 3` would read a broken scan as clean — a release gate that fails open on a clean checkout is
+  worse than no gate at all. (security review 2026-09-02; fix scope: v1.18.1)
+- [ ] A project home (`ProjectHome`) survives a `DELETE` without `wipe=true`, with no sweeper and no
+  remaining UI path — the clone and GitHub initial commit both run `bash -lc` login shells inside
+  the guest, which materializes the user's ssh private key, gcloud ADC, and agent tokens into the
+  project home BEFORE any terminal is opened, so a project whose provisioning fails can strand a
+  materialized ssh key on the host. The readiness probe change (`waitForBroker` using plain `sh -c`)
+  reduced the number of login shells from up to ten to one, but did not remove the exposure — it is
+  inherent to provisioning needing credentials at all. Fix: either wipe `ProjectHome` on every delete,
+  or sweep orphaned homes. (security review 2026-09-02)
+- [ ] There is no `provisioning` state in the UI for the window between the 201 and the clone
+  finishing, during which the workspace is briefly not yet a git repo (R13). The window grew slightly
+  with the broker wait. (review 2026-09-02)
+- [ ] `web/src/components/Sidebar.tsx`'s `deleteError` badge has no automated coverage — the sibling
+  convention the new `provisionError` badge was copied from. The new badge got e2e coverage in this
+  release; the older one did not. (verifier 2026-09-02)

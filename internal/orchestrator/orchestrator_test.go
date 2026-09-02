@@ -27,3 +27,20 @@ func TestRestartPolicy(t *testing.T) {
 		t.Errorf("ephemeral VM policy = %q, want no", p.Name)
 	}
 }
+
+// The hostname is user-visible on every prompt line and in the terminal status
+// bar, so it carries the project's name alone — no platform prefix — and stays
+// a legal DNS label.
+func TestGuestHostname(t *testing.T) {
+	cases := map[string]string{
+		"styrman-harness": "styrman-harness", // NOT "styrman-styrman-harness"
+		"api":             "api",
+		"my-project-":     "my-project", // ValidateName allows a trailing dash; a hostname must not
+		"-":               "project",    // never blank
+	}
+	for in, want := range cases {
+		if got := guestHostname(in); got != want {
+			t.Errorf("guestHostname(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

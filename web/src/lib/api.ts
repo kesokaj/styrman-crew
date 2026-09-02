@@ -12,6 +12,10 @@ export interface Project {
   /** Last failed background destroy — the DELETE answered 202, so this is
    * how the user learns the delete didn't stick. */
   deleteError?: string;
+  /** Last failed background repo provisioning (clone / GitHub repo create).
+   * POST /api/projects answers 201 before the clone runs, so this is how the
+   * user learns why the project came up as an empty repo. */
+  provisionError?: string;
 }
 
 /** Live resource snapshot of a project's microVM (terminal status bar). */
@@ -194,6 +198,26 @@ export function projectNameError(name: string): string | undefined {
   return /^[a-z][a-z0-9-]{0,30}$/.test(name)
     ? undefined
     : "lowercase letters, digits and dashes; starts with a letter (max 31)";
+}
+
+/**
+ * The project name for a "Clone a repo" create: the repository's own name, as
+ * the operator expects ("use the same name as the repo being cloned"). Slugged
+ * to the server's project-name rules (projectNameError) — a repo called
+ * `My_Repo.git` becomes `my-repo`. Returns "" when nothing usable is left, so
+ * the caller keeps whatever the user typed.
+ */
+export function projectNameFromRepoURL(url: string): string {
+  const last = url.trim().replace(/\/+$/, "").split(/[/:]/).pop() ?? "";
+  return last
+    .replace(/\.git$/i, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[^a-z]+/, "") // must start with a letter
+    .replace(/-+$/, "")
+    .slice(0, 31)
+    .replace(/-+$/, ""); // the slice can leave a trailing dash
 }
 
 /** Run a UI action; surface API failures instead of swallowing the rejection. */

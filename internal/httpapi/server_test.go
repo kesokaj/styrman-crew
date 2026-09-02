@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/kesokaj/styrman-crew/internal/config"
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
@@ -128,17 +129,74 @@ func TestAuthGuard(t *testing.T) {
 	}
 }
 
-func TestRedactURL(t *testing.T) {
+// A clone URL and the guest command output that names it both reach the
+// operator's logs and the project API, so redaction has to be exhaustive.
+// This replaced a positional scan (redactURL) that was wrong twice over:
+// it stopped at the first URL, and it anchored on the wrong "@".
+func TestRedactSecrets(t *testing.T) {
 	cases := map[string]string{
 		"https://user:ghp_secret@github.com/o/r.git": "https://***@github.com/o/r.git",
-		"https://github.com/o/r.git":                 "https://github.com/o/r.git",
-		"git@github.com:o/r.git":                     "git@github.com:o/r.git",
 		"ssh://git@host/o/r":                         "ssh://***@host/o/r",
+		"ssh://git:key@host/o/r":                     "ssh://***@host/o/r",
+		"fatal: unable to access 'https://user:ghp_secret@github.com/o/r.git/'": "fatal: unable to access 'https://***@github.com/o/r.git/'",
+		// EVERY occurrence, not just the last one.
+		"a https://u:t1@h/x b https://u:t2@h/y": "a https://***@h/x b https://***@h/y",
+		// scp-style carries a USERNAME, not a secret — stays readable.
+		"git@github.com:o/r.git":                         "git@github.com:o/r.git",
+		"git@github.com: Permission denied (publickey).": "git@github.com: Permission denied (publickey).",
+		// Nothing to do.
+		"nothing to redact here":     "nothing to redact here",
+		"https://github.com/o/r.git": "https://github.com/o/r.git",
+		// An "@" in the PATH is not userinfo. The positional scan mangled
+		// this into "https://***@v1.git" (review 2026-09-02).
+		"https://github.com/o/r@v1.git": "https://github.com/o/r@v1.git",
+		// git, curl and net/url all split userinfo at the LAST "@" of the
+		// authority; anchoring on the first left the tail of a password
+		// containing "@" in the clear (security review 2026-09-02).
+		"https://user:AA@BB@github.com/o/r": "https://***@github.com/o/r",
 	}
 	for in, want := range cases {
-		if got := redactURL(in); got != want {
-			t.Errorf("redactURL(%q) = %q, want %q", in, got, want)
+		if got := redactSecrets(in); got != want {
+			t.Errorf("redactSecrets(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// guestErrMessage and clampTitle both render untrusted text into the UI. A
+// control character or a bidi override there can make a line claim to say
+// something it does not, and a blind byte slice can leave a broken rune.
+func TestStripControlsAndClampBytes(t *testing.T) {
+	strip := map[string]string{
+		// Only the control BYTES go; the printable tail of an escape sequence
+		// is ordinary text and stays visible, which is the point.
+		"a\x1b[2Jb\x07c":      "a[2Jbc",
+		"a\u0085b":            "ab",  // C1 (NEL)
+		"a\u202eb":            "ab",  // right-to-left override
+		"a\u2066b\u2069c":     "abc", // bidi isolates
+		"a\u200bb\ufeffc":     "abc", // zero-width + BOM
+		"a\u061cb":            "ab",  // arabic letter mark — the enumerated
+		"a\u2028b\u2029c":     "abc", // version missed these three (review)
+		"plain ascii is kept": "plain ascii is kept",
+		"åäö are kept":        "åäö are kept",
+	}
+	for in, want := range strip {
+		if got := stripControls(in); got != want {
+			t.Errorf("stripControls(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	// "aé" is 3 bytes: a cut at 2 lands inside "é" and must fall back to 1.
+	if got := clampBytes("aé", 2); got != "a" {
+		t.Errorf("clampBytes split a multi-byte rune: %q", got)
+	}
+	if got := clampBytes("aé", 3); got != "aé" {
+		t.Errorf("clampBytes truncated an exactly-fitting string: %q", got)
+	}
+	if got := clampBytes("abc", 10); got != "abc" {
+		t.Errorf("clampBytes truncated a short string: %q", got)
+	}
+	if !utf8.ValidString(clampBytes(strings.Repeat("é", 400), guestErrMaxBytes)) {
+		t.Error("clampBytes produced invalid UTF-8")
 	}
 }
 
@@ -162,5 +220,54 @@ func TestCloneURLValidation(t *testing.T) {
 		if cloneURLRe.MatchString(u) {
 			t.Errorf("clone URL %q should be rejected", u)
 		}
+	}
+}
+
+// A failed clone used to be logged and nothing else — the user just got a
+// silently empty project. guestErrMessage is what carries the reason back, so
+// it must pick git's diagnosis line, redact any token riding in the URL, and
+// stay bounded (the guest controls this text).
+func TestGuestErrMessage(t *testing.T) {
+	cases := []struct{ name, out, want string }{
+		{
+			name: "picks the fatal line over the banner",
+			out:  "Cloning into '.'...\r\nfatal: could not read Username for 'https://github.com': No such device or address\n",
+			want: "clone failed: fatal: could not read Username for 'https://github.com': No such device or address",
+		},
+		{
+			name: "keeps the ssh diagnosis",
+			out:  "Cloning into '.'...\ngit@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.\n",
+			want: "clone failed: fatal: Could not read from remote repository.",
+		},
+		{
+			name: "redacts a token embedded in the remote URL",
+			out:  "fatal: unable to access 'https://user:ghp_secret@github.com/o/r.git/'\n",
+			want: "clone failed: fatal: unable to access 'https://***@github.com/o/r.git/'",
+		},
+		{
+			name: "redacts EVERY token on the line, not just the last",
+			out:  "fatal: https://u:t1@h/x and https://u:t2@h/y both failed\n",
+			want: "clone failed: fatal: https://***@h/x and https://***@h/y both failed",
+		},
+		{
+			name: "no usable output degrades to the prefix alone",
+			out:  "Cloning into '.'...\n\n",
+			want: "clone failed",
+		},
+	}
+	for _, c := range cases {
+		if got := guestErrMessage("clone failed", c.out); got != c.want {
+			t.Errorf("%s: guestErrMessage() = %q, want %q", c.name, got, c.want)
+		}
+	}
+
+	// The guest is untrusted and root in its own VM: it controls both the
+	// length and the bytes of this string.
+	long := guestErrMessage("clone failed", "fatal: "+strings.Repeat("x", 5000))
+	if len(long) > 320 {
+		t.Errorf("guestErrMessage did not cap output: len = %d", len(long))
+	}
+	if got := guestErrMessage("clone failed", "fatal: a\x1b[2Jb\x07c"); got != "clone failed: fatal: a[2Jbc" {
+		t.Errorf("control bytes not stripped: %q", got)
 	}
 }
