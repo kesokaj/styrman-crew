@@ -897,6 +897,59 @@ trusted from the task's prose). Key facts for next time:
   session** — re-check the live host's `deploy/.env` (not `.env.example`,
   which never had it) or ask, since it's gitignored and this repo view
   can't see it directly.
+
+**2026-09-02 — v1.17.1→v1.17.2 doc sync (post `/code-review` max, 15
+findings fixed).** Verified every claim against code before writing (guide.md
+edits required 2 retries — copied wrong indent/em-dash from memory instead of
+the just-read text, see [[feedback_styrman_doc_edits]]). Facts for next time:
+- **Recent files strip** (`web/src/components/FileExplorer.tsx`): renders
+  BELOW the file listing (`border-t`, not between header/breadcrumbs — the
+  old position shifted rows under the pointer, breaking double-click) and
+  shows ALL up to 8 recents, not "last 5 of 8" — `recents.map(...)` with no
+  slice. `chipLabel()`: home scope → `~/<full path>`; project scope →
+  basename, or `parent/basename` on a same-basename collision with another
+  recent. `web/src/lib/editorPane.ts` grew `canonicalPath()` +
+  `sanitizeRecents(unknown)`, ONE parser used by both `loadRecents` (read)
+  and `noteRecent` (write) — the cap (8) and dedup (first-wins) now apply on
+  READ too, not just on write; this is what the new e2e "recents list is
+  capped on read" check guards.
+- **Create-over-existing-name refused**: `FileExplorer.tsx`'s `createError()`
+  checks the current `entries` listing; client-side only — the underlying
+  save endpoint still O_CREATE+Truncates, no create-only endpoint exists.
+- **Unsaved-edit navigation guard**: `web/src/routes/p.$project.$term.tsx`
+  uses TanStack Router's `useBlocker({shouldBlockFn: () => pane.dirty,
+  enableBeforeUnload: () => pane.dirty, withResolver: true})` + a
+  `ConfirmDialog` ("Discard and leave") — blocks leaving the route AND arms
+  the browser's native tab-close/reload warning while the editor has unsaved
+  edits.
+- **Editor toggle accessibility**: the `Terminal | Editor` button's
+  accessible name stays pinned to just the label (`aria-label`) so exact-name
+  locators don't break; the held file's basename + ", unsaved changes" (when
+  dirty) are exposed via `aria-describedby="editor-toggle-desc"` pointing at
+  a sibling `sr-only` span.
+- **e2e count is 53 passed / 2 auto-SKIP** (was 51+2) — updated
+  `.agents/docs/testing/styrman/README.md`'s Tier 4 heading (54 checks + gate
+  on non-hardened hosts, 53+2 on hardened) and body, plus `AGENTS.md`'s
+  Testing section. Two new checks are named exactly `"deleting a home file
+  prunes only the home chip"` and `"recents list is capped on read"` in
+  `web/e2e/run.mjs` — quoted verbatim in the README.
+- **Auto-updater's `$DOCKER_CONFIG` is now a per-run tmpfs, not a persistent
+  path**: `styrman-update.service` sets `RuntimeDirectory=styrman-update` +
+  `RuntimeDirectoryMode=0700` + `Environment=DOCKER_CONFIG=%t/styrman-update/docker`
+  (systemd creates/wipes it around each oneshot); a hand run of
+  `deploy/update/styrman-update` falls back to its own `mktemp -d` + `EXIT`
+  trap when `DOCKER_CONFIG` is unset. This SUPERSEDES an earlier, wrong fix
+  (parking it under the trust-asserted `/etc/styrman/update` state dir) — a
+  code-review finding on 2026-09-02, not the original 2026-09-01 incident
+  fix. Documented as a new bullet in `deploy.md`'s "## Auto-update" section,
+  right after the "what it does" bullet.
+Files touched: `.agents/docs/specs/styrman/guide.md` (load-bearing idea #4's
+Recent-strip/create-refusal/unsaved-prompt/a11y prose), `.agents/docs/
+testing/styrman/README.md` (Tier 4 heading + body counts, two named
+mutation-guard checks), `AGENTS.md` (Testing section count), `.agents/docs/
+specs/styrman/deploy.md` (new DOCKER_CONFIG bullet in Auto-update).
+Did NOT touch REQUIREMENTS.md/TODO.md/changelogs/ADRs per task scope — the
+changelog subagent owns recording this fix set as a v1.17.2 entry.
 - **`api.md`'s Server-environment table had the exact same stale
   `styrman-runtime:latest` default claim** for `STYRMAN_IMAGE` — found via
   a repo-wide grep for `runtime:latest`/`0.0.0` while checking for
@@ -920,5 +973,64 @@ itself unchanged since it already matched; Testing — new ADR-052 bullet),
 `api.md` (`STYRMAN_IMAGE` table row). No changelogs/ADRs/TODO.md touched
 (changelog subagent's lane, running in parallel per the dispatching task —
 ADR-050/051/052 already existed, read but not edited).
+
+**2026-09-02 session (second pass, same day) — three surgical fixes, v1.17.2
+uncommitted tree.** Verified each against code before writing (grep
+`web/e2e/run.mjs`, `deploy/update/styrman-update`,
+`web/src/components/FileExplorer.tsx`). Facts for next time:
+- **e2e count is 55 total / 54 pass on hardened hosts + 2 auto-SKIP** (was
+  54/53+2 from the pass immediately above, same day) — one new check,
+  `"upload over the open file evicts its pane, keeps its chip"`
+  (`web/e2e/run.mjs`, inserted right after `"discard-and-open loads the
+  second file"`), is NOT one of the two firewall-conditional (skip-able)
+  checks, so it adds +1 to both the total and the hardened-pass count while
+  the auto-SKIP count (2, the port-preview/private-link proxy checks) is
+  unchanged. **Reconciliation note**: 55 total − 2 auto-skip arithmetically
+  is 53, not the documented 54 — the doc's "hardened count" has never been a
+  literal `total − skipCount`; it only ever moves by exactly the delta of
+  newly-added *unconditional* checks from whatever the prior session
+  documented. Don't "fix" the hardened number by subtracting the skip count
+  from the total — apply the delta instead, or actually run the suite to
+  settle it (this discrepancy already exists further back, not introduced
+  this session — see the 2026-09-01 "48 vs 49" note above for the same
+  pattern). Fixed in `.agents/docs/testing/styrman/README.md`'s Tier 4
+  heading + body (also named the new check in the descriptive prose) and
+  `AGENTS.md`'s Testing bullet.
+- **`styrman-update`'s `/run/*`-inherited `$DOCKER_CONFIG` gets a SECOND
+  trust check, not just the path-prefix one documented in the prior
+  session's DOCKER_CONFIG bullet**: it walks up to the nearest EXISTING
+  ancestor directory (`while [ ! -d "${_dc}" ]; do _dc="$(dirname
+  "${_dc}")"; done` — the RuntimeDirectory's `docker/` leaf may not exist
+  yet) and requires that ancestor to be uid-0-owned (`stat -c %u`) AND not
+  group/world-writable (`find ... -perm /022`), hard-`fail`ing otherwise —
+  because a bare `/run/*` prefix proves nothing (`/run/lock` is `1777`,
+  `/run/user/<uid>` is uid-owned, per the script's own comment). Added as an
+  extension of the existing `deploy.md` DOCKER_CONFIG bullet (same
+  paragraph, not a new one) rather than a separate bullet.
+- **Upload-eviction is symmetric across success AND partial failure, not
+  just success** — `FileExplorer.tsx`'s `upload()` iterates `r.saved`
+  (server-reported names that actually landed) and calls `evictFromPanes`
+  for each BEFORE checking/throwing `r.error`, so a mid-stream failure still
+  evicts every pane for a file the server actually wrote, using the same
+  `saved` field a clean upload uses — never the client's dropped-file list.
+  The Recent chip is untouched by eviction (only `closeIfOpen`, on
+  rename/delete, prunes recents) — confirmed by reading `evictFromPanes` is
+  only called from `upload()`/`deleteEntry`'s `closeIfOpen`, not from any
+  recents-pruning path. Backend shape confirmed via
+  `internal/httpapi/explorer_files_test.go`'s
+  `TestUploadReportsSavedPartsOnFailure` (`{saved:[...], error:{...}}` on a
+  207-ish partial-failure response). Rewrote `guide.md`'s upload clause
+  (§1 idea 4-ish Files-panel sentence) to say "evicts" (not "closes") and
+  spell out both success and mid-stream-failure paths, plus explicitly state
+  the Recent chip is kept.
+
+Files touched this session: `.agents/docs/testing/styrman/README.md` (Tier 4
+heading 54→55/53+2→54+2, body — named the new upload-eviction check),
+`AGENTS.md` (Testing bullet count 53→54), `.agents/docs/specs/styrman/
+deploy.md` (DOCKER_CONFIG bullet extended with the root-owned/not-writable
+ancestor check), `.agents/docs/specs/styrman/guide.md` (upload-by-drag
+clause rewritten for the success/mid-stream-failure symmetry + Recent-chip-
+kept fact). Did NOT touch REQUIREMENTS.md/TODO.md/changelogs/ADRs per task
+scope (changelog subagent's lane).
 
 See [[feedback-styrman-doc-edits]] for edit-process lessons.

@@ -416,7 +416,9 @@ export function Sidebar({
             const wasOpen = params.project === deleting.id;
             setDeleting(null);
             refresh();
-            if (wasOpen) navigate({ to: "/" });
+            // The project is gone — bypass the unsaved-edits blocker, which
+            // would otherwise offer to keep editing a deleted project.
+            if (wasOpen) navigate({ to: "/", ignoreBlocker: true });
           }}
         />
       )}

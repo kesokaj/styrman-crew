@@ -247,14 +247,29 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	var saved []string
+	// Non-nil from the start: the client iterates it, and it is reported on
+	// EVERY exit — a mid-stream failure must tell the client which earlier
+	// parts already landed, so panes holding those files get evicted and a
+	// stale buffer cannot overwrite the upload on Save (code review 2026-09-02).
+	saved := []string{}
+	// uploadErr mirrors writeErr's JSON shape (minus its ErrNotFound remap —
+	// every error passed here is a static message) plus the parts saved so far.
+	uploadErr := func(status int, err error) {
+		writeJSON(w, status, map[string]any{
+			"error": map[string]string{"message": err.Error()},
+			"saved": saved,
+		})
+	}
 	for {
 		part, err := mr.NextPart()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			writeErr(w, http.StatusBadRequest, err)
+			// The branch an oversized drop actually hits (the 512 MiB cap trips
+			// inside the boundary scan between parts) — earlier parts landed,
+			// so this exit reports them too (code review round 4).
+			uploadErr(http.StatusBadRequest, err)
 			return
 		}
 		name := filepath.Base(part.FileName())
@@ -265,11 +280,11 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 		// Managed-subtree guard per part (audit finding): an upload into
 		// ~/.dockerd or ~/.ssh must be refused like delete/rename/write.
 		if managedHomeTarget(strings.Contains(r.Pattern, "/home/"), target) {
-			writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
+			uploadErr(http.StatusBadRequest, errors.New("path is managed by styrman"))
 			return
 		}
 		if err := files.SaveStream(root, target, part); err != nil {
-			writeErr(w, http.StatusInternalServerError, errors.New("cannot save upload"))
+			uploadErr(http.StatusInternalServerError, errors.New("cannot save upload"))
 			return
 		}
 		saved = append(saved, name)

@@ -94,6 +94,12 @@ export function useFileEditorState(
   const [wrap, setWrapState] = useState(loadWrap);
   const editorRef = useRef<CodeEditorHandle>(null);
   const dirty = text !== savedContent;
+  // ONE document identity — scope (kind AND project) + path — used both for
+  // the render-phase reset below and to remount CodeEditor (it takes its
+  // initial document from `value` only on mount). Including the project means
+  // this file's correctness no longer rests on EditorPane's per-terminal key
+  // living in another file (security review).
+  const docIdentity = `${scope.kind}:${scope.project}:${file.path}`;
 
   const setWrap = (on: boolean) => {
     setWrapState(on);
@@ -119,9 +125,17 @@ export function useFileEditorState(
   // takes its initial document from `value` in that same render, so an
   // effect-based reset left the new file showing the PREVIOUS file's content
   // (caught by the e2e Dockerfile check, 2026-09-01).
-  const [shownPath, setShownPath] = useState(file.path);
-  if (shownPath !== file.path) {
-    setShownPath(file.path);
+  // Keyed on SCOPE + path, not path alone: the same relative path exists in
+  // both the project and the home scope, and the Recent strip makes that
+  // cross-scope open one click — keyed on path alone the other scope's buffer
+  // survived and Ctrl+S wrote it over the wrong file (code review, 2026-09-02).
+  // (Declared above the reset so the reset can clear it — the note is
+  // per-file too, like preview mode.)
+  const [checkNote, setCheckNote] = useState<string>();
+  const [shownKey, setShownKey] = useState(docIdentity);
+  if (shownKey !== docIdentity) {
+    setShownKey(docIdentity);
+    setCheckNote(undefined);
     setText(file.content);
     setSavedContent(file.content);
     // Preview mode is per-file too. The modal got this free by unmounting
@@ -164,7 +178,6 @@ export function useFileEditorState(
   // an empty gutter reads as "no problems found", so a failed check returns
   // nothing rather than a fabricated pass, and the tool's own errors come back
   // as real diagnostics from the server.
-  const [checkNote, setCheckNote] = useState<string>();
   const runCheck = async (text: string): Promise<CheckDiagnostic[]> => {
     if (file.binary || file.truncated) return [];
     try {
@@ -235,6 +248,7 @@ export function useFileEditorState(
 
   return {
     text,
+    docIdentity,
     setText,
     dirty,
     saving,
@@ -272,7 +286,9 @@ export function FileEditorToolbar({
 }) {
   return (
     <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs">
-      <span className="truncate font-mono font-medium">{file.path}</span>
+      <span data-testid="editor-path" className="truncate font-mono font-medium">
+        {file.path}
+      </span>
       <span className="shrink-0 text-text-dim">{fmtSize(file.size)}</span>
       {file.truncated && <span className="shrink-0 text-warn">truncated</span>}
       {st.checkNote && (
@@ -386,6 +402,7 @@ export function FileEditorBody({
       fallback={<p className="p-4 text-xs text-text-dim">Loading editor…</p>}
     >
       <CodeEditor
+        key={st.docIdentity}
         ref={st.editorRef}
         value={st.text}
         filename={file.path}

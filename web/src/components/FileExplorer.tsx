@@ -3,10 +3,12 @@ import { api, tryUI, type FileEntry, type Scope } from "../lib/api";
 import {
   basename,
   closeFileInPane,
+  evictFromPanes,
   openFileInPane,
   useEditorPane,
   useFileSavedTick,
   useRecentFiles,
+  type RecentFile,
 } from "../lib/editorPane";
 import { ConfirmDialog, IconButton, PromptDialog } from "./ui";
 import {
@@ -79,6 +81,21 @@ export function FileExplorer({
   const isOpen = (scopeKind: Scope["kind"], p: string) =>
     !!openFile && openFile.scope.kind === scopeKind && openFile.path === p;
 
+  // Chip text: home files show their full path under ~/ (a bare "~/name"
+  // implied a root-level file that does not exist); project files show the
+  // basename, or parent/basename when another recent shares the basename —
+  // identical chips reopened the wrong file (code review, 2026-09-02).
+  const chipLabel = (r: RecentFile, all: RecentFile[]) => {
+    if (r.scopeKind === "home") return `~/${r.path}`;
+    const base = basename(r.path);
+    const collides = all.some(
+      (o) => o !== r && o.scopeKind === "project" && basename(o.path) === base,
+    );
+    if (!collides || !r.path.includes("/")) return base;
+    const parent = r.path.slice(0, r.path.lastIndexOf("/"));
+    return `${basename(parent)}/${base}`;
+  };
+
   // Generation guard (audit finding): quick directory hops could let an
   // EARLIER listing resolve last and repaint the previous directory's entries
   // under the new breadcrumb. Each (scope,path) change invalidates in-flight
@@ -119,6 +136,14 @@ export function FileExplorer({
     if (v.includes("/")) return "Names cannot contain /";
     return undefined;
   };
+  // Creating over an existing entry silently TRUNCATED it (the save endpoint
+  // opens O_CREATE+Truncate and there is no create-only endpoint) — and, with
+  // no backup layer, that is unrecoverable (code review, 2026-09-02).
+  const createError = (v: string): string | undefined =>
+    nameError(v) ??
+    (entries.some((e) => e.name === v)
+      ? "An entry with that name already exists here"
+      : undefined);
 
   const inDir = (name: string) => (path ? `${path}/${name}` : name);
 
@@ -127,7 +152,22 @@ export function FileExplorer({
   // every pane in the project, not just this terminal's: the same file can be
   // open in another terminal's pane.
   const closeIfOpen = (entryPath: string) =>
-    closeFileInPane(project, entryPath, scope.kind);
+    closeFileInPane(project, scope.kind, entryPath);
+
+  // Upload = replace on disk underneath any pane holding that file, so the
+  // pane's pre-upload buffer must go (Save would overwrite the upload) while
+  // the Recent chip stays — the file still exists. Evict EXACTLY what the
+  // server reports it wrote — on success and on a mid-stream failure alike
+  // (it reports the parts that landed before the error); never the dropped
+  // names, which would discard unsaved edits for files it never touched
+  // (code review, 2026-09-02).
+  const upload = async (list: File[]) => {
+    const r = await api.uploadFiles(scope, path, list);
+    for (const name of r.saved)
+      evictFromPanes(project, { scopeKind: scope.kind, path: inDir(name) });
+    load();
+    if (r.error) throw r.error;
+  };
 
   const createFile = (name: string) =>
     tryUI(async () => {
@@ -216,10 +256,7 @@ export function FileExplorer({
               onChange={(e) => {
                 const list = Array.from(e.target.files ?? []);
                 if (list.length)
-                  tryUI(async () => {
-                    await api.uploadFiles(scope, path, list);
-                    load();
-                  });
+                  tryUI(() => upload(list));
                 e.target.value = "";
               }}
             />
@@ -229,45 +266,6 @@ export function FileExplorer({
           </IconButton>
         </div>
       </div>
-
-      {recents.length > 0 && (
-        <div
-          data-testid="recent-files"
-          className="flex items-center gap-1 overflow-x-auto border-b border-border px-2 py-1.5"
-        >
-          <span className="shrink-0 text-[10px] uppercase tracking-wide text-text-dim">
-            Recent
-          </span>
-          {recents.map((r) => {
-            const open = isOpen(r.scopeKind, r.path);
-            return (
-              <button
-                key={`${r.scopeKind}/${r.path}`}
-                onClick={() =>
-                  openFileInPane(
-                    project,
-                    term,
-                    r.scopeKind === "home"
-                      ? { kind: "home", project }
-                      : { kind: "project", project },
-                    r.path,
-                  )
-                }
-                aria-label={`Open recent file ${(r.scopeKind === "home" ? "~/" : "") + r.path}`}
-                aria-current={open ? "true" : undefined}
-                title={(r.scopeKind === "home" ? "~/" : "") + r.path}
-                className={`max-w-40 shrink-0 truncate rounded-full px-2 py-0.5 font-mono text-[11px] ${
-                  open
-                    ? "bg-accent-soft font-medium text-on-accent-soft"
-                    : "text-text-dim hover:bg-bg-hover hover:text-text"
-                }`}
-              >
-                {r.scopeKind === "home" ? `~/${basename(r.path)}` : basename(r.path)}
-              </button>
-            );
-          })}
-        </div>
-      )}
 
       <div className="flex flex-wrap items-center gap-0.5 px-2 py-1 text-[11px] text-text-dim">
         <button
@@ -303,10 +301,7 @@ export function FileExplorer({
           setDragging(false);
           const list = Array.from(e.dataTransfer.files ?? []);
           if (list.length)
-            tryUI(async () => {
-              await api.uploadFiles(scope, path, list);
-              load();
-            });
+            tryUI(() => upload(list));
         }}
       >
         {error && <p className="px-2 py-2 text-xs text-danger">{error}</p>}
@@ -331,7 +326,13 @@ export function FileExplorer({
             }`}
             onClick={() => (e.dir ? setPath(e.path) : openEntry(e.path))}
           >
-            <span className="shrink-0 text-text-dim">
+            <span
+              className={`shrink-0 ${
+                !e.dir && isOpen(scope.kind, e.path)
+                  ? "text-on-accent-soft"
+                  : "text-text-dim"
+              }`}
+            >
               {e.dir ? (
                 <FolderIcon className="h-3.5 w-3.5" />
               ) : (
@@ -365,7 +366,13 @@ export function FileExplorer({
               {e.symlink && <span className="text-accent"> ↗</span>}
             </span>
             {!e.dir && (
-              <span className="shrink-0 text-[10px] text-text-dim">
+              <span
+                className={`shrink-0 text-[10px] ${
+                  isOpen(scope.kind, e.path)
+                    ? "text-on-accent-soft"
+                    : "text-text-dim"
+                }`}
+              >
                 {fmtSize(e.size)}
               </span>
             )}
@@ -408,12 +415,55 @@ export function FileExplorer({
         ))}
       </div>
 
+      {/* BELOW the listing, not above (code review 2026-09-02): mounted above,
+          the strip's first appearance shifted every row under a stationary
+          pointer by almost a full row height — a double-click's second press
+          landed on the wrong entry. */}
+      {recents.length > 0 && (
+        <div
+          data-testid="recent-files"
+          className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-border px-2 py-1.5"
+        >
+          <span className="shrink-0 text-[10px] uppercase tracking-wide text-text-dim">
+            Recent
+          </span>
+          {recents.map((r) => {
+            const open = isOpen(r.scopeKind, r.path);
+            const full = (r.scopeKind === "home" ? "~/" : "") + r.path;
+            return (
+              <button
+                key={`${r.scopeKind}/${r.path}`}
+                onClick={() =>
+                  openFileInPane(
+                    project,
+                    term,
+                    r.scopeKind === "home"
+                      ? { kind: "home", project }
+                      : { kind: "project", project },
+                    r.path,
+                  )
+                }
+                aria-label={`Open recent file ${full}`}
+                aria-current={open ? "true" : undefined}
+                title={full}
+                className={`max-w-40 shrink-0 truncate rounded-full px-2 py-0.5 font-mono text-[11px] ${
+                  open
+                    ? "bg-accent-soft font-medium text-on-accent-soft"
+                    : "text-text-dim hover:bg-bg-hover hover:text-text"
+                }`}
+              >
+                {chipLabel(r, recents)}
+              </button>
+            );
+          })}
+        </div>
+      )}
       {dialog?.kind === "newFile" && (
         <PromptDialog
           title="New file"
           label="Created in the current directory."
           submitLabel="Create"
-          validate={nameError}
+          validate={createError}
           onSubmit={createFile}
           onClose={() => setDialog(null)}
         />
@@ -423,7 +473,7 @@ export function FileExplorer({
           title="New folder"
           label="Created in the current directory."
           submitLabel="Create"
-          validate={nameError}
+          validate={createError}
           onSubmit={createFolder}
           onClose={() => setDialog(null)}
         />

@@ -8,11 +8,17 @@ Type=oneshot
 # no default, so a bare invocation — notably a privileged TEST run — can never
 # alias production state by omission.
 Environment=STYRMAN_UPDATE_STATE_DIR=/etc/styrman/update
-# ProtectHome=yes (below) makes /root read-only, and the docker CLI insists on
-# creating $HOME/.docker — which killed the FIRST real end-to-end deploy at
-# `docker build` (2026-09-01, and the rollback died the same way). Point it
-# into the state dir instead of weakening the hardening.
-Environment=DOCKER_CONFIG=/etc/styrman/update/.docker
+# The docker CLI insists on creating $DOCKER_CONFIG (/root/.docker by default)
+# and ProtectHome=yes (below) makes /root INACCESSIBLE and empty — which killed
+# the first real end-to-end deploy at `docker build`, and its rollback with it
+# (2026-09-01). A per-run, systemd-managed tmpfs dir: wiped after the oneshot,
+# so no root-executed docker config, cli-plugins or buildx state accretes
+# anywhere (code review 2026-09-02: the earlier fix parked it under the
+# trust-asserted state dir, unasserted and re-pinning the path). Hand-runs get
+# the same shape from the script itself (a mktemp dir removed on exit).
+RuntimeDirectory=styrman-update
+RuntimeDirectoryMode=0700
+Environment=DOCKER_CONFIG=%t/styrman-update/docker
 ExecStart=/usr/local/bin/styrman-update
 # Builds are heavy and must never starve the running platform.
 Nice=10

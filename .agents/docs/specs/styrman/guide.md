@@ -82,23 +82,48 @@ selections before a keypress can land — the runtime image's tmux
    saving no longer closes it, just re-disables Save until the next edit
    (v1.7.2); the explorer row for whatever THIS terminal's pane currently
    holds is highlighted (matched by scope kind + path), and a per-project
-   **Recent** chip strip between the header and the breadcrumbs shows the
-   last 5 of up to 8 recently opened files (basename, `~/` prefix for home
-   scope, full path on hover) — click to reopen; the currently-open file's
-   chip is highlighted too; the list survives reloads via localStorage
-   (`styrman.recentFiles.<project>`, degrading silently to session-only if
-   storage is blocked) and is pruned when its file is deleted or renamed
-   (2026-09-01). The terminal header's `Terminal | Editor` toggle shows the
-   held file's basename (truncated, mono) next to the Editor label so the
-   open file is visible even while looking at the terminal view
-   (2026-09-01); a **Wrap** toggle controls soft-wrap (default on, persisted
+   **Recent** strip sits BELOW the file listing (a border-t row, not
+   between the header and breadcrumbs — mounting it above shifted every row
+   under a stationary pointer, breaking double-click, 2026-09-02) showing
+   ALL up to 8 recently opened files: home-scope chips read `~/<full
+   path>`; project chips show the basename, or `parent/basename` when
+   another recent shares that basename (identical chips used to reopen the
+   wrong file) — click a chip to reopen; the currently-open file's chip is
+   highlighted too; the list survives reloads via localStorage
+   (`styrman.recentFiles.<project>`, one canonicalizing parser shared by
+   every read and write — relative-only, no empty/`.`/`..` segments, ≤512
+   chars, first-wins dedup — degrading silently to session-only if storage
+   is blocked) and is pruned when its file is deleted or renamed
+   (2026-09-01). New file / New folder refuses a name that already exists
+   in the current listing (creating over one used to silently truncate it
+   via the save endpoint, and with no backup layer that was unrecoverable,
+   2026-09-02) — client-side only, so a raw API call can still truncate.
+   Leaving a terminal — another terminal, a project, Settings — while the
+   editor has unsaved edits is blocked with a "Discard and leave" confirm
+   dialog, and closing or reloading the browser tab triggers its native
+   unsaved-changes warning too (2026-09-02): the per-terminal dirty flag
+   does not survive an unmount, so leaving without asking would silently
+   discard the buffer. The terminal header's `Terminal | Editor` toggle
+   shows the held file's basename (truncated, mono) next to the Editor
+   label so the open file is visible even while looking at the terminal view
+   (2026-09-01) — the basename, and ", unsaved changes" when dirty, are
+   also exposed to screen readers via `aria-describedby` (the toggle's own
+   accessible name stays pinned to "Editor"/"Terminal" so exact-name
+   locators and screen-reader muscle memory don't break, 2026-09-02); a
+   **Wrap** toggle controls soft-wrap (default on, persisted
    across sessions); markdown opens as
    a RENDERED preview with an Edit toggle; a **Format** button reformats with
    the file's real CLI formatter running INSIDE the project VM — `gofmt`,
    `prettier`, `black`/`ruff`, `rustfmt`, `shfmt`, `terraform fmt`/`tofu fmt`
    — except JSON, which still formats locally/offline (v1.7.3); upload by
-   drag, download; destructive operations on platform-managed home paths are
-   refused), Ports (what's
+   drag (an upload that overwrites an already-open file evicts that file's
+   editor pane, keyed off the server's own reported saved base names rather
+   than what was dropped — on a clean success AND on a mid-stream failure
+   alike, since the server reports what actually landed on disk before the
+   error too, 2026-09-02 — so a stale in-memory copy of overwritten content
+   can never linger visibly open; its Recent chip is kept, since the file
+   itself still exists), download; destructive operations on
+   platform-managed home paths are refused), Ports (what's
    listening, with process / inner-docker image, shareable
    `/p/<id>/<t>/port/<port>/` links; per-port sharing — adding a Google
    email mints a stable **private link** `https://<token>.private.…/`

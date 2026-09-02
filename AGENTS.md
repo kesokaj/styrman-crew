@@ -99,7 +99,7 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
   it — production has no auth-bypass listener to test against instead;
   prereq `npx playwright install chromium`; check counts:
   `.agents/docs/testing/styrman/README.md`, the source of truth — currently
-  51 passed + 2 auto-SKIP).
+  54 passed + 2 auto-SKIP).
 - Spike results (Phase 0) in `.agents/docs/testing/spikes/`.
 - Any privileged (root) test must point state/target dirs at a scratch
   prefix, never a default that aliases `/var/lib/styrman`/`/etc/styrman` —

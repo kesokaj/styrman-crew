@@ -50,14 +50,16 @@ export function TerminalList({
     tryUI(async () => {
       await api.deleteTerminal(project, id);
       refresh();
-      if (activeTerm === id) navigate({ to: "/" });
+      // The terminal is gone: never prompt to keep editing INTO it (the
+      // route's unsaved-edits blocker would strand the user on a dead route).
+      if (activeTerm === id) navigate({ to: "/", ignoreBlocker: true });
     });
 
   const removeAll = () =>
     tryUI(async () => {
       await api.deleteAllTerminals(project);
       refresh();
-      navigate({ to: "/" });
+      navigate({ to: "/", ignoreBlocker: true });
     });
 
   return (

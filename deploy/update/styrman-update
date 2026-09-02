@@ -86,6 +86,34 @@ esac
 STATE="${STATE_DIR}/deployed-version"
 STATE_SHA="${STATE_DIR}/deployed-sha"
 FAILED="${STATE_DIR}/failed-version"
+# docker CLI config: ephemeral and EMPTY on every run. Under the unit systemd
+# provides a per-run tmpfs dir (RuntimeDirectory); a hand-run gets a mktemp
+# dir removed on exit. Never root's /root/.docker (ProtectHome makes it vanish
+# under the timer, so timer and hand-run builds differed) and never the state
+# dir (root-executed inputs nobody asserts) — code review 2026-09-02.
+# Only a systemd-provided RuntimeDirectory (under /run) is honoured: an
+# inherited value from a `sudo -E` hand-run would re-open the root-executed
+# config/plugin surface this exists to remove (security review).
+case "${DOCKER_CONFIG:-}" in
+    /run/*)
+        # Same trust bar as every other root input: /run/lock is 1777 and
+        # /run/user/<uid> is uid-owned, so the path shape alone proves nothing
+        # (security review). The unit's RuntimeDirectory is root 0700; its
+        # docker/ leaf may not exist yet — assert the nearest existing dir.
+        _dc="${DOCKER_CONFIG}"
+        while [ ! -d "${_dc}" ]; do _dc="$(dirname "${_dc}")"; done
+        [ "$(stat -c %u "${_dc}")" = "0" ] \
+            || fail "DOCKER_CONFIG=${DOCKER_CONFIG} is not root-owned — refusing a docker config another user controls"
+        [ -z "$(find "${_dc}" -maxdepth 0 -perm /022 2>/dev/null)" ] \
+            || fail "DOCKER_CONFIG=${DOCKER_CONFIG} is group/world-writable — refusing"
+        ;;
+    *)
+        DOCKER_CONFIG="$(mktemp -d)"
+        # The script's ONLY trap: anyone adding another EXIT trap must chain
+        # this cleanup, not replace it (review note).
+        trap 'rm -rf "${DOCKER_CONFIG}"' EXIT ;;
+esac
+export DOCKER_CONFIG
 [ -d "${DEPLOY_DIR}/.git" ] || fail "no deploy clone at ${DEPLOY_DIR} (see host-setup.sh step 8c)"
 # compose reads this for the ingress token, uid/gid, &c. The updater no longer
 # reads it itself (the version check uses a container label), but a build

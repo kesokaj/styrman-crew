@@ -224,9 +224,14 @@ try {
       .waitFor({ timeout: 5000 });
   });
   await check("terminal header badge names the held file", async () => {
-    await page
-      .getByRole("button", { name: "Editor", exact: true })
-      .getByText("nested.txt")
+    const editorToggle = page.getByRole("button", { name: "Editor", exact: true });
+    // The visible badge AND its screen-reader description (aria-describedby)
+    // both carry the name — assert each on purpose.
+    await editorToggle
+      .locator("span:not(.sr-only)", { hasText: "nested.txt" })
+      .waitFor({ timeout: 5000 });
+    await editorToggle
+      .locator("span.sr-only", { hasText: "nested.txt" })
       .waitFor({ timeout: 5000 });
   });
   await shot("04c-editor-open"); // the editor pane itself, for design review
@@ -299,14 +304,114 @@ try {
     // its Recent chip and confirm content and the chip's aria-current follow.
     await panel()
       .getByTestId("recent-files")
-      .getByLabel(/^Open recent file .*nested\.txt$/)
+      .getByLabel("Open recent file subdir/nested.txt", { exact: true })
       .click({ timeout: 7000 });
+    // A REAL reopen: the Dockerfile document must be gone and the toolbar must
+    // name the reopened file — a lax `text=hi` match was already satisfied by
+    // the still-open Dockerfile buffer ("RUN echo hi") (code review 2026-09-02).
+    await page
+      .locator(".cm-content >> text=FROM debian")
+      .waitFor({ state: "detached", timeout: 10000 });
+    await page
+      .getByTestId("editor-path")
+      .filter({ hasText: "subdir/nested.txt" })
+      .waitFor({ timeout: 10000 });
     await page.waitForSelector(".cm-content >> text=hi", { timeout: 10000 });
     await panel()
       .getByTestId("recent-files")
       .locator('[aria-current="true"]')
       .filter({ hasText: "nested.txt" })
       .waitFor({ timeout: 5000 });
+  });
+  // The SAME relative path in both scopes (code review 2026-09-02 — the two
+  // worst findings): a cross-scope open must flip the document (the editor
+  // reset was keyed on path alone, so Ctrl+S overwrote the other scope's
+  // file), and deleting the project copy must leave the home copy's chip AND
+  // pane untouched (the pane sweep was path-only and dropped unsaved edits).
+  await check("same path in both scopes: content flips, deletes stay scoped", async () => {
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.waitForTimeout(400);
+    await page.keyboard.type("mkdir -p ~/subdir && echo homey > ~/subdir/nested.txt");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(900);
+    await panel().getByText("Files", { exact: true }).click();
+    await panel().getByText("Home", { exact: true }).click();
+    await page.waitForTimeout(600);
+    await fileList().getByText("subdir", { exact: true }).click();
+    await page.waitForTimeout(400);
+    await fileList().getByText("nested.txt", { exact: true }).click();
+    await page.waitForSelector(".cm-content >> text=homey", { timeout: 15000 });
+    const strip = panel().getByTestId("recent-files");
+    // Flip to the PROJECT copy via its chip: its content must replace the
+    // home copy's (a path-only editor reset keeps "homey" on screen).
+    await strip
+      .getByLabel("Open recent file subdir/nested.txt", { exact: true })
+      .click();
+    await page
+      .locator(".cm-content >> text=homey")
+      .waitFor({ state: "detached", timeout: 10000 });
+    await page.waitForSelector(".cm-content >> text=hi", { timeout: 10000 });
+    // …and back to the home copy.
+    await strip
+      .getByLabel("Open recent file ~/subdir/nested.txt", { exact: true })
+      .click();
+    await page
+      .locator(".cm-content >> text=hi")
+      .waitFor({ state: "detached", timeout: 10000 });
+    await page.waitForSelector(".cm-content >> text=homey", { timeout: 10000 });
+    // Delete the PROJECT copy while the pane holds the HOME copy.
+    await panel().getByText("Project", { exact: true }).click();
+    await page.waitForTimeout(600);
+    await fileList().getByText("subdir", { exact: true }).click();
+    await page.waitForTimeout(400);
+    await panel()
+      .locator("div.group")
+      .filter({ hasText: "nested.txt" })
+      .first()
+      .hover();
+    await panel().getByLabel("Delete nested.txt").click();
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await page.waitForTimeout(1200);
+    await strip
+      .getByLabel("Open recent file subdir/nested.txt", { exact: true })
+      .waitFor({ state: "detached", timeout: 5000 });
+    await strip
+      .getByLabel("Open recent file ~/subdir/nested.txt", { exact: true })
+      .waitFor({ timeout: 5000 });
+    // The pane still holds the home copy — a path-only sweep would have
+    // cleared it to "No file open".
+    await page.waitForSelector(".cm-content >> text=homey", { timeout: 5000 });
+    await page
+      .getByTestId("editor-path")
+      .filter({ hasText: "subdir/nested.txt" })
+      .waitFor({ timeout: 5000 });
+    await fileList().getByText("../", { exact: true }).click();
+    await page.waitForTimeout(400);
+  });
+  // The read path caps and sanitises whatever storage holds (code review
+  // 2026-09-02 mutant): a corrupted 20-entry blob renders exactly the cap.
+  // ORDERING: this overwrites the project's real recents and RELOADS the
+  // page — it must stay ahead of every dirty-editor check (the route's
+  // beforeunload handler would turn the reload into a native dialog) and
+  // no later check may rely on the earlier chips.
+  await check("recents list is capped on read", async () => {
+    const project = new URL(page.url()).pathname.split("/")[2];
+    await page.evaluate((p) => {
+      const big = Array.from({ length: 20 }, (_, i) => ({
+        scopeKind: "project",
+        path: `junk${i}.txt`,
+      }));
+      localStorage.setItem(`styrman.recentFiles.${p}`, JSON.stringify(big));
+    }, project);
+    await page.reload();
+    await page.waitForSelector("aside", { timeout: 15000 });
+    await panel().getByText("Files", { exact: true }).click();
+    await panel().getByTestId("recent-files").waitFor({ timeout: 10000 });
+    const n = await panel()
+      .getByTestId("recent-files")
+      .getByRole("button")
+      .count();
+    if (n !== 8) throw new Error(`recents strip rendered ${n} chips, cap is 8`);
   });
   // "Discard and open": editing a file, then clicking another, must prompt and
   // then actually LOAD the second file. This dead-ended on an empty pane in
@@ -337,6 +442,23 @@ try {
 
   // Syntax checking (item 5): the real checker runs in the project VM and its
   // diagnostics land in CodeMirror's lint gutter.
+  // An upload that replaces the OPEN file must evict its pane (a stale buffer
+  // would overwrite the upload on Save) but keep its Recent chip — the file
+  // still exists — and reopening shows the uploaded content (code review
+  // 2026-09-02; covers the server-reported saved-names path).
+  await check("upload over the open file evicts its pane, keeps its chip", async () => {
+    await page.getByTestId("editor-path").filter({ hasText: "two.txt" }).waitFor({ timeout: 10000 });
+    await panel()
+      .locator('input[type="file"]')
+      .setInputFiles({ name: "two.txt", mimeType: "text/plain", buffer: Buffer.from("UPLOADED\n") });
+    await page.waitForSelector("text=No file open", { timeout: 10000 });
+    const chip = panel()
+      .getByTestId("recent-files")
+      .getByLabel("Open recent file two.txt", { exact: true });
+    await chip.waitFor({ timeout: 5000 });
+    await chip.click();
+    await page.waitForSelector(".cm-content >> text=UPLOADED", { timeout: 15000 });
+  });
   await check("syntax check flags a broken shell script", async () => {
     await page.getByRole("button", { name: "Terminal", exact: true }).click();
     await page.locator(".xterm textarea").first().focus();

@@ -259,3 +259,60 @@ func testRoutesWithDir(t *testing.T) (http.Handler, string) {
 	}
 	return New(cfg, users, orch, logger).Routes(), dir
 }
+
+// A mid-stream upload failure must still report the parts that LANDED: the
+// client evicts panes holding those files so a stale buffer cannot overwrite
+// the upload on Save (code review 2026-09-02). Home scope: "a.txt" saves,
+// ".ssh" is a managed name and is refused — the 400 body carries saved=[a.txt].
+func TestUploadReportsSavedPartsOnFailure(t *testing.T) {
+	h := testRoutes(t)
+	pid := makeProject(t, h, "partial-upload")
+	home := "/api/projects/" + pid + "/home"
+	var mp strings.Builder
+	mp.WriteString("--BOUND\r\nContent-Disposition: form-data; name=\"files\"; filename=\"a.txt\"\r\n\r\nfirst\r\n")
+	mp.WriteString("--BOUND\r\nContent-Disposition: form-data; name=\"files\"; filename=\".ssh\"\r\n\r\nnope\r\n--BOUND--\r\n")
+	req := httptest.NewRequest(http.MethodPost, home+"/upload?path=", strings.NewReader(mp.String()))
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=BOUND")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("partial upload = %d, want 400: %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Saved []string          `json:"saved"`
+		Error map[string]string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("400 body is not JSON: %v: %s", err, w.Body.String())
+	}
+	if len(body.Saved) != 1 || body.Saved[0] != "a.txt" {
+		t.Fatalf("saved = %v, want [a.txt] — the client must learn what landed", body.Saved)
+	}
+	if body.Error["message"] == "" {
+		t.Fatal("error message missing alongside saved")
+	}
+	// The landed part really is on disk (so evicting its pane was right).
+	if w := (func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, home+"/file?path=a.txt", nil))
+		return w
+	})(); w.Code != http.StatusOK {
+		t.Fatalf("a.txt after partial upload = %d, want 200", w.Code)
+	}
+
+	// A successful upload reports the list; an upload where EVERY part is
+	// skipped (no usable filename) must still report an EMPTY list, not null —
+	// the client iterates it (a Go nil slice serialises as null).
+	for _, tc := range []struct{ name, body, want string }{
+		{"saved part", "--BOUND\r\nContent-Disposition: form-data; name=\"files\"; filename=\"b.txt\"\r\n\r\nsecond\r\n--BOUND--\r\n", `"saved":["b.txt"]`},
+		{"nothing usable", "--BOUND\r\nContent-Disposition: form-data; name=\"files\"; filename=\"\"\r\n\r\nx\r\n--BOUND--\r\n", `"saved":[]`},
+	} {
+		req = httptest.NewRequest(http.MethodPost, home+"/upload?path=", strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "multipart/form-data; boundary=BOUND")
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), tc.want) {
+			t.Fatalf("%s: upload = %d body %s, want 200 containing %s", tc.name, w.Code, w.Body.String(), tc.want)
+		}
+	}
+}

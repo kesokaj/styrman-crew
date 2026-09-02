@@ -96,11 +96,13 @@ export function basename(path: string): string {
 }
 
 // ── Recently opened files (operator request 2026-09-01) ─────────────────────
-// Per PROJECT, newest first, deduped, capped. Unlike the open-file state
-// above (session context by design), the recents LIST is a convenience worth
-// keeping across reloads — localStorage, guarded: a blocked or empty store
-// must never break the explorer, so every touch is try/catched and the
-// feature silently degrades to session-only.
+// Per PROJECT (shared by that project's terminals), newest first, deduped,
+// capped. Unlike the open-file state above (session context by design), the
+// recents LIST is a convenience worth keeping across reloads — localStorage,
+// guarded: a blocked or empty store must never break the explorer, so every
+// touch is try/catched and the feature silently degrades to session-only.
+// Known limits, accepted: no cross-tab coherence (last writer wins) and the
+// per-project keys are never garbage-collected.
 
 export type RecentFile = { scopeKind: Scope["kind"]; path: string };
 
@@ -111,38 +113,55 @@ const recentsKey = (project: string) => `styrman.recentFiles.${project}`;
 const recents = new Map<string, RecentFile[]>();
 const NO_RECENTS: RecentFile[] = [];
 
+/**
+ * Canonical relative path or null: no leading slash, no empty/dot segments,
+ * no dot-dot at all (the server's cleanRel NORMALISES ".." — the client is
+ * stricter on purpose: a recent that only exists after normalisation is not a
+ * key the listing ever produces), no trailing slash, no control characters
+ * (defensive — such a name would be unusable in the UI), bounded length. "./a.txt", "a//b" and "subdir/"
+ * all normalise to the key the listing uses (code review, 2026-09-02).
+ */
+function canonicalPath(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length > 512) return null;
+  // eslint-disable-next-line no-control-regex
+  if (raw.startsWith("/") || /[\x00-\x1f\x7f]/.test(raw)) return null;
+  const segs = raw.split("/").filter((s) => s !== "" && s !== ".");
+  if (segs.length === 0 || segs.includes("..")) return null;
+  return segs.join("/");
+}
+
+/**
+ * ONE constructing parser for every path into the recents list — the storage
+ * boundary (another tab, a legacy schema) AND our own writes — so what is
+ * shown, deduped, highlighted and pruned is always the canonical shape.
+ * First-wins dedup, capped; foreign properties are dropped, not re-serialised.
+ */
+function sanitizeRecents(input: unknown): RecentFile[] {
+  if (!Array.isArray(input)) return NO_RECENTS;
+  const out: RecentFile[] = [];
+  const seen = new Set<string>();
+  for (const r of input) {
+    if (!r || typeof r !== "object") continue;
+    const kind = (r as { scopeKind?: unknown }).scopeKind;
+    if (kind !== "project" && kind !== "home") continue;
+    const path = canonicalPath((r as { path?: unknown }).path);
+    if (path === null) continue;
+    const k = `${kind}/${path}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({ scopeKind: kind, path });
+    if (out.length >= RECENTS_CAP) break;
+  }
+  return out.length ? out : NO_RECENTS;
+}
+
 function loadRecents(project: string): RecentFile[] {
   const cached = recents.get(project);
   if (cached) return cached;
   let list: RecentFile[] = NO_RECENTS;
   try {
     const raw = localStorage.getItem(recentsKey(project));
-    if (raw) {
-      const parsed: unknown = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        // Validate hard: this crosses a storage boundary another tab (or a
-        // legacy schema) may have written. Reject non-relative and dot-nav
-        // paths outright, bound the length, and dedup (duplicate entries
-        // would become duplicate React keys).
-        const seen = new Set<string>();
-        list = parsed.filter((r): r is RecentFile => {
-          if (!r || typeof r !== "object") return false;
-          const { scopeKind, path } = r as RecentFile;
-          if (scopeKind !== "project" && scopeKind !== "home") return false;
-          if (typeof path !== "string" || !path || path.length > 512)
-            return false;
-          if (path.startsWith("/") || path.split("/").includes(".."))
-            return false;
-          const k = `${scopeKind}/${path}`;
-          if (seen.has(k)) return false;
-          seen.add(k);
-          return true;
-        });
-        // Bound the ARRAY too, not just each path — a corrupted or foreign
-        // blob must not render an unbounded chip strip.
-        list = list.slice(0, RECENTS_CAP);
-      }
-    }
+    if (raw) list = sanitizeRecents(JSON.parse(raw));
   } catch {
     // blocked storage / bad JSON — start empty
   }
@@ -161,11 +180,27 @@ function storeRecents(project: string, list: RecentFile[]) {
 }
 
 function noteRecent(project: string, scopeKind: Scope["kind"], path: string) {
-  const prev = loadRecents(project);
-  const rest = prev.filter(
-    (r) => !(r.scopeKind === scopeKind && r.path === path),
+  // The new entry goes first; sanitizeRecents dedups (first wins, so the
+  // older duplicate drops), canonicalises and caps — same rules as the read.
+  storeRecents(
+    project,
+    sanitizeRecents([{ scopeKind, path }, ...loadRecents(project)]),
   );
-  storeRecents(project, [{ scopeKind, path }, ...rest].slice(0, RECENTS_CAP));
+}
+
+/**
+ * Whether an entry (a pane's file or a recents chip) is `target` or lives
+ * under it when `target` is a directory — in the SAME scope. Scope is part
+ * of identity: project:notes.md and home:notes.md are different files.
+ */
+function matches(
+  entry: { scopeKind: Scope["kind"]; path: string },
+  target: { scopeKind: Scope["kind"]; path: string },
+): boolean {
+  return (
+    entry.scopeKind === target.scopeKind &&
+    (entry.path === target.path || entry.path.startsWith(target.path + "/"))
+  );
 }
 
 /** A project's recently opened files, newest first. */
@@ -186,34 +221,45 @@ export function useRecentFiles(project: string): RecentFile[] {
  */
 export function closeFileInPane(
   project: string,
+  scopeKind: Scope["kind"],
   path: string,
-  scopeKind?: Scope["kind"],
+) {
+  evictFromPanes(project, { scopeKind, path });
+  // A deleted/renamed path leaves the recents strip too. Milder hazard than
+  // the pane sweep (a stale chip's open just fails to load — it cannot
+  // recreate the file), but a strip of dead chips is noise. Files removed
+  // from inside the guest (rm in a terminal) are not seen here and age out of
+  // the cap instead — accepted.
+  const target = { scopeKind, path };
+  const prev = loadRecents(project);
+  const kept = prev.filter((r) => !matches(r, target));
+  if (kept.length !== prev.length) storeRecents(project, kept);
+}
+
+/**
+ * Drop a file from every pane in the project WITHOUT touching its Recent
+ * chip — for a file that still exists but whose on-disk content was replaced
+ * underneath the editor (an upload): the stale buffer must go, the chip is
+ * still valid (code review, 2026-09-02).
+ */
+export function evictFromPanes(
+  project: string,
+  target: { scopeKind: Scope["kind"]; path: string },
 ) {
   let changed = false;
   for (const [key, st] of states) {
     if (!key.startsWith(`${project}/`) || !st.file) continue;
-    const p = st.file.path;
-    if (p !== path && !p.startsWith(path + "/")) continue;
+    // Scope-aware (code review, 2026-09-02): the old path-only sweep cleared a
+    // pane holding home:<p> — and its unsaved edits — when project:<p> was
+    // deleted. One predicate for panes and chips.
+    if (!matches({ scopeKind: st.file.scope.kind, path: st.file.path }, target))
+      continue;
     // Keep the view where it is; just drop the file. The pane then shows its
     // "no file open" state rather than silently flipping to the terminal.
     states.set(key, { ...st, file: null, dirty: false });
     changed = true;
   }
   if (changed) emit();
-  // A deleted/renamed path leaves the recents strip too. Milder hazard than
-  // the pane sweep above (a stale chip's open just fails to load — it cannot
-  // recreate the file), but a strip of dead chips is noise. Same path-prefix
-  // coarseness; files removed from inside the guest (rm in a terminal) are
-  // not seen here and age out of the cap instead — accepted.
-  // Scope-aware when the caller knows it (the explorer does): deleting
-  // project:notes.md must not drop a home:notes.md chip (review finding).
-  const prev = loadRecents(project);
-  const kept = prev.filter(
-    (r) =>
-      (scopeKind !== undefined && r.scopeKind !== scopeKind) ||
-      (r.path !== path && !r.path.startsWith(path + "/")),
-  );
-  if (kept.length !== prev.length) storeRecents(project, kept);
 }
 
 // A save in the editor pane changes a file's size/mtime, but the pane is a

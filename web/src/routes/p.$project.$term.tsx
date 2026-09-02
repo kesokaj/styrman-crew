@@ -1,11 +1,12 @@
 import { useRef, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useBlocker } from "@tanstack/react-router";
 import { api, tryUI } from "../lib/api";
 import { usePolled } from "../lib/hooks";
 import { SidePanel } from "../components/SidePanel";
 import { TerminalPane } from "../components/TerminalPane";
 import { TerminalStatusBar } from "../components/TerminalStatusBar";
 import { EditorPane } from "../components/EditorPane";
+import { ConfirmDialog } from "../components/ui";
 import { basename, useEditorPane } from "../lib/editorPane";
 
 export const Route = createFileRoute("/p/$project/$term")({
@@ -26,6 +27,15 @@ function TerminalPage() {
   // Which view this terminal's main pane shows. Per-terminal, so one terminal
   // can hold an editor while another shows a shell (operator request).
   const { state: pane, setView } = useEditorPane(project, term);
+  // Leaving this route (another terminal, a project, Settings) unmounts the
+  // per-terminal editor and its unsaved buffer — only the store's dirty flag
+  // survives, which then reads as a lie. Block with a discard prompt, and arm
+  // the browser's beforeunload, while edits exist (code review, 2026-09-02).
+  const blocker = useBlocker({
+    shouldBlockFn: () => pane.dirty,
+    enableBeforeUnload: () => pane.dirty,
+    withResolver: true,
+  });
   // Mount the editor lazily on first use, then keep it mounted alongside the
   // terminal so switching views never reloads the file or the session. (The
   // ref latches across terminal switches too, since this route does not
@@ -108,6 +118,11 @@ function TerminalPage() {
                 // name ("Editor foo.txt") — breaking every exact-name locator
                 // and screen-reader muscle memory (review finding).
                 aria-label={label}
+                // The label pin hides the badge/dot below from assistive tech
+                // (accname stops at the label); describe them instead.
+                aria-describedby={
+                  mode === "editor" && pane.file ? "editor-toggle-desc" : undefined
+                }
                 className={`rounded-full px-2.5 py-0.5 ${
                   pane.view === mode
                     ? "bg-accent-soft font-medium text-on-accent-soft"
@@ -123,9 +138,15 @@ function TerminalPage() {
                 {/* Which file the (hidden) editor holds — otherwise invisible
                     from the terminal view (operator request 2026-09-01). */}
                 {mode === "editor" && pane.file && (
-                  <span className="ml-1 hidden max-w-28 truncate align-middle font-mono text-[10px] opacity-75 sm:inline-block">
-                    {basename(pane.file.path)}
-                  </span>
+                  <>
+                    <span className="ml-1 hidden max-w-28 truncate align-middle font-mono text-[10px] sm:inline-block">
+                      {basename(pane.file.path)}
+                    </span>
+                    <span id="editor-toggle-desc" className="sr-only">
+                      {basename(pane.file.path)}
+                      {pane.dirty ? ", unsaved changes" : ""}
+                    </span>
+                  </>
                 )}
                 {/* Unsaved edits are otherwise invisible from the terminal
                     view — the editor and its Save button are hidden. */}
@@ -180,6 +201,19 @@ function TerminalPage() {
           child (e.g. the port-share editor) can carry one project's state — and
           write it — onto another (M28). */}
       <SidePanel key={project} project={project} term={term} projectName={proj?.name} />
+      {blocker.status === "blocked" && (
+        <ConfirmDialog
+          title="Discard unsaved changes?"
+          body={`"${pane.file?.path ?? "The open file"}" has unsaved changes. Leaving this terminal will discard them.`}
+          confirmLabel="Discard and leave"
+          danger
+          onConfirm={blocker.proceed}
+          onCancel={blocker.reset}
+          // onClose also runs after a confirm — resolve the blocker exactly
+          // once via onConfirm/onCancel and keep this a no-op.
+          onClose={() => {}}
+        />
+      )}
     </>
   );
 }

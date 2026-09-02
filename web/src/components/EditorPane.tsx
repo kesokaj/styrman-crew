@@ -74,6 +74,14 @@ export function EditorPane({
       try {
         const f = await api.readFile(wanted.scope, wanted.path);
         if (!stale) setLoaded({ file: f, req: wanted });
+      } catch (e) {
+        // The open FAILED (a stale Recent chip, a file rm'd inside the guest):
+        // point the store back at what is actually on screen. Left pointing
+        // at the requested path, the explorer/badge lied AND closeFileInPane
+        // no longer recognised the on-screen file, so deleting it left its
+        // buffer editable and Save recreated it (code review, 2026-09-02).
+        if (!stale) setFile(loaded ? loaded.req : null);
+        throw e; // tryUI still toasts it
       } finally {
         if (!stale) setLoading(false);
       }

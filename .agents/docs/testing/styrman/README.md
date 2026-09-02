@@ -97,7 +97,7 @@ go test ./... && bash .agents/docs/testing/styrman/integration.sh
 Image changes: rebuild the image first; the integration script always creates
 fresh containers so it picks the new image up automatically.
 
-## Tier 4 — Browser e2e (Playwright, 52 checks + a final client-error gate; firewall-hardened hosts run 51 + 2 auto-SKIP)
+## Tier 4 — Browser e2e (Playwright, 55 checks + a final client-error gate; firewall-hardened hosts run 54 + 2 auto-SKIP)
 
 `bash web/e2e/run.sh [image-tag]` — self-hosts: builds the web SPA
 (`cd web && npm run build`) FIRST, then the server, then starts its own
@@ -124,10 +124,23 @@ opens it there — not a modal — with the correct content, toggling back to
 the terminal, the terminal session surviving that round-trip, reopening the
 same file, the word-wrap toggle, Dockerfile syntax highlighting,
 discard-and-open correctly LOADING the second file rather than dead-ending
-on an empty pane, deleting a file that is open in the pane, and syntax
+on an empty pane, an upload that overwrites the OPEN file evicting its
+editor pane while keeping its Recent chip (eviction is keyed off the
+server-reported saved names, the same path a mid-stream upload failure
+also reports, not the dropped names — code review, 2026-09-02),
+deleting a file that is open in the pane, and syntax
 checking — a broken shell script flags a lint-gutter error, a clean file
 stays clean, and the check/format temp file leaves no litter in the
-workspace listing), and full cleanup — 52 checks + the client-error gate (51 pass on firewall-hardened
+workspace listing), plus two mutation-guard checks added 2026-09-02 that
+kill mutants the rest of the suite couldn't catch — "same path in both
+scopes: content flips, deletes stay scoped" (a same-relative-path home and
+project file, flipping the open pane between them via their chips, then
+deleting the project copy while the pane holds the home copy asserts the
+project chip is gone, the home chip and its content survive, and the pane
+stays put — the scope-flip regression), and the on-disk recents list is capped at 8
+on READ, not just on write (seed a 20-entry `styrman.recentFiles.<project>`
+blob in localStorage, reload, assert only 8 chips render) — and full
+cleanup — 55 checks + the client-error gate (54 pass on firewall-hardened
 hosts, plus 2 auto-SKIP) plus a final no-client-errors gate + screenshots.
 Prereq: `cd web && npm i && npx playwright install chromium` (once).
 Self-cleaning: deletes any leftover `e2e-ui` project at start.

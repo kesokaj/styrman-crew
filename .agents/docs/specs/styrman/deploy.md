@@ -249,6 +249,30 @@ disabled for exactly this reason.
   `STYRMAN_IMAGE` explicitly to `docker compose` — shell env outranks the
   clone's own `deploy/.env` in compose precedence, so a stale line in that
   file can never silently re-point projects at a mutable tag.
+- **The docker CLI's config dir is a per-run tmpfs, never a persistent
+  path.** `docker build`/`docker compose` insist on creating `$DOCKER_CONFIG`
+  (`/root/.docker` by default) — and `ProtectHome=yes` (below) makes `/root`
+  inaccessible and empty, which killed the first real end-to-end deploy at
+  `docker build`, and its rollback with it (2026-09-01 incident). The fix is
+  NOT to park it under the trust-asserted state dir (that re-pins an
+  unasserted path there, a review finding on the first attempt at this fix):
+  `styrman-update.service` sets `RuntimeDirectory=styrman-update` +
+  `RuntimeDirectoryMode=0700` and `Environment=DOCKER_CONFIG=%t/styrman-update/docker`
+  — systemd creates and wipes that directory around every oneshot run, so no
+  root-executed docker config, cli-plugins, or buildx state ever accretes
+  anywhere. A hand run of `styrman-update` gets the same shape from the
+  script itself: an inherited `DOCKER_CONFIG` is honoured ONLY when it
+  already sits under `/run/` (i.e. the systemd `RuntimeDirectory` case
+  above) — and even then only after its nearest EXISTING ancestor directory
+  (the `RuntimeDirectory`'s `docker/` leaf may not exist yet) passes the
+  same trust bar as any other root input: root-owned (uid 0) and not
+  group/world-writable, since a `/run/*` path shape alone proves nothing
+  (`/run/lock` is `1777`, `/run/user/<uid>` is uid-owned) — the script hard-
+  fails otherwise. Any other inherited value, including one a `sudo -E`
+  invocation might try to inject, is ignored, and the script `mktemp -d`s a
+  fresh directory instead and registers an `EXIT` trap to remove it. Neither
+  path is `/root/.docker`, `/etc/styrman/update`, or any other persistent
+  location.
 - **Where it runs**: a DEDICATED clone at `/opt/styrman`
   (`STYRMAN_DEPLOY_DIR`), never the operator's own working tree — the
   compose build reads `context: ..` from the repo root, so an automatic

@@ -455,10 +455,21 @@ export const api = {
         body: form,
       },
     );
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new ApiError(body?.error?.message ?? res.statusText, res.status);
-    }
+    // Unlike the other calls this does NOT throw on failure: the server
+    // reports the BASE NAMES it wrote under `dir` on EVERY exit (it base-names
+    // each part; a mid-stream failure lists only what landed), and the caller
+    // must act on that list before surfacing the error — a pane holding one of
+    // those files would otherwise overwrite the upload on Save.
+    const body = (await res.json().catch(() => ({}))) as {
+      saved?: string[];
+      error?: { message?: string };
+    };
+    return {
+      saved: body.saved ?? [],
+      error: res.ok
+        ? undefined
+        : new ApiError(body.error?.message ?? res.statusText, res.status),
+    };
   },
 
   listHistory: (project: string) =>

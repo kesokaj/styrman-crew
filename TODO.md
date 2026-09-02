@@ -153,15 +153,52 @@ Add new items below as they arise.
   shipped — re-raise separately if still wanted.
 - [ ] 🟡 The updater does not reinstall ITSELF: a release that changes
   `deploy/update/*` deploys the stack but leaves the OLD
-  `/usr/local/bin/styrman-update` + units installed (bit twice today: the
-  token-auth script and the `DOCKER_CONFIG` unit fix each needed a manual
-  `install`). Fix idea: `deploy()` installs the checkout's updater
-  script+units after a successful health check (takes effect next run).
-- [ ] 🟢 lows carried from `reviews/2026-09-01-review-editor-ux.md` round 2
-  worth tracking: badge/dot invisible to screen readers under the
-  `aria-label` pin (sr-only sibling or `aria-describedby`); `FileEditor`'s
-  during-render reset keyed on path only, not scope (cross-scope same-path
-  open now one click away via chips); open row/chip lose hover affordance.
+  `/usr/local/bin/styrman-update` + units installed (bit a THIRD time in the
+  v1.17.2 code-review-fix release — the round-2 `/run/*`-only `DOCKER_CONFIG`
+  script had to be hand-installed on the host again). Fix idea: `deploy()`
+  installs the checkout's updater script+units after a successful health
+  check (takes effect next run).
+- [ ] 🟢 The currently-open file's row in the file explorer
+  (`bg-accent-soft`, `isOpen` branch, `FileExplorer.tsx:333-337`) has no
+  `hover:` class, unlike every other row — carried over from
+  `reviews/2026-09-01-review-editor-ux.md` round 2, NOT covered by the
+  v1.17.2 contrast fix (that fix changed the row's text/icon color to
+  `text-on-accent-soft`, not its hover behavior). The other two lows from
+  that same round-2 batch — the screen-reader-invisible badge/dot, and
+  `FileEditor`'s scope-blind render-phase reset — were fixed in v1.17.2
+  (findings 13 and 1 respectively); this is the one that wasn't.
+- [ ] 🟢 A create-only (`O_EXCL`) file endpoint so a raw API caller can't
+  truncate via `PUT .../file` — the v1.17.2 fix for finding 2 (existing-name
+  rejection) is client-side only; `createError` is also TOCTOU against the
+  last-loaded listing. (v1.17.2 code-review-fix release,
+  `.agents/docs/changes/2026-09-02-v1.17.2-code-review-fixes.md`)
+- [ ] 🟢 `chipLabel` disambiguates same-basename collisions one parent level
+  only — `x/a/n.txt` and `y/a/n.txt` still render two identical `a/n.txt`
+  chips (each button's `title`/`aria-label` still carries the full path).
+  Walk up until unique, or record the residual in `guide.md`. (v1.17.2
+  code-review-fix release)
+- [ ] 🟢 Move the `"recents list is capped on read"` e2e check
+  (`web/e2e/run.mjs`) to the end of the editor section, or restore the real
+  `styrman.recentFiles.<project>` localStorage key after it — it currently
+  overwrites the real recents with 20 junk entries mid-suite and never
+  restores them, an ordering landmine for whatever check runs after it next.
+  (v1.17.2 code-review-fix release)
+- [ ] 🟢 `web/src/lib/api.ts`'s `uploadFiles` bypasses `request()`, so it gets
+  neither the 401/OAuth-redirect handling nor the abort timeout every other
+  API call gets. An ingress-redirected upload (expired session → redirect to
+  the OAuth portal) reads as `res.ok`, `res.json()` fails, and the
+  `.catch(() => ({}))` fallback makes `upload()` report a clean, silent
+  success for an upload that never happened; a plain 401 surfaces as a raw
+  toast instead of running `reAuthOnce()`. (v1.17.2 round-4 review, low,
+  `.agents/docs/reviews/2026-09-02-review-v1.17.2-fixes.md`)
+- [ ] 🟢 Run `govulncheck` inside the builder image (or pin the host
+  toolchain to match) so the security gate measures what actually ships —
+  it currently runs against this host's go1.25.0 while
+  `deploy/Dockerfile.server` pins `golang:1.25.13-trixie`; the shipped
+  artifact is unaffected (every stdlib fix the host scan surfaces is
+  ≤ 1.25.13) but the 31-finding noise floor from the toolchain mismatch is
+  where a future real advisory would hide. (v1.17.2 round-3 security delta,
+  `.agents/docs/reviews/2026-09-02-security-v1.17.2-fixes.md`)
 - [ ] 🟢 Bearer-token possession-binding trade, accepted risk recorded in
   ADR-056: `/etc/styrman/gh-token` grants full repo-read from any machine
   that reads it once, with no host-key/client-cert/IP anchor the way the
