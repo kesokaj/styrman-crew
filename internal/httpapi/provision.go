@@ -76,6 +76,29 @@ func (ps provisionSpec) wantsGitHub() bool {
 	return ps.github == "private" || ps.github == "public"
 }
 
+// bootFailed is the other outcome of a project create: the microVM never came
+// up, so nothing that needs the guest can run. It says so on the project —
+// the GitHub paths used to fail silently here, which is the same defect class
+// as the clone bug this file exists to prevent (review 2026-09-02).
+//
+// Takes the same provisionSpec as provisionRepo so the two outcomes can never
+// disagree about what was asked for; attach and run are unused here.
+func (s *Server) bootFailed(ctx context.Context, ps provisionSpec) {
+	switch {
+	case ps.cloneURL != "":
+		s.setProvisionError(ps.user, ps.project, "clone skipped: the project VM did not start")
+		// R13 must hold even if the microVM never booted: a clone cannot run
+		// without the guest, so leave an empty repo behind.
+		if err := gitrepo.EnsureRepo(ctx, ps.workdir); err != nil {
+			s.logger.Error("R13 fallback init failed", "project", ps.name, "error", err)
+		}
+	case ps.wantsGitHub():
+		s.setProvisionError(ps.user, ps.project, "GitHub repo not created: the project VM did not start")
+	}
+	// A plain `git init` project needs nothing from the guest — its repo was
+	// created server-side before the 201, so a failed boot costs it nothing.
+}
+
 // provisionRepo fills a new project's workspace: a clone, or a GitHub repo
 // created and pushed. Both need the user's credentials, and credentials reach
 // a project ONLY over the credential broker on its own bridge (ADR-030/032) —

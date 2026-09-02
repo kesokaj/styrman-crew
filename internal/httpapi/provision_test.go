@@ -413,3 +413,57 @@ func TestProvisionErrorSurfacesInTheProjectAPI(t *testing.T) {
 	}
 	t.Errorf("provisionError outlived the deleted project: %q", s.provisionError("tester", created.ID))
 }
+
+// The other outcome of a create: the microVM never started. Both credentialed
+// paths must SAY so — the GitHub arm used to fail silently here, which is the
+// same defect class as the clone bug this file exists to prevent. R13 still
+// has to hold for a clone (verifier 2026-09-02).
+func TestBootFailedReportsAndKeepsR13(t *testing.T) {
+	t.Run("clone says so and still leaves a repo", func(t *testing.T) {
+		s := testServer(t)
+		id := newProject(t, s, "proj")
+		ws := t.TempDir()
+		s.bootFailed(context.Background(), provisionSpec{
+			user: "tester", project: id, name: "proj", workdir: ws,
+			cloneURL: "https://github.com/o/r.git",
+		})
+		if got := s.provisionError("tester", id); got != "clone skipped: the project VM did not start" {
+			t.Errorf("provisionError = %q", got)
+		}
+		if _, err := os.Stat(filepath.Join(ws, ".git")); err != nil {
+			t.Errorf("R13: no repo left behind after a failed boot: %v", err)
+		}
+	})
+
+	for _, vis := range []string{"private", "public"} {
+		t.Run("github "+vis+" says so", func(t *testing.T) {
+			s := testServer(t)
+			id := newProject(t, s, "proj")
+			ws := t.TempDir()
+			s.bootFailed(context.Background(), provisionSpec{
+				user: "tester", project: id, name: "proj", workdir: ws,
+				github: vis,
+			})
+			if got := s.provisionError("tester", id); got != "GitHub repo not created: the project VM did not start" {
+				t.Errorf("provisionError = %q — the GitHub path must not fail silently", got)
+			}
+		})
+	}
+
+	t.Run("plain init reports nothing", func(t *testing.T) {
+		s := testServer(t)
+		id := newProject(t, s, "proj")
+		ws := t.TempDir()
+		s.bootFailed(context.Background(), provisionSpec{
+			user: "tester", project: id, name: "proj", workdir: ws,
+		})
+		// Its repo was created server-side before the 201, so a failed boot
+		// costs it nothing and there is nothing to report.
+		if got := s.provisionError("tester", id); got != "" {
+			t.Errorf("plain init reported %q", got)
+		}
+		if _, err := os.Stat(filepath.Join(ws, ".git")); err == nil {
+			t.Error("bootFailed initialised a repo for a project that needs no guest work")
+		}
+	})
+}
