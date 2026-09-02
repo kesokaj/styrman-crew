@@ -143,14 +143,13 @@ Add new items below as they arise.
   now validates that `STYRMAN_UPDATE_STATE_DIR` has at least two components
   and is not in the blacklist (`/`, `/etc`, `/var`, `/tmp`, `/opt`, `/home`).
   Prevents system-dir pollution from typos.
-- [ ] 🟢 Ingress admin `origins` directive is browser-only defense-in-depth,
-  not `/load` authentication — the comment/test now say so correctly, but
-  the loopback guard still accepts `localhost` by name (resolution-dependent)
-  rather than restricting to IP literals; neither is a live hole today
-  (loopback bind + ordering luck), just worth tightening if the guard is
-  ever reused elsewhere. (`deploy/caddy/ingress/generator.go`,
-  `loopback.go`; `.agents/docs/reviews/2026-09-01-review-redfix.md`,
-  `.agents/docs/reviews/2026-09-01-security-redfix.md`)
+- [x] 🟢 Ingress admin `origins` directive is browser-only defense-in-depth,
+  not `/load` authentication. **DONE 2026-09-02** — v1.19.1 tightens the loopback
+  guard to refuse all names (including `"localhost"`) and accept only IP literals
+  verified via `net.ParseIP` and `IsLoopback()`. `DefaultCaddyAdmin` changed from
+  `"localhost:2019"` to `"127.0.0.1:2019"` (IP literal). New test `TestDefaultCaddyAdminPassesTheGuard`
+  asserts the shipped default passes the guard. See
+  `.agents/docs/changes/2026-09-02-v1.19.1-ingress-loopback-guard.md`.
 
 - [x] Editor/file-explorer UX pass (operator, 2026-09-01: "just some
   optimisation" — current behavior works fine, this is polish, not a fix).
