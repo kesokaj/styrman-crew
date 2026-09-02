@@ -29,9 +29,17 @@ func isLoopbackAddr(addr string) bool {
 	if host == "" {
 		return false // ":2019" binds every interface
 	}
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
+	// An IP LITERAL only — a name is deliberately refused, including
+	// "localhost". The guard's whole contract is "this address binds loopback
+	// and nothing else", and a name cannot establish that here: it is resolved
+	// by the OS at bind time through /etc/hosts and NSS, so what this function
+	// checks and what Caddy actually binds are two different things. Accepting
+	// it on a string match asserted the contract instead of verifying it
+	// (2026-09-01 review; tightened 2026-09-02).
+	//
+	// The admin endpoint can reconfigure the ingress, so this is the guard that
+	// keeps it off the network — `origins` is browser-only defence in depth,
+	// not authentication.
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }

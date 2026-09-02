@@ -62,9 +62,12 @@ const (
 	// Override via DEFAULT_RPS env var.
 	DefaultRPS = 100
 
-	// DefaultCaddyAdmin is the Caddy admin API listen address.
-	// Override via CADDY_ADMIN env var.
-	DefaultCaddyAdmin = "localhost:2019"
+	// DefaultCaddyAdmin is the Caddy admin API listen address. An IP literal,
+	// not "localhost": isLoopbackAddr no longer accepts a NAME, because a name
+	// is resolved by the OS at bind time and so cannot be verified here
+	// (2026-09-01 review; changed 2026-09-02). Override via CADDY_ADMIN — the
+	// override must also be a loopback IP literal with a port.
+	DefaultCaddyAdmin = "127.0.0.1:2019"
 )
 
 // ─── DYNAMIC: Env var keys ─────────────────────────────────────────────
