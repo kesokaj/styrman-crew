@@ -48,9 +48,12 @@ echo "==> vendored ingress module (separate go.mod)"
 # produces identical filenames (TODO 2026-09-01; hit for real 2026-09-02).
 if [ -z "${SKIP_WEB_FRESHNESS:-}" ] && command -v npm >/dev/null 2>&1; then
     echo "==> web/dist freshness (rebuild and compare)"
-    committed="$(cd "${WT}/web/dist" && find . -type f | sort)"
+    # ONLY dist/client: that is what web/embed.go embeds and what is
+    # committed. dist/server is the unused Node handler Start also emits and is
+    # gitignored, so including it compares a build artifact against nothing.
+    committed="$(cd "${WT}/web/dist" && find client -type f | sort)"
     ( cd "${WT}/web" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1 )
-    rebuilt="$(cd "${WT}/web/dist" && find . -type f | sort)"
+    rebuilt="$(cd "${WT}/web/dist" && find client -type f | sort)"
     if [ "${committed}" != "${rebuilt}" ]; then
         echo "FAIL: committed web/dist does not match a build of this commit's web/src." >&2
         echo "      Run 'cd web && npm run build' and commit web/dist." >&2

@@ -248,38 +248,38 @@ export function TerminalPane({
       }
     });
 
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    // Only ship a size that actually CHANGED. The focusToken path refits four
+    // times ([0, 50, 150, 400]) so a hidden pane's layout has settled before
+    // the user sees it, and every tick used to send its own frame — up to four
+    // identical tmux pane resizes per Editor→Terminal toggle, exactly the cost
+    // the 120ms debounce exists to avoid (2026-09-01 review). The retries are
+    // still needed; the duplicate frames were not.
+    let sentCols = 0;
+    let sentRows = 0;
+    const shipSize = () => {
+      fit.fit();
+      // FitAddon clamps to 2×1; don't ship a nonsense size for a collapsed pane.
+      if (term.cols < 10 || term.rows < 3) return;
+      if (term.cols === sentCols && term.rows === sentRows) return;
+      if (ws?.readyState !== WebSocket.OPEN) return;
+      sentCols = term.cols;
+      sentRows = term.rows;
+      ws.send(
+        JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
+      );
+    };
     // Debounce: dragging the window edge fires this dozens of times/s, and
     // each resize is a full tmux pane resize + TUI redraw inside the microVM.
-    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     const onResize = () => {
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        fit.fit();
-        // FitAddon clamps to 2×1; don't ship a nonsense size for a collapsed
-        // pane.
-        if (term.cols < 10 || term.rows < 3) return;
-        if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({
-              type: "resize",
-              cols: term.cols,
-              rows: term.rows,
-            }),
-          );
-        }
-      }, 120);
+      resizeTimer = setTimeout(shipSize, 120);
     };
     // Let the show-the-pane path refit immediately instead of waiting out the
     // debounce (see the focusToken effect).
     onResizeRef.current = () => {
       clearTimeout(resizeTimer);
-      fit.fit();
-      if (term.cols < 10 || term.rows < 3) return;
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
-        );
-      }
+      shipSize();
     };
     const resizeObserver = new ResizeObserver(onResize);
     resizeObserver.observe(host);

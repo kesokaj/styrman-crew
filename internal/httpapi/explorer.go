@@ -225,6 +225,23 @@ func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
 		return
 	}
+	// ?create=true is create-only: the kernel refuses if the name is taken.
+	// The UI's own "name already exists" check is client-side and TOCTOU
+	// against the last-loaded listing, so without this a raw API caller — or
+	// two people picking the same name at once — could truncate an existing
+	// file through this endpoint (v1.17.2 review).
+	if r.URL.Query().Get("create") == "true" {
+		if err := files.Create(root, rel, body.Content); err != nil {
+			if errors.Is(err, files.ErrExists) {
+				writeErr(w, http.StatusConflict, errors.New("a file with that name already exists"))
+				return
+			}
+			writeErr(w, http.StatusBadRequest, errors.New("cannot create file"))
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if err := files.Write(root, rel, body.Content); err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("cannot write file"))
 		return

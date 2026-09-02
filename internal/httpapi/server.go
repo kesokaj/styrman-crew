@@ -698,7 +698,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	p, err := sp.projects.Add(project.Project{Name: req.Name, GitInit: true, CreatedAt: time.Now().UTC()})
+	p, err := sp.projects.Add(project.Project{Name: req.Name, CreatedAt: time.Now().UTC()})
 	if err != nil {
 		writeErr(w, http.StatusConflict, err)
 		return

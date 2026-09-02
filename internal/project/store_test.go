@@ -29,7 +29,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := s.Add(Project{Name: "alpha", CreatedAt: time.Now().UTC(), GitInit: true})
+	p, err := s.Add(Project{Name: "alpha", CreatedAt: time.Now().UTC()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestStoreRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Name != "alpha" || !got.GitInit {
+	if got.Name != "alpha" {
 		t.Errorf("reloaded project = %+v", got)
 	}
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {

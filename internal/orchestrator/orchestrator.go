@@ -141,15 +141,6 @@ func key(user, project string) string { return user + "/" + project }
 // Touch records terminal activity for the idle reaper.
 func (o *Orchestrator) Touch(user, project string) { o.activity.Store(key(user, project), time.Now()) }
 
-// LastActivity returns the last recorded terminal activity for a project
-// (zero time if none) — lets the checkpoint loop skip idle trees.
-func (o *Orchestrator) LastActivity(user, project string) time.Time {
-	if v, ok := o.activity.Load(key(user, project)); ok {
-		return v.(time.Time)
-	}
-	return time.Time{}
-}
-
 // Status inspects the project's container.
 func (o *Orchestrator) Status(ctx context.Context, user, project string) (Status, error) {
 	insp, err := o.docker.ContainerInspect(ctx, config.ContainerName(project))

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, tryUI, type FileEntry, type Scope } from "../lib/api";
 import {
-  basename,
   closeFileInPane,
   evictFromPanes,
   openFileInPane,
@@ -87,13 +86,21 @@ export function FileExplorer({
   // identical chips reopened the wrong file (code review, 2026-09-02).
   const chipLabel = (r: RecentFile, all: RecentFile[]) => {
     if (r.scopeKind === "home") return `~/${r.path}`;
-    const base = basename(r.path);
-    const collides = all.some(
-      (o) => o !== r && o.scopeKind === "project" && basename(o.path) === base,
-    );
-    if (!collides || !r.path.includes("/")) return base;
-    const parent = r.path.slice(0, r.path.lastIndexOf("/"));
-    return `${basename(parent)}/${base}`;
+    const segs = r.path.split("/").filter(Boolean);
+    const peers = all.filter((o) => o !== r && o.scopeKind === "project");
+    // Walk up until the suffix is unique, rather than stopping after ONE
+    // parent: `x/a/n.txt` and `y/a/n.txt` both rendered `a/n.txt`, two
+    // identical chips (2026-09-02 review). Bounded by the path's own depth,
+    // so the worst case is the full path — which is unique by definition.
+    for (let take = 1; take <= segs.length; take++) {
+      const label = segs.slice(segs.length - take).join("/");
+      const collides = peers.some((o) => {
+        const os = o.path.split("/").filter(Boolean);
+        return os.slice(os.length - take).join("/") === label;
+      });
+      if (!collides) return label;
+    }
+    return r.path;
   };
 
   // Generation guard (audit finding): quick directory hops could let an
@@ -172,7 +179,10 @@ export function FileExplorer({
   const createFile = (name: string) =>
     tryUI(async () => {
       const p = inDir(name);
-      await api.saveFile(scope, p, "");
+      // createFile, not saveFile: the dialog's existing-name check races the
+      // last-loaded listing, so only the server's O_EXCL can guarantee this
+      // does not truncate someone else's file (v1.17.2 review).
+      await api.createFile(scope, p, "");
       load();
       openEntry(p); // same editor as a click — never a second surface
     });
@@ -320,8 +330,11 @@ export function FileExplorer({
           <div
             key={e.path}
             className={`group flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs ${
+              // The open row had no hover: state, unlike every other row —
+              // it read as disabled rather than as "this one is open"
+              // (2026-09-01 editor-UX review, round 2).
               !e.dir && isOpen(scope.kind, e.path)
-                ? "bg-accent-soft"
+                ? "bg-accent-soft hover:bg-accent-soft/80"
                 : "hover:bg-bg-hover"
             }`}
             onClick={() => (e.dir ? setPath(e.path) : openEntry(e.path))}

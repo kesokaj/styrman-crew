@@ -14,6 +14,7 @@
 package files
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -234,6 +235,25 @@ func openRegWrite(rt *os.Root, rel string) (*os.File, error) {
 
 // Write saves content to a file, creating it if needed (confined to root).
 func Write(root, rel, content string) error {
+	return write(root, rel, content, false)
+}
+
+// ErrExists is returned by Create when rel is already taken.
+var ErrExists = errors.New("file already exists")
+
+// Create writes content to rel under root ONLY if nothing is there, and
+// returns ErrExists otherwise.
+//
+// The UI's "name already taken" check is client-side and TOCTOU against the
+// last-loaded listing, so it is a courtesy, not a guarantee: a raw API caller
+// (or two people creating the same name at once) could still truncate an
+// existing file through the write path. O_EXCL makes the kernel decide, which
+// is the only place the race can actually be settled (v1.17.2 review).
+func Create(root, rel, content string) error {
+	return write(root, rel, content, true)
+}
+
+func write(root, rel, content string, exclusive bool) error {
 	rt, err := openRoot(root)
 	if err != nil {
 		return err
@@ -243,9 +263,20 @@ func Write(root, rel, content string) error {
 	if st, err := rt.Stat(crel); err == nil && st.IsDir() {
 		return fmt.Errorf("path is a directory")
 	}
-	f, err := openRegWrite(rt, crel)
-	if err != nil {
-		return err
+	var f *os.File
+	if exclusive {
+		f, err = rt.OpenFile(crel, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NONBLOCK, 0o644)
+		if err != nil {
+			if os.IsExist(err) {
+				return ErrExists
+			}
+			return err
+		}
+	} else {
+		f, err = openRegWrite(rt, crel)
+		if err != nil {
+			return err
+		}
 	}
 	defer f.Close()
 	_, err = f.WriteString(content)

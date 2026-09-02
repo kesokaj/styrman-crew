@@ -83,6 +83,19 @@ case "${STATE_DIR}" in
         # the deployed-sha trust hole the security review closed.
         fail "STYRMAN_UPDATE_STATE_DIR=${STATE_DIR} is inside /var/lib/styrman — refusing (ADR-052)" ;;
 esac
+# A shared system directory is not a state dir. The ADR-052 guard only checked
+# the /var/lib/styrman prefix, so a ONE-COMPONENT typo off the recommended
+# /etc/styrman/update — "/etc", or a bare "/" — passed it cleanly (root-owned,
+# 0755, no group/world-write bits) and scattered deployed-version, deployed-sha
+# and failed-version into a shared dir where nothing would ever find them
+# (audit 2026-09-02). Require a dedicated nested path: at least two components,
+# and never a bare top-level directory.
+case "${STATE_DIR}" in
+    /) fail "STYRMAN_UPDATE_STATE_DIR=/ is the filesystem root — refusing; use a dedicated dir, e.g. /etc/styrman/update" ;;
+    /*/*) : ;; # two or more components — fine
+    /*)  fail "STYRMAN_UPDATE_STATE_DIR=${STATE_DIR} is a top-level system directory — refusing; use a dedicated dir, e.g. /etc/styrman/update" ;;
+    *)   fail "STYRMAN_UPDATE_STATE_DIR=${STATE_DIR} must be an absolute path" ;;
+esac
 STATE="${STATE_DIR}/deployed-version"
 STATE_SHA="${STATE_DIR}/deployed-sha"
 FAILED="${STATE_DIR}/failed-version"

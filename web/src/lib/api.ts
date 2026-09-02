@@ -7,7 +7,6 @@ export interface Project {
   name: string; // friendly, renamable label
   dir: string; // workspace dir under ~/projects (frozen at creation)
   createdAt: string;
-  gitInit: boolean;
   state: "running" | "stopped" | "absent" | "creating" | "deleting";
   /** Last failed background destroy — the DELETE answered 202, so this is
    * how the user learns the delete didn't stick. */
@@ -456,6 +455,16 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ content }),
     }),
+  /**
+   * Create a NEW file, failing with 409 if the name is taken. The dialog's own
+   * existing-name check is TOCTOU against the last-loaded listing, so this is
+   * the one that actually holds — the kernel settles it with O_EXCL.
+   */
+  createFile: (scope: Scope, path: string, content: string) =>
+    request<void>(
+      `${scopeBase(scope)}/file?path=${encodeURIComponent(path)}&create=true`,
+      { method: "PUT", body: JSON.stringify({ content }) },
+    ),
   // Format content with the language's real CLI formatter in the project VM.
   formatFile: (project: string, path: string, content: string) =>
     request<{ content: string }>(`/api/projects/${project}/format`, {

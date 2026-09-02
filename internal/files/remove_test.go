@@ -1,6 +1,7 @@
 package files
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -84,5 +85,38 @@ func TestRemoveRefusesDotDot(t *testing.T) {
 	_ = Remove(root, "../outside.json")
 	if _, err := os.Stat(outside); err != nil {
 		t.Errorf("a file outside the root was deleted: %v", err)
+	}
+}
+
+// Create is the server-side guarantee behind "that name is taken": the UI's
+// own check races the last-loaded listing, so only O_EXCL can actually stop a
+// raw API caller (or two people at once) truncating an existing file.
+func TestCreateIsExclusive(t *testing.T) {
+	root := t.TempDir()
+	if err := Create(root, "notes.md", "first"); err != nil {
+		t.Fatalf("Create on a free name: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "notes.md")); string(b) != "first" {
+		t.Errorf("content = %q, want %q", b, "first")
+	}
+	if err := Create(root, "notes.md", "second"); !errors.Is(err, ErrExists) {
+		t.Errorf("Create over an existing file = %v, want ErrExists", err)
+	}
+	// And it must not have been truncated on the way to failing.
+	if b, _ := os.ReadFile(filepath.Join(root, "notes.md")); string(b) != "first" {
+		t.Errorf("Create truncated the existing file: %q", b)
+	}
+	// Write still overwrites deliberately — that is Save.
+	if err := Write(root, "notes.md", "third"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(root, "notes.md")); string(b) != "third" {
+		t.Errorf("Write did not overwrite: %q", b)
+	}
+	// Confinement still applies to the exclusive path.
+	if err := Create(root, "../escape.md", "x"); err == nil {
+		if _, statErr := os.Stat(filepath.Join(filepath.Dir(root), "escape.md")); statErr == nil {
+			t.Error("Create escaped the root")
+		}
 	}
 }

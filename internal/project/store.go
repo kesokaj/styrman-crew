@@ -25,9 +25,7 @@ type Project struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Dir       string    `json:"dir"`
-	Agent     string    `json:"agent,omitempty"` // legacy field
 	CreatedAt time.Time `json:"createdAt"`
-	GitInit   bool      `json:"gitInit"`
 	// SharedPorts maps an exposed port → the Google emails allowed to open
 	// THAT port's preview (and only that port — never the terminal, files, or
 	// dashboard). Per-port so a share is least-privilege; an empty/absent entry

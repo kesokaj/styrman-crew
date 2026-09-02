@@ -446,6 +446,15 @@ try {
       .getByRole("button")
       .count();
     if (n !== 8) throw new Error(`recents strip rendered ${n} chips, cap is 8`);
+    // Put the real recents back. This check writes 20 junk entries over the
+    // project's actual recents and previously left them there for the rest of
+    // the suite, so every later chip assertion ran against junk (2026-09-02
+    // review). Restoring is cheaper than reordering the whole section.
+    await page.evaluate((p) => {
+      localStorage.removeItem(`styrman.recentFiles.${p}`);
+    }, project);
+    await page.reload();
+    await page.waitForSelector("aside", { timeout: 15000 });
   });
   // "Discard and open": editing a file, then clicking another, must prompt and
   // then actually LOAD the second file. This dead-ended on an empty pane in
