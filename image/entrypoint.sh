@@ -107,51 +107,50 @@ if [ ! -f "${HOME_DIR}/.tmux.conf" ]; then
         || log "WARN: could not seed ~/.tmux.conf (home not writable?)"
 fi
 
-# ─── Agent harness from the base image (R5/ADR-030) ─────────────────────────
-# The image carries the harness so every project gets IDENTICAL defaults —
-# fixing the old gap where only the operator's shared home got it. Seeded
-# write-once, keyed on the image's harness version, as the user (deploys into
-# ~/.claude, ~/.gemini AND ~/.agents/bin — the skills/subagents/commands and
-# the vendor-neutral shell gates, NOT credentials).
+# ─── Agent harness from the base image (R5/ADR-030, ADR-062) ────────────────
+# The image carries a mirror of styrman-harness (/styrman/harness, at the
+# commit in its COMMIT file) and the sh-agent binary built from it, so every
+# project gets IDENTICAL defaults. Seeded write-once, keyed on the image
+# version, as the user: `sh-agent install` copies the context, skills and
+# agents into ~/.claude and ~/.gemini/config and writes its manifest to
+# ~/.config/sh-agent/ — NOT credentials, and NO settings.json for either tool
+# (operator directive 2026-09-03). A home seeded by the previous harness
+# (≤ v1.19.x) is migrated first: configs/harness-migrate.sh moves its
+# artifacts to ~/.styrman/harness-backup-<ts>/, never deletes.
+# install is a file copier — no network, no agy/claude call (verified in the
+# styrman-harness source) — so the PATH trim ADR-047 needed for the old
+# harness's `agy -p` self-check is gone; measured 0.02 s into an empty home on
+# the host and ~0.5 s through `docker run` including container start
+# (testing/2026-09-03-verify-harness-phase2.md).
 # Non-fatal: a harness hiccup must never block the project from booting.
-if [ -z "${MINIMAL}" ] && [ -x /styrman/harness/setup.sh ]; then
+if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
     HARNESS_VER="$(cat /styrman/VERSION 2>/dev/null || echo dev)"
     HARNESS_STAMP="${HOME_DIR}/.styrman/.harness-version"
     if [ "$(cat "${HARNESS_STAMP}" 2>/dev/null || true)" != "${HARNESS_VER}" ]; then
         runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/.styrman" 2>/dev/null || true
-        # setup.sh also refreshes files INSIDE its own tree (e.g. GEMINI.md
-        # from shared/AGENTS.md), so it needs a writable copy — the image
-        # path is root-owned. Run from a user-owned throwaway; the HOME
-        # deploy (~/.claude, ~/.gemini, ~/.agents/bin) still lands.
-        #
-        # PATH excludes /usr/local/bin ON PURPOSE (R1 latency). The harness's
-        # antigravity/setup.sh ends with a self-check that shells out to
-        # `agy -p "/skills"`, guarded only by `command -v agy`. On a home with
-        # no agy OAuth token — i.e. EVERY newly created project, since the
-        # token is materialized by a login shell that has not run yet — that
-        # call blocks for a fixed 60s before failing, and this whole block
-        # sits ahead of /run/styrman/ready. Measured: 61s with agy on PATH,
-        # 0.4s without — identical for every artifact setup.sh manages
-        # (running agy additionally leaves its OWN CLI state under
-        # ~/.gemini/antigravity-cli/, which setup.sh does not manage and the
-        # broker recreates anyway). Hiding agy makes the guard skip the
-        # cosmetic self-check — which buys nothing even when it does run:
-        # it reports "0 records listed; 0/28 deployed skills present".
-        # Everything setup.sh needs (bash, rsync, python3, git, jq) is in
-        # /usr/bin.
-        # Do NOT wrap this in `timeout` instead: the self-check is the LAST
-        # step of antigravity/setup.sh, so a timeout would kill the run before
-        # claude/setup.sh executes and the marker would never be written —
-        # re-deploying on every boot, forever.
-        HSRC="$(runuser -u "${USERNAME}" -- mktemp -d 2>/dev/null || true)"
-        if [ -n "${HSRC}" ] && runuser -u "${USERNAME}" -- cp -r /styrman/harness/. "${HSRC}/" 2>/dev/null \
-            && runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" PATH=/usr/bin:/bin:/usr/sbin:/sbin bash "${HSRC}/setup.sh" >/dev/null 2>&1; then
+        # Both steps run as the user, each under a timeout: this block sits
+        # ahead of /run/styrman/ready and the home is user-controlled, so a
+        # stall here (security review 2026-09-03: a ~/.gitconfig include of a
+        # FIFO would hang the installer's `git rev-parse`) must never brick a
+        # boot. GIT_CONFIG_GLOBAL=/dev/null keeps that git call off the home's
+        # config altogether. The stamp is written only when BOTH steps
+        # succeed, so a failure is retried next boot (both are idempotent);
+        # install runs even after a partial migration so a single unmovable
+        # old file cannot withhold the harness — the WARN says what was left.
+        # 20 s each: both finish in well under a second; the cap only bounds a
+        # stall, and it must stay inside R1's 15 s soft budget as far as possible
+        # and the server's 90 s ready wait in any case (security review round 2).
+        HM_OK=1; HI_OK=1
+        timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" bash /styrman/configs/harness-migrate.sh || HM_OK=0
+        timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+            /styrman/bin/sh-agent install --repo /styrman/harness --home "${HOME_DIR}" >/dev/null || HI_OK=0
+        if [ "${HM_OK}" = 1 ] && [ "${HI_OK}" = 1 ]; then
             runuser -u "${USERNAME}" -- sh -c "printf '%s' '${HARNESS_VER}' > '${HARNESS_STAMP}'" 2>/dev/null || true
-            log "agent harness deployed (version ${HARNESS_VER})"
+            log "agent harness deployed (version ${HARNESS_VER}, styrman-harness $(cut -c1-7 /styrman/harness/COMMIT 2>/dev/null || echo '?'))"
         else
-            log "WARN: agent harness deploy reported errors (continuing)"
+            [ "${HM_OK}" = 1 ] || log "WARN: previous-harness migration reported errors or timed out (see the [harness-migrate] lines above)"
+            [ "${HI_OK}" = 1 ] || log "WARN: sh-agent install reported errors or timed out — harness not deployed this boot (continuing)"
         fi
-        [ -n "${HSRC}" ] && rm -rf "${HSRC}" 2>/dev/null || true
     fi
 fi
 
