@@ -118,6 +118,10 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
   ADR-052; convention detailed in
   `.agents/docs/testing/styrman/README.md`.
 
+## Deploy
+
+Two targets exist: local (loopback dev run) and the production host. Procedures live in `.agents/docs/deploy/` — `local.md`, `remote.md` (points at `deploy/README.md`, `specs/styrman/deploy.md`, and `versioning.md`), `gcp.md` (not applicable: self-hosted). `/preflight` deploys only by these guides.
+
 ## Key Files
 
 | Path | Purpose |

@@ -10,6 +10,10 @@
 *.key
 *.tfvars
 *.tfstate
+# Agent harness: worktrees Claude Code creates for subagents; project scratch (keep the dir)
+.claude/worktrees/
+.agents/scratch/*
+!.agents/scratch/.gitkeep
 # Keep the checked-in template. MUST stay last — gitignore is last-match-wins.
 !.env.example
 web/node_modules/
