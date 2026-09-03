@@ -16,18 +16,13 @@ Harness migration, operator-confirmed 2026-09-03: scope A (the repo's own harnes
 
 ## Next
 
-No automated assertion that a seeded agent harness is correct. Neither
-`.agents/docs/testing/styrman/integration.sh` nor the Playwright e2e suite
-(`web/e2e/`) checks the harness deployed into a project home — not the
-constitution, skills, subagents, nor the `~/.agents/bin/` shell gates.
-Every check for the v1.15.0 release was derived ad hoc from
-`image/entrypoint.sh` and recorded only as manual steps ("Tier 5" in
-`.agents/docs/testing/styrman/README.md`). Related: `integration.sh` polls
-readiness in a `seq 1 60` loop with no latency assertion, which is why a
-60-second regression on the container boot path (fixed in v1.15.0 — it
-violated REQUIREMENTS.md R1 by 4x) went undetected. A boot-latency
-assertion plus a handful of harness assertions in `integration.sh` would
-catch this class of regression automatically.
+Closed 2026-09-03 (ADR-062): `integration.sh` now asserts the seeded harness
+inside a booted project (`sh-agent status` no drift, the two-line
+`CLAUDE.md`, 28 skills / 7 agents, no previous-harness artifacts) and bounds
+boot→ready by R1's 15 s hard limit from the container's own timestamps — the
+"no automated assertion that a seeded agent harness is correct" item and its
+boot-latency gap. Tier 5 in `.agents/docs/testing/styrman/README.md` keeps
+only what a script cannot judge.
 
 ## Later / Ideas
 

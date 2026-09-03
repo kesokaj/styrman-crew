@@ -84,38 +84,39 @@ Steps, in order:
 6. Seed the per-project home (ADR-031) write-once from the image: shell
    dotfiles from `image/skel/` (`~/.bashrc`, `~/.profile`, `~/.bash_*`, and
    `~/.npmrc` — the last referencing `${NPM_TOKEN}` from the broker) and the
-   agent harness from `image/harness/` — vendored verbatim from
-   `devshell_prompt/harness` (see `image/harness/VENDORED.md`; upstream
-   commit `6132b97` as of v1.15.0). The harness carries a 69-line "Global
-   Agent Constitution" (`shared/AGENTS.md` — Resume Protocol + a
-   Definition-of-Done dispatch table), 28 skills, and 6 subagents
-   (`changelog`, `documentation`, `reviewer`, `verifier`, `security`,
-   `explorer`; `verifier` replaced the older `testing` agent in v1.15.0).
-   Its own `setup.sh` deploys into THREE locations under the seeded home:
-   `~/.claude` (`CLAUDE.md`, `skills/`, `agents/`, `settings.json`),
-   `~/.gemini` (`GEMINI.md` plus skills/agents derived for `agy`), and the
-   vendor-neutral `~/.agents/bin/` (`resume-context.sh`/`trail-check.sh` —
-   wired as Claude Code's `SessionStart`/`Stop` hooks, invoked as explicit
-   steps inside Antigravity skill bodies). The vendored `setup.sh` is
-   invoked with `/usr/local/bin` trimmed from PATH (ADR-047): its
-   `antigravity/setup.sh` ends with a cosmetic self-check that shells out
-   to `agy -p "/skills"` behind a bare `command -v agy` guard, and on a
-   brand-new project's home — which has no agy OAuth token yet, since that
-   token is only materialized by a login shell that hasn't run at
-   entrypoint time — that call blocks for a fixed 60s before failing. This
-   seeding step sits ahead of `/run/styrman/ready`, so the 60s landed
-   squarely on the boot-critical path and blew R1's cold-boot budget 4x.
-   Hiding `agy` from PATH makes the guard skip the self-check instead;
-   nothing else `setup.sh` needs lives in `/usr/local/bin`, so the deployed
-   harness is byte-identical either way (measured 456ms trimmed vs 60,900ms
-   default). The trim is scoped to this one `runuser … env` invocation —
-   the guest's own login-shell PATH is untouched. Write-once, keyed on
-   `/styrman/VERSION` (stamped from `STYRMAN_VERSION` at image build time,
-   `image/Dockerfile:86-87`) versus a per-home `~/.styrman/.harness-version`
-   stamp (entrypoint step below) — bumping `STYRMAN_VERSION` and rebuilding
-   the image is what RE-SEEDS an already-onboarded project's home AND
-   RETIRES content the harness has since dropped from it (e.g. the old
-   `testing` subagent file, superseded by `verifier`).
+   agent harness from `image/harness/` — a verbatim mirror of the
+   `styrman-harness` repository at the commit in `image/harness/COMMIT`
+   (refresh procedure in `image/harness/VENDORED.md`; ADR-062, superseding
+   ADR-046's source and ADR-047's PATH trim). The image builds `sh-agent`
+   from that mirror in a builder stage pinned to the same Go toolchain as
+   `deploy/Dockerfile.server` and ships it as `/styrman/bin/sh-agent`. The
+   harness is 28 skills and 7 subagents (`bugs`, `changelog`,
+   `documentation`, `explorer`, `reviewer`, `security`, `verifier`) plus the
+   global context (`AGENTS.md`); `sh-agent install --repo /styrman/harness
+   --home <home>` copies it into `~/.claude` (`AGENTS.md`, a two-line
+   `CLAUDE.md` stub importing it, `skills/`, `agents/`) and
+   `~/.gemini/config` (`rules/AGENTS.md`, `skills/`, `agents/<name>/agent.md`
+   derived for `agy`), writes its manifest to `~/.config/sh-agent/state.json`,
+   and drops a copy of itself at `~/.local/bin/sh-agent` (`sh-agent status`
+   inside a project is the drift check; `sh-agent update` is not used in
+   VMs — the image is the delivery path). It ships NO hooks, NO scripts, and
+   NO `settings.json` for either tool (operator directive 2026-09-03), so
+   Claude Code runs in its default permission mode inside a project. `install`
+   is a file copier — no network, no `agy`/`claude` call — so the ADR-047
+   PATH trim is gone (0.02 s into an empty home on the host). Write-once,
+   keyed on `/styrman/VERSION` versus the per-home `~/.styrman/.harness-version`
+   stamp: bumping `STYRMAN_VERSION` and rebuilding the image is what RE-SEEDS
+   an already-onboarded project's home. A home seeded by the previous harness
+   (≤ v1.19.x: stamp present, no sh-agent manifest) is migrated first by
+   `image/configs/harness-migrate.sh`, which MOVES every path the old
+   `setup.sh` wrote — `~/.claude/{CLAUDE.md,settings.json,skills,agents,
+   commands,statusline.sh,format-hook.sh,feedback-capture.sh}`,
+   `~/.gemini/{GEMINI.md,settings.json,format-hook.sh}`,
+   `~/.gemini/config/{skills,plugins/harness,global_workflows}`,
+   `~/.agents/bin`, and the `.bak.<ts>` copies beside them — into
+   `~/.styrman/harness-backup-<ts>/`, never deletes, and touches nothing else
+   (credentials, `~/.gemini/antigravity-cli`, `~/projects`, user dotfiles).
+   The stamp is written only when migration AND install both succeed.
    6b. Login-shell `/etc/profile.d` snippets: `zzz-styrman-motd.sh` (zzz- so it
    runs LAST, after credentials are materialized — it probes
    `~/.claude/.credentials.json` etc. and would otherwise nag "run

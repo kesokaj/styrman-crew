@@ -5,8 +5,8 @@ No mocks in the orchestrator path.
 
 ## Tiers
 
-1. **Unit** — `go build ./...`, `go vet ./...`, `go test -race ./...` (store, validation; fast, no Docker). The vendored Caddy ingress is a SEPARATE Go module and is not covered by the root `go test ./...` run — test it explicitly: `(cd deploy/caddy/ingress && go test ./...)`. Frontend: `cd web && npm run check` (tsc -b), `npm run lint` (oxlint), and `npm test` (`vitest run` — added 2026-09-02; `web` previously had no unit-test framework at all) — 11 tests across two files: `web/src/lib/api.test.ts` (`projectNameFromRepoURL`, `cloneURLError`, `projectNameError` — pure, security- or UX-load-bearing string logic that was the frontend's entire test-coverage story before this) and `web/src/lib/editorPane.test.ts` (`basename`). Deliberately NOT unit-tested: the editor pane store's per-terminal draft behavior (parked on unmount, restored only for the file it belongs to, dropped when that file closes or is evicted) — its state lives in a module-level `Map` that is not exported, so reaching it from a unit test would mean either widening the module's API just for tests or pulling in a React renderer; `editorPane.test.ts`'s own header comment says so explicitly rather than faking coverage with an assertion that would always pass. That behavior is covered by Tier 4 e2e instead. Outside these two files, most TypeScript/React logic is still covered only by type-checking + lint plus, where applicable, Tier 4 e2e — a changed function/component with no unit test and no e2e exercise has no automated coverage at all, note it explicitly when verifying.
-2. **Integration (60 checks; 3 auto-SKIP on firewall-hardened hosts)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
+1. **Unit** — `go build ./...`, `go vet ./...`, `go test -race ./...` (store, validation; fast, no Docker). The vendored Caddy ingress is a SEPARATE Go module and is not covered by the root `go test ./...` run — test it explicitly: `(cd deploy/caddy/ingress && go test ./...)`. Frontend: `cd web && npm run check` (tsc -b), `npm run lint` (oxlint), and `npm test` (`vitest run` — added 2026-09-02; `web` previously had no unit-test framework at all) — 17 tests across three files: `web/src/lib/api.test.ts` (`projectNameFromRepoURL`, `cloneURLError`, `projectNameError` — pure, security- or UX-load-bearing string logic that was the frontend's entire test-coverage story before this), `web/src/lib/editorPane.test.ts` (`basename`), and `web/src/lib/api.session.test.ts` (6 tests, BUG-001: `request()`/`uploadFiles` against a stubbed browser facing the ingress's cross-origin session-expiry redirect — re-auth once, the reload cap under partial failure, the deferred counter clear, malformed and corrupt counter records). Deliberately NOT unit-tested: the editor pane store's per-terminal draft behavior (parked on unmount, restored only for the file it belongs to, dropped when that file closes or is evicted) — its state lives in a module-level `Map` that is not exported, so reaching it from a unit test would mean either widening the module's API just for tests or pulling in a React renderer; `editorPane.test.ts`'s own header comment says so explicitly rather than faking coverage with an assertion that would always pass. That behavior is covered by Tier 4 e2e instead. Outside these two files, most TypeScript/React logic is still covered only by type-checking + lint plus, where applicable, Tier 4 e2e — a changed function/component with no unit test and no e2e exercise has no automated coverage at all, note it explicitly when verifying.
+2. **Integration (65 checks; 3 auto-SKIP on firewall-hardened hosts)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
    (default `styrman-runtime:test` — see the warning under Prereqs about
    `:dev`). Isolated server (own state dir, port
    18080) through the full lifecycle: legacy-layout migration, async create
@@ -15,7 +15,10 @@ No mocks in the orchestrator path.
    ports + all preview URL shapes, the in-guest git client (status + diff),
    sticky stop (close 4002 refusal vs `?boot=1` revive), settings,
    persistence across container destruction, UUID identity + friendly
-   rename, wipe. Safe next to a real install. (The old host-side `/diff` +
+   rename, wipe, and (since ADR-062) the seeded agent harness: `sh-agent
+   status` no drift, the two-line `CLAUDE.md`, 28 skills / 7 agy agents, no
+   previous-harness artifacts, and boot→ready within R1's 15 s hard limit
+   (measured and printed; the 5 s soft target is reported, not asserted). Safe next to a real install. (The old host-side `/diff` +
    checkpoint checks were replaced with `/git/status` + `/git/diff` checks
    when those routes were removed in the git-RCE fix, ADR-039.)
 3. **Manual / UX** — things scripts can't judge:
@@ -28,8 +31,8 @@ No mocks in the orchestrator path.
    - resize the window → TUI reflows (tmux + ContainerExecResize)
 4. **Browser e2e (Playwright)** — see the Tier 4 section below.
 5. **Vendored agent harness (`image/harness/`)** — see the Tier 5 section
-   below. NOT automated anywhere (integration.sh and the e2e suite have
-   zero harness assertions) — run by hand on every harness sync.
+   below: the in-guest assertions are Tier 2 checks since ADR-062; what
+   remains manual is the mirror refresh itself and the agent-CLI smoke.
 6. **Security (govulncheck)** — `bash deploy/vulncheck.sh`. Runs
    `govulncheck@v1.7.0` for BOTH Go modules (root, and the vendored Caddy
    ingress at `deploy/caddy/ingress`) inside the SAME pinned `golang`
@@ -290,76 +293,54 @@ To point the Playwright checks at an already-running server instead, call
 `node web/e2e/run.mjs [--base http://127.0.0.1:8080] [--shots /tmp/styrman-shots]`
 directly.
 
-## Tier 5 — Vendored agent harness (`image/harness/`), manual — KNOWN GAP: not automated
+## Tier 5 — Vendored agent harness (`image/harness/`)
 
-Fires whenever `image/harness/` is re-synced from `~/workspace/devshell_prompt/harness`
-and/or `STYRMAN_VERSION` is bumped (ADR-046: the tree is a verbatim mirror,
-one delivery path — version bump + image rebuild). No step here is wired
-into `integration.sh` or `web/e2e` today; derive it fresh from
-`image/entrypoint.sh:110-135` each time until it is automated.
+The image carries a verbatim mirror of `styrman-harness` at the commit in
+`image/harness/COMMIT` and the `sh-agent` binary built from it; the
+entrypoint seeds every project home with `sh-agent install` (write-once,
+keyed on `/styrman/VERSION`), after `image/configs/harness-migrate.sh` has
+moved a previous harness's artifacts to `~/.styrman/harness-backup-<ts>/`
+(ADR-062; plan `plans/2026-09-03-image-harness-replacement.md`). Fires on
+every mirror refresh and every `STYRMAN_VERSION` bump.
 
-1. Mirror fidelity: `diff -rq image/harness ~/workspace/devshell_prompt/harness`
-   → must report ONLY `VENDORED.md` differing.
-2. Image contents match `image/harness/VENDORED.md`'s stated roster:
-   `docker run --rm --entrypoint bash <image> -c 'cat /styrman/VERSION;
-   wc -l /styrman/harness/shared/AGENTS.md; ls /styrman/harness/claude/agents/;
-   ls -d /styrman/harness/shared/skills/*/ | wc -l'`.
-3. Clean-home deploy — mirrors `image/entrypoint.sh:110-135` exactly
-   (write-once seed, keyed on `/styrman/VERSION`): inside the image,
-   `useradd -m` a throwaway user, `mktemp -d` a user-owned copy of
-   `/styrman/harness` (setup.sh needs a writable tree), then
-   `runuser -u <user> -- env HOME=<home> PATH=/usr/bin:/bin:/usr/sbin:/sbin
-   bash <copy>/setup.sh`. Assert exit 0, matching `CLAUDE.md`/`GEMINI.md`
-   line counts, matching skill count under BOTH `~/.claude/skills/*/` and
-   `~/.gemini/config/skills/*/` (top-level directory count — recursive
-   `SKILL.md` search over-counts nested reference files with the same
-   name), the agent roster under `~/.claude/agents/`, both gates under
-   `~/.agents/bin/`, and valid JSON in `~/.claude/settings.json`.
+Automated (Tier 2, `integration.sh`, five checks inside the booted project):
+`sh-agent status` exits 0 with no drift; `~/.claude/CLAUDE.md` is the
+two-line import stub; 28 skills and 7 agy agents; none of `~/.agents/bin`,
+`~/.gemini/GEMINI.md`, `~/.claude/settings.json`; boot→ready under R1's 15 s
+hard limit from the container's own timestamps (the value is printed — watch
+it against the 5 s soft target; ~2.7 s measured 2026-09-01 on the old
+harness, the new install is ~0.02 s on the host).
 
-   **3a. Latency assertion (ADR-047 regression guard) — time the same
-   command:**
+Manual, on every mirror refresh:
 
-   ```bash
-   time runuser -u <user> -- env HOME=<home> PATH=/usr/bin:/bin:/usr/sbin:/sbin \
-       bash <copy>/setup.sh >/dev/null 2>&1
-   ```
+1. Mirror fidelity: `diff -rq --exclude .git --exclude .agents --exclude
+   .gitignore ~/workspace/styrman-harness image/harness` → exactly
+   `Only in image/harness: COMMIT` and `Only in image/harness: VENDORED.md`;
+   `cat image/harness/COMMIT` equals `git -C ~/workspace/styrman-harness
+   rev-parse HEAD` (the refresh command is in `image/harness/VENDORED.md`).
+2. Image contents: `docker run --rm --entrypoint /styrman/bin/sh-agent
+   <image> list --repo /styrman/harness` shows `Skills (28)` and
+   `Subagents (7)`; `docker run --rm --entrypoint sh <image> -c 'cat
+   /styrman/harness/COMMIT; ls /styrman/configs/harness-migrate.sh'`.
+3. Old-home migration on the host, no VM (the exact procedure, with the
+   asserted outcomes, is `testing/2026-09-03-verify-harness-phase2.md`): seed
+   a scratch home with `git archive v1.19.1 image/harness`'s `setup.sh`,
+   stamp `~/.styrman/.harness-version`, run `harness-migrate.sh`, then
+   `sh-agent install` through the image; every old path is under one
+   `~/.styrman/harness-backup-*`, none remains, planted user files are
+   byte-identical, a second migrate run is a no-op.
+4. Agent-CLI smoke inside a fresh project (needs the operator's sign-in):
+   `claude -p "What is the first heading of your global context, and how
+   many skills do you have?"` quotes `# AGENTS.md — global agent context`
+   and 28; `agy` reports the rules file `~/.gemini/config/rules/AGENTS.md`.
+5. Real re-seed evidence, when a stopped project seeded by ≤ v1.19.x is
+   available: start it on the new image and read the entrypoint log line
+   `agent harness deployed (version …, styrman-harness <sha>)` plus the
+   `[harness-migrate] moved N path(s)` lines; `docker cp` the backup dir
+   listing out WITHOUT modifying the container further.
 
-   Must complete in **~1s, not ~60s** (measured 2026-09-01: **456ms**
-   trimmed PATH vs **60,900ms** default PATH, byte-identical deploy either
-   way — see ADR-047 and `runtime-image.md` step 6). This guards against
-   the exact regression class Tier 5 exists for: `agy`'s
-   `antigravity/setup.sh` self-check (`agy -p "/skills"`, gated only by
-   `command -v agy`) blocks for a fixed 60s on a home with no agy OAuth
-   token — i.e. every fresh project — and that call sits ahead of
-   `/run/styrman/ready` on the container boot path. The trim only works
-   because `agy` isn't reachable under `/usr/bin:/bin:/usr/sbin:/sbin`; if
-   a future `image/Dockerfile` change or an upstream `setup.sh` edit moves
-   `agy` (or adds another blocking call) onto that trimmed PATH, this is
-   the only check that will catch it — `go test`, `integration.sh`, and
-   `web/e2e` are all blind to harness timing. Also assert the guard
-   condition directly: `runuser -u <user> -- env
-   PATH=/usr/bin:/bin:/usr/sbin:/sbin command -v agy` must find nothing.
-
-   **3b. End-to-end, optional but closer to what R1 actually gates:**
-   create a throwaway project via the API, then compute the gap between
-   `docker inspect -f '{{.State.StartedAt}}' <container>` and the
-   timestamp on the `project <uuid> ready` line from
-   `docker logs -t <container>`. Must be under R1's 5s soft target and
-   well under its 15s hard limit (measured 2026-09-01: **2.69s** cold
-   create end-to-end). Delete the throwaway project afterwards.
-4. Stop-hook guest-session safety: `bash
-   /styrman/harness/shared/scripts/trail-check.sh` (no args = hook mode,
-   as Claude Code's Stop hook invokes it) must exit 0 both outside any git
-   repo and inside a git repo with no `.agents/docs/changes/` dir — a repo
-   that never opted into the harness contract must never be blocked.
-5. Real re-seed evidence, if a stopped project container seeded from an
-   older version is available: `docker cp <container>:<home>/.styrman/.harness-version -`
-   plus the same CLAUDE.md/agents/skills checks as step 3, WITHOUT
-   starting or otherwise modifying the container (`docker cp` reads the
-   stopped filesystem layer directly).
-
-**Known gap (2026-09-01):** none of the above is scripted. A future
-harness sync that breaks `setup.sh`, drops a skill, or ships a hook that
-hangs a guest session would pass `go test`, `integration.sh`, and
-`web/e2e` cleanly. A `harness-check.sh` implementing steps 2–4 above
-belongs in this directory or as an `integration.sh` step.
+Retired with the old harness: the `diff -rq` against `devshell_prompt`, the
+`CLAUDE.md`/`GEMINI.md` line counts, the `~/.agents/bin` gates, the
+`settings.json` JSON check, the ADR-047 latency guard (its regression class
+— a blocking CLI call on the boot path — is now caught by the Tier 2
+boot→ready assertion), and the Stop-hook safety check (no hooks ship).

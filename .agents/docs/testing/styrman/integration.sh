@@ -74,7 +74,7 @@ ID=$(echo "${OUT}" | grep -oE '"id":"[0-9a-f-]{36}"' | cut -d'"' -f4)
 CN="styrman-${ID}"
 check "create returns immediately (async boot)" "echo '${OUT}' | grep -q '\"state\":\"creating\"'"
 check "project got a UUID" "[ -n '${ID}' ]"
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
     docker exec "${CN}" test -f /run/styrman/ready 2>/dev/null && break
     sleep 1
 done
@@ -85,6 +85,25 @@ check "workspace dir on host" "[ -d '${STATE}/projects/${ME}/${ID}' ]"
 check "git repo initialized" "docker exec ${CN} test -d /home/$(id -un)/projects/itest/.git"
 check "in-guest dockerd runs overlay2" \
     "docker exec ${CN} docker info --format '{{.Driver}}' | grep -q overlay2"
+
+say "agent harness (ADR-062: sh-agent seeded write-once from the image)"
+GH="/home/${ME}"
+check "sh-agent reports no drift in the project home" \
+    "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/sh-agent status --repo /styrman/harness --home ${GH} >/dev/null"
+check "CLAUDE.md is the two-line import stub" \
+    "docker exec ${CN} grep -qx '@AGENTS.md' ${GH}/.claude/CLAUDE.md"
+check "28 skills and 7 agy agents seeded" \
+    "[ \"\$(docker exec ${CN} sh -c 'ls ${GH}/.claude/skills | wc -l')\" = 28 ] && [ \"\$(docker exec ${CN} sh -c 'ls ${GH}/.gemini/config/agents | wc -l')\" = 7 ]"
+check "no previous-harness artifacts (shell gates, GEMINI.md, settings.json)" \
+    "! docker exec ${CN} sh -c 'test -e ${GH}/.agents/bin || test -e ${GH}/.gemini/GEMINI.md || test -e ${GH}/.claude/settings.json'"
+# R1 boot budget, from the container's own clock: the gap between its start
+# and the entrypoint's ready line. The harness seed sits on that path — a
+# blocking call there once cost 60 s (ADR-047) and nothing asserted it.
+BOOT_AT="$(docker inspect -f '{{.State.StartedAt}}' "${CN}")"
+READY_AT="$(docker logs -t "${CN}" 2>&1 | grep -m1 'project .* ready' | cut -d' ' -f1)"
+BOOT_GAP="$(awk "BEGIN{printf \"%.2f\", $(date -d "${READY_AT:-1970-01-01T00:00:00Z}" +%s.%N) - $(date -d "${BOOT_AT}" +%s.%N)}")"
+check "boot to ready within R1's 15 s hard limit (measured ${BOOT_GAP}s; soft target 5 s)" \
+    "awk 'BEGIN{exit !(${BOOT_GAP} > 0 && ${BOOT_GAP} < 15)}'"
 
 say "terminals (durable records, ADR-016)"
 NEW=$(curl -fsS -X POST "${API}/api/projects/${ID}/terminals" -d '{"title":"First terminal"}')
@@ -253,7 +272,7 @@ curl -fsS -X DELETE "${API}/api/projects/${ID}?wipe=true" -o /dev/null
 # Delete is ASYNC since v1.3 (202 + background: destroy container, THEN wipe,
 # THEN remove the record). Wait for the LAST step — the record leaving the
 # API list — so the wipe + record-removal checks below don't race the tail.
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
     curl -fsS "${API}/api/projects" | grep -q "${ID}" || break
     sleep 2
 done

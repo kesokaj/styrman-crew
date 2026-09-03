@@ -12,7 +12,7 @@ read that for the trust story; this doc is the day-to-day reference.
 |---|---|---|---|
 | `styrman-server` | `deploy/Dockerfile.server` | `docker compose build` (or `styrman-update`) | The Go binary + embedded SPA — the containerized server itself. |
 | `styrman-caddy` | `deploy/caddy/Dockerfile` | `docker compose build` (or `styrman-update`) | The vendored ingress: Caddy 2 + caddy-security (Google OAuth) + Cloudflare DNS + the styrman label-discovery module. |
-| `styrman-runtime` | `image/Dockerfile` | `docker build ... image/` — NOT a compose service, a separate step | The per-project microVM image every project boots: Kata guest, dotfiles, the agent harness (`claude`/`agy`), toolchains. |
+| `styrman-runtime` | `image/Dockerfile` | `docker build ... image/` — NOT a compose service, a separate step | The per-project microVM image every project boots: Kata guest, dotfiles, the agent harness (`claude`/`agy` — a mirror of `styrman-harness` at `image/harness/COMMIT`, ADR-062), toolchains. |
 
 `styrman-runtime` is the odd one out: `docker compose build`/`up --build`
 never touches it. Forgetting to (re)build it at the release version is the
@@ -86,7 +86,10 @@ that section for why.
 
 1. Land the change (commit; the review/security/verifier gates and
    `/preflight` are a separate concern from this doc — see `AGENTS.md`'s
-   Definition of Done).
+   Definition of Done). A release that refreshed `image/harness/` names the
+   `styrman-harness` commit it ships (`image/harness/COMMIT`) in its
+   changelog entry — that pin, plus `STYRMAN_VERSION`, is what decides which
+   harness every project re-seeds on its next start (ADR-062).
 2. **REQUIRED: verify the COMMIT, not the working tree, before tagging it —
    run `deploy/verify-commit.sh [commit-ish]` (default `HEAD`).**
    `go build`/`go test`/`docker build` run against whatever is currently
