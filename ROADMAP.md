@@ -12,7 +12,7 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-Harness migration, operator-confirmed 2026-09-03: scope A (the repo's own harness layout) is done; scope B replaces the harness the runtime image seeds into every microVM with `sh-agent` from `styrman-harness` — plan `.agents/docs/plans/2026-09-03-image-harness-replacement.md`, checklist `.agents/docs/plans/2026-09-03-harness-migration.md`. Also open: the "fail to fetch" stats-bar/sidebar bug (`TODO.md` Inbox).
+Harness migration, operator-confirmed 2026-09-03: scope A (the repo's own harness layout) done; scope B (the image seeds `sh-agent` from a `styrman-harness` mirror, ADR-062) implemented through Phase 4 in four commits on 2026-09-03 — plan `.agents/docs/plans/2026-09-03-image-harness-replacement.md`. Open before the `v1.20.0` release (Phase 5, `/preflight`): the operator's call after the Phase 3 security review did not converge in three rounds (`reviews/2026-09-03-security-harness-phase3.md`; every finding is fixed, the residual is stated in BUG-003), the `REQUIREMENTS.md` R5 wording, and the token-lifetime decision (`TODO.md`). The "fail to fetch" bug is fixed (BUG-001) and ships with that release.
 
 ## Next
 
