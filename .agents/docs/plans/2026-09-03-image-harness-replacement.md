@@ -1,64 +1,80 @@
 ---
 owner: main
 date: 2026-09-03
-status: draft — awaiting cold-reader check and the operator's answers to the four open questions
+status: ready — cold-read by `reviewer` 2026-09-03 (`reviews/2026-09-03-review-plan-image-harness-replacement.md`, 3 medium / 4 low, all resolved below); the operator's answers to the open questions recorded 2026-09-03
 ---
 # Plan — replace the image-seeded harness with sh-agent (styrman-harness)
 
-Scope as read: the runtime image stops shipping the previous harness (`image/harness/`: constitution, 29 skills, shell gates, hooks, `GEMINI.md`, agy plugin) and seeds the current one — `sh-agent install` from the `styrman-harness` repo (28 skills, 7 agents, `~/.gemini/config/rules/AGENTS.md`, no hooks, no scripts) — into every project home, on first boot and on version bump, migrating homes that carry the old one. The settings UI, the tests, and the docs follow. Confirmed by the operator 2026-09-03 ("Yes. We are going to replace that as well."). Recon: `2026-09-03-recon-image-harness.md`.
+Scope as read: the runtime image stops shipping the previous harness (`image/harness/`: constitution, 29 skills, shell gates, hooks, `settings.json`, `GEMINI.md`, agy plugin) and seeds the current one — `sh-agent install` from the `styrman-harness` repo (28 skills, 7 agents, `~/.gemini/config/rules/AGENTS.md`, no hooks, no scripts, no settings files) — into every project home, on first boot and on version bump, migrating homes that carry the old one. The settings UI, the tests, and the docs follow. Confirmed by the operator 2026-09-03 ("Yes. We are going to replace that as well." and, mid-session: "the new harness should fully replace the old. ALL old occurrences of the old harness need to go. Even settings.json files for gemini and claude"). Recon: `2026-09-03-recon-image-harness.md`.
 
-## Decisions (D1–D3 need the operator; D4–D7 are proposed as consequences)
+## Operator's answers (2026-09-03), applied throughout
 
-- **D1 Delivery — recommended: keep ADR-046's model.** `image/harness/` becomes a verbatim mirror of the styrman-harness checkout at a recorded commit (`image/harness/COMMIT`), refreshed by hand from `~/workspace/styrman-harness` (rsync, excluding `.git/`, `.agents/`, `.gitignore`), and the Dockerfile builds `sh-agent` from it in a builder stage. Alternatives: a git submodule at the pinned SHA (git-native pin, but every clone including the auto-updater's `/opt/styrman` must recurse); `git clone` at boot (rejected: needs private-repo credentials on first boot, when no token exists, and violates R1's boot budget).
-- **D2 Seeding.** `image/entrypoint.sh` runs `sh-agent install --repo /styrman/harness --home "$HOME_DIR"` as the project user, keyed on the existing `~/.styrman/.harness-version` stamp. `install` is a file copier: no network, no CLI shell-outs, so the ADR-047 PATH trim (there to dodge a 60 s `agy -p` self-check) is retired, and boot time is measured against R1.
-- **D3 Migration of homes seeded by the old harness** (stamp present and older than the first version carrying this change): move, never delete, into `~/.styrman/harness-backup-<timestamp>/`: `~/.claude/CLAUDE.md` (the old constitution — `sh-agent` never overwrites a `CLAUDE.md` it did not write, so the two-line import cannot land otherwise), `~/.gemini/GEMINI.md`, `~/.agents/bin/`, `~/.gemini/config/plugins/harness/`, `~/.claude/{format-hook.sh,feedback-capture.sh,statusline.sh}`, `~/.claude/commands/*` from the old set, and the three skills the new harness dropped (`research`, `grill-me`, `skill-repair`) from both vendors. Strip the `hooks` and `statusLine` keys the old `merge-settings.py` added from `~/.claude/settings.json`; every other key stays. User-created files are never touched. The helper lives in `image/` (call site, per ADR-047), not in the mirror.
+1. D1: mirror at a recorded commit (not a submodule).
+2. D3: move the old artifacts to `~/.styrman/harness-backup-<ts>/`, never delete — and the old `settings.json` files of both vendors go with them (whole files, not a key strip).
+3. The release is a minor bump (`v1.20.0`); `MINIMAL` projects do not get the harness (unchanged: the setup VM runs `STYRMAN_MINIMAL=1`).
+4. D5: repoint the settings roster at a seeded project home and filter `*.bak.*`.
+
+No reason was found not to follow any of them. One consequence to state: with no `settings.json` seeded, Claude Code inside a project runs in its default permission mode (the old file set `permissions.defaultMode: auto`, `attribution` empty, `effortLevel: high`); the operator's own machine runs the new harness with exactly that — no `permissions` block, no `GEMINI.md`, no `~/.gemini/settings.json` — so this is the known baseline, not a regression to hide.
+
+## Decisions
+
+- **D1 Delivery — mirror at a recorded commit (ADR-046's model, new source).** `image/harness/` is a verbatim copy of the `styrman-harness` checkout at the SHA recorded in `image/harness/COMMIT`, refreshed by hand from `~/workspace/styrman-harness` with `rsync -a --delete --exclude .git --exclude .agents --exclude .gitignore ~/workspace/styrman-harness/ image/harness/` (the nested `.gitignore` is excluded so it cannot ignore files inside this repo). The Dockerfile builds `sh-agent` from the mirror in a builder stage. Rejected: a submodule (every clone incl. the updater's `/opt/styrman` must recurse); `git clone` at boot (private repo, no credentials on first boot, R1 budget).
+- **D2 Seeding.** `image/entrypoint.sh` runs `runuser -u "$USERNAME" -- env HOME="$HOME_DIR" /styrman/bin/sh-agent install --repo /styrman/harness --home "$HOME_DIR"`, keyed on the existing `~/.styrman/.harness-version` stamp. What `install` does (verified in the styrman-harness source 2026-09-03): copies files, writes `~/.config/sh-agent/state.json` (the manifest) and a copy of itself to `~/.local/bin/sh-agent`; it runs `git rev-parse` in the repo dir to record the commit and discards the error when there is no `.git` (the mirror has none, so the manifest's `commit` is empty — `image/harness/COMMIT` is the record; `sh-agent status` prints a blank commit, accepted); it never invokes `agy`, `claude`, or the network. Measured on the host: 256 files into an empty home in 0.02 s. The ADR-047 PATH trim (there to dodge the old `agy -p` self-check) is therefore retired; boot is still timed against R1. `~/.local/bin` is already on the interactive PATH (`image/skel/bashrc:23`).
+- **D3 Migration of homes seeded by the old harness.** Predicate: `~/.styrman/.harness-version` exists and `~/.config/sh-agent/state.json` does not (seeded, never by sh-agent) — no version-string comparison. Action: move, never delete, into `~/.styrman/harness-backup-<YYYYmmdd-HHMMSS>/` keeping the path relative to `$HOME`, everything the old `image/harness/{claude,antigravity}/setup.sh` wrote (inventoried 2026-09-03 from those scripts):
+  - `.claude/CLAUDE.md` (the old constitution — `sh-agent` never overwrites a `CLAUDE.md` it did not write, so the two-line import cannot land otherwise), `.claude/settings.json` (whole file; it carried `hooks`, `statusLine`, `permissions`, `attribution`, `effortLevel`, `theme`, `verbose`, `fileCheckpointingEnabled`, `cleanupPeriodDays`), `.claude/skills/`, `.claude/agents/`, `.claude/commands/`, `.claude/statusline.sh`, `.claude/format-hook.sh`, `.claude/feedback-capture.sh`
+  - `.gemini/GEMINI.md`, `.gemini/settings.json` (if present), `.gemini/format-hook.sh`, `.gemini/config/skills/`, `.gemini/config/plugins/harness/`, `.gemini/config/global_workflows/` (if present)
+  - `.agents/bin/`
+  - every `*.bak.*` sibling the old `backup()` left in `.claude/`, `.claude/agents/`, `.claude/commands/`, `.gemini/`, `.agents/bin/`
+  Whole harness-owned trees move (not a file list inside them): the old harness rsync'd `skills/` with `--delete` and re-seeded `agents/` on every version bump, so anything a user dropped in there was already at the harness's mercy; the backup keeps it recoverable. Never touched: anything else under `~/.claude/` (history, `projects/`, credentials), `~/.gemini/antigravity-cli/` (agy's own state and the broker-delivered OAuth token, R3), other plugins under `~/.gemini/config/plugins/`, `~/projects/`, the user's dotfiles. The two skills the new harness dropped (`grill-me`, `skill-repair`) need no special case: they go with `.claude/skills/` and `.gemini/config/skills/`. The helper lives in `image/configs/harness-migrate.sh` (call site, per ADR-047), not in the mirror; it logs each move and is idempotent (second boot: predicate false, no-op).
 - **D4 No `sh-agent update` inside VMs.** Updates arrive with the image, as today (ADR-046 unchanged on delivery). `sh-agent status` inside a project is the self-check the tests use.
-- **D5 Settings UI.** `internal/httpapi/setup.go` `toolDetails`: agy agents are read from `.gemini/config/agents/*/agent.md` (not `plugins/harness/agents`); Claude paths unchanged. The roster is read from the base home, which the entrypoint never seeds (`TODO.md` first item), so today the fields are always empty: Phase 3 either repoints the lookup at a seeded project home or drops the three fields — open question 4. `listNames` filters `*.bak.*` either way.
-- **D6 Tests.** Tier 5 stops being manual: `integration.sh` asserts, inside a booted project, `sh-agent status` exit 0 with no drift, the absence of `~/.agents/bin`, `~/.gemini/GEMINI.md`, and a `hooks` key, and a boot-latency bound — the `ROADMAP.md` "Next" item.
+- **D5 Settings UI.** `internal/httpapi/setup.go` `toolDetails`: the roster (`Skills`, `Agents`, `Commands`) is read from the user's most recently created project whose home has `~/.config/sh-agent/state.json` (the base home is never seeded — `TODO.md` Inbox item "Settings harness roster is permanently empty"); when no project qualifies the fields stay empty as today. agy `Agents` come from `.gemini/config/agents/*/agent.md` (directory names), not `plugins/harness/agents`. `listNames` ignores `*.bak.*`. `Commands` will read 0 (the harness ships none; `/name` skills are the commands) — the UI copy must not imply otherwise.
+- **D6 Tests.** Tier 5 stops being manual: `integration.sh` asserts, inside a booted project, `sh-agent status` exit 0 with no drift, the absence of `~/.agents/bin`, `~/.gemini/GEMINI.md`, `~/.claude/settings.json`, and a boot-latency bound — the `ROADMAP.md` "Next" item.
 - **D7 Records.** ADR-062 supersedes ADR-046's mirror *source* and ADR-047's PATH trim; R5 (identical defaults for every project) stands; `versioning.md` records the harness commit per release.
+- **D8 No styrman-owned settings files.** Neither vendor gets a `settings.json` from the image (operator directive 2026-09-03). Nothing in `image/` seeds one.
 
 ## Phase 1 — vendor and build (files and Dockerfile only)
 
-- [ ] `image/harness/` replaced by the mirror: `context/`, `skills/`, `agents/`, `commands/`, `rules/`, `cmd/`, `internal/`, `go.mod`, `README.md`, plus `COMMIT` (the styrman-harness SHA) and a rewritten `VENDORED.md` (provenance, refresh procedure, the `diff -rq` check against the checkout at that SHA)
-- [ ] `image/Dockerfile`: builder stage `go build -o /out/sh-agent ./cmd/sh-agent` from the mirror; runtime gets `/styrman/bin/sh-agent` and `/styrman/harness/`; `COPY harness/` line and comment updated
-- [ ] Old `image/harness/{setup.sh,shared/,claude/,antigravity/}` removed (the backup is git)
-- Verification: `docker build` at a dev version succeeds; `docker run --rm --entrypoint /styrman/bin/sh-agent <img> list --repo /styrman/harness` shows 28 skills, 7 agents; `diff -rq` against the checkout is empty
+- [ ] `image/harness/` replaced by the mirror (D1 rsync command): `context/`, `skills/`, `agents/`, `commands/`, `rules/`, `cmd/`, `internal/`, `go.mod`, the harness repo's own `README.md`/`AGENTS.md`/`CLAUDE.md`/`REQUIREMENTS.md`/`ROADMAP.md`/`TODO.md` (verbatim; not read by anything here), plus `COMMIT` (the styrman-harness SHA) and a rewritten `VENDORED.md` (provenance, the refresh command, the `diff -rq` check against the checkout at that SHA, the blank-commit note from D2)
+- [ ] `image/Dockerfile`: builder stage `FROM golang:<same pin as deploy/Dockerfile.server> AS harness-builder` → `go build -o /out/sh-agent ./cmd/sh-agent` from the mirror; runtime gets `/styrman/bin/sh-agent` and `/styrman/harness/`; `COPY harness/` line and comment updated
+- [ ] Old `image/harness/{setup.sh,shared/,claude/,antigravity/,README.md}` removed (the backup is git: `git show v1.19.1:image/harness/...`)
+- Verification: `docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/` succeeds; `docker run --rm --entrypoint /styrman/bin/sh-agent styrman-runtime:dev list --repo /styrman/harness` shows 28 skills, 7 agents; `diff -rq --exclude .git --exclude .agents --exclude .gitignore ~/workspace/styrman-harness image/harness` reports only `COMMIT` and `VENDORED.md`
 
 ## Phase 2 — seeding and migration (entrypoint)
 
-- [ ] `image/entrypoint.sh` harness block: `runuser -u "$USERNAME" -- env HOME="$HOME_DIR" /styrman/bin/sh-agent install --repo /styrman/harness --home "$HOME_DIR"`, stamp written on success, non-fatal and logged on failure, ADR-047 PATH trim and its comment removed; `~/.local/bin` on the user's PATH (check the login shell profile the image seeds)
-- [ ] `image/configs/harness-migrate.sh` (python3 or sh): runs before `install` when the stamp exists and predates the cut-over version; moves the D3 list into `~/.styrman/harness-backup-<ts>/`, strips the two settings keys, logs each move
-- [ ] `MINIMAL` mode still skips the whole block
-- Verification: clean home → stamp written, `sh-agent status --home` no drift, `~/.claude/CLAUDE.md` is the two-line stub, boot within R1 (timed against the current image); old-home fixture (a home seeded by the current image in a throwaway container) → backup dir holds the old files, `settings.json` has no `hooks`, user files untouched, second boot is a no-op
+- [ ] `image/entrypoint.sh` harness block: when the stamp differs from `/styrman/VERSION`: run `image/configs/harness-migrate.sh` (as the user, `HOME` set), then the D2 `sh-agent install`; stamp written on success; non-fatal and logged on failure; ADR-047 PATH trim and its comment removed
+- [ ] `image/configs/harness-migrate.sh` (bash; `set -euo pipefail`; input `HOME`): the D3 predicate and move list, one `mv` per path into the timestamped backup dir, a log line per move, exit 0 when nothing to do
+- [ ] `MINIMAL` mode still skips the whole block (operator answer 3)
+- Verification, all on the host, no VM (the real upgrade is Phase 5):
+  - clean home: `H=$(mktemp -d .agents/scratch/home.XXXX)`; `docker run --rm -v "$H:/h" -e HOME=/h --entrypoint /styrman/bin/sh-agent styrman-runtime:dev install --repo /styrman/harness --home /h` → `$H/.claude/CLAUDE.md` is the two-line stub, `ls $H/.claude/skills | wc -l` = 28, `ls $H/.gemini/config/agents | wc -l` = 7, `sh-agent status --repo image/harness --home $H` no drift
+  - old-home fixture: `git archive v1.19.1 image/harness | tar -x -C .agents/scratch/` then `HOME=$H2 bash .agents/scratch/image/harness/setup.sh` (this is exactly what the old entrypoint ran, as the user with `HOME` set; needs bash, rsync, python3 — all on the host) and `mkdir -p $H2/.styrman && echo 1.19.1 > $H2/.styrman/.harness-version`; then `HOME=$H2 bash image/configs/harness-migrate.sh` followed by the clean-home `install` above against `$H2` → `$H2/.styrman/harness-backup-*/` holds every D3 path that existed, `$H2/.claude/settings.json` and `$H2/.gemini/GEMINI.md` and `$H2/.agents/bin` are gone from the home, a user file planted beforehand (`$H2/.claude/projects/keep.txt`, `$H2/.gemini/antigravity-cli/keep.txt`) is byte-identical, `sh-agent status` no drift; a second `harness-migrate.sh` run is a no-op
+  - boot latency: Phase 5 (real VM), compared with `.agents/docs/testing/styrman/README.md` Tier 5 3a (~1 s today)
 
 ## Phase 3 — server
 
-- [ ] `internal/httpapi/setup.go` `toolDetails`: agy `Agents` from `.gemini/config/agents` (directory names); roster source per open question 4; `listNames` ignores `*.bak.*`; test in `internal/httpapi/` with a fixture home
-- Verification: `go test ./internal/httpapi/ -race`; the settings page shows 7 agents for both tools on a dev project
+- [ ] `internal/httpapi/setup.go` `toolDetails`: roster source per D5 (the qualifying project's home), agy `Agents` from `.gemini/config/agents` (directory names), `listNames` ignores `*.bak.*`; test in `internal/httpapi/` with a fixture home holding `.claude/agents/{a.md,b.md.bak.20260901-065226}`, `.claude/skills/{x,y}/SKILL.md`, `.gemini/config/agents/{a,c}/agent.md`, and a `.config/sh-agent/state.json`
+- [ ] Settings page copy: `Commands` reads 0 by design (D5) — either hide a zero count or label it; the frontend change is small
+- Verification: `go test ./internal/httpapi/ -race`; the settings page shows 7 agents for both tools on a dev project with at least one seeded project
 
 ## Phase 4 — tests and docs
 
 - [ ] `.agents/docs/testing/styrman/integration.sh`: the D6 assertions (docker exec into the created project; count in `README.md` updated)
 - [ ] `.agents/docs/testing/styrman/README.md` Tier 5 rewritten around `sh-agent status`; Tier 4 note on the private-repo clone left as history
-- [ ] `image/README.md`, `README.md` (harness paragraph), `AGENTS.md` (Setup Commands comment "the version keys harness re-seeding" stays true)
-- [ ] `.agents/docs/architecture/DECISIONS.md` ADR-062; `.agents/docs/specs/styrman/versioning.md` harness-commit pin per release; `ROADMAP.md` "Next" harness-assertion item closed; changelog
+- [ ] `image/README.md`, `README.md` (harness paragraph), `AGENTS.md` (Setup Commands comment "the version keys harness re-seeding" stays true; R5's "vendored from `devshell_prompt/harness`" wording is in `REQUIREMENTS.md` — immutable without the operator: propose the one-line edit "vendored from `styrman-harness`" at Phase 4 and apply only on approval, with ADR-062)
+- [ ] `.agents/docs/architecture/DECISIONS.md` ADR-062 (D1–D8); `.agents/docs/specs/styrman/versioning.md` harness-commit pin per release; `ROADMAP.md` "Next" harness-assertion item closed; `TODO.md` Inbox item "Settings harness roster is permanently empty" ticked (Phase 3 is its fix); changelog
 - Verification: `integration.sh` green with the new count; docs cold-read by the `documentation` agent
 
 ## Phase 5 — e2e and release
 
-- [ ] Dev image built and run locally; new project created; `docker exec` → `sh-agent status` no drift; `claude -p` inside the project answers the context question (first heading, 28 skills, `/grilling`); `agy` after the operator signs in (manual, recorded)
-- [ ] Upgrade path on a real existing dev project (stop, start on the new image) → migration evidence
-- [ ] `/preflight` for the release; version chosen by the operator (minor bump proposed)
+- [ ] Dev image built and run locally; new project created; `docker exec` → `sh-agent status` no drift; `claude -p` inside the project answers the context question (first heading, 28 skills, `/grilling`); `agy` after the operator signs in (manual, recorded); boot latency recorded
+- [ ] Upgrade path on a real existing dev project (stop, start on the new image) → migration evidence (backup dir listing, `settings.json` gone, user files intact)
+- [ ] `/preflight` for `v1.20.0`
 - Verification: e2e criteria below; `deploy/verify-commit.sh` on the release commit
 
 ## E2E criteria
 
-Golden path: a new project on the new image reports ready within R1; inside it `sh-agent status` says no drift, `~/.claude/CLAUDE.md` is the two-line import, `ls ~/.claude/skills | wc -l` is 28, `ls ~/.gemini/config/agents | wc -l` is 7, and `claude -p` quotes `# AGENTS.md — global agent context`.
-Edge: a project home seeded by v1.19.x restarts on the new image: the old constitution, `GEMINI.md`, shell gates, and hook scripts are under `~/.styrman/harness-backup-*`, `settings.json` has no `hooks` key, `~/projects/` and the user's own dotfiles are byte-identical before and after.
+Golden path: a new project on the new image reports ready within R1; inside it `sh-agent status` says no drift, `~/.claude/CLAUDE.md` is the two-line import, `ls ~/.claude/skills | wc -l` is 28, `ls ~/.gemini/config/agents | wc -l` is 7, no `~/.claude/settings.json`, no `~/.gemini/GEMINI.md`, no `~/.agents/bin`, and `claude -p` quotes `# AGENTS.md — global agent context`.
+Edge: a project home seeded by v1.19.x restarts on the new image: every D3 path is under `~/.styrman/harness-backup-*`, none remain in the home, `~/projects/`, `~/.gemini/antigravity-cli/`, and the user's own dotfiles are byte-identical before and after, and a second restart changes nothing.
 
-## Open questions for the operator (block Phase 1)
+## Resolved review findings (2026-09-03)
 
-1. D1: mirror at a recorded commit (recommended) or a git submodule?
-2. D3: is moving the old artifacts to `~/.styrman/harness-backup-<ts>/` acceptable, or delete outright?
-3. The version that carries this (minor bump, e.g. v1.20.0?) and whether `MINIMAL` projects should also get the new harness.
-4. D5: repoint the settings-page roster at a seeded project home, or drop the three roster fields as dead reporting?
+Medium: D3 skill list corrected (only `grill-me`, `skill-repair` dropped; `research` stays — and the whole-tree move makes the list moot); D3 settings keys — the whole file moves (operator); contradictions removed (decisions are decided, open questions closed). Low: the `TODO.md` item is named, not numbered; D2 states the `git rev-parse` shell-out; the old-home fixture has literal commands; Phase 4 ticks the roster item.

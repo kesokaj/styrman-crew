@@ -1,0 +1,36 @@
+---
+owner: reviewer
+date: 2026-09-03
+---
+# Review — cold-reader check: image-harness-replacement plan (2026-09-03)
+
+Range reviewed: `.agents/docs/plans/2026-09-03-image-harness-replacement.md` (plan document, not a diff), cross-checked against `image/harness/`, `image/entrypoint.sh`, `internal/httpapi/setup.go`, `REQUIREMENTS.md`, `.agents/docs/architecture/DECISIONS.md` (ADR-046/047), `TODO.md`, `ROADMAP.md`, and the `styrman-harness` checkout at `~/workspace/styrman-harness`.
+
+## Verdict: REQUEST CHANGES
+
+The plan's architecture is sound and most of its technical claims about `sh-agent` (install semantics, file layout, `KeepForeign`/`CLAUDE.md` handling, `.gemini/config/agents/*/agent.md` layout, the 28-skill/7-agent counts) check out exactly against the actual `styrman-harness` code. But D3's migration list names the wrong skills to back up, D3 understates what the old `settings.json` merge actually injected, and the plan contains a live contradiction between what Phase 2 decides unconditionally and what the Open Questions section still treats as blocking — a cold reader executing phase by phase would either implement a materially wrong migration or stall on a question the plan already answered elsewhere.
+
+## Findings
+
+- **[medium / confidence: high]** Plan line 14 (D3) — "the three skills the new harness dropped (`research`, `grill-me`, `skill-repair`)" is wrong. Diffing the old harness's skill set against the new one shows only `grill-me` and `skill-repair` were actually dropped; `research` is still shipped in the new harness (`~/workspace/styrman-harness/skills/research/` exists and is one of its 28 skills). Evidence: `comm -23 <(ls image/harness/shared/skills) <(ls ~/workspace/styrman-harness/skills)` → `grill-me`, `skill-repair` only (plus the non-skill `VENDORED.md` file). Fix: correct D3 to name only the two skills actually dropped, and make `image/configs/harness-migrate.sh` migrate exactly that set — moving `research` to backup would be harmless in the end-state (re-install rewrites it) but is a wrong basis for the script's logic and for the Phase 2 verification's "old-home fixture" checks.
+
+- **[medium / confidence: high]** Plan line 14 (D3) — "Strip the `hooks` and `statusLine` keys the old `merge-settings.py` added ... every other key stays" understates what the old merge actually wrote. `image/harness/claude/settings.json` (the merge *source*, applied via deep-merge on every seed) also injects `effortLevel`, `theme`, `verbose`, `fileCheckpointingEnabled`, `cleanupPeriodDays`, `attribution`, and `permissions.{defaultMode,allow,ask}` — including `ask` entries tied specifically to the retired hook/checkpoint design (e.g. `"Bash(git clean:*)"`, `"Bash(rm:*)"`). The plan never says whether these should also be pruned or are intentionally kept as generic user preferences. Evidence: `image/harness/claude/settings.json:1-70`. Fix: enumerate every key the old merge actually added and make an explicit call on each before Phase 2 writes the strip logic, rather than asserting only two keys were added.
+
+- **[medium / confidence: high]** Plan lines 14, 31, 62–63 — a live contradiction a cold reader cannot resolve. Phase 2's task list states unconditionally "`MINIMAL` mode still skips the whole block" (line 31, no hedge), while Open Question 3 (line 63) asks "whether `MINIMAL` projects should also get the new harness" and the Open Questions section header (line 59) says these four questions "block Phase 1." Likewise D3 (line 14) states "move, never delete" as settled decision text and Phase 2 (line 30) implements it directly, while Open Question 2 (line 62) re-asks the same move-vs-delete question without the "(recommended)" hedge D1 uses. A reader following the phases literally would implement one answer while the plan's own gating language says the question is still open and blocking. Fix: either mark D2/D3/the-MINIMAL-clause as "(recommended, pending operator confirmation)" the way D1 is marked, or drop the corresponding open question once the Decisions section has actually committed.
+
+- **[low / confidence: medium]** Plan line 16 (D5) — "the roster is read from the base home... today the fields are always empty (`TODO.md` first item)" is imprecise: in `TODO.md`'s Inbox, the empty-roster item is the *second* entry — the first is the 2026-09-03 "fail to fetch" bug. A cold reader searching for "the first item" will land on the wrong entry.
+
+- **[low / confidence: medium]** Plan line 13 (D2) — "`install` is a file copier: no network, no CLI shell-outs" is not quite accurate: `harness.Install` (`internal/harness/apply.go:75`) and `sh-agent status` both shell out to `git rev-parse --short HEAD` on every run (errors are silently discarded, which is why it still works against a `.git`-less mirror per D1). The conclusion D2 draws from the claim (the ADR-047 `agy`-hiding PATH trim can be retired) is correct regardless — `sh-agent` never invokes `agy` — but the stated justification overstates what the tool does.
+
+- **[low / confidence: low]** Plan line 32 — the Phase 2 verification's "old-home fixture (a home seeded by the current image in a throwaway container)" doesn't specify which image tag "the current image" resolves to at test time, or how that home directory is carried over to a container running the *new* image for the second boot. A cold reader has no literal command to run for this step, only a description of the intent.
+
+- **[low / confidence: medium]** Gap — Phase 4's task list (docs, ADR-062, versioning.md, `ROADMAP.md` "Next" closure, changelog) never mentions closing the `TODO.md` Inbox item "Settings harness roster is permanently empty," even though Phase 3 (open question 4) is exactly the fix for it. Per this project's `AGENTS.md` Definition of Done, "Records" includes ticking resolved TODO/ROADMAP items; as written, Phase 4 leaves a stale, now-resolved entry in `TODO.md`.
+
+No violations of R1/R3/R5 or contradictions of ADR-046/ADR-047 were found beyond the above — the plan's D7 explicitly and correctly supersedes ADR-046's mirror-source clause and ADR-047's PATH trim, and the seeding mechanism (image-baked mirror, identical per-project seeding, write-once stamp) is consistent with R1 (latency budget addressed via a measured verification step) R3 (per-project home untouched) and R5 (harness still carried by the base image, seeded identically).
+
+## What checked out cleanly (worth recording, not a finding)
+
+- `sh-agent`'s `CLAUDE.md`/`KeepForeign` behavior matches D3's claim that it never overwrites a `CLAUDE.md` it did not write (`internal/harness/apply.go:31-34`, `plan.go:57`).
+- The 28-skill / 7-agent counts (Phase 1 verification, E2E criteria) are exactly correct: `styrman-harness/skills/` has 28 real skill directories (`VENDORED.md` is a file, correctly excluded by `LoadSkills`'s `IsDir` check) and `agents/` has 7.
+- D5's `.gemini/config/agents/*/agent.md` (directory-per-agent) layout for agy matches `plan.go:102` exactly, and the current `internal/httpapi/setup.go:230-252` code it replaces (`plugins/harness/agents`) is confirmed stale once Phase 1 removes `image/harness/antigravity/plugins/`.
+- `~/.local/bin` is already on the interactive shell PATH via `image/skel/bashrc:23`, so D2's PATH caveat needs no new work.
