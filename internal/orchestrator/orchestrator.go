@@ -7,7 +7,9 @@ package orchestrator
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"os"
@@ -213,6 +215,17 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 			err = errdefs.NotFound(fmt.Errorf("recreated"))
 		}
 	}
+	// Every path below hands the project home to Docker as a bind SOURCE:
+	// create passes it in Binds, and START re-resolves the stored, unresolved
+	// source on every start (verified on Engine 29.7.2) — so a symlink the
+	// guest plants at p/<uuid> from the setup VM would mount a host path as
+	// the home on the next Stop/Start, no race needed (security review
+	// 2026-09-03 round 3, BUG-003). Refuse a symlink component on every
+	// path; a home that does not exist yet is fine (create makes it and
+	// checks again).
+	if err := projectHomeIsReal(o.cfg.UserHome(user), o.cfg.ProjectHome(user, project)); err != nil {
+		return "", fmt.Errorf("project home: %w", err)
+	}
 	switch {
 	case err == nil:
 		id = insp.ID
@@ -253,6 +266,13 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 		phome := o.cfg.ProjectHome(user, project)
 		if err := os.MkdirAll(phome, 0o700); err != nil {
 			return "", fmt.Errorf("create project home: %w", err)
+		}
+		// Re-check now that the home exists: MkdirAll returns nil through a
+		// symlink-to-dir (the check above allowed a missing home). The
+		// window between this check and the create/start is the residual
+		// recorded in BUG-003; the durable fix is un-nesting (TODO.md).
+		if err := realBelow(o.cfg.UserHome(user), phome); err != nil {
+			return "", fmt.Errorf("project home: %w", err)
 		}
 		// Same rule for the workspace's mount TARGET inside the home bind
 		// (~/projects/<dir> → host-side <phome>/projects/<dir>): dockerd
@@ -1213,4 +1233,37 @@ func (o *Orchestrator) Logs(ctx context.Context, project string, tail int) (stri
 	// tailBuffer guarantees len <= maxBytes; trimLogTail (unit-tested) handles
 	// the partial first line and the banner without any indexing.
 	return trimLogTail(buf.String(), buf.Dropped(), buf.StartsAtLineBoundary()), nil
+}
+
+// realBelow reports an error when any path component of target below base
+// is a symlink: base is server-controlled, everything below it may be
+// guest-written. Both must be clean absolute paths with target under base.
+func realBelow(base, target string) error {
+	rel, err := filepath.Rel(base, target)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%s is not below %s", target, base)
+	}
+	cur := base
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			return err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink (guest-planted?) — refusing to use it as a mount source", cur)
+		}
+	}
+	return nil
+}
+
+// projectHomeIsReal is realBelow for a project home that may not exist yet:
+// a missing component is fine (the create path makes it and re-checks), a
+// symlink anywhere below the base home is not.
+func projectHomeIsReal(base, phome string) error {
+	err := realBelow(base, phome)
+	if err != nil && errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	return err
 }

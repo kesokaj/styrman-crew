@@ -29,6 +29,7 @@ import (
 	"github.com/kesokaj/styrman-crew/internal/config"
 	"github.com/kesokaj/styrman-crew/internal/conversation"
 	"github.com/kesokaj/styrman-crew/internal/credstore"
+	"github.com/kesokaj/styrman-crew/internal/files"
 	"github.com/kesokaj/styrman-crew/internal/gitrepo"
 	"github.com/kesokaj/styrman-crew/internal/identity"
 	"github.com/kesokaj/styrman-crew/internal/links"
@@ -117,6 +118,12 @@ type notifCacheEntry struct {
 
 // New creates the Server.
 func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestrator, logger *slog.Logger) *Server {
+	// Tenant bases: every files.* root under them is opened confined to the
+	// tenant, never by following a guest-plantable symlink on the host
+	// (BUG-002). The workspaces base is included for uniformity; its
+	// per-project mount point is not guest-replaceable, the homes' nested
+	// `p/<uuid>` is.
+	files.Trust(cfg.HomesDir, filepath.Join(cfg.StateDir, "projects"))
 	s := &Server{
 		cfg:           cfg,
 		orch:          orch,

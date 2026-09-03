@@ -188,6 +188,16 @@ function CredentialsSection() {
   const find = (pred: (i: CredItem) => boolean) => items.find(pred);
   const detailOf = (name: string) =>
     (toolData?.tools ?? []).find((t) => t.name === name)?.details?.join("  ");
+  // The agent harness roster (skills, subagents) seeded into every project
+  // home, read from the newest seeded project; absent until one has booted.
+  const rosterOf = (name: string, fallback: string) => {
+    const t = (toolData?.tools ?? []).find((t) => t.name === name);
+    const parts = [
+      t?.skills?.length ? `${t.skills.length} skills` : "",
+      t?.agents?.length ? `${t.agents.length} subagents` : "",
+    ].filter(Boolean);
+    return parts.length ? `${fallback} — ${parts.join(" · ")}` : fallback;
+  };
   const std = [
     {
       label: "git",
@@ -235,7 +245,7 @@ function CredentialsSection() {
       set: !!st?.claude,
       item: find((i) => i.id === "claude-credentials"),
       synced: !!find((i) => i.id === "claude-credentials"),
-      detail: "~/.claude",
+      detail: rosterOf("claude", "~/.claude"),
     },
     {
       label: "agy",
@@ -243,7 +253,7 @@ function CredentialsSection() {
       set: !!st?.agy,
       item: find((i) => i.id === "agy-oauth-token"),
       synced: !!find((i) => i.id === "agy-oauth-token"),
-      detail: "~/.gemini (Antigravity)",
+      detail: rosterOf("agy", "~/.gemini (Antigravity)"),
     },
   ];
   // Deduped by tool (gcloud ADC + gcloud CLI both sign in via `styrman-setup

@@ -20,7 +20,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"unicode/utf8"
 )
@@ -48,10 +50,74 @@ func cleanRel(rel string) string {
 	return rel
 }
 
-// openRoot opens a confined root. The root itself is opened following
-// symlinks (it is server-controlled and guaranteed real); everything
-// underneath is symlink-confined.
+// Tenant bases registered by Trust. A root below one of them is opened
+// confined to its first path component — the tenant — never by following
+// the root path on the host.
+var trusted struct {
+	sync.RWMutex
+	bases []string
+}
+
+// Trust registers tenant base directories (the homes dir, the workspaces
+// dir): every root under `<base>/<tenant>/…` is then opened through an
+// os.Root at `<base>/<tenant>`, so each component below the tenant is
+// resolved with symlink confinement. Without this, os.OpenRoot follows
+// symlinks on the root path itself — and a project home at
+// `<homes>/<u>/p/<uuid>` sits INSIDE the base home the setup VM
+// bind-mounts, where the guest is root: a symlink planted at `p/<uuid>`
+// would have been followed to any host path (security review 2026-09-03,
+// BUG-002). Idempotent; call before serving. Roots outside every base keep
+// the plain os.OpenRoot behaviour (tests with ad hoc temp roots).
+func Trust(bases ...string) {
+	trusted.Lock()
+	defer trusted.Unlock()
+	for _, b := range bases {
+		if b == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(b); err == nil {
+			b = abs
+		}
+		b = filepath.Clean(b)
+		if !slices.Contains(trusted.bases, b) {
+			trusted.bases = append(trusted.bases, b)
+		}
+	}
+}
+
+// openRoot opens a confined root. Below a trusted tenant base the root is
+// reached from `<base>/<tenant>` with symlink confinement (see Trust);
+// elsewhere the root path is opened as given and only what is underneath
+// is confined.
 func openRoot(root string) (*os.Root, error) {
+	if root == "" {
+		// filepath.Abs("") would be the process cwd — fail closed instead
+		// (security review 2026-09-03).
+		return nil, errors.New("empty root")
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	root = filepath.Clean(root)
+	trusted.RLock()
+	defer trusted.RUnlock()
+	for _, base := range trusted.bases {
+		rel, err := filepath.Rel(base, root)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		tenant, rest, _ := strings.Cut(rel, string(filepath.Separator))
+		tr, err := os.OpenRoot(filepath.Join(base, tenant))
+		if err != nil {
+			return nil, err
+		}
+		if rest == "" {
+			return tr, nil
+		}
+		sub, err := tr.OpenRoot(rest)
+		tr.Close()
+		return sub, err
+	}
 	return os.OpenRoot(root)
 }
 
@@ -333,6 +399,9 @@ func ReadRaw(root, rel string, max int64) ([]byte, error) {
 
 // ListNames returns the entry names in a directory (confined), or nil if it
 // does not exist. For enumerating skills/subagents/commands dirs.
+// maxListNames bounds ListNames; a roster is a few dozen entries.
+const maxListNames = 1000
+
 func ListNames(root, rel string) []string {
 	rt, err := openRoot(root)
 	if err != nil {
@@ -344,8 +413,11 @@ func ListNames(root, rel string) []string {
 		return nil
 	}
 	defer d.Close()
-	des, err := d.ReadDir(-1)
-	if err != nil {
+	// Capped: the directory is guest-writable and this is polled — an
+	// unbounded ReadDir is a per-tenant lever on the shared server
+	// (security review 2026-09-03). A harness roster is a few dozen names.
+	des, err := d.ReadDir(maxListNames)
+	if err != nil && len(des) == 0 {
 		return nil
 	}
 	names := make([]string, 0, len(des))

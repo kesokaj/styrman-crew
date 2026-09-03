@@ -367,18 +367,26 @@ func pruneTranscripts(cfg *config.Config, logger *slog.Logger) {
 		if !u.IsDir() {
 			continue
 		}
-		projects, err := os.ReadDir(filepath.Join(cfg.HomesDir, u.Name(), "p"))
+		// Everything below the tenant's base home is guest-writable: the
+		// setup VM mounts it with a root guest, and the project homes sit
+		// INSIDE it at p/<uuid> (ADR-031). So `p` and every entry under it
+		// are listed and opened through an os.Root at the base home — a
+		// symlink the guest plants at p/<uuid> (or at p itself) toward the
+		// host or another tenant is refused, never followed; before this the
+		// project root was opened by raw path and would have been (security
+		// review 2026-09-03, BUG-003). Inside a project home the walk was
+		// already confined (2026-08-30 review).
+		tenant, terr := os.OpenRoot(filepath.Join(cfg.HomesDir, u.Name()))
+		if terr != nil {
+			continue
+		}
+		projects, err := fs.ReadDir(tenant.FS(), "p")
 		if err != nil {
+			tenant.Close()
 			continue
 		}
 		for _, p := range projects {
-			// The per-project home is the GUEST'S writable mount — a guest
-			// could symlink ~/.styrman (or logs/, or a file) at another
-			// tenant's tree or the host, and a naive walk would let the
-			// (root-in-prod) janitor delete THROUGH it (2026-08-30 review,
-			// blocking). os.Root confines every path component: symlinks
-			// that escape the project home are refused, not followed.
-			home, rerr := os.OpenRoot(filepath.Join(cfg.HomesDir, u.Name(), "p", p.Name()))
+			home, rerr := tenant.OpenRoot(filepath.Join("p", p.Name()))
 			if rerr != nil {
 				continue
 			}
@@ -386,7 +394,11 @@ func pruneTranscripts(cfg *config.Config, logger *slog.Logger) {
 				if err != nil || d.IsDir() {
 					return nil //nolint:nilerr // best-effort janitor
 				}
-				fi, ierr := d.Info()
+				// fs.Stat through the root, not d.Info(): for a root opened
+				// with Root.OpenRoot the entry's Info() lstats a path that
+				// repeats the sub-root's prefix and fails (Go 1.25), which
+				// would silently skip every file.
+				fi, ierr := fs.Stat(home.FS(), rel)
 				if ierr != nil || !fi.Mode().IsRegular() {
 					return nil
 				}
@@ -399,6 +411,7 @@ func pruneTranscripts(cfg *config.Config, logger *slog.Logger) {
 			})
 			home.Close()
 		}
+		tenant.Close()
 	}
 	if pruned > 0 {
 		logger.Info("transcript janitor pruned old transcripts",

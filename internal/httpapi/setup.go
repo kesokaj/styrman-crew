@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -162,30 +163,56 @@ type toolInfo struct {
 	ConfigDir string   `json:"configDir,omitempty"`
 }
 
-// listNames enumerates a harness dir (skills/agents/commands) relative to
-// the user's home, confined to it.
+// oldHarnessBackup matches the previous harness's re-seed backups
+// (`<file>.bak.<YYYYmmdd-HHMMSS>`, e.g. `testing.md.bak.20260901-065226`),
+// which are not agents. Anchored to that exact shape so a legitimately named
+// entry containing `.bak.` elsewhere is not hidden.
+var oldHarnessBackup = regexp.MustCompile(`\.bak\.[0-9]{8}-[0-9]{6}$`)
+
+// listNames enumerates a harness dir (skills/agents/commands) relative to a
+// home, confined to it. An empty home lists nothing.
 func listNames(home, rel string) []string {
+	if home == "" {
+		return nil
+	}
 	var out []string
 	for _, n := range files.ListNames(home, rel) {
-		name := strings.TrimSuffix(n, ".md")
-		if strings.HasPrefix(name, ".") {
+		if strings.HasPrefix(n, ".") || oldHarnessBackup.MatchString(n) {
 			continue
 		}
-		out = append(out, name)
+		out = append(out, strings.TrimSuffix(n, ".md"))
 	}
 	sort.Strings(out)
 	return out
 }
 
-// toolDetails builds the per-tool settings cards from the user's home:
-// identity facts plus the skills/agents/commands each harness carries.
+// rosterHome is the home the settings page reads the harness roster from:
+// the user's most recently created project whose home carries the sh-agent
+// manifest. The base home is never seeded (the setup VM runs MINIMAL), so
+// before ADR-062 the roster was always empty. No seeded project → "" and the
+// roster fields stay empty.
+func (s *Server) rosterHome(user string, sp *userSpace) string {
+	for _, p := range sp.projects.List() { // newest first
+		h := s.cfg.ProjectHome(user, p.ID)
+		if files.Exists(h, ".config/sh-agent/state.json") {
+			return h
+		}
+	}
+	return ""
+}
+
+// toolDetails builds the per-tool settings cards: identity facts and
+// readiness from the user's base home (where the broker keeps credentials
+// current), the skills/agents/commands roster from a seeded project home
+// (rosterHome — every project gets the identical set, R5).
 func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
-	u, _, err := s.who(r)
+	u, sp, err := s.who(r)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
 	h := s.cfg.UserHome(u.Username)
+	rh := s.rosterHome(u.Username, sp)
 	read := func(rel string) string {
 		b, _ := files.ReadRaw(h, rel, 0)
 		return string(b)
@@ -232,9 +259,9 @@ func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
 		Name:      "claude",
 		Ready:     files.Exists(h, ".claude/.credentials.json"),
 		ConfigDir: "~/.claude",
-		Skills:    listNames(h, ".claude/skills"),
-		Agents:    listNames(h, ".claude/agents"),
-		Commands:  listNames(h, ".claude/commands"),
+		Skills:    listNames(rh, ".claude/skills"),
+		Agents:    listNames(rh, ".claude/agents"),
+		Commands:  listNames(rh, ".claude/commands"),
 	}
 	tools = append(tools, claude)
 
@@ -244,8 +271,10 @@ func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
 		Name:      "agy",
 		Ready:     files.Exists(h, ".gemini/antigravity-cli/antigravity-oauth-token"),
 		ConfigDir: "~/.gemini/config",
-		Skills:    listNames(h, ".gemini/config/skills"),
-		Agents:    listNames(h, ".gemini/config/plugins/harness/agents"),
+		Skills:    listNames(rh, ".gemini/config/skills"),
+		// One directory per agent, `<name>/agent.md` (sh-agent's derived
+		// layout; the old harness's plugins/harness/agents is gone).
+		Agents: listNames(rh, ".gemini/config/agents"),
 	}
 	if agy.Ready {
 		agy.Details = []string{"OAuth token stored"}
