@@ -19,7 +19,7 @@ Inventory: `AGENTS.md`, `REQUIREMENTS.md`, `ROADMAP.md`, `TODO.md`, `README.md`,
 - [x] `AGENTS.md` `## Deploy` section pointing at the guides
 - [x] Verify: `go build ./... && go vet ./...`; a headless Claude Code session in the repo sees `CLAUDE.md` → `AGENTS.md` and the project layer through the symlinks
 - [x] Changelog entry, commit by name, push
-- [ ] Handoff with a cold-reader check
+- [x] Handoff with a cold-reader check (fresh session resumed from it 2026-09-03; its findings applied)
 
 ## Scope B — the harness the runtime image seeds into every project home (feature)
 

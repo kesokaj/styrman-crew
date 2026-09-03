@@ -2,7 +2,7 @@
 
 <!-- Division of labor: ROADMAP.md = where the project is going; TODO.md = small deferred items; .agents/docs/plans/ = how. -->
 
-Last reviewed: 2026-09-01
+Last reviewed: 2026-09-03
 
 Empty by design past "Now" (operator directive 2026-08-30: "I want nothing
 in todo and roadmap — start fresh with new things"). See `TODO.md` for the
@@ -12,7 +12,7 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-<!-- Deliberately empty — awaiting operator input. Add items here as they arise, don't invent them. -->
+Harness migration, operator-confirmed 2026-09-03: scope A (the repo's own harness layout) is done; scope B replaces the harness the runtime image seeds into every microVM with `sh-agent` from `styrman-harness` — plan `.agents/docs/plans/2026-09-03-image-harness-replacement.md`, checklist `.agents/docs/plans/2026-09-03-harness-migration.md`. Also open: the "fail to fetch" stats-bar/sidebar bug (`TODO.md` Inbox).
 
 ## Next
 

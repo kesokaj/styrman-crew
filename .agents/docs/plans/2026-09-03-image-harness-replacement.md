@@ -1,7 +1,7 @@
 ---
 owner: main
 date: 2026-09-03
-status: draft — awaiting cold-reader check and the operator's decisions D1–D3
+status: draft — awaiting cold-reader check and the operator's answers to the four open questions
 ---
 # Plan — replace the image-seeded harness with sh-agent (styrman-harness)
 
@@ -13,7 +13,7 @@ Scope as read: the runtime image stops shipping the previous harness (`image/har
 - **D2 Seeding.** `image/entrypoint.sh` runs `sh-agent install --repo /styrman/harness --home "$HOME_DIR"` as the project user, keyed on the existing `~/.styrman/.harness-version` stamp. `install` is a file copier: no network, no CLI shell-outs, so the ADR-047 PATH trim (there to dodge a 60 s `agy -p` self-check) is retired, and boot time is measured against R1.
 - **D3 Migration of homes seeded by the old harness** (stamp present and older than the first version carrying this change): move, never delete, into `~/.styrman/harness-backup-<timestamp>/`: `~/.claude/CLAUDE.md` (the old constitution — `sh-agent` never overwrites a `CLAUDE.md` it did not write, so the two-line import cannot land otherwise), `~/.gemini/GEMINI.md`, `~/.agents/bin/`, `~/.gemini/config/plugins/harness/`, `~/.claude/{format-hook.sh,feedback-capture.sh,statusline.sh}`, `~/.claude/commands/*` from the old set, and the three skills the new harness dropped (`research`, `grill-me`, `skill-repair`) from both vendors. Strip the `hooks` and `statusLine` keys the old `merge-settings.py` added from `~/.claude/settings.json`; every other key stays. User-created files are never touched. The helper lives in `image/` (call site, per ADR-047), not in the mirror.
 - **D4 No `sh-agent update` inside VMs.** Updates arrive with the image, as today (ADR-046 unchanged on delivery). `sh-agent status` inside a project is the self-check the tests use.
-- **D5 Settings UI.** `internal/httpapi/setup.go` `toolDetails`: agy agents are read from `.gemini/config/agents/*/agent.md` (not `plugins/harness/agents`); Claude paths unchanged.
+- **D5 Settings UI.** `internal/httpapi/setup.go` `toolDetails`: agy agents are read from `.gemini/config/agents/*/agent.md` (not `plugins/harness/agents`); Claude paths unchanged. The roster is read from the base home, which the entrypoint never seeds (`TODO.md` first item), so today the fields are always empty: Phase 3 either repoints the lookup at a seeded project home or drops the three fields — open question 4. `listNames` filters `*.bak.*` either way.
 - **D6 Tests.** Tier 5 stops being manual: `integration.sh` asserts, inside a booted project, `sh-agent status` exit 0 with no drift, the absence of `~/.agents/bin`, `~/.gemini/GEMINI.md`, and a `hooks` key, and a boot-latency bound — the `ROADMAP.md` "Next" item.
 - **D7 Records.** ADR-062 supersedes ADR-046's mirror *source* and ADR-047's PATH trim; R5 (identical defaults for every project) stands; `versioning.md` records the harness commit per release.
 
@@ -33,7 +33,7 @@ Scope as read: the runtime image stops shipping the previous harness (`image/har
 
 ## Phase 3 — server
 
-- [ ] `internal/httpapi/setup.go` `toolDetails`: agy `Agents` from `.gemini/config/agents` (directory names); test in `internal/httpapi/` with a fixture home
+- [ ] `internal/httpapi/setup.go` `toolDetails`: agy `Agents` from `.gemini/config/agents` (directory names); roster source per open question 4; `listNames` ignores `*.bak.*`; test in `internal/httpapi/` with a fixture home
 - Verification: `go test ./internal/httpapi/ -race`; the settings page shows 7 agents for both tools on a dev project
 
 ## Phase 4 — tests and docs
@@ -61,3 +61,4 @@ Edge: a project home seeded by v1.19.x restarts on the new image: the old consti
 1. D1: mirror at a recorded commit (recommended) or a git submodule?
 2. D3: is moving the old artifacts to `~/.styrman/harness-backup-<ts>/` acceptable, or delete outright?
 3. The version that carries this (minor bump, e.g. v1.20.0?) and whether `MINIMAL` projects should also get the new harness.
+4. D5: repoint the settings-page roster at a seeded project home, or drop the three roster fields as dead reporting?

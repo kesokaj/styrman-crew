@@ -10,6 +10,8 @@ Add new items below as they arise.
 
 ## Inbox
 
+- [ ] Bug (operator, 2026-09-03): after some minutes the bottom stats bar and the sidebar show "fail to fetch"; a browser F5 fixes it until it recurs. Symptom only; repro to be established with the operator (which view, minutes elapsed, browser console). Run through the `bug` skill. (added 2026-09-03)
+
 - [ ] Settings harness roster is permanently empty. `internal/httpapi/setup.go:230-252`
   reports the harness roster (`Skills`, `Agents`, `Commands`) from
   `s.cfg.UserHome(u.Username)` — the base/setup home. The entrypoint never
