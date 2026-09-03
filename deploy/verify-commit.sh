@@ -19,11 +19,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SHA="$(git -C "${ROOT}" rev-parse --verify "${REF}^{commit}")"
 WT="$(mktemp -d "${TMPDIR:-/tmp}/styrman-verify-XXXXXX")"
 IMG="styrman-verify-$$:tmp"
+RIMG="styrman-verify-runtime-$$:tmp"
 
 cleanup() {
     git -C "${ROOT}" worktree remove --force "${WT}" >/dev/null 2>&1 || true
     rm -rf "${WT}" 2>/dev/null || true
     docker rmi "${IMG}" >/dev/null 2>&1 || true
+    docker rmi "${RIMG}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -40,6 +42,33 @@ echo "==> go test -race"; ( cd "${WT}" && go test -race -count=1 ./... )
 # it, so a break there ships silently (TODO 2026-09-01, closed 2026-09-02).
 echo "==> vendored ingress module (separate go.mod)"
 ( cd "${WT}/deploy/caddy/ingress" && go vet ./... && go test ./... )
+
+# The harness mirror is a THIRD module and compiles into a binary every
+# project runs (ADR-062). Root ./... never reaches it, and a partially staged
+# refresh (151 files, refreshed by hand) is exactly the class this gate
+# exists for — so check the mirror's own integrity manifest against the
+# commit's tree, build the module, and pin the two Dockerfiles' Go toolchain
+# to the same value (vulncheck.sh derives its scan image from
+# Dockerfile.server alone).
+echo "==> vendored harness mirror (image/harness: integrity, build, toolchain pin)"
+# sha256sum -c proves every listed file is present and unchanged; the list
+# diff proves nothing UNLISTED was added, and the symlink find that nothing
+# in the mirror is a link (security review round 2).
+( cd "${WT}/image/harness" && sha256sum -c --quiet SHA256SUMS && go vet ./... )
+extra="$(cd "${WT}/image/harness" && diff <(find . -type f ! -name SHA256SUMS | sed 's#^\./##' | LC_ALL=C sort) <(cut -c67- SHA256SUMS) || true)"
+links="$(cd "${WT}/image/harness" && find . -type l)"
+if [ -n "${extra}" ] || [ -n "${links}" ]; then
+    echo "FAIL: image/harness differs from its SHA256SUMS file list (unlisted or missing entries, or symlinks):" >&2
+    printf '%s\n%s\n' "${extra}" "${links}" >&2
+    exit 1
+fi
+srv_go="$(sed -n 's/^FROM \(golang:[^ ]*\) AS builder$/\1/p' "${WT}/deploy/Dockerfile.server")"
+img_go="$(sed -n 's/^FROM \(golang:[^ ]*\) AS harness-builder$/\1/p' "${WT}/image/Dockerfile")"
+if [ -z "${srv_go}" ] || [ "${srv_go}" != "${img_go}" ]; then
+    echo "FAIL: Go toolchain pin differs: deploy/Dockerfile.server='${srv_go}' image/Dockerfile='${img_go}'" >&2
+    exit 1
+fi
+echo "    mirror matches SHA256SUMS; builder pin ${img_go}"
 
 # The Go binary EMBEDS web/dist (web/embed.go), and web/dist is committed. So a
 # frontend change whose build output was never committed ships a server whose
@@ -76,6 +105,22 @@ fi
 echo "==> server image (the build the updater runs)"
 ( cd "${WT}" && docker build -q -f deploy/Dockerfile.server \
     --build-arg STYRMAN_VERSION=verify -t "${IMG}" . >/dev/null )
+
+# The runtime image is the updater's other build, and the one that ships the
+# harness: build it from the commit too, then check that the harness the
+# image lists is the harness the commit's tree holds (ADR-062).
+echo "==> runtime image (image/) and the harness it seeds"
+( cd "${WT}" && docker build -q --build-arg STYRMAN_VERSION=verify -t "${RIMG}" image/ >/dev/null )
+want_skills="$(find "${WT}/image/harness/skills" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l | tr -d ' ')"
+want_agents="$(find "${WT}/image/harness/agents" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')"
+listed="$(docker run --rm --entrypoint /styrman/bin/sh-agent "${RIMG}" list --repo /styrman/harness 2>&1)"
+if ! grep -q "Skills (${want_skills})" <<<"${listed}" || ! grep -q "Subagents (${want_agents})" <<<"${listed}"; then
+    echo "FAIL: the runtime image lists a different harness than the commit's image/harness tree" >&2
+    echo "      expected Skills (${want_skills}) and Subagents (${want_agents}); got:" >&2
+    grep -E '^### ' <<<"${listed}" >&2 || true
+    exit 1
+fi
+echo "    runtime image seeds ${want_skills} skills, ${want_agents} subagents (styrman-harness $(cut -c1-7 "${WT}/image/harness/COMMIT"))"
 
 echo
 echo "OK: commit ${SHA:0:12} builds and tests clean in isolation — safe to tag."

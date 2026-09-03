@@ -1,6 +1,17 @@
 # styrman-runtime — the per-project microVM image (AMD64 only, R11/ADR-001).
 # Pure tooling: no server binary inside (ADR-002); the styrman server drives
 # everything via docker exec.
+# sh-agent, the harness installer, is built from the vendored styrman-harness
+# mirror (harness/, see harness/VENDORED.md) in a builder stage pinned to the
+# same Go toolchain as deploy/Dockerfile.server. Static binary; the runtime
+# stage only copies it (ADR-062).
+FROM golang:1.25.13-trixie AS harness-builder
+WORKDIR /src
+COPY harness/ /src/
+# GOPROXY=off: the module has no requirements; make that a build failure,
+# not a network fetch, if it ever changes.
+RUN CGO_ENABLED=0 GOTOOLCHAIN=local GOPROXY=off go build -trimpath -ldflags='-s -w' -o /out/sh-agent ./cmd/sh-agent
+
 FROM debian:trixie
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -98,12 +109,15 @@ COPY configs/ /styrman/configs/
 # source of truth since internal/dotfiles was removed); the entrypoint seeds
 # each per-project home write-once.
 COPY skel/ /styrman/skel/
-# Agent harness (claude + agy), vendored snapshot of devshell_prompt/harness
-# (R5/ADR-030): the base image carries identical defaults for every project;
-# the entrypoint seeds it into each home write-once. See harness/VENDORED.md.
+# Agent harness (claude + agy): a mirror of styrman-harness at harness/COMMIT
+# (R5/ADR-030, ADR-062) plus the sh-agent binary built from it above. The base
+# image carries identical defaults for every project; the entrypoint seeds
+# them into each home write-once with `sh-agent install`. See harness/VENDORED.md.
 COPY harness/ /styrman/harness/
+COPY --from=harness-builder /out/sh-agent /styrman/bin/sh-agent
 ARG STYRMAN_VERSION=0.0.0
 RUN echo "${STYRMAN_VERSION}" > /styrman/VERSION && chmod +x /styrman/entrypoint.sh && \
+    chmod -R go-w /styrman/harness && \
     install -m 755 /styrman/configs/styrman-setup /usr/local/bin/styrman-setup && \
     install -m 755 /styrman/configs/styrman-git-credential /usr/local/bin/styrman-git-credential
 
