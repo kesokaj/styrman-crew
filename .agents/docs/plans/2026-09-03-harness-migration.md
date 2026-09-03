@@ -25,7 +25,7 @@ Inventory: `AGENTS.md`, `REQUIREMENTS.md`, `ROADMAP.md`, `TODO.md`, `README.md`,
 
 Today `image/harness/` ships the previous harness (constitution `shared/AGENTS.md`, 29 skills, `shared/scripts/{trail-check,resume-context,format-hook,...}.sh`, `claude/settings.json` with hooks, `antigravity/GEMINI.md`, plugins), seeded and re-seeded by `image/entrypoint.sh` keyed on `STYRMAN_VERSION`. It is to be replaced by the current harness (`styrman-harness`: `sh-agent`, 28 skills, 7 agents, no hooks, no scripts, `~/.gemini/config/rules/AGENTS.md`).
 
-- [ ] Recon brief: `.agents/docs/plans/2026-09-03-recon-image-harness.md` (`explorer`, dispatched 2026-09-03)
-- [ ] Feature plan with phases and task boxes (the `feature` skill), design decisions stated for the operator: how the image obtains the harness (pinned snapshot at build vs clone at boot; private-repo access via the credential broker), re-seeding an existing home, the Antigravity rules path inside the VM, retiring hooks/scripts the product documents, test tiers (integration "Tier 5" harness checks, e2e)
+- [x] Recon brief: `.agents/docs/plans/2026-09-03-recon-image-harness.md` (`explorer`, 2026-09-03)
+- [x] Feature plan with phases and task boxes (the `feature` skill): `2026-09-03-image-harness-replacement.md`; design decisions stated for the operator: how the image obtains the harness (pinned snapshot at build vs clone at boot; private-repo access via the credential broker), re-seeding an existing home, the Antigravity rules path inside the VM, retiring hooks/scripts the product documents, test tiers (integration "Tier 5" harness checks, e2e)
 - [ ] Cold-reader check of the plan (`reviewer`) before any code
 - [ ] Phases as checkpoints; e2e before done; `ROADMAP.md` "Next" (harness assertions) folded in or closed
