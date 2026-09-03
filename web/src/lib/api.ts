@@ -260,6 +260,7 @@ class ApiError extends Error {
 // toast, instead of every poll surfacing cryptic errors forever.
 let reAuthTriggered = false;
 let reAuthCleared = false;
+const REAUTH_CLEAR_AFTER_MS = 10_000;
 function reAuthOnce() {
   if (reAuthTriggered) return;
   reAuthTriggered = true;
@@ -269,10 +270,26 @@ function reAuthOnce() {
   let attempts = 0;
   try {
     const raw = sessionStorage.getItem("reauth");
-    if (raw) {
-      const { n, at } = JSON.parse(raw) as { n: number; at: number };
-      if (Date.now() - at < 60_000) attempts = n;
+    // Shape-checked, and a corrupt record is overwritten rather than left to
+    // disable the cap forever (security review 2026-09-03, both rounds): a
+    // negative n would never reach 2, and a parse failure must not skip the
+    // write below.
+    let rec: { n?: unknown; at?: unknown } = {};
+    try {
+      const parsed: unknown = raw ? JSON.parse(raw) : null;
+      if (typeof parsed === "object" && parsed !== null) rec = parsed;
+    } catch {
+      rec = {};
     }
+    const { n, at } = rec;
+    if (
+      Number.isInteger(n) &&
+      (n as number) >= 0 &&
+      typeof at === "number" &&
+      Number.isFinite(at) &&
+      Date.now() - at < 60_000
+    )
+      attempts = n as number;
     sessionStorage.setItem(
       "reauth",
       JSON.stringify({ n: attempts + 1, at: Date.now() }),
@@ -296,20 +313,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     // box); surface a timeout the UI can show instead of a spinner forever.
     signal: init?.signal ?? AbortSignal.timeout(20000),
     ...init,
+    // Never follow a redirect. The API issues none; the one the ingress issues
+    // for an expired session (→ https://auth.<domain>/oauth2/google/ →
+    // accounts.google.com) is cross-origin, so a fetch that FOLLOWED it
+    // rejected with a bare "Failed to fetch" before any Response existed and
+    // the expiry handling below never ran — every poll showed the raw error
+    // until F5 (BUG-001). With "manual" the browser hands back an
+    // opaqueredirect Response instead. After the spread so no caller can
+    // unset it by accident (security review 2026-09-03).
+    redirect: "manual",
   });
-  if (res.status === 401 || (res.redirected && res.url.includes("/oauth2/"))) {
+  if (res.status === 401 || res.type === "opaqueredirect") {
     reAuthOnce();
     throw new ApiError("session expired — reloading to sign in", res.status || 401);
   }
-  // First healthy response after a reload clears the re-auth counter, so a
-  // GENUINE later expiry gets its automatic reload again (audit 2026-08-30).
+  // A healthy page clears the re-auth counter, so a GENUINE later expiry gets
+  // its automatic reload again (audit 2026-08-30). Deferred and guarded
+  // (security review 2026-09-03): clearing on the first ok response let a page
+  // that ALSO gets a same-origin 3xx on one endpoint (the mux's path-cleaning
+  // 301 from a crafted route param) reset the counter on every load and reload
+  // every 1.2 s forever. The counter counts RELOADS, so it clears only once
+  // the page has stayed healthy for a while with no re-auth fired.
   if (res.ok && !reAuthCleared) {
     reAuthCleared = true;
-    try {
-      sessionStorage.removeItem("reauth");
-    } catch {
-      /* storage unavailable */
-    }
+    setTimeout(() => {
+      if (reAuthTriggered) return;
+      try {
+        sessionStorage.removeItem("reauth");
+      } catch {
+        /* storage unavailable */
+      }
+    }, REAUTH_CLEAR_AFTER_MS);
   }
   if (res.status === 204) return undefined as T;
   const body = await res.json().catch(() => ({}));
@@ -510,6 +544,7 @@ export const api = {
         method: "POST",
         body: form,
         signal: AbortSignal.timeout(120000), // uploads are big; generous, not absent
+        redirect: "manual", // as in request(): the ingress chain is cross-origin
       });
     } catch (e) {
       const aborted = e instanceof DOMException && e.name === "TimeoutError";
@@ -518,7 +553,7 @@ export const api = {
         error: new ApiError(aborted ? "upload timed out" : "upload failed", 0),
       };
     }
-    if (res.status === 401 || (res.redirected && res.url.includes("/oauth2/"))) {
+    if (res.status === 401 || res.type === "opaqueredirect") {
       reAuthOnce();
       return {
         saved: [],
