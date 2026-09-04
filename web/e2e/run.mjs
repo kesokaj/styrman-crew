@@ -478,7 +478,8 @@ try {
       .getByTestId("recent-files")
       .getByRole("button")
       .count();
-    if (n !== 8) throw new Error(`recents strip rendered ${n} chips, cap is 8`);
+    if (n !== 16)
+      throw new Error(`recents strip rendered ${n} chips, cap is 16`);
     // Put the real recents back. This check writes 20 junk entries over the
     // project's actual recents and previously left them there for the rest of
     // the suite, so every later chip assertion ran against junk (2026-09-02
@@ -489,6 +490,7 @@ try {
     await page.reload();
     await page.waitForSelector("aside", { timeout: 15000 });
   });
+
   // "Discard and open": editing a file, then clicking another, must prompt and
   // then actually LOAD the second file. This dead-ended on an empty pane in
   // review (the store bailed on an identical object, so the loader never re-ran).
@@ -534,6 +536,64 @@ try {
     await chip.waitFor({ timeout: 5000 });
     await chip.click();
     await page.waitForSelector(".cm-content >> text=UPLOADED", { timeout: 15000 });
+  });
+
+  // ── Recent strip: collapsible + resizable grid (v1.22.0) ────────────────
+  // ORDERING: these need a NON-EMPTY recents list, so they cannot sit beside
+  // the cap check above — that one deliberately clears
+  // styrman.recentFiles.<project> and reloads, leaving no strip to assert on
+  // (`recents.length > 0` gates the whole thing). By here the upload check has
+  // put two.txt back in the list.
+  await check("recent strip is a WRAPPING grid, not one scrolling row", async () => {
+    await panel().getByText("Files", { exact: true }).click();
+    const strip = panel().getByTestId("recent-files");
+    await strip.waitFor({ timeout: 10000 });
+    const wraps = await strip.evaluate(
+      (el) => getComputedStyle(el).flexWrap === "wrap",
+    );
+    if (!wraps) throw new Error("recents strip does not wrap");
+  });
+
+  await check("recent strip collapses, and the choice survives a reload", async () => {
+    const toggle = panel().getByRole("button", { name: /^Recent \(\d+\)$/ });
+    await toggle.click();
+    await panel().getByTestId("recent-files").waitFor({ state: "detached", timeout: 5000 });
+    const stored = await page.evaluate(() =>
+      localStorage.getItem("styrman.recents.collapsed"),
+    );
+    if (stored !== "1") throw new Error(`collapsed flag stored as ${stored}`);
+    await page.reload();
+    await page.waitForSelector("aside", { timeout: 15000 });
+    await panel().getByText("Files", { exact: true }).click();
+    await page.waitForTimeout(400);
+    if (await panel().getByTestId("recent-files").count())
+      throw new Error("strip re-expanded after reload");
+    // Expand again and leave it that way for anything after this.
+    await panel()
+      .getByRole("button", { name: /^Recent \(\d+\)$/ })
+      .click();
+    await panel().getByTestId("recent-files").waitFor({ timeout: 5000 });
+    const cleared = await page.evaluate(() =>
+      localStorage.getItem("styrman.recents.collapsed"),
+    );
+    if (cleared !== null)
+      throw new Error(`expanded should REMOVE the key, got ${cleared}`);
+  });
+
+  await check("a hand-edited height is clamped, not obeyed", async () => {
+    await page.evaluate(() =>
+      localStorage.setItem("styrman.recents.height", "99999"),
+    );
+    await page.reload();
+    await page.waitForSelector("aside", { timeout: 15000 });
+    await panel().getByText("Files", { exact: true }).click();
+    const strip = panel().getByTestId("recent-files");
+    await strip.waitFor({ timeout: 10000 });
+    const h = await strip.evaluate((el) => el.getBoundingClientRect().height);
+    if (h > 320) throw new Error(`strip is ${h}px, above the 320px cap`);
+    await page.evaluate(() =>
+      localStorage.removeItem("styrman.recents.height"),
+    );
   });
   await check("syntax check flags a broken shell script", async () => {
     await page.getByRole("button", { name: "Terminal", exact: true }).click();

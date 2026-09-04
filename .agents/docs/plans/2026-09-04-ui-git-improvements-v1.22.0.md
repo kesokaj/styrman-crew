@@ -565,11 +565,11 @@ smallest, most isolated changes land first.
 - [x] `web/dist` rebuilt — verify: freshness step, AI
 
 ### Phase 4 — Recent files grid
-- [ ] `RECENTS_CAP` 8 → 16 + sanitiser test — verify: tier 1, AI
-- [ ] Wrapping grid, newest first, header with count — verify: tier 3, AI
-- [ ] Collapse toggle + drag resize, both persisted and clamped — verify: tier 3, AI
-- [ ] Update `web/e2e/run.mjs:448` cap assertion to 16 — verify: tier 3, AI
-- [ ] `web/dist` rebuilt — verify: freshness step, AI
+- [x] `RECENTS_CAP` 8 → 16. The sanitiser itself stays e2e-covered, not unit-covered: `sanitizeRecents` is not exported and `editorPane.test.ts`'s header records why that module's internals are deliberately not reached from unit tests. The e2e seeds 20 junk entries and asserts exactly 16 chips render — verify: tier 3, AI
+- [x] Wrapping grid, newest first, header with count — verify: tier 3, AI
+- [x] Collapse toggle + drag resize, persisted globally and clamped in `lib/recentsPanel.ts` (14 unit tests); pointer events with capture, and the height persisted once at drag END rather than at pointermove rate — verify: tier 1 + tier 3, AI
+- [x] Update the e2e cap assertion to 16 — verify: tier 3, AI
+- [x] `web/dist` rebuilt — verify: freshness step, AI
 
 ### Phase 5 — Git diff in the main pane + fast commit
 - [ ] `PaneState.diff` + `openDiffInPane`; add `diff` to `set()`'s no-op guard — verify: tier 1, AI

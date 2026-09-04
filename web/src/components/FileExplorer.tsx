@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  clampRecentsHeight,
+  loadRecentsCollapsed,
+  loadRecentsHeight,
+  storeRecentsCollapsed,
+  storeRecentsHeight,
+} from "../lib/recentsPanel";
+import {
   canGoBack,
   canGoForward,
   currentPath,
@@ -75,6 +82,25 @@ export function FileExplorer({
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [error, setError] = useState<string>();
   const [dragging, setDragging] = useState(false);
+  // Recent-strip geometry: GLOBAL preference, read once on mount. Lazy
+  // initialisers so localStorage is touched once, not on every render.
+  const [recentsCollapsed, setRecentsCollapsed] = useState(loadRecentsCollapsed);
+  const [recentsHeight, setRecentsHeight] = useState(loadRecentsHeight);
+  /** In-flight resize drag: pointer Y and the height when it started. */
+  const dragRef = useRef<{ y: number; h: number } | null>(null);
+  /**
+   * End a resize drag from EITHER pointerup or pointercancel. Persists once,
+   * at the end: a write at pointermove rate would hammer localStorage for no
+   * benefit, and `recentsHeight` here is current because React commits between
+   * native pointer events.
+   */
+  const endResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId))
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    storeRecentsHeight(recentsHeight);
+  };
   const [dialog, setDialog] = useState<ExplorerDialog | null>(null);
 
   // Switching project resets the view to that project's root.
@@ -509,15 +535,74 @@ export function FileExplorer({
       {/* BELOW the listing, not above (code review 2026-09-02): mounted above,
           the strip's first appearance shifted every row under a stationary
           pointer by almost a full row height — a double-click's second press
-          landed on the wrong entry. */}
+          landed on the wrong entry. That hazard is WORSE now the strip is a
+          variable-height grid, which is also why its height comes from the
+          stored value and not from its content: gaining a chip must never
+          reflow the listing above it. */}
       {recents.length > 0 && (
+        <div className="shrink-0 border-t border-border">
+          {/* Drag handle sits ON the top border. Pointer events (not mouse)
+              so a trackpad or a touch screen can resize too, with capture so
+              the drag survives the pointer leaving the 4px strip. */}
+          {!recentsCollapsed && (
+            <div
+              role="separator"
+              aria-label="Resize recent files"
+              aria-orientation="horizontal"
+              // touch-none: without it a mobile browser can claim the initial
+              // touch as a page-scroll gesture and cancel the pointer sequence
+              // before the resize starts. select-none + preventDefault stop a
+              // fast drag from selecting the text it passes over.
+              className="h-1 cursor-row-resize touch-none select-none bg-transparent hover:bg-accent-soft"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                e.currentTarget.setPointerCapture(e.pointerId);
+                dragRef.current = { y: e.clientY, h: recentsHeight };
+              }}
+              onPointerMove={(e) => {
+                const d = dragRef.current;
+                if (!d) return;
+                // Dragging UP (smaller clientY) makes the strip taller.
+                setRecentsHeight(clampRecentsHeight(d.h + (d.y - e.clientY)));
+              }}
+              onPointerUp={endResize}
+              // A drag the OS cancels (a touch gesture taken over, a context
+              // menu) fires pointercancel and never pointerup. Without this
+              // the height the user just dragged to is applied on screen but
+              // never persisted, so it silently reverts on the next reload.
+              onPointerCancel={endResize}
+            />
+          )}
+          <button
+            onClick={() => {
+              const next = !recentsCollapsed;
+              setRecentsCollapsed(next);
+              storeRecentsCollapsed(next);
+            }}
+            aria-expanded={!recentsCollapsed}
+            aria-controls="recent-files"
+            className="flex w-full items-center gap-1 px-2 py-1 text-[10px] uppercase tracking-wide text-text-dim hover:bg-bg-hover hover:text-text"
+          >
+            <ChevronRightIcon
+              className={`h-3 w-3 transition-transform ${recentsCollapsed ? "" : "rotate-90"}`}
+            />
+            Recent ({recents.length})
+          </button>
+        </div>
+      )}
+      {recents.length > 0 && !recentsCollapsed && (
         <div
           data-testid="recent-files"
-          className="flex shrink-0 items-center gap-1 overflow-x-auto border-t border-border px-2 py-1.5"
+          id="recent-files"
+          // The pixel height is the user's choice; the percentage is the floor
+          // under the LISTING. The panel is h-full off the viewport, so on a
+          // short one (small window, mobile landscape) a maxed-out strip would
+          // otherwise squeeze the file list — the panel's primary content — to
+          // a sliver while the strip stayed fully visible. max-height wins over
+          // height, so this caps without touching what is stored.
+          style={{ height: recentsHeight, maxHeight: "45%" }}
+          className="flex shrink-0 flex-wrap content-start items-start gap-1 overflow-y-auto px-2 pb-1.5"
         >
-          <span className="shrink-0 text-[10px] uppercase tracking-wide text-text-dim">
-            Recent
-          </span>
           {recents.map((r) => {
             const open = isOpen(r.scopeKind, r.path);
             const full = (r.scopeKind === "home" ? "~/" : "") + r.path;

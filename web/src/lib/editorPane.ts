@@ -120,7 +120,10 @@ export function basename(path: string): string {
 
 export type RecentFile = { scopeKind: Scope["kind"]; path: string };
 
-const RECENTS_CAP = 8;
+// 16 since v1.22.0 (was 8): the strip became a WRAPPING, resizable grid, so
+// more than one row's worth is actually reachable now. The cap still exists
+// because the list is re-sanitised and re-serialised on every file open.
+const RECENTS_CAP = 16;
 const recentsKey = (project: string) => `styrman.recentFiles.${project}`;
 // Arrays are replaced, never mutated: useSyncExternalStore compares snapshots
 // by identity.

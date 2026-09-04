@@ -1,0 +1,26 @@
+---
+owner: reviewer
+date: 2026-09-04
+---
+# Review — phase4-recents-grid   (2026-09-04)
+
+Range reviewed: `/tmp/claude-1000/-home-kesokaj-workspace-styrman-crew/a1fcfb7b-6662-4bce-8e06-59c0ae200ac4/scratchpad/phase4.diff` (Phase 4 — "Recent files grid": `.agents/docs/plans/2026-09-04-ui-git-improvements-v1.22.0.md`, `.agents/docs/testing/styrman/README.md`, `web/e2e/run.mjs`, `web/src/components/FileExplorer.tsx`, `web/src/lib/editorPane.ts`), plus the two untracked files appended in full, `web/src/lib/recentsPanel.ts` and `web/src/lib/recentsPanel.test.ts`.
+
+## Verdict: APPROVE WITH NITS
+
+Nothing broken at high severity. The core logic (`clampRecentsHeight`/`loadRecentsHeight`/`loadRecentsCollapsed` and their persistence) is correct and well covered — 14 new unit tests, all passing, plus `tsc -b` and `oxlint` clean, and the documented `61 tests / six files` and `73 e2e checks` claims verified against the actual run. The pointer-drag handler's specific worry point — a stale `recentsHeight` closure in `onPointerUp` — is not actually a bug: React re-renders and commits between separate native pointer events, so the delegated `onPointerUp` handler always sees the latest state, and `dragRef` (a ref, not state) correctly anchors the drag's start height so per-move deltas don't compound. The worse-in-practice issues are (1) no minimum reserved height for the file listing when the recents strip is expanded to near its 320px cap in a short viewport, and (2) a couple of drag-robustness gaps (no `pointercancel` handling, no `touch-action`/`user-select` guard) that don't corrupt state but can silently drop a resize or interfere with touch/text-selection.
+
+## Findings
+
+- **[medium / confidence: medium]** `web/src/components/FileExplorer.tsx:392-407,529-577` — the file-list (`min-h-0 flex-1`) has no reserved minimum height, while the recents strip below it is user-resizable up to `RECENTS_MAX_HEIGHT` (320px, `recentsPanel.ts:16`) with no relationship to the panel's actual available height. `SidePanel` is `h-full` off the viewport (`SidePanel.tsx:63,87`), so on a short viewport (mobile landscape, a small window) the header/toolbar/path-bar/recents-header chrome plus a maxed-out or even default (96px) recents strip can squeeze the primary file listing to a sliver or effectively zero px — it won't overflow the page (flex/`min-h-0` shrinks it gracefully) but it can become functionally unusable while the recents strip stays fully visible. Nothing clamps `recentsHeight` against the panel's actual remaining space. Fix: derive the max from available height (e.g. via `ResizeObserver`/`clamp(vh)`) or reserve a minimum px for `file-list` in the flex layout.
+- **[low / confidence: medium]** `web/src/components/FileExplorer.tsx:534-560` — the resize handle has no `onPointerCancel`. If the drag is interrupted (touch gesture cancelled by the OS, browser context menu, etc.) `dragRef.current` is left non-null and, more importantly, the in-progress height that was applied via the last `onPointerMove` is never persisted (only `onPointerUp` calls `storeRecentsHeight`) — the visible size silently reverts on next reload even though it looked resized. Not data-corrupting since `dragRef` is unconditionally overwritten on the next `onPointerDown`, but a legitimate resize can be silently lost.
+- **[low / confidence: low]** `web/src/components/FileExplorer.tsx:539` — the handle's comment claims trackpad/touch support ("Pointer events... so a trackpad or a touch screen can resize too") but no `touch-action: none` is set on the handle and no `user-select: none` is applied during the drag. Without `touch-action`, some mobile browsers can interpret the initial touch as a page-scroll gesture and cancel the pointer sequence before the resize starts; without suppressing selection, a fast drag over the file list/text above can select text mid-resize. Neither corrupts stored state, but both work against the stated goal.
+
+## Criteria
+
+1. Dead code — pass. The old plain "Recent" label span is removed along with the old scrolling-row markup it belonged to; nothing orphaned.
+2. Flow tracing — pass. `FileExplorer.tsx` → `recentsPanel.ts` wiring is consistent (lazy `useState` initializers call the loaders once; `clampRecentsHeight`/`storeRecentsHeight`/`storeRecentsCollapsed` are all pure/never-throw as documented); `editorPane.ts`'s `RECENTS_CAP` bump to 16 and `e2e/run.mjs`'s cap assertion were updated together. The one real gap is the missing `pointercancel` finalization noted above.
+3. Standards conformance — pass. `tsc -b`, `oxlint`, and `npm test` (61/61) all run clean; matches the `typescript`/`frontend` skill conventions (pure logic split from thin, non-throwing storage wrappers; tests colocated).
+4. Directory layout — pass. `recentsPanel.ts` / `recentsPanel.test.ts` land beside the other `web/src/lib/*` modules and their tests, matching the existing `editorPane.ts`/`explorerHistory.ts`/`appearance.ts` pattern.
+5. Simplicity (DIY-except-security) — pass. No new dependency; the geometry logic is a small, pure, stdlib-only module — appropriately sized to its one consumer.
+6. Decoupling — pass. `recentsPanel.ts` is a clean, narrow module (5 exports, no cross-imports back into `FileExplorer.tsx` or `editorPane.ts`); `FileExplorer.tsx` only imports what it uses.
