@@ -67,7 +67,8 @@ Browser ──HTTPS──► Caddy (Google OAuth, TLS, Cloudflare DNS — vendor
                       │ identity header
                       ▼
               styrman server (Go; embedded TanStack Start SPA)
-                ├── per-user spaces: homes/<user>, metadata JSON stores
+                ├── per-user spaces: homes/<user> (server-only parent of
+                │     base/ and p/<uuid>, ADR-064), metadata JSON stores
                 ├── REST + WS /ws/term/{projectId}/{terminal}
                 ├── /p/{id}/{t}/port/{port}/ → apps inside the microVM
                 │     (owner, or a Google email the owner shared that port with)

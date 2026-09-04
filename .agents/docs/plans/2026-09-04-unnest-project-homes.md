@@ -1,7 +1,7 @@
 ---
 owner: main
 date: 2026-09-04
-status: draft — cold-read rounds 1–2 applied (reviews/2026-09-04-review-plan-unnest-project-homes.md), awaiting round 3
+status: Phases 1–2 done (2026-09-04); release v1.21.0 via /preflight pending
 ---
 # Plan — un-nest the project homes from the setup VM's mount   (2026-09-04)
 
@@ -90,14 +90,14 @@ No API, JSON, or env change. `files.Trust(cfg.HomesDir, …)` is unchanged: the 
 ## Phases
 
 ### Phase 1 — config, migration, orchestrator, server
-- [ ] `config.TenantDir` + `UserHome` → `base`; config test — verify: unit, `go test ./internal/config/`, AI
-- [ ] `migrateLegacy` step 1 creates `TenantDir` before its rename (test added); `migrateBaseHomes` in `cmd/styrman/main.go`, wired after `migrateLegacy`; tests — verify: unit, `go test ./cmd/styrman/ -race`, AI
-- [ ] `EnsureSetup`: stale-bind recreate (`setupHomeStale`), confined `base` creation, `realBelow(TenantDir, UserHome)`; `EnsureRunning` (orchestrator.go:226,272,275,282) and `createProject` (server.go:726-727) call sites → `TenantDir`; the boundary comments at those lines, the janitor's, and `.agents/rules/guest-writable-paths.md` rewritten for the new layout; tests — verify: unit, `go test ./internal/orchestrator/ ./internal/httpapi/ -race`, AI
-- [ ] Full suite `go build ./... && go vet ./... && go test ./... -race`; changelog entry; commit; push — verify: AI
+- [x] `config.TenantDir` + `UserHome` → `base`; config test — verify: unit, `go test ./internal/config/`, AI
+- [x] `migrateLegacy` step 1 creates `TenantDir` before its rename (test added); `migrateBaseHomes` in `cmd/styrman/main.go`, wired after `migrateLegacy`; tests — verify: unit, `go test ./cmd/styrman/ -race`, AI
+- [x] `EnsureSetup`: stale-bind recreate (`setupHomeStale`), confined `base` creation, `realBelow(TenantDir, UserHome)`; `EnsureRunning` (orchestrator.go:226,272,275,282) and `createProject` (server.go:726-727) call sites → `TenantDir`; the boundary comments at those lines, the janitor's, and `.agents/rules/guest-writable-paths.md` rewritten for the new layout; tests — verify: unit, `go test ./internal/orchestrator/ ./internal/httpapi/ -race`, AI
+- [x] Full suite green; changelog entry; security rounds 1–2 (blocking high closed by the root-confined migration and the startup sweep); committed `f3882ac`, pushed — verify: AI
 
 ### Phase 2 — docs, suites, upgrade fixture, release
-- [ ] ADR-064; `AGENTS.md`, `deploy.md`, `guide.md`/`runtime-image.md` wording; `documentation` cold-read — verify: AI
-- [ ] `integration.sh` and `web/e2e/run.sh` green on `styrman-runtime:test`; the upgrade fixture above — verify: integration + e2e + fixture, `verifier`, AI
+- [x] ADR-064; `AGENTS.md`, `deploy.md` wording; `documentation` cold-read fixed `api.md`, `guide.md`, `README.md` — verify: AI
+- [x] `integration.sh` (62/0/3, boot→ready 1.72 s) and `web/e2e/run.sh` (61/0/2) green on `styrman-runtime:test` (`testing/2026-09-04-verify-unnest-phase2.md`); the upgrade fixture — PASS in three runs (`testing/2026-09-04-e2e-unnest-upgrade-fixture.md`) — verify: integration + e2e + fixture, `verifier`, AI
 - [ ] `/preflight` for `v1.21.0` (reviewer + security over the release diff; `verify-commit.sh`; signed tag; auto-updater deploy; live check) — verify: AI, live check both
 
 ## Risks

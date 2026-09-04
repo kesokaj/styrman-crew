@@ -180,7 +180,8 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
                       ▼
    styrman-server (container; header-auth; no auth-bypass listener in prod)
      ├── embedded TanStack Start SPA (ADR-013)
-     ├── identity → per-user space: homes/<user>, users/<user>/{projects,
+     ├── identity → per-user space: homes/<user> (server-only parent of
+     │   base/ and p/<uuid>, ADR-064), users/<user>/{projects,
      │   conversations,profile}.json  (ADR-019; no database, ADR-007)
      ├── REST (api.md) · WS /ws/term/{id}/{t} (terminal-protocol.md)
      ├── /p/{id}/{t}/port/{port}/ → proxy to apps inside the microVM
@@ -466,6 +467,7 @@ rotated token, or a tool signed into inside a project instead of at setup).
 | Path                                               | What                                                                                                                           |
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `/var/lib/styrman/homes/<user>/p/<uuid>`           | A project's OWN home (ADR-031): dotfiles, tool state, docker disk, transcripts — nothing backs this up, see "Durability" below |
+| `/var/lib/styrman/homes/<user>/base`               | The setup VM's home (ADR-064); `homes/<user>` itself is server-only, mounted into no guest |
 | `/var/lib/styrman/projects/<user>/<uuid>`          | Workspaces (ADR-027, per-project storage) — source code; commit and push it, nothing else preserves it                         |
 | `…/homes/<user>/p/<uuid>/.dockerd/<uuid>.img`      | Per-project Docker disk (sparse)                                                                                               |
 | `…/homes/<user>/p/<uuid>/.styrman/logs/<uuid>/`    | Terminal transcripts                                                                                                           |

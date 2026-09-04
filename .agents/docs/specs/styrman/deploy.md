@@ -662,13 +662,16 @@ re-run `styrman-setup` (or Settings → Credentials) on the rebuilt host to
 re-onboard. Deleting a file revokes that credential for new sessions.
 Onboarding is now automatic (ADR-034, v1.5.4): finishing first-run
 `styrman-setup` harvests every credential the user just signed into — from
-the setup VM's shared home — straight into the broker, so every project
+the setup VM's home (`homes/<user>/base`) — straight into the broker, so every project
 created afterwards is current with zero re-auth. `Settings → Credentials →
 Import from a project` (`POST /api/settings/credentials/import`) still
 exists as a supplementary/refresh path — for rotated tokens, or a tool the
 user signed into inside a project instead of at setup time.
 
 Per-project homes (ADR-031) live at `<state>/homes/<user>/p/<uuid>` —
-each mounted as that project's `$HOME`; `homes/<user>` itself is only the
-setup VM's home. The old shared-home model (and `deploy/home-init.sh`) is
-gone: the base image seeds every new home.
+each mounted as that project's `$HOME`; the setup VM's home is
+`homes/<user>/base` (ADR-064, v1.21.0 — it was `homes/<user>` itself, which
+put every project home inside the setup VM's mount; the server moves an
+old base home into `base/` once at startup). `homes/<user>` is server-only
+and mounted into no guest. The old shared-home model (and
+`deploy/home-init.sh`) is gone: the base image seeds every new home.

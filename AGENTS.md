@@ -72,7 +72,8 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
   — no database. Project creation is async (instant 201, background boot).
 - Multi-tenant: identity from the ingress header → username slug; each
   PROJECT mounts its own home at `/var/lib/styrman/homes/<u>/p/<uuid>`
-  (ADR-031; `homes/<u>` is just the base/setup-VM home). Configurable
+  (ADR-031); the setup VM's home is `homes/<u>/base`, and `homes/<u>` itself
+  is server-only, mounted into no guest (ADR-064). Configurable
   in-guest "terminal username". Admins = env-provided emails.
 - Per-project workspace storage (ADR-027): each working tree lives at
   `/var/lib/styrman/projects/<u>/<uuid>`, bind-mounted into the microVM at
