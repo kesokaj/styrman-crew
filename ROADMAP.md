@@ -12,7 +12,7 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-Un-nesting the project homes (operator decision 2026-09-04): the setup VM's home moves to `HomesDir/<user>/base` so no guest mount contains the project homes — plan `.agents/docs/plans/2026-09-04-unnest-project-homes.md`, release `v1.21.0`. Shipped before it: v1.20.0 (`changes/2026-09-04-v1.20.0-harness-replacement-and-session-expiry.md`), the harness migration complete end to end.
+**v1.21.0 shipped 2026-09-04** (`.agents/docs/changes/2026-09-04-v1.21.0-unnest-project-homes.md`): the setup VM's home is `homes/<user>/base` and no guest mount contains the project homes (ADR-064); production's base home migrated at the deploy. Before it, v1.20.0 (the harness migration end to end, BUG-001, eight-hour sessions). Nothing is in flight; the next items are the operator's picks from `TODO.md` (the legacy `migrateWorkspaces` path, the `git.go:73` read, the upstream `sh-agent` items, the ingress lows).
 
 ## Next
 

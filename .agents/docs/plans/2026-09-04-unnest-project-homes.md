@@ -1,7 +1,7 @@
 ---
 owner: main
 date: 2026-09-04
-status: Phases 1–2 done (2026-09-04); release v1.21.0 via /preflight pending
+status: shipped in v1.21.0 (2026-09-04)
 ---
 # Plan — un-nest the project homes from the setup VM's mount   (2026-09-04)
 
@@ -98,7 +98,7 @@ No API, JSON, or env change. `files.Trust(cfg.HomesDir, …)` is unchanged: the 
 ### Phase 2 — docs, suites, upgrade fixture, release
 - [x] ADR-064; `AGENTS.md`, `deploy.md` wording; `documentation` cold-read fixed `api.md`, `guide.md`, `README.md` — verify: AI
 - [x] `integration.sh` (62/0/3, boot→ready 1.72 s) and `web/e2e/run.sh` (61/0/2) green on `styrman-runtime:test` (`testing/2026-09-04-verify-unnest-phase2.md`); the upgrade fixture — PASS in three runs (`testing/2026-09-04-e2e-unnest-upgrade-fixture.md`) — verify: integration + e2e + fixture, `verifier`, AI
-- [ ] `/preflight` for `v1.21.0` (reviewer + security over the release diff; `verify-commit.sh`; signed tag; auto-updater deploy; live check) — verify: AI, live check both
+- [x] `/preflight` for `v1.21.0` — SHIP (`reviews/2026-09-04-preflight-v1.21.0.md`), tag on `efe4ae6`, deployed by the auto-updater; live: server healthy, production base home migrated (17 entries, 0 failed), no stale setup VM existed
 
 ## Risks
 
