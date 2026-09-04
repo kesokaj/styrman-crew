@@ -542,7 +542,7 @@ func (s *Server) importGitCredential(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	st, err := s.orch.Status(r.Context(), u.Username, p.ID)
+	st, err := s.guest.Status(r.Context(), u.Username, p.ID)
 	if err != nil || st.State != "running" {
 		writeErr(w, http.StatusConflict, errors.New("name a RUNNING project to import from"))
 		return
@@ -550,7 +550,7 @@ func (s *Server) importGitCredential(w http.ResponseWriter, r *http.Request) {
 	guest := s.guestUserFor(u.Username)
 	// Login shell so gh's config/PATH are set up; skip the broker cred-pull so
 	// we read the project's REAL gh token, not the broker's own copy (H6).
-	code, out, err := s.orch.Exec(r.Context(), st.ContainerID, orchestrator.ExecSpec{
+	code, out, err := s.guest.Exec(r.Context(), st.ContainerID, orchestrator.ExecSpec{
 		User: guest,
 		Env:  []string{"HOME=/home/" + guest, "USER=" + guest, "STYRMAN_SKIP_CRED_PULL=1"},
 		Cmd:  []string{"bash", "-lc", "gh auth token --hostname " + body.Host + " 2>/dev/null"},
@@ -643,7 +643,7 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func(p project.Project) {
 			defer wg.Done()
-			st, err := s.orch.Status(ctx, u.Username, p.ID)
+			st, err := s.guest.Status(ctx, u.Username, p.ID)
 			if err != nil {
 				s.logger.Warn("notifications: status failed", "project", p.ID, "error", err)
 				return

@@ -51,9 +51,40 @@ type userSpace struct {
 }
 
 // Server wires the API handlers to their dependencies.
+// guestRuntime is the slice of the orchestrator this package needs to run a
+// command inside a project's microVM: where the container is (Status) and how
+// to run something in it (Exec).
+//
+// It exists to make the HTTP handlers TESTABLE. Every git verb, the syntax
+// checker and the formatter reach the guest through exactly these two calls,
+// and with the concrete *orchestrator.Orchestrator there was no way to
+// exercise a handler without a live Docker daemon and a booted Kata microVM —
+// so their argv, status mapping and error handling had no unit coverage at
+// all (recorded three times over: TODO.md's checkFile/formatFile item, the
+// v1.22.0 gate's note on the six new git handlers, and BUG-003's residual).
+//
+// Deliberately NARROW: the orchestrator's other fifteen-odd methods stay on
+// the concrete `orch` field. This is a seam for the exec path, not an
+// abstraction over the orchestrator.
+//
+// CONTRACT, which the concrete orchestrator enforced implicitly and an
+// interface does not: the ContainerID returned by Status BELONGS to that
+// user and project, and a caller may Exec into it on that basis alone. It is
+// the only thing binding a subsequent Exec to the right tenant's microVM, so
+// any implementation that returns an id not derived from the pair breaks
+// tenant isolation, not merely a test (security review 2026-09-04).
+type guestRuntime interface {
+	Status(ctx context.Context, user, project string) (orchestrator.Status, error)
+	Exec(ctx context.Context, containerID string, spec orchestrator.ExecSpec) (int, string, error)
+}
+
 type Server struct {
-	cfg    *config.Config
+	cfg *config.Config
+	// orch is the real orchestrator; guest is the same object behind the
+	// narrow interface above, swapped for a fake in tests. Both point at the
+	// same instance in production — see New.
 	orch   *orchestrator.Orchestrator
+	guest  guestRuntime
 	tmux   *conversation.Manager
 	bridge *terminal.Bridge
 	users  *userstore.Store
@@ -127,6 +158,7 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 	s := &Server{
 		cfg:           cfg,
 		orch:          orch,
+		guest:         orch,
 		tmux:          conversation.NewManager(orch, cfg),
 		users:         users,
 		logger:        logger,
@@ -809,7 +841,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		home := "/home/" + guest
 		guestWorkdir := home + "/projects/" + p.Dir
 		run := func(cmd ...string) (int, string, error) {
-			return s.orch.Exec(ctx, containerID, orchestrator.ExecSpec{
+			return s.guest.Exec(ctx, containerID, orchestrator.ExecSpec{
 				User:    guest,
 				WorkDir: guestWorkdir,
 				Env:     []string{"HOME=" + home, "USER=" + guest},
@@ -828,7 +860,7 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	st, err := s.orch.Status(r.Context(), u.Username, p.ID)
+	st, err := s.guest.Status(r.Context(), u.Username, p.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

@@ -146,7 +146,7 @@ func (s *Server) harvestCredentials(ctx context.Context, user, containerID, gues
 // trimmed stdout (ok=false on non-zero exit or exec error). The command must
 // redirect its own stderr (Exec combines the streams).
 func (s *Server) guestOut(ctx context.Context, containerID, guest, script string) (string, bool) {
-	code, out, err := s.orch.Exec(ctx, containerID, orchestrator.ExecSpec{
+	code, out, err := s.guest.Exec(ctx, containerID, orchestrator.ExecSpec{
 		User: guest,
 		// Skip the pull-on-login overwrite for this shell so a harvest reads the
 		// guest's REAL current files, not the broker's stale copy (H6).
@@ -252,7 +252,7 @@ func (s *Server) pushCredsToRunningProjects(user, guest string) {
 			}
 			ectx, ecancel := context.WithTimeout(ctx, 30*time.Second)
 			// A login shell that does nothing — profile.d does the work.
-			_, _, err := s.orch.Exec(ectx, st.ContainerID, orchestrator.ExecSpec{
+			_, _, err := s.guest.Exec(ectx, st.ContainerID, orchestrator.ExecSpec{
 				User: guest,
 				Env:  []string{"HOME=/home/" + guest, "USER=" + guest},
 				Cmd:  []string{"bash", "-lc", ":"},

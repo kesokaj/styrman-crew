@@ -355,7 +355,7 @@ func (s *Server) checkFile(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	_, out, err := s.orch.Exec(ctx, cid, orchestrator.ExecSpec{
+	_, out, err := s.guest.Exec(ctx, cid, orchestrator.ExecSpec{
 		User:    guest,
 		Env:     []string{"HOME=/home/" + guest, "USER=" + guest},
 		WorkDir: ws,

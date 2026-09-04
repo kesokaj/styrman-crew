@@ -58,7 +58,7 @@ func (s *Server) projectStats(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	st, err := s.orch.Status(r.Context(), u.Username, p.ID)
+	st, err := s.guest.Status(r.Context(), u.Username, p.ID)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -71,7 +71,7 @@ func (s *Server) projectStats(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
 	view := projectStatsView{State: "running"}
-	if code, out, err := s.orch.Exec(ctx, st.ContainerID, orchestrator.ExecSpec{
+	if code, out, err := s.guest.Exec(ctx, st.ContainerID, orchestrator.ExecSpec{
 		User: guest,
 		Env:  []string{"HOME=/home/" + guest},
 		Cmd:  []string{"bash", "-c", statsScript},

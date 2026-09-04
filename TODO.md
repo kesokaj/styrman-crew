@@ -11,7 +11,9 @@ Add new items below as they arise.
 ## Inbox
 
 - [ ] 🟢 Coverage tracing for v1.22.0 is incomplete (release gate, 2026-09-04). The verifier ran every command green but did not finish tracing each changed file to a covering test; the largest untraced surface is `web/src/components/SidePanelGit.tsx` (351 changed lines), plus `deploy/verify-commit.sh`'s new CSS-origin gate step, `image/skel/*`, and `integration.sh`'s own additions. These are UNKNOWN, not established failures — `SidePanelGit.tsx` is exercised by the e2e git checks but not line-for-line. Per AGENTS.md a changed file with no covering test is a FAIL row, so this needs closing out rather than assuming.
-- [ ] 🟢 The six git HTTP handlers added in v1.22.0 (`fetch`, `pull`, `branches`, `checkout`, `log`, `stash`) have NO Go unit test — only `validCommitHash`/`validBranchName`/`stashOps` are unit-tested, and the handlers are covered by e2e/integration only. Cause: `Server.orch` is a concrete `*orchestrator.Orchestrator` with no exec seam to fake. This is the SAME gap already recorded for `checkFile`/`formatFile` below and as BUG-003's residual — three instances now, so an `Exec` interface on the orchestrator would close all of them at once. (release gate 2026-09-04)
+- [x] The six git HTTP handlers added in v1.22.0 have NO Go unit test. **DONE 2026-09-04**: `internal/httpapi` gained a narrow `guestRuntime` interface (`Status` + `Exec`), set from the orchestrator in `New()`, with 15 call sites routed through it and 24 handler tests in `guestexec_test.go`. The argv IS the security decision in these handlers (`add -A` not `commit -a`, `--end-of-options` on the switch path, `-u` on stash push, no `--prune` on fetch) and none of it could be asserted before — a comment claiming an invariant is not a test. **Correction to this item's own claim:** the Exec seam closes this and the `checkFile`/`formatFile` item, but NOT BUG-003's residual, which needs a fake DOCKER client — a different seam entirely. Two of three, not three.
+
+- [ ] 🟡 BUG-003's residual, restated at its real size and NOT closed by the `guestRuntime` seam: `EnsureRunning` has no unit test because `internal/orchestrator` has no fake Docker client. `o.docker` is a concrete `*client.Client` reached through 19 distinct methods (ContainerCreate/Start/Inspect/List/Remove/Stop, four Exec calls, six Network calls, ImageInspect, Ping, ContainerLogs), and `EnsureRunning` alone is 166 lines. Closing it means a `dockerAPI` interface over at least the subset EnsureRunning touches, plus a fake — its own task, roughly the size of the seam just done. Worth doing: what becomes testable is the symlink check on the bind source (BUG-002/003), the guard that keeps one tenant's home out of another's mount. (sized 2026-09-04)
 - [ ] 🟢 A transient 404 tripped the e2e client-error gate once during teardown (a request outliving a deleted project) and did NOT reproduce; never root-caused. The gate now records the failing URL alongside the browser's message, so a recurrence is diagnosable. (v1.22.0, 2026-09-04)
 
 - [x] Bug (operator, 2026-09-03): after some minutes the bottom stats bar and the sidebar show "fail to fetch"; a browser F5 fixes it until it recurs. **DONE 2026-09-03** — BUG-001: the ingress session token (caddy-security default lifetime 900 s) expires, the `/api/*` redirect to the auth subdomain is cross-origin, and the SPA's `fetch()` rejected before the existing re-auth handling could see it. `request()` now uses `redirect: "manual"` and treats an opaque redirect as an expired session (one toast, one reload). See `.agents/docs/bugs/BUG-001-fail-to-fetch-session-expiry.md` and `.agents/docs/changes/2026-09-03-fail-to-fetch-session-expiry.md`. Not yet released: ships with the next tag.
@@ -43,12 +45,15 @@ Add new items below as they arise.
   backups would be listed as agents — a real example exists on the host:
   `~/.claude/agents/testing.md.bak.20260901-065226`. Filter `*.bak.*` if
   repointed. (deferred: needs a product decision, not a code fix)
-- [ ] `checkFile`/`formatFile` (`internal/httpapi/check.go`,
-  `internal/orchestrator/exec.go`) have no Go handler-level test — only e2e
-  coverage plus the script-contract unit test
-  (`TestGuestScriptsNeverWaitForStdinEOF`) exercise them. (deferred: flagged
-  by the verifier during the 2026-09-01 syntax-check/auto-updater batch,
-  not fixed in that pass)
+- [x] `checkFile`/`formatFile` have no Go handler-level test. **DONE
+  2026-09-04** via the same `guestRuntime` seam: `guestexec_test.go` covers
+  the format round trip (content reaches the guest on STDIN, never
+  interpolated into the shell script), the `STYRMAN_OK`/`STYRMAN_ERR`
+  sentinel that separates formatted output from a formatter's error message
+  (422 carrying the formatter's own line), an unsupported extension refused
+  without touching the guest, and check's `supported:false` path. Original
+  note: only e2e plus `TestGuestScriptsNeverWaitForStdinEOF` exercised them.
+  (flagged by the verifier 2026-09-01)
 - [x] `deploy/Dockerfile.server` still embeds a committed `web/dist` with
   nothing verifying it matches current `web/src`. **DONE 2026-09-02** — v1.19.0
   `deploy/verify-commit.sh` includes a `web/dist` freshness rebuild-and-compare

@@ -56,7 +56,7 @@ func (s *Server) gitContext(r *http.Request) (user, cid, guest, ws string, p pro
 	if err != nil {
 		return "", "", "", "", pr, err
 	}
-	st, serr := s.orch.Status(r.Context(), u.Username, pr.ID)
+	st, serr := s.guest.Status(r.Context(), u.Username, pr.ID)
 	if serr != nil {
 		return "", "", "", "", pr, serr
 	}
@@ -87,7 +87,7 @@ func (s *Server) gitIdentity(user string) (name, email string) {
 
 // gitExec runs `git -C <ws> <args>` in the guest and returns (exitCode, output).
 func (s *Server) gitExec(ctx context.Context, cid, guest, ws string, args ...string) (int, string, error) {
-	return s.orch.Exec(ctx, cid, orchestrator.ExecSpec{
+	return s.guest.Exec(ctx, cid, orchestrator.ExecSpec{
 		User: guest,
 		Env: []string{
 			"HOME=/home/" + guest,
@@ -883,7 +883,7 @@ func (s *Server) gitSummary(w http.ResponseWriter, r *http.Request) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			st, serr := s.orch.Status(ctx, u.Username, p.ID)
+			st, serr := s.guest.Status(ctx, u.Username, p.ID)
 			if serr != nil || st.State != "running" {
 				return
 			}

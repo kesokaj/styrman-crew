@@ -197,7 +197,7 @@ func (s *Server) importCredentials(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	st, err := s.orch.Status(r.Context(), u.Username, p.ID)
+	st, err := s.guest.Status(r.Context(), u.Username, p.ID)
 	if err != nil || st.State != "running" {
 		writeErr(w, http.StatusConflict, errors.New("name a RUNNING project to import from"))
 		return
