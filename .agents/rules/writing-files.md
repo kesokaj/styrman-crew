@@ -3,7 +3,7 @@ name: writing-files
 description: Never create or delete at a path without checking it first; a "new tests" commit that deletes lines, or an unnamed " D" after an rm, is a red flag.
 ---
 
-# Writing and deleting files (BUG-005, BUG-006)
+# Writing and deleting files (BUG-005, BUG-006, BUG-007)
 
 The first ADR-064 test file was written with `cat > cmd/styrman/migrate_test.go`
 onto a file that had existed since v1.3, silently deleting two live tests; three
@@ -43,3 +43,31 @@ dispatched afterwards inherits it. A bare `cd web` earlier in a session is
 what put an agent's memory file under `web/` in the first place. Use a
 subshell — `(cd web && npm test)` — so the next command, and the next agent,
 still start where they think they do.
+
+## Verify it is TEXT (BUG-007)
+
+Two v1.22.0 source files were written through a Python heredoc that emitted
+RAW control bytes where the two-character escape was meant. The code worked —
+NUL is a legal JavaScript string character — so every test passed. But git
+classified both files as binary, and a code review, a security review and two
+later phase reviews all read "Binary files differ" and signed off on files
+they could not see.
+
+- After any heredoc or generator write: `git diff --numstat <path>`. A `-` in
+  both columns, or `file <path>` saying "data", means the content is invisible
+  to every reviewer. Stop, exactly as for BUG-005's deletion count.
+- Never emit a raw control byte into source. Write the ESCAPE and let the
+  TARGET language decode it. In a Python heredoc that means a raw string
+  prefix, or doubling the backslashes.
+- A target language that accepts the byte silently (TypeScript, Markdown) is
+  more dangerous than one that rejects it (Go's `illegal character NUL`): the
+  same mistake in a Go test failed loudly the same day and was fixed at once.
+- This applies to REVIEW ARTIFACTS too. The security findings file that raised
+  this had embedded the bytes it was describing, making itself unreadable.
+- Reviewing a diff that says "Binary files differ" for something that should
+  be source is not a review. Refuse rather than skip.
+
+The three sections above are one family: BUG-005 wrote over a file without
+looking, BUG-006 deleted files without looking, BUG-007 wrote files nobody
+could look at. Each was invisible in the normal review path, and each is
+caught by asking git what actually changed before committing.

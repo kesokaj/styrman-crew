@@ -587,9 +587,9 @@ smallest, most isolated changes land first.
 - [x] Ref/hash/op validation helpers + their table tests FIRST. **DEVIATION from the plan, deliberate:** the plan said to validate with `git check-ref-format --branch`; `validBranchName` instead gates only what makes ARGV dangerous (leading `-`, C0/C1/DEL, space, invalid UTF-8, >255 bytes) and leaves ref-format validity to git, which rejects it authoritatively. Reimplementing git's ref rules in Go would mean silently drifting from a spec we do not own; `TestValidBranchNameDefersRefFormatToGit` pins that as a decision. A real bug was caught by these tests: ranging a string DECODES UTF-8, so a lone 0x9B byte became RuneError and slipped past the C1 check into argv — argv carries bytes, so invalid UTF-8 is now rejected before ranging — verify: tier 1, AI
 - [x] `fetch` (NO `--prune` — see the security note) + `pull --ff-only` handlers and routes — verify: tier 3, AI
 - [x] `branches` + `checkout` handlers and routes; the switch form runs `checkout --end-of-options <name> --` — verify: tier 3, AI
-- [ ] `log` handler (limit clamped 1..200) — verify: tier 1 + tier 2, AI
-- [ ] `diff?commit=` via `git show --format= --patch`, exit code checked → 404; comment why the sibling branches do NOT check it (`--no-index` exits 1 on difference) — verify: tier 1 + tier 2, AI
-- [ ] Root-commit diff returns a real patch, not an error — verify: tier 2 integration, AI
+- [x] `log` handler (limit clamped 1..200) — verify: tier 3 e2e, AI
+- [x] `diff?commit=` via `git show --format= --patch`, exit code checked → 404; the sibling branches deliberately still do NOT check theirs, commented — verify: tier 3 e2e, AI
+- [x] Root-commit diff returns a real patch, not an error. VERIFIED EMPIRICALLY post-release (2026-09-04) rather than assumed, because this case is the entire reason `git show` was chosen: on a repo whose root commit carries content, `git show --format= --patch --no-color <root> --` returns the full patch at exit 0, while the rejected `git diff <root>~1..<root>` form fails with `fatal: bad revision`. The e2e clicks a commit but does not specifically pin the ROOT one, so this was an untested assumption until now — verify: manual, AI
 - [x] `stash` handler: closed op enum; `list` returns structured entries parsed from `--format=%gd%x00%gs`; `push -u` — verify: tier 1 + tier 3, AI
 - [x] `api.ts` client methods added, and `encodeURIComponent(project)` applied across the WHOLE git block incl. the pre-existing methods — verify: tier 1, AI
 - [x] Narrowed (not ticked) the `api.ts` encoding item in `TODO.md`. First wording implied `project` was now generally handled; the reviewer caught that `scopeBase` and ~20 other call sites still interpolate it unencoded, and the note now says the fix is scoped to the git endpoints only — verify: reread, AI
@@ -603,7 +603,7 @@ smallest, most isolated changes land first.
 - [x] Full `go test ./...`, the vendored ingress module, `go vet`, web checks, integration, e2e — verify: `verifier`, AI
 - [x] `bash deploy/vulncheck.sh` — the two accepted unfixable `docker/docker` findings only (`TODO.md:62`), unchanged by this release — verify: AI
 - [x] `deploy/verify-commit.sh` — OK on `acb5918`, then RE-RUN on the final release commit after the gate fixes, since the gate must run against what is actually tagged — verify: AI
-- [ ] Tag + release v1.22.0 per `specs/styrman/versioning.md`, runtime image rebuilt at the same version (phase 1 forces it) — verify: user
+- [x] Tag + release v1.22.0. Signed tag `v1.22.0` -> `209edce`, pushed 14:55; the auto-updater built all three images and deployed at 14:59, `styrman-server:1.22.0` healthy, no `failed-version` latch. `deploy/verify-commit.sh` was re-run on `209edce` (the commit actually tagged) after the gate fixes, not just on `acb5918`. REMAINING, and only the operator can do it: a FRESH Google sign-in — `versioning.md` is explicit that an existing session staying logged in proves nothing, and caddy-security surviving a version bump is the riskiest step — verify: user
 
 ## Cold-reader resolutions (round 1, 2026-09-04)
 
