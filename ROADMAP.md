@@ -12,7 +12,9 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**v1.21.0 shipped 2026-09-04** (`.agents/docs/changes/2026-09-04-v1.21.0-unnest-project-homes.md`): the setup VM's home is `homes/<user>/base` and no guest mount contains the project homes (ADR-064); production's base home migrated at the deploy. Before it, v1.20.0 (the harness migration end to end, BUG-001, eight-hour sessions). **In flight: v1.22.0 — UI + git improvements** (`.agents/docs/plans/2026-09-04-ui-git-improvements-v1.22.0.md`), operator-approved 2026-09-04: `GOPATH=$HOME/.go` in the seeded skel (new homes only), terminal/editor font settings, file-explorer back/forward/up + a readable crumb bar, the Recent strip as a collapsible resizable wrapping grid, git diffs in the main pane + a UUID fast-commit, and the git verbs fetch/pull/branches/log/stash. Cut from the request: the global UI density rework and `git commit --amend`. Still queued behind it are the operator's picks from `TODO.md` (the legacy `migrateWorkspaces` path, the `git.go:73` read, the upstream `sh-agent` items, the ingress lows).
+**v1.22.0 shipped 2026-09-04** (`.agents/docs/changes/`, six phase entries plus the release entry; gate: `.agents/docs/reviews/2026-09-04-preflight-v1.22.0.md`): `GOPATH=$HOME/.go` in the seeded skel (NEW project homes only — existing homes keep `$HOME/go`), terminal/editor font settings, file-explorer back/forward/up with a readable crumb bar, the Recent strip as a collapsible resizable grid, git diffs in the main pane plus a UUID fast-commit, and six new git verbs (fetch, pull, branches, log, stash). Before it, v1.21.0 (ADR-064, the un-nested project homes).
+
+Carried forward, unstarted: the operator's picks from `TODO.md` — the legacy `migrateWorkspaces` path, the `git.go:73` confined read, the upstream `sh-agent` items, and the ingress lows. Two new items from this release's gate are also in `TODO.md`: the incomplete coverage tracing (largest untraced surface is `SidePanelGit.tsx`) and the fact that the six new git HTTP handlers have no Go unit test, because `Server.orch` is a concrete type with no exec seam.
 
 ## Next
 

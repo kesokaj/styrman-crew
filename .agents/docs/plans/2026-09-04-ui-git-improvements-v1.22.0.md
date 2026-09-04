@@ -600,9 +600,9 @@ smallest, most isolated changes land first.
 - [x] `web/dist` rebuilt — verify: freshness step, AI
 
 ### Release
-- [ ] Full `go test ./...`, `(cd deploy/caddy/ingress && go test ./...)`, `go vet`, web checks, integration, e2e — verify: `verifier`, AI
-- [ ] `bash deploy/vulncheck.sh` (a new npm dependency landed) — verify: AI
-- [ ] `deploy/verify-commit.sh` on the release commit — verify: AI
+- [x] Full `go test ./...`, the vendored ingress module, `go vet`, web checks, integration, e2e — verify: `verifier`, AI
+- [x] `bash deploy/vulncheck.sh` — the two accepted unfixable `docker/docker` findings only (`TODO.md:62`), unchanged by this release — verify: AI
+- [x] `deploy/verify-commit.sh` — OK on `acb5918`, then RE-RUN on the final release commit after the gate fixes, since the gate must run against what is actually tagged — verify: AI
 - [ ] Tag + release v1.22.0 per `specs/styrman/versioning.md`, runtime image rebuilt at the same version (phase 1 forces it) — verify: user
 
 ## Cold-reader resolutions (round 1, 2026-09-04)
