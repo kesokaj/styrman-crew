@@ -335,8 +335,10 @@ func (s *Server) gitCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if code != 0 {
-		// e.g. "nothing to commit" or a missing identity — surface git's message.
-		writeErr(w, http.StatusConflict, errors.New(firstLine(out)))
+		// e.g. "nothing to commit" or a missing identity — surface git's
+		// message, stripped/redacted/capped like every other guest-controlled
+		// string (the phase-5 fix reached gitRun but missed this site).
+		writeErr(w, http.StatusConflict, errors.New(guestErrMessage("git commit", out)))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"output": strings.TrimSpace(out)})
@@ -360,7 +362,18 @@ func (s *Server) gitPush(w http.ResponseWriter, r *http.Request) {
 	args := []string{"push"}
 	if code, _, _ := s.gitExec(ctx, cid, guest, ws, "rev-parse", "--abbrev-ref", "@{upstream}"); code != 0 {
 		_, br, _ := s.gitExec(ctx, cid, guest, ws, "rev-parse", "--abbrev-ref", "HEAD")
-		args = []string{"push", "-u", "origin", strings.TrimSpace(br)}
+		branch := strings.TrimSpace(br)
+		// This name is GUEST-controlled: plumbing can create `refs/heads/-foo`,
+		// which rev-parse reports verbatim and `push -u origin -foo` then reads
+		// as options (verified on git 2.47.3: -f + -o o). gitCheckout gates its
+		// branch name; this sibling did not (security review of the v1.22.0
+		// release). --end-of-options does not work for push, so validate.
+		if !validBranchName(branch) {
+			writeErr(w, http.StatusConflict,
+				errors.New("current branch name is not pushable: "+guestErrMessage("branch", branch)))
+			return
+		}
+		args = []string{"push", "-u", "origin", branch}
 	}
 	code, out, err := s.gitExec(ctx, cid, guest, ws, args...)
 	if err != nil {
@@ -368,7 +381,11 @@ func (s *Server) gitPush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if code != 0 {
-		writeErr(w, http.StatusBadGateway, errors.New(firstLine(out)))
+		// The MOST remote-influenced string in this file: a push failure carries
+		// the server's sideband output, and the remote URL comes from the
+		// guest-writable .git/config. guestErrMessage strips controls, redacts a
+		// credential riding in a URL, and caps the length.
+		writeErr(w, http.StatusBadGateway, errors.New(guestErrMessage("git push", out)))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"output": strings.TrimSpace(out)})

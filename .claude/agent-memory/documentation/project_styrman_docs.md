@@ -1186,4 +1186,20 @@ itself current" bullet's mechanism phrase). Did NOT touch REQUIREMENTS.md/
 TODO.md/changelogs/ADRs per task scope (ADR-057 already existed and already
 matched code; changelog subagent's lane for a v1.17.3 entry).
 
+**2026-09-04, v1.22.0 sync (README-only pass; api.md/guide.md/runtime-image.md/
+testing README already updated by the release itself):** README's Git-tab
+bullet widened to cover Fast commit, Fetch/Pull (`--ff-only`), branch
+dropdown, Commits list, and stash push/pop, plus diffs moving to a
+full-width main-pane view (was a 64px in-panel box); added file-explorer
+Back/Forward/Up + `Alt+←/→` + breadcrumb bar + collapsible Recent-files
+strip, and Settings → Appearance (terminal/editor font size+family) to the
+first Why bullet; Status section's top entry became v1.22.0 with a short
+summary, v1.21.0 entry kept below it. AGENTS.md:58's stale `# 60 checks`
+inline comment on `integration.sh` corrected to 68 (README.md already had
+the count elsewhere as the live source of truth). Deploy guides
+(local/remote/gcp.md) judged unchanged: v1.22.0 only added a CSS-external-
+origin gate step inside `deploy/verify-commit.sh`, not a procedure change —
+confirmed by grepping the guides (they reference verify-commit.sh generically,
+never enumerate its internal gates).
+
 See [[feedback-styrman-doc-edits]] for edit-process lessons.

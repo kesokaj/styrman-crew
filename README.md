@@ -19,14 +19,20 @@ containers disposable always.
   terminal is the surface, organized like a conversation app: projects →
   terminals in the sidebar, project context (files, ports, history, git)
   in the side panel. A thin status bar under every terminal shows live
-  CPU/mem/disk/IP/uptime and how many credentials are synced into it.
+  CPU/mem/disk/IP/uptime and how many credentials are synced into it. The
+  file explorer has Back/Forward/Up navigation (`Alt+←`/`Alt+→` too) and a
+  breadcrumb bar, with a collapsible, resizable Recent-files strip above
+  it; Settings → Appearance sets terminal and editor font size and family.
 - **Every project is a git repo, always.** Initialized (or cloned) at
   creation, no exceptions. The **Git tab is a real client**: status, stage/
-  unstage, commit (author auto-injected), push, and per-file diffs, running
-  inside the project's own VM so the right identity and credentials apply.
-  Server-side **Format** reformats a file with its real CLI formatter
-  (`gofmt`, `prettier`, `black`, `rustfmt`, `shfmt`, `terraform fmt`, …), also
-  run inside the VM.
+  unstage, commit (author auto-injected), a Fast commit button for a
+  one-click stage-everything-and-commit, Fetch/Pull (`--ff-only`), push, a
+  branch dropdown that switches or creates, a Commits list, and stash push/
+  pop — all running inside the project's own VM so the right identity and
+  credentials apply. Diffs open full-width in the main pane, a third view
+  beside Terminal and Editor. Server-side **Format** reformats a file with
+  its real CLI formatter (`gofmt`, `prettier`, `black`, `rustfmt`, `shfmt`,
+  `terraform fmt`, …), also run inside the VM.
 - **Per-project everything.** Each project owns its **home** (ADR-031) and
   its workspace storage (ADR-027), its Docker daemon and disk, its network —
   and its apt packages: what you `apt install` is captured at shutdown and
@@ -92,8 +98,15 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.21.0**, deployed: https://crew.styrman.xyz (Google sign-in).
+**v1.22.0**, deployed: https://crew.styrman.xyz (Google sign-in).
 
+- **v1.22.0** (2026-09-04): the Git tab grew from a status/stage/commit/push
+  box into a fuller client — Fast commit, Fetch/Pull (`--ff-only`), a branch
+  dropdown, a Commits list, and stash push/pop — and diffs now open
+  full-width in the main pane instead of a 64px box in the side panel.
+  Settings → Appearance adds terminal/editor font size and family; the file
+  explorer gained Back/Forward/Up navigation, a breadcrumb bar, and a
+  collapsible, resizable Recent-files strip.
 - **v1.21.0** (2026-09-04): the setup VM's home is now `homes/<user>/base`,
   not `homes/<user>` itself, so no guest mount contains the project homes
   (ADR-064). The server migrates an old base home into `base/` once at

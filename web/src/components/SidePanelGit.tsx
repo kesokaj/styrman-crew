@@ -9,7 +9,11 @@ import {
 import { usePolled } from "../lib/hooks";
 import { toast } from "../lib/toast";
 import { ConfirmDialog, PromptDialog } from "./ui";
-import { openDiffInPane } from "../lib/editorPane";
+import {
+  evictCleanProjectPanes,
+  notifyFileSaved,
+  openDiffInPane,
+} from "../lib/editorPane";
 
 export function GitTab({
   project,
@@ -61,6 +65,23 @@ export function GitTab({
   }, [project, running, showLog, data?.ahead]);
   const staged = files.filter((f) => f.staged && f.staged !== "?");
   const changed = files.filter((f) => f.unstaged && f.unstaged !== "");
+
+  /**
+   * Called after any verb that REWRITES the working tree (checkout, pull,
+   * stash push/pop). Open editor buffers now predate the tree; clean ones are
+   * dropped so the next open re-reads, and a dirty one is reported rather than
+   * discarded — Save would otherwise write pre-switch content over the new
+   * tree (release review, 2026-09-04).
+   */
+  const treeChanged = () => {
+    const staleDirty = evictCleanProjectPanes(project);
+    notifyFileSaved(); // the explorer re-lists; the tree moved under it too
+    if (staleDirty > 0)
+      toast(
+        "error",
+        `${staleDirty} editor buffer${staleDirty === 1 ? "" : "s"} still hold${staleDirty === 1 ? "s" : ""} pre-change content — saving would overwrite the new tree`,
+      );
+  };
 
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -141,6 +162,7 @@ export function GitTab({
                     setBranchOpen(false);
                     run(async () => {
                       await api.gitCheckout(project, b);
+                      treeChanged();
                       toast("success", `Switched to ${b}`);
                     });
                   }}
@@ -182,7 +204,7 @@ export function GitTab({
           }
           disabled={busy}
           className="rounded px-2 py-0.5 text-text-dim hover:bg-bg-hover hover:text-text disabled:opacity-40"
-          title="git fetch --all --prune (updates remote refs, touches no files)"
+          title="git fetch --all (updates remote refs, touches no files; no --prune by design)"
         >
           Fetch
         </button>
@@ -190,6 +212,7 @@ export function GitTab({
           onClick={() =>
             run(async () => {
               await api.gitPull(project);
+              treeChanged();
               toast("success", "Pulled");
             })
           }
@@ -394,6 +417,7 @@ export function GitTab({
                 run(async () => {
                   await api.gitStash(project, "push");
                   setStashes((await api.gitStashList(project)).entries);
+                  treeChanged();
                   toast("success", "Stashed (including untracked files)");
                 })
               }
@@ -407,6 +431,7 @@ export function GitTab({
                 run(async () => {
                   await api.gitStash(project, "pop");
                   setStashes((await api.gitStashList(project)).entries);
+                  treeChanged();
                   toast("success", "Popped");
                 })
               }
@@ -460,6 +485,7 @@ export function GitTab({
           onSubmit={(name) =>
             run(async () => {
               await api.gitCheckout(project, name.trim(), true);
+              treeChanged();
               setNewBranch(false);
               toast("success", `Created and switched to ${name.trim()}`);
             })

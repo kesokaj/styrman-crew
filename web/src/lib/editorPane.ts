@@ -329,6 +329,36 @@ export function evictFromPanes(
   if (changed) emit();
 }
 
+/**
+ * The whole working tree changed underneath the editor — a branch switch, a
+ * pull, a stash push/pop. Unlike evictFromPanes, no single path is at fault:
+ * every PROJECT-scope buffer may now predate the tree (home-scope files live
+ * outside the worktree and are unaffected).
+ *
+ * Clean panes are evicted, so the next open re-reads from disk. DIRTY panes
+ * are deliberately LEFT ALONE: discarding someone's unsaved typing to protect
+ * them from a stale save trades one kind of data loss for another. The count
+ * of those is returned so the caller can warn instead — the danger is real
+ * (Save would write pre-switch content over the new tree), it just is not
+ * ours to resolve silently.
+ */
+export function evictCleanProjectPanes(project: string): number {
+  let changed = false;
+  let dirtyLeft = 0;
+  for (const [key, st] of states) {
+    if (!key.startsWith(`${project}/`) || !st.file) continue;
+    if (st.file.scope.kind !== "project") continue;
+    if (st.dirty) {
+      dirtyLeft++;
+      continue;
+    }
+    states.set(key, { ...st, file: null, dirty: false, draft: null });
+    changed = true;
+  }
+  if (changed) emit();
+  return dirtyLeft;
+}
+
 // A save in the editor pane changes a file's size/mtime, but the pane is a
 // SIBLING of the explorer, not its child, so it cannot call load() directly
 // (the deleted modal could). This counter is the signal; the explorer
