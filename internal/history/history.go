@@ -6,6 +6,7 @@ package history
 import (
 	"context"
 	"fmt"
+	"github.com/kesokaj/styrman-crew/internal/files"
 	"io"
 	"os"
 	"path"
@@ -36,7 +37,7 @@ func List(homeDir, project string) ([]Transcript, error) {
 	// "No transcripts yet" (missing home/dir) is empty+nil; any OTHER failure
 	// (permissions, I/O) is a real error — hiding it made a broken transcript
 	// dir indistinguishable from an idle project (audit finding).
-	rt, err := os.OpenRoot(homeDir)
+	rt, err := files.OpenRoot(homeDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return []Transcript{}, nil
@@ -71,7 +72,7 @@ func List(homeDir, project string) ([]Transcript, error) {
 		if de.IsDir() || !strings.HasSuffix(de.Name(), ".log") {
 			continue
 		}
-		info, err := de.Info()
+		info, err := rt.Lstat(path.Join(logsRel(project), de.Name())) // not de.Info(): fails on a sub-root (Go 1.25), see files.List
 		if err != nil {
 			continue
 		}
@@ -122,7 +123,7 @@ func Search(ctx context.Context, homeDir, project, query string) ([]Match, error
 	if len(transcripts) > searchMaxFiles {
 		transcripts = transcripts[:searchMaxFiles]
 	}
-	rt, err := os.OpenRoot(homeDir)
+	rt, err := files.OpenRoot(homeDir)
 	if err != nil {
 		return []Match{}, nil
 	}
@@ -204,7 +205,7 @@ func Read(homeDir, project, id string, maxBytes int64) (string, error) {
 	if maxBytes <= 0 {
 		maxBytes = 256 << 10
 	}
-	rt, err := os.OpenRoot(homeDir)
+	rt, err := files.OpenRoot(homeDir)
 	if err != nil {
 		return "", err
 	}

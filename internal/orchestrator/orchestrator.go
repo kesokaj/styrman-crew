@@ -264,7 +264,15 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 		// seeds from the image (dotfiles + harness). Created before the mount
 		// so Docker doesn't auto-create it root-owned.
 		phome := o.cfg.ProjectHome(user, project)
-		if err := os.MkdirAll(phome, 0o700); err != nil {
+		// Created through an os.Root at the base home, not by path:
+		// os.MkdirAll follows a symlink the guest planted at `p` and would
+		// create a root-owned directory anywhere on the host (release review
+		// 2026-09-04, same class as BUG-003). The base home itself is below
+		// the server-controlled HomesDir.
+		if err := os.MkdirAll(o.cfg.UserHome(user), 0o700); err != nil {
+			return "", fmt.Errorf("create base home: %w", err)
+		}
+		if err := mkdirAllConfined(o.cfg.UserHome(user), filepath.Join("p", project), 0o700); err != nil {
 			return "", fmt.Errorf("create project home: %w", err)
 		}
 		// Re-check now that the home exists: MkdirAll returns nil through a
@@ -281,7 +289,10 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 		// a wipe-delete then strands the record with "wipe incomplete"
 		// forever. Pre-create it as ourselves (0755 like dockerd would, for
 		// in-guest traversal); a root server keeps today's exact layout.
-		if err := os.MkdirAll(filepath.Join(phome, "projects", opts.Dir), 0o755); err != nil {
+		// Through an os.Root at the (verified real) project home: ~/projects
+		// is guest-writable and a link there would turn this into a
+		// root-owned mkdir on the host (release review 2026-09-04).
+		if err := mkdirAllConfined(phome, filepath.Join("projects", opts.Dir), 0o755); err != nil {
 			return "", fmt.Errorf("create workspace mountpoint: %w", err)
 		}
 		id, err = o.create(ctx, createSpec{
@@ -1266,4 +1277,15 @@ func projectHomeIsReal(base, phome string) error {
 		return nil
 	}
 	return err
+}
+
+// mkdirAllConfined creates rel below base through an os.Root, so a symlink
+// the guest planted on the way cannot redirect the mkdir outside base.
+func mkdirAllConfined(base, rel string, perm os.FileMode) error {
+	rt, err := os.OpenRoot(base)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+	return rt.MkdirAll(rel, perm)
 }

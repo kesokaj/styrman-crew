@@ -102,3 +102,38 @@ func TestListNamesIsCapped(t *testing.T) {
 func fmtInt(i int) string {
 	return string(rune('0'+i/1000%10)) + string(rune('0'+i/100%10)) + string(rune('0'+i/10%10)) + string(rune('0'+i%10))
 }
+
+// The whole explorer runs through roots below a trusted base: List must
+// return every entry with its size there too. Under Go 1.25 a sub-root's
+// DirEntry.Info() fails, and the first Trust cut turned every project
+// listing into "Empty directory" (release e2e, 2026-09-04).
+func TestListWorksBelowATrustedBase(t *testing.T) {
+	base := t.TempDir()
+	Trust(base)
+	ws := filepath.Join(base, "alice", "proj")
+	if err := os.MkdirAll(filepath.Join(ws, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "README.md"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := List(ws, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("List below a trusted base returned %d entries, want 2: %+v", len(entries), entries)
+	}
+	var sawFile bool
+	for _, e := range entries {
+		if e.Name == "README.md" {
+			sawFile = true
+			if e.Size != 5 || e.Dir {
+				t.Errorf("README.md entry = %+v, want size 5, not a dir", e)
+			}
+		}
+	}
+	if !sawFile {
+		t.Error("README.md missing from the listing")
+	}
+}

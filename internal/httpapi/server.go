@@ -720,7 +720,17 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	// The per-project home (ADR-031) — created here too so the Files "Home"
 	// scope works before the first boot; the entrypoint seeds it on boot.
-	if err := os.MkdirAll(s.cfg.ProjectHome(u.Username, p.ID), 0o700); err != nil {
+	// Through an os.Root at the base home: `p` is guest-writable (the setup
+	// VM mounts the base home), and a path MkdirAll would follow a planted
+	// link (release review 2026-09-04, BUG-003 class).
+	if err := os.MkdirAll(s.cfg.UserHome(u.Username), 0o700); err == nil {
+		err = files.MkdirAllPerm(s.cfg.UserHome(u.Username), filepath.Join("p", p.ID), 0o700)
+		if err != nil {
+			_ = sp.projects.Remove(p.ID)
+			writeErr(w, http.StatusInternalServerError, errors.New("cannot create project home"))
+			return
+		}
+	} else {
 		_ = sp.projects.Remove(p.ID)
 		writeErr(w, http.StatusInternalServerError, errors.New("cannot create project home"))
 		return

@@ -91,8 +91,26 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.18.1**, deployed: https://crew.styrman.xyz (Google sign-in).
+**v1.20.0**, deployed: https://crew.styrman.xyz (Google sign-in).
 
+- **v1.20.0** (2026-09-04): the agent harness every project home receives is
+  now a verbatim mirror of the operator's `styrman-harness` repo, installed
+  by `sh-agent` — 28 skills, 7 subagents, global context, no hooks, scripts,
+  or settings files; homes seeded by the previous harness are migrated
+  (never deleted) into `~/.styrman/harness-backup-<timestamp>/` (ADR-062),
+  and Settings shows the installed roster. The "Failed to fetch" that hit
+  active sessions every ~15 minutes is fixed — the SPA now re-authenticates
+  once on session expiry instead of surfacing the error (BUG-001) — and the
+  ingress session lifetime is now a deliberate eight hours, not Caddy's
+  900-second default (ADR-063). Three symlink-plantable project-home path
+  exposures found and fixed during the harness work (BUG-002/003):
+  `internal/files.Trust` confines file access per tenant, the transcript
+  janitor is confined the same way, and the orchestrator refuses a
+  symlinked bind source before handing it to Docker. The integration suite
+  now asserts the seeded harness and R1 boot latency (65 checks).
+- v1.19.x (2026-09-02): host-writable-path containment asserted end to end,
+  a cross-tenant project-deletion bug fixed, and the ingress admin loopback
+  guard now verifies an IP instead of trusting a name.
 - The 2026-08-30 marathon shipped an ops row + microVM logs on the
   dashboard, sidebar git badges, project-scoped env vars, and a sticky stop
   with a busy-aware idle reaper (ADR-042…045), followed by a same-day

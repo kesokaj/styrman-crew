@@ -24,6 +24,12 @@ its least-trusted parent.
 - **Deletion bases:** the transcript janitor is the model — list and open
   through the tenant root; stat with `fs.Stat(root.FS(), rel)`, not
   `DirEntry.Info()`, which fails on a sub-root under Go 1.25.
+- **Reading through any confined root:** never `DirEntry.Info()` after
+  `ReadDir` — use `rt.Lstat`/`rt.Stat` through the root (BUG-004: the first
+  `files.Trust` cut turned every project listing into "Empty directory").
+  Every unit test of a root-reading function needs a case below a
+  `files.Trust` base; an integration check of a listing asserts a known
+  entry, never just the JSON key.
 - **New paths:** when a new tree is nested under an existing mount, ask who
   can replace its components before writing the code, and add a test that
   plants the symlink (`internal/files/trust_test.go`,

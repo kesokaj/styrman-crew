@@ -1,6 +1,7 @@
 package history
 
 import (
+	"github.com/kesokaj/styrman-crew/internal/files"
 	"os"
 	"path/filepath"
 	"testing"
@@ -56,5 +57,29 @@ func TestSearch(t *testing.T) {
 		if x.Transcript == "conv-3" {
 			t.Error("search followed a symlink escaping the home")
 		}
+	}
+}
+
+// Transcript listing runs through a root below a trusted tenant base in
+// production (the project home under HomesDir). A sub-root's
+// DirEntry.Info() fails under Go 1.25 and would drop every transcript
+// (release e2e 2026-09-04, BUG-004): List must read sizes via the root.
+func TestListBelowATrustedBase(t *testing.T) {
+	base := t.TempDir()
+	files.Trust(base)
+	home := filepath.Join(base, "alice", "p", "11111111-1111-4111-8111-111111111111")
+	logs := filepath.Join(home, ".styrman", "logs", "proj")
+	if err := os.MkdirAll(logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logs, "conv-1.log"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := List(home, "proj")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || out[0].ID != "conv-1" || out[0].Size != 5 {
+		t.Fatalf("List below a trusted base = %+v, want one transcript conv-1 of size 5", out)
 	}
 }

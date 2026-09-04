@@ -24,6 +24,7 @@ STATE="$(mktemp -d /tmp/styrman-itest-XXXX)"
 REPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
 API="http://127.0.0.1:${PORT}"
 PASS=0; FAIL=0
+ABORTED=1   # cleared by the last line; a set -e abort must never report green
 
 say()  { echo -e "\n\033[1;34m=== $* ===\033[0m"; }
 ok()   { echo -e "\033[32mPASS\033[0m $*"; PASS=$((PASS+1)); }
@@ -38,10 +39,12 @@ cleanup() {
     [ -n "${CN}" ] && docker rm -f "${CN}" 2>/dev/null || true
     [ -n "${ID}" ] && docker network rm "sdb-${ID}" 2>/dev/null || true
     sudo rm -rf "${STATE}" 2>/dev/null || rm -rf "${STATE}" || true
-    echo "passed=${PASS} failed=${FAIL} skipped=${SKIP}"
+    echo "passed=${PASS} failed=${FAIL} skipped=${SKIP} aborted=${ABORTED}"
     # An EXIT trap's status does NOT become the script's exit status (audit
-    # finding: failing runs exited 0) — exit explicitly from the trap.
-    exit $(( FAIL == 0 ? 0 : 1 ))
+    # finding: failing runs exited 0) — exit explicitly from the trap. A
+    # run that never reached the end (set -e) is a failure too (release
+    # review 2026-09-04: a truncated run reported green).
+    exit $(( FAIL == 0 && ABORTED == 0 ? 0 : 1 ))
 }
 trap cleanup EXIT
 
@@ -55,7 +58,7 @@ mkdir -p "${STATE}/home/projects"   # legacy layout: exercises the migration
 STYRMAN_STATE_DIR="${STATE}" STYRMAN_IMAGE="${IMAGE}" STYRMAN_ADDR="127.0.0.1:${PORT}" \
     "${STATE}/styrman" > "${STATE}/server.log" 2>&1 &
 SERVER_PID=$!
-for i in $(seq 1 20); do
+for _ in $(seq 1 20); do
     curl -fsS "${API}/api/health" >/dev/null 2>&1 && break
     sleep 0.5
 done
@@ -100,7 +103,7 @@ check "no previous-harness artifacts (shell gates, GEMINI.md, settings.json)" \
 # and the entrypoint's ready line. The harness seed sits on that path — a
 # blocking call there once cost 60 s (ADR-047) and nothing asserted it.
 BOOT_AT="$(docker inspect -f '{{.State.StartedAt}}' "${CN}")"
-READY_AT="$(docker logs -t "${CN}" 2>&1 | grep -m1 'project .* ready' | cut -d' ' -f1)"
+READY_AT="$(docker logs -t "${CN}" 2>&1 | grep -m1 'project .* ready' | cut -d' ' -f1 || true)"
 BOOT_GAP="$(awk "BEGIN{printf \"%.2f\", $(date -d "${READY_AT:-1970-01-01T00:00:00Z}" +%s.%N) - $(date -d "${BOOT_AT}" +%s.%N)}")"
 check "boot to ready within R1's 15 s hard limit (measured ${BOOT_GAP}s; soft target 5 s)" \
     "awk 'BEGIN{exit !(${BOOT_GAP} > 0 && ${BOOT_GAP} < 15)}'"
@@ -139,8 +142,10 @@ check "invalid transcript id refused" \
     "[ \$(curl -s -o /dev/null -w '%{http_code}' '${API}/api/projects/${ID}/history/..%2Fetc') != 200 ]"
 
 say "file explorer"
-check "project listing works" "curl -fsS '${API}/api/projects/${ID}/files' | grep -q entries"
-check "home listing works (per-project)" "curl -fsS '${API}/api/projects/${ID}/home/files' | grep -q entries"
+# A real entry, not just the key: an empty "entries":[] passed this check
+# while every project listing was blank (release e2e 2026-09-04, BUG-004).
+check "project listing works (shows .git)" "curl -fsS '${API}/api/projects/${ID}/files' | grep -q '\"name\":\".git\"'"
+check "home listing works (per-project, shows .styrman)" "curl -fsS '${API}/api/projects/${ID}/home/files' | grep -q '\"name\":\".styrman\"'"
 check "path traversal refused" \
     "[ \$(curl -s -o /dev/null -w '%{http_code}' '${API}/api/projects/${ID}/files?path=../../etc') = 400 ]"
 curl -fsS -X PUT "${API}/api/projects/${ID}/file?path=note.txt" \
@@ -279,3 +284,4 @@ done
 check "container gone (async delete)" "! docker ps -a --format '{{.Names}}' | grep -q ${CN}"
 check "workspace wiped" "[ ! -d '${STATE}/projects/${ME}/${ID}' ]"
 check "project gone from API" "! curl -fsS ${API}/api/projects | grep -q ${ID}"
+ABORTED=0

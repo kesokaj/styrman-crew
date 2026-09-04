@@ -193,7 +193,12 @@ func List(root, rel string) ([]Entry, error) {
 	}
 	out := make([]Entry, 0, len(des))
 	for _, de := range des {
-		info, err := de.Info()
+		// rt.Lstat, not de.Info(): for a root reached through Root.OpenRoot
+		// (every root below a trusted tenant base) a DirEntry's Info()
+		// lstats a path with the sub-root's prefix repeated and fails under
+		// Go 1.25 — which silently emptied every listing (release e2e
+		// 2026-09-04, 21 failures; the same quirk bit the janitor first).
+		info, err := rt.Lstat(path.Join(rel, de.Name()))
 		if err != nil {
 			continue
 		}
@@ -453,14 +458,7 @@ func Save(root, rel string, data []byte, perm os.FileMode) error {
 
 // MkdirAll creates rel and any missing parents under root, confined — a
 // symlinked component escaping the root is refused.
-func MkdirAll(root, rel string) error {
-	rt, err := openRoot(root)
-	if err != nil {
-		return err
-	}
-	defer rt.Close()
-	return rt.MkdirAll(cleanRel(rel), 0o755)
-}
+func MkdirAll(root, rel string) error { return MkdirAllPerm(root, rel, 0o755) }
 
 // Rename moves oldRel to newRel, both confined to root — neither side can
 // traverse a symlink that escapes it. Refuses to clobber an existing
@@ -539,4 +537,19 @@ func Exists(root, rel string) bool {
 	defer rt.Close()
 	_, err = rt.Stat(cleanRel(rel))
 	return err == nil
+}
+
+// OpenRoot opens a confined root for a caller outside this package (the
+// history store): the same tenant confinement as every files.* function.
+// Caller closes it.
+func OpenRoot(root string) (*os.Root, error) { return openRoot(root) }
+
+// MkdirAllPerm is MkdirAll with an explicit mode (a project home is 0700).
+func MkdirAllPerm(root, rel string, perm os.FileMode) error {
+	rt, err := openRoot(root)
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+	return rt.MkdirAll(cleanRel(rel), perm)
 }
