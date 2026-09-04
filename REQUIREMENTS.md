@@ -42,7 +42,9 @@
 4. **R4 — Terminal-first, no embedded IDE**: the agent CLI is the primary interface.
    No code-server / VS Code embed. A lightweight file viewer is the ceiling.
 5. **R5 — Agents**: `claude` (Claude Code) and `agy` (Antigravity CLI), selected per
-   project at creation. The agent harness (vendored from `devshell_prompt/harness`) and
+   project at creation. The agent harness (a mirror of `styrman-harness` at
+   `image/harness/COMMIT`, installed by `sh-agent`; no hooks, scripts, or settings files —
+   ADR-062, operator approval 2026-09-04; was "vendored from `devshell_prompt/harness`") and
    the default shell config are carried by the **base image** and seeded identically into
    every project home (ADR-030, revised 2026-08-28; was "deployed into the shared home").
 6. **R6 — Terminals are durable records over tmux sessions** (ADR-016):

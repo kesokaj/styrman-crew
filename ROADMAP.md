@@ -12,7 +12,7 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-Harness migration, operator-confirmed 2026-09-03: scope A (the repo's own harness layout) done; scope B (the image seeds `sh-agent` from a `styrman-harness` mirror, ADR-062) implemented through Phase 4 in four commits on 2026-09-03 — plan `.agents/docs/plans/2026-09-03-image-harness-replacement.md`. Open before the `v1.20.0` release (Phase 5, `/preflight`): the operator's call after the Phase 3 security review did not converge in three rounds (`reviews/2026-09-03-security-harness-phase3.md`; every finding is fixed, the residual is stated in BUG-003), the `REQUIREMENTS.md` R5 wording, and the token-lifetime decision (`TODO.md`). The "fail to fetch" bug is fixed (BUG-001) and ships with that release.
+Harness migration, operator-confirmed 2026-09-03: scope A (the repo's own harness layout) done; scope B (the image seeds `sh-agent` from a `styrman-harness` mirror, ADR-062) implemented through Phase 4 in four commits on 2026-09-03 — plan `.agents/docs/plans/2026-09-03-image-harness-replacement.md`. Open before the `v1.20.0` release (Phase 5, `/preflight`): the operator's call after the Phase 3 security review did not converge in three rounds (`reviews/2026-09-03-security-harness-phase3.md`; every finding is fixed, the residual is stated in BUG-003), the token-lifetime fix (approved 2026-09-04, ships in this release). The `REQUIREMENTS.md` R5 wording was updated with the operator's approval on 2026-09-04 (ADR-062 amendment). The "fail to fetch" bug is fixed (BUG-001) and ships with that release.
 
 ## Next
 

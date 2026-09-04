@@ -2358,3 +2358,16 @@ Verification: v1.18.0 incident (root cause: commit not verified before tag); v1.
 
 Source: image/Dockerfile, image/harness/{COMMIT,VENDORED.md}, image/entrypoint.sh, image/configs/harness-migrate.sh, internal/httpapi/setup.go, web/src/routes/settings.tsx, .agents/docs/testing/styrman/integration.sh.
 Verification: .agents/docs/plans/2026-09-03-image-harness-replacement.md (phases and e2e criteria), .agents/docs/testing/2026-09-03-verify-harness-phase{1,2,3}.md, .agents/docs/reviews/2026-09-03-{review,security}-harness-phase*.md, .agents/docs/changes/2026-09-03-harness-replacement-phase*.md.
+
+---
+
+## ADR-062 — amendment (2026-09-04): R5 wording updated with the operator's approval
+
+**Context:** ADR-062 left `REQUIREMENTS.md` R5 reading "vendored from `devshell_prompt/harness`" pending the operator's explicit approval (REQUIREMENTS.md is immutable without it). The operator approved on 2026-09-04: "change requirements, this harness we are adding is the new one now. Full rip and replace."
+
+**Decision:** R5 now names the harness as a mirror of `styrman-harness` at `image/harness/COMMIT`, installed by `sh-agent`, with no hooks, scripts, or settings files; the previous wording is kept as history in the same sentence. Nothing else in R5 changes.
+
+**Consequences:** The requirement and the implementation agree; ADR-062's last open consequence is closed.
+
+Source: REQUIREMENTS.md R5, ROADMAP.md "Now".
+Verification: .agents/docs/changes/2026-09-03-harness-replacement-phase4.md (the proposal), this session's release entry.
