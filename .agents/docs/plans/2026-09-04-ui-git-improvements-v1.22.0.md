@@ -584,20 +584,20 @@ smallest, most isolated changes land first.
 - [x] `web/dist` rebuilt — verify: freshness step, AI
 
 ### Phase 6 — Git verbs (fetch, pull, branches, log, stash)
-- [ ] Ref/hash/op validation helpers + their table test FIRST — verify: tier 1 `-race`, AI
-- [ ] `fetch` + `pull --ff-only` handlers and routes — verify: tier 1 + tier 2, AI
-- [ ] `branches` + `checkout` handlers and routes — verify: tier 1 + tier 2, AI
+- [x] Ref/hash/op validation helpers + their table tests FIRST. **DEVIATION from the plan, deliberate:** the plan said to validate with `git check-ref-format --branch`; `validBranchName` instead gates only what makes ARGV dangerous (leading `-`, C0/C1/DEL, space, invalid UTF-8, >255 bytes) and leaves ref-format validity to git, which rejects it authoritatively. Reimplementing git's ref rules in Go would mean silently drifting from a spec we do not own; `TestValidBranchNameDefersRefFormatToGit` pins that as a decision. A real bug was caught by these tests: ranging a string DECODES UTF-8, so a lone 0x9B byte became RuneError and slipped past the C1 check into argv — argv carries bytes, so invalid UTF-8 is now rejected before ranging — verify: tier 1, AI
+- [x] `fetch` (NO `--prune` — see the security note) + `pull --ff-only` handlers and routes — verify: tier 3, AI
+- [x] `branches` + `checkout` handlers and routes; the switch form runs `checkout --end-of-options <name> --` — verify: tier 3, AI
 - [ ] `log` handler (limit clamped 1..200) — verify: tier 1 + tier 2, AI
 - [ ] `diff?commit=` via `git show --format= --patch`, exit code checked → 404; comment why the sibling branches do NOT check it (`--no-index` exits 1 on difference) — verify: tier 1 + tier 2, AI
 - [ ] Root-commit diff returns a real patch, not an error — verify: tier 2 integration, AI
-- [ ] `stash` handler: closed op enum; `list` returns structured entries parsed from `--format=%gd%x00%gs` — verify: tier 1, AI
-- [ ] `api.ts` client methods added, and `encodeURIComponent(project)` applied across the WHOLE git block incl. the seven existing methods — verify: tier 1, AI
-- [ ] Narrow (do not tick) the `api.ts` encoding item in `TODO.md` to the terminal `id` / link `token` templates — verify: reread, AI
-- [ ] Panel UI: Pull button, branch dropdown, Log section, stash controls — verify: tier 3, both
-- [ ] Log entry click → diff in the main pane, passing `commit` AND `subject` on the target — verify: tier 3, AI
-- [ ] `security` agent on the whole phase-6 diff (user input → argv) — verify: review, AI
-- [ ] `api.md` + `guide.md` updated — verify: `documentation` agent, AI
-- [ ] `web/dist` rebuilt — verify: freshness step, AI
+- [x] `stash` handler: closed op enum; `list` returns structured entries parsed from `--format=%gd%x00%gs`; `push -u` — verify: tier 1 + tier 3, AI
+- [x] `api.ts` client methods added, and `encodeURIComponent(project)` applied across the WHOLE git block incl. the pre-existing methods — verify: tier 1, AI
+- [x] Narrowed (not ticked) the `api.ts` encoding item in `TODO.md`. First wording implied `project` was now generally handled; the reviewer caught that `scopeBase` and ~20 other call sites still interpolate it unencoded, and the note now says the fix is scoped to the git endpoints only — verify: reread, AI
+- [x] Panel UI: Fetch + Pull buttons, branch dropdown (switch / create), Commits section, stash controls. The section is "Commits", not "History" — the side panel already has a History TAB and the two collided — verify: tier 3, both
+- [x] Log entry click → diff in the main pane, passing `commit` AND `subject` on the target — verify: tier 3, AI
+- [x] `security` agent on the whole phase-6 diff. Four findings, all fixed; the medium one is recorded below — verify: review, AI
+- [x] `api.md` + `guide.md` updated (written directly rather than via the `documentation` agent — the endpoint semantics being recorded are exactly the security decisions made in this phase) — verify: reread, AI
+- [x] `web/dist` rebuilt — verify: freshness step, AI
 
 ### Release
 - [ ] Full `go test ./...`, `(cd deploy/caddy/ingress && go test ./...)`, `go vet`, web checks, integration, e2e — verify: `verifier`, AI

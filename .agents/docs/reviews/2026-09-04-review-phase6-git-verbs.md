@@ -1,0 +1,25 @@
+---
+owner: reviewer
+date: 2026-09-04
+---
+# Review — phase6-git-verbs   (2026-09-04)
+
+Range reviewed: `/tmp/claude-1000/-home-kesokaj-workspace-styrman-crew/a1fcfb7b-6662-4bce-8e06-59c0ae200ac4/scratchpad/phase6.diff` (six git verbs: fetch/pull/branches/checkout/log/stash — `internal/httpapi/git.go`, `internal/httpapi/git_verbs_test.go`, `internal/httpapi/server.go`, `web/src/components/SidePanelGit.tsx`, `web/src/lib/api.ts`, `web/e2e/run.mjs`, `.agents/docs/specs/styrman/api.md`, `TODO.md`)
+
+## Verdict: APPROVE WITH NITS
+
+Nothing in the diff is broken at the level of a crash, a security hole, or a violated requirement — `go build`/`go vet`/`go test ./internal/httpapi/...`, `tsc -b`, `oxlint`, and `vitest` all pass clean, the read-vs-mutation status convention is applied consistently across all five new handlers, the NUL-separated `log`/stash-list parsing and `splitLines` handle empty output and trailing newlines correctly (verified against real git behavior, including the `git checkout <branch> --` trailing-separator form), and the argv-injection gate on branch names is sound. The two real findings are a shipped-but-unreachable capability (`git/fetch` has no UI trigger) and a security-tracking note that now understates the scope of a known low-severity issue — neither blocks the change, both should be fixed before calling this phase done.
+
+## Findings
+
+- **[medium / confidence: high]** `web/src/lib/api.ts:677` (`api.gitFetch`) — added, and the backend route (`internal/httpapi/server.go:463`, `internal/httpapi/git.go:452`) is fully implemented, but nothing in `web/src/components/SidePanelGit.tsx` ever calls `api.gitFetch` (confirmed by grep across `web/src`: the only hits are the definition and the endpoint string). The remote-branch entries in the dropdown even carry the tooltip "Remote-tracking ref — fetch, then create a local branch," promising an action the panel has no button for. Either wire a Fetch control into the panel (the dropdown or the pull button's row is the natural spot) or drop the client method and the tooltip's promise; as shipped it's a dead export per criterion 1 and an unreachable flow per criterion 2.
+- **[low / confidence: medium]** `TODO.md:26` — the phase-6 edit narrows the tracked low-severity path-retargeting finding to "terminal `id`, and link `token`" plus a note that "the whole git block now encodes project… the remaining two templates are elsewhere in the file and untouched." That reads as "project is now handled"; it isn't. `scopeBase` (`web/src/lib/api.ts:391-394`, explicitly named in the same TODO line) and a couple dozen other call sites (`getProject`, `stats`, `logs`, delete/start/stop, `terminals`, `ports`, `links`, `history`, `env`, `format`, `check`) still interpolate `${project}`/`${id}` unencoded and were untouched by this diff. The note should say the fix is scoped to the git endpoints only, not imply the broader `project` exposure is down to two remaining templates.
+
+## Criteria
+
+1. **Dead code** — fail: `api.gitFetch` has zero callers (see finding above). Everything else added is reached (branches/log/checkout/stash all have call sites and e2e coverage).
+2. **Flow tracing** — pass except the fetch gap above. `gitContext` → `gitExec` → `gitRun`/inline-view wiring is consistent across all five new handlers; error propagation matches the established `firstLine`/`writeErr` pattern; `gitLog`'s `view.Repo = code == 0` is always `false` inside that branch (the only path in with `code == 0` requires `err != nil`, and `orchestrator.Exec` always returns `-1` on error) — functionally harmless since the frontend never reads `GitLog.repo`, but worth simplifying to a plain `false` like its siblings if touched again.
+3. **Standards conformance** — pass: matches `golang`/`typescript` skills; `gofmt`/`vet`/`oxlint`/`tsc` all clean; the security-relevant branch-name validator is deliberately scoped to argv-danger only and explicitly defers ref-format validity to git, which is the right call and is pinned by its own test (`TestValidBranchNameDefersRefFormatToGit`).
+4. **Directory layout** — pass: new Go code stays in `internal/httpapi/`, its test is appended to the existing `git_verbs_test.go` (BUG-005 compliant — verified via diff hunk, not a `cat >` rewrite), new frontend code stays inside `web/src/`.
+5. **Simplicity (DIY-except-security)** — pass: no new dependencies; stdlib-only NUL-delimited parsing instead of a porcelain library; the argv-injection gate is correctly scoped as "not a reimplementation of git-check-ref-format" rather than hand-rolling ref validation.
+6. **Decoupling** — pass: the six verbs are independent handlers sharing only the pre-existing `gitContext`/`gitExec`/`gitRun` seam; no new cross-package reach-ins; the frontend's three new `useEffect`s are gated by `running`/`showLog` and scoped to `SidePanelGit.tsx` alone, and `SidePanel` is remounted via `key={project}` on project switch (`web/src/routes/p.$project.$term.tsx:225`), so the branches/log/stash state cannot leak across a project switch despite those effects not using `usePolled`'s staleness-generation guard.

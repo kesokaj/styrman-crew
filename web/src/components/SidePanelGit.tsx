@@ -1,8 +1,14 @@
-import { useState, type ReactNode } from "react";
-import { api, type GitFile } from "../lib/api";
+import { useEffect, useState, type ReactNode } from "react";
+import {
+  api,
+  type GitBranches,
+  type GitCommit,
+  type GitFile,
+  type GitStashEntry,
+} from "../lib/api";
 import { usePolled } from "../lib/hooks";
 import { toast } from "../lib/toast";
-import { ConfirmDialog } from "./ui";
+import { ConfirmDialog, PromptDialog } from "./ui";
 import { openDiffInPane } from "../lib/editorPane";
 
 export function GitTab({
@@ -24,8 +30,35 @@ export function GitTab({
   const [selStaged, setSelStaged] = useState(false);
   const [discarding, setDiscarding] = useState<GitFile | null>(null);
   const [fastCommitting, setFastCommitting] = useState(false);
+  const [branches, setBranches] = useState<GitBranches | null>(null);
+  const [branchOpen, setBranchOpen] = useState(false);
+  const [newBranch, setNewBranch] = useState(false);
+  const [log, setLog] = useState<GitCommit[] | null>(null);
+  const [stashes, setStashes] = useState<GitStashEntry[]>([]);
+  const [showLog, setShowLog] = useState(false);
 
   const files = data?.files ?? [];
+
+  // Branches and stashes are cheap and only interesting while the repo is up.
+  // They are NOT on the 8s status poll: a dropdown that reshuffles under the
+  // pointer is worse than one that is a few seconds stale.
+  const running = data?.state === "running" && data.repo;
+  useEffect(() => {
+    if (!running) return;
+    void api.gitBranches(project).then(setBranches).catch(() => {});
+    void api
+      .gitStashList(project)
+      .then((r) => setStashes(r.entries))
+      .catch(() => {});
+  }, [project, running, data?.branch]);
+
+  useEffect(() => {
+    if (!running || !showLog) return;
+    void api
+      .gitLog(project, 50)
+      .then((r) => setLog(r.commits))
+      .catch(() => {});
+  }, [project, running, showLog, data?.ahead]);
   const staged = files.filter((f) => f.staged && f.staged !== "?");
   const changed = files.filter((f) => f.unstaged && f.unstaged !== "");
 
@@ -81,8 +114,91 @@ export function GitTab({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 border-b border-border px-2 py-1.5 text-xs">
-        <span className="font-medium">{data.branch || "main"}</span>
+        <div className="relative">
+          <button
+            onClick={() => setBranchOpen((v) => !v)}
+            aria-expanded={branchOpen}
+            className="rounded px-1 py-0.5 font-medium hover:bg-bg-hover"
+            title="Switch branch"
+          >
+            {data.branch || "main"} ▾
+          </button>
+          {branchOpen && (
+            <div className="absolute left-0 top-full z-20 mt-1 max-h-64 w-56 overflow-y-auto rounded-lg border border-border bg-bg-raised py-1 shadow-2xl">
+              <button
+                onClick={() => {
+                  setBranchOpen(false);
+                  setNewBranch(true);
+                }}
+                className="block w-full px-2 py-1 text-left text-accent hover:bg-bg-hover"
+              >
+                + New branch from here
+              </button>
+              {(branches?.local ?? []).map((b) => (
+                <button
+                  key={b}
+                  onClick={() => {
+                    setBranchOpen(false);
+                    run(async () => {
+                      await api.gitCheckout(project, b);
+                      toast("success", `Switched to ${b}`);
+                    });
+                  }}
+                  className={`block w-full truncate px-2 py-1 text-left hover:bg-bg-hover ${
+                    b === branches?.current
+                      ? "font-medium text-on-accent-soft"
+                      : "text-text-dim"
+                  }`}
+                >
+                  {b}
+                </button>
+              ))}
+              {(branches?.remote ?? []).length > 0 && (
+                <div className="mt-1 border-t border-border px-2 pt-1 text-[10px] uppercase tracking-wide text-text-dim">
+                  Remote
+                </div>
+              )}
+              {(branches?.remote ?? []).map((b) => (
+                <div
+                  key={b}
+                  className="truncate px-2 py-1 text-text-dim"
+                  title="Remote-tracking ref — fetch, then create a local branch"
+                >
+                  {b}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
         <span className="text-text-dim">{track}</span>
+        <button
+          onClick={() =>
+            run(async () => {
+              await api.gitFetch(project);
+              // Remote-tracking refs moved; the dropdown reads them.
+              setBranches(await api.gitBranches(project));
+              toast("success", "Fetched");
+            })
+          }
+          disabled={busy}
+          className="rounded px-2 py-0.5 text-text-dim hover:bg-bg-hover hover:text-text disabled:opacity-40"
+          title="git fetch --all --prune (updates remote refs, touches no files)"
+        >
+          Fetch
+        </button>
+        <button
+          onClick={() =>
+            run(async () => {
+              await api.gitPull(project);
+              toast("success", "Pulled");
+            })
+          }
+          disabled={busy}
+          className="rounded px-2 py-0.5 text-text-dim hover:bg-bg-hover hover:text-text disabled:opacity-40"
+          title="git pull --ff-only"
+        >
+          Pull{data.behind > 0 ? ` ${data.behind}` : ""}
+        </button>
         <button
           onClick={() =>
             run(async () => {
@@ -229,7 +345,128 @@ export function GitTab({
             ))}
           </FileGroup>
         )}
+        <div className="border-t border-border">
+          <button
+            onClick={() => setShowLog((v) => !v)}
+            aria-expanded={showLog}
+            className="flex w-full items-center gap-1 px-2 py-1 text-[10px] uppercase tracking-wide text-text-dim hover:bg-bg-hover hover:text-text"
+          >
+            {showLog ? "▾" : "▸"} Commits
+          </button>
+          {showLog &&
+            (log === null ? (
+              <p className="px-2 pb-2 text-xs text-text-dim">Loading…</p>
+            ) : log.length === 0 ? (
+              <p className="px-2 pb-2 text-xs text-text-dim">No commits yet.</p>
+            ) : (
+              log.map((c) => (
+                <button
+                  key={c.hash}
+                  // Pass the subject WITH the hash: the pane renders its
+                  // header from what it was handed, never a second fetch.
+                  onClick={() =>
+                    openDiffInPane(project, term, {
+                      commit: c.hash,
+                      subject: c.subject,
+                      staged: false,
+                      untracked: false,
+                    })
+                  }
+                  className="flex w-full items-baseline gap-2 px-2 py-0.5 text-left text-xs hover:bg-bg-hover"
+                  title={`${c.hash}\n${c.author} · ${c.date}`}
+                >
+                  <span className="shrink-0 font-mono text-[10px] text-accent">
+                    {c.shortHash}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate">{c.subject}</span>
+                </button>
+              ))
+            ))}
+        </div>
+
+        <div className="border-t border-border">
+          <div className="flex items-center gap-2 px-2 py-1">
+            <span className="text-[10px] uppercase tracking-wide text-text-dim">
+              Stash ({stashes.length})
+            </span>
+            <button
+              onClick={() =>
+                run(async () => {
+                  await api.gitStash(project, "push");
+                  setStashes((await api.gitStashList(project)).entries);
+                  toast("success", "Stashed (including untracked files)");
+                })
+              }
+              disabled={busy || data.clean}
+              className="ml-auto text-xs text-accent hover:brightness-110 disabled:opacity-40"
+            >
+              Stash all
+            </button>
+            <button
+              onClick={() =>
+                run(async () => {
+                  await api.gitStash(project, "pop");
+                  setStashes((await api.gitStashList(project)).entries);
+                  toast("success", "Popped");
+                })
+              }
+              disabled={busy || stashes.length === 0}
+              className="text-xs text-text-dim hover:text-text disabled:opacity-40"
+              // A conflicting pop leaves markers in the tree AND keeps the
+              // entry; say so up front rather than after it happens.
+              title="git stash pop — on conflict the tree gets conflict markers and the entry is KEPT"
+            >
+              Pop
+            </button>
+          </div>
+          {stashes.map((e) => (
+            <div
+              key={e.ref}
+              className="flex items-baseline gap-2 px-2 py-0.5 text-xs"
+            >
+              <span className="shrink-0 font-mono text-[10px] text-text-dim">
+                {e.ref}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-text-dim">
+                {e.subject}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
+
+      {newBranch && (
+        <PromptDialog
+          title="New branch"
+          label="Created from the current HEAD and checked out."
+          submitLabel="Create"
+          // UX ONLY — NOT a security boundary. The server re-validates every
+          // branch name in validBranchName (git.go) before any git call, and
+          // that is the gate that counts. This exists so the common mistakes
+          // are caught without a round trip. It is kept in step with the
+          // server's rules (leading dash, C0/C1/DEL controls, space, 255
+          // bytes) so the two do not silently disagree; if they ever do, the
+          // server wins and the drift is in the safe direction.
+          validate={(v) =>
+            v.trim() === ""
+              ? "Enter a name"
+              : new TextEncoder().encode(v).length > 255
+                ? "Too long (max 255 bytes)"
+                : // eslint-disable-next-line no-control-regex
+                  /^-|[\x00-\x1f\x7f\u0080-\u009f ]/.test(v)
+                  ? "No spaces, control characters, or a leading dash"
+                  : undefined
+          }
+          onSubmit={(name) =>
+            run(async () => {
+              await api.gitCheckout(project, name.trim(), true);
+              setNewBranch(false);
+              toast("success", `Created and switched to ${name.trim()}`);
+            })
+          }
+          onClose={() => setNewBranch(false)}
+        />
+      )}
 
       {fastCommitting && (
         <ConfirmDialog

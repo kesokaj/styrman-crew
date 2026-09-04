@@ -57,7 +57,13 @@ const hydrationWarns = [];
 const record = (s) => (HYDRATION.test(s) ? hydrationWarns : pageErrors).push(s);
 page.on("pageerror", (e) => record(String(e)));
 page.on("console", (m) => {
-  if (m.type() === "error") record(m.text());
+  if (m.type() !== "error") return;
+  // Include the URL. The browser's own text for a failed request is just
+  // "Failed to load resource: the server responded with a status of 404",
+  // which names neither the endpoint nor the caller — useless in a suite this
+  // size (cost a whole debugging run in v1.22.0).
+  const url = m.location()?.url;
+  record(url ? `${m.text()} [${url}]` : m.text());
 });
 page.setDefaultTimeout(15000);
 const shot = (name) => page.screenshot({ path: `${SHOTS}/${name}.png` });
@@ -879,6 +885,85 @@ try {
     await page.waitForSelector("aside >> text=Nothing to commit", {
       timeout: 30000,
     });
+  });
+
+  // ── Git verbs: branches, log, stash (v1.22.0) ──────────────────────────
+  await check("branch dropdown lists branches and creates one", async () => {
+    await panel().getByText("Git", { exact: true }).click();
+    await page.waitForSelector("aside >> text=Nothing to commit", { timeout: 20000 });
+    await panel().getByTitle("Switch branch").click();
+    await panel().getByText("+ New branch from here").click();
+    await page.locator('[role="dialog"] input').fill("e2e/feature-1");
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    await page.waitForSelector("text=/Created and switched to e2e\\/feature-1/", {
+      timeout: 20000,
+    });
+    // The header now shows the new branch.
+    await page.waitForSelector("aside >> text=e2e/feature-1", { timeout: 20000 });
+  });
+
+  await check("switching to an existing branch works", async () => {
+    // Exercises the SWITCH path specifically, which runs
+    // `checkout --end-of-options <name> --` — a different argv shape from the
+    // create path above, and the one a trailing `--` never protected.
+    await panel().getByTitle("Switch branch").click();
+    await panel().getByRole("button", { name: "main", exact: true }).click();
+    await page.waitForSelector("text=/Switched to main/", { timeout: 20000 });
+    await page.waitForSelector("aside >> text=main", { timeout: 20000 });
+  });
+
+  await check("an invalid branch name is refused before any round trip", async () => {
+    await panel().getByTitle("Switch branch").click();
+    await panel().getByText("+ New branch from here").click();
+    // A leading dash is the argv-injection shape the server also rejects.
+    await page.locator('[role="dialog"] input').fill("--upload-pack=evil");
+    // PromptDialog validates on SUBMIT, not on input, so the message only
+    // appears after Create — and the dialog stays open when it does.
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    await page.waitForSelector(
+      "text=/No spaces, control characters, or a leading dash/",
+      { timeout: 5000 },
+    );
+    // Close it no matter what: a modal left open fails every later check.
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await page.waitForSelector('[role="dialog"]', { state: "detached", timeout: 5000 });
+  });
+
+  await check("fetch and pull controls are reachable", async () => {
+    // Regression guard for a shipped-but-unwired capability: gitFetch existed
+    // with no button, while the dropdown's tooltip promised the action.
+    // Presence only — the e2e project has no remote to fetch from.
+    await panel().getByRole("button", { name: "Fetch", exact: true }).waitFor({ timeout: 10000 });
+    await panel().getByRole("button", { name: /^Pull/ }).waitFor({ timeout: 10000 });
+  });
+
+  await check("history lists commits and opens one in the main pane", async () => {
+    // "Commits", not "History": the side panel already has a History TAB and
+    // a /History/ locator matched both (strict-mode violation).
+    await panel().getByRole("button", { name: /Commits/ }).click();
+    // The fast commit above produced a UUID-subject commit.
+    await page.waitForSelector("aside >> text=/[0-9a-f]{7}/", { timeout: 20000 });
+    await panel().locator("button", { hasText: /^[0-9a-f]{7}/ }).first().click();
+    await mainContains("diff --git");
+  });
+
+  await check("stash push -u captures untracked work, pop restores it", async () => {
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.locator(".xterm textarea").first().focus();
+    await page.keyboard.type("echo stashme > brand-new.txt");
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(1200);
+    await panel().getByText("Git", { exact: true }).click();
+    await page.waitForSelector("aside >> text=/Changes \\(/", { timeout: 20000 });
+    await panel().getByRole("button", { name: "Stash all" }).click();
+    // -u is the point: an UNTRACKED file must be stashed, not left behind.
+    await page.waitForSelector("text=/Stashed \\(including untracked files\\)/", {
+      timeout: 20000,
+    });
+    await page.waitForSelector("aside >> text=Nothing to commit", { timeout: 20000 });
+    await panel().getByRole("button", { name: "Pop", exact: true }).click();
+    await page.waitForSelector("text=Popped", { timeout: 20000 });
+    await page.waitForSelector("aside >> text=/Changes \\(/", { timeout: 20000 });
   });
 
   // Clips tab must open without spinning: getClips backs useSyncExternalStore,

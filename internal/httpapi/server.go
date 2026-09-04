@@ -270,6 +270,14 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("POST /api/projects/{project}/git/discard", s.gitDiscard)
 	mux.HandleFunc("POST /api/projects/{project}/git/commit", s.gitCommit)
 	mux.HandleFunc("POST /api/projects/{project}/git/push", s.gitPush)
+	// v1.22.0 verbs. Reads are GET and answer 200 with a state/repo flag;
+	// mutations are POST and answer 4xx, matching the split above.
+	mux.HandleFunc("GET /api/projects/{project}/git/branches", s.gitBranches)
+	mux.HandleFunc("GET /api/projects/{project}/git/log", s.gitLog)
+	mux.HandleFunc("POST /api/projects/{project}/git/fetch", s.gitFetch)
+	mux.HandleFunc("POST /api/projects/{project}/git/pull", s.gitPull)
+	mux.HandleFunc("POST /api/projects/{project}/git/checkout", s.gitCheckout)
+	mux.HandleFunc("POST /api/projects/{project}/git/stash", s.gitStash)
 	// Format a file with its language's real CLI formatter, in the guest VM.
 	mux.HandleFunc("POST /api/projects/{project}/format", s.formatFile)
 	// Syntax check: same exec-in-guest shape as /format (check.go).

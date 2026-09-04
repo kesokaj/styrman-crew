@@ -54,6 +54,36 @@ export interface GitStatus {
   files: GitFile[];
 }
 
+/** Local and remote-tracking branches (v1.22.0). */
+export interface GitBranches {
+  state: "running" | "stopped";
+  repo: boolean;
+  current?: string;
+  local: string[];
+  remote: string[];
+}
+
+/** One commit in the log view. */
+export interface GitCommit {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  author: string;
+  date: string;
+}
+
+export interface GitLog {
+  state: "running" | "stopped";
+  repo: boolean;
+  commits: GitCommit[];
+}
+
+/** One stash entry. Parsed SERVER-side — the frontend never reads porcelain. */
+export interface GitStashEntry {
+  ref: string;
+  subject: string;
+}
+
 /** A terminal: a durable record whose live view is a tmux session. */
 export interface Terminal {
   id: string;
@@ -589,7 +619,7 @@ export const api = {
     ),
   // Git side panel (real git client; runs in the guest VM).
   gitStatus: (project: string) =>
-    request<GitStatus>(`/api/projects/${project}/git/status`),
+    request<GitStatus>(`/api/projects/${encodeURIComponent(project)}/git/status`),
   gitDiff: (
     project: string,
     opts: {
@@ -611,17 +641,17 @@ export const api = {
     );
   },
   gitStage: (project: string, body: { path?: string; all?: boolean }) =>
-    request<{ output: string }>(`/api/projects/${project}/git/stage`, {
+    request<{ output: string }>(`/api/projects/${encodeURIComponent(project)}/git/stage`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
   gitUnstage: (project: string, body: { path?: string; all?: boolean }) =>
-    request<{ output: string }>(`/api/projects/${project}/git/unstage`, {
+    request<{ output: string }>(`/api/projects/${encodeURIComponent(project)}/git/unstage`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
   gitDiscard: (project: string, path: string, untracked: boolean) =>
-    request<{ output: string }>(`/api/projects/${project}/git/discard`, {
+    request<{ output: string }>(`/api/projects/${encodeURIComponent(project)}/git/discard`, {
       method: "POST",
       body: JSON.stringify({ path, untracked }),
     }),
@@ -638,9 +668,45 @@ export const api = {
       },
     ),
   gitPush: (project: string) =>
-    request<{ output: string }>(`/api/projects/${project}/git/push`, {
+    request<{ output: string }>(`/api/projects/${encodeURIComponent(project)}/git/push`, {
       method: "POST",
     }),
+
+  // v1.22.0 verbs. READS answer 200 with state/repo flags (a missing repo or a
+  // stopped VM is a state, not a failed request); MUTATIONS answer 4xx.
+  gitFetch: (project: string) =>
+    request<{ output: string }>(
+      `/api/projects/${encodeURIComponent(project)}/git/fetch`,
+      { method: "POST" },
+    ),
+  gitPull: (project: string) =>
+    request<{ output: string }>(
+      `/api/projects/${encodeURIComponent(project)}/git/pull`,
+      { method: "POST" },
+    ),
+  gitBranches: (project: string) =>
+    request<GitBranches>(
+      `/api/projects/${encodeURIComponent(project)}/git/branches`,
+    ),
+  gitCheckout: (project: string, branch: string, create = false) =>
+    request<{ output: string }>(
+      `/api/projects/${encodeURIComponent(project)}/git/checkout`,
+      { method: "POST", body: JSON.stringify({ branch, create }) },
+    ),
+  gitLog: (project: string, limit?: number) =>
+    request<GitLog>(
+      `/api/projects/${encodeURIComponent(project)}/git/log${limit ? `?limit=${limit}` : ""}`,
+    ),
+  gitStash: (project: string, op: "push" | "pop") =>
+    request<{ output: string }>(
+      `/api/projects/${encodeURIComponent(project)}/git/stash`,
+      { method: "POST", body: JSON.stringify({ op }) },
+    ),
+  gitStashList: (project: string) =>
+    request<{ entries: GitStashEntry[] }>(
+      `/api/projects/${encodeURIComponent(project)}/git/stash`,
+      { method: "POST", body: JSON.stringify({ op: "list" }) },
+    ),
 
 
   settings: () => request<Settings>("/api/settings"),

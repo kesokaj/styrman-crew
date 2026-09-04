@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 	"github.com/kesokaj/styrman-crew/internal/project"
@@ -439,6 +440,276 @@ func (s *Server) gitDiff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"state": "running", "diff": out})
 }
 
+// ─── v1.22.0 verbs: fetch, pull, branches, checkout, log, stash ────────────
+//
+// READ endpoints (branches, log) report absence as 200 with a flag, matching
+// gitStatus/gitDiff: a missing repo and a stopped VM are STATES of the world,
+// not failed requests, and the panel already renders them calmly. MUTATIONS
+// (fetch, pull, checkout, stash) keep 4xx, matching gitCommit/gitPush: an
+// action that could not happen IS a failure. Do not "unify" these.
+
+// gitFetch updates remote-tracking refs without touching the working tree.
+func (s *Server) gitFetch(w http.ResponseWriter, r *http.Request) {
+	_, cid, guest, ws, _, err := s.gitContext(r)
+	if err != nil {
+		s.gitCtxErr(w, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	// NO --prune. The refspec fetch obeys is `remote.<name>.fetch` from the
+	// workspace's .git/config, which the GUEST can write: with
+	// `+refs/heads/*:refs/heads/ns/*`, a pruning fetch deletes local branches
+	// (demonstrated, security review 2026-09-04). No privilege boundary is
+	// crossed — a guest shell could delete its own refs anyway — but the
+	// realistic actor here is a prompt-injected agent in the VM, and the
+	// trigger would be the operator's un-confirmed Fetch click. The tidiness
+	// --prune buys is not worth being that trigger.
+	//
+	// --all keeps guest-chosen REMOTE NAMES out of argv entirely; the
+	// --refmap alternative is fatal when combined with --all and would put
+	// them back. Do not "improve" this into that.
+	s.gitRun(w, ctx, cid, guest, ws, "fetch", "--all")
+}
+
+// gitPull fast-forwards the current branch. --ff-only on purpose: a merge that
+// conflicts would leave a half-merged tree in a VM with no interactive git to
+// finish it, and no way for this API to help.
+func (s *Server) gitPull(w http.ResponseWriter, r *http.Request) {
+	_, cid, guest, ws, _, err := s.gitContext(r)
+	if err != nil {
+		s.gitCtxErr(w, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	if code, _, _ := s.gitExec(ctx, cid, guest, ws, "rev-parse", "--abbrev-ref", "@{upstream}"); code != 0 {
+		writeErr(w, http.StatusConflict, errors.New("no upstream branch — push first"))
+		return
+	}
+	s.gitRun(w, ctx, cid, guest, ws, "pull", "--ff-only")
+}
+
+type gitBranchesView struct {
+	State   string   `json:"state"`
+	Repo    bool     `json:"repo"`
+	Current string   `json:"current,omitempty"`
+	Local   []string `json:"local"`
+	Remote  []string `json:"remote"`
+}
+
+// gitBranches lists local and remote-tracking branches.
+func (s *Server) gitBranches(w http.ResponseWriter, r *http.Request) {
+	_, cid, guest, ws, _, err := s.gitContext(r)
+	if err != nil {
+		if errors.Is(err, errVMNotRunning) {
+			writeJSON(w, http.StatusOK, gitBranchesView{State: "stopped", Local: []string{}, Remote: []string{}})
+			return
+		}
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	view := gitBranchesView{State: "running", Repo: true, Local: []string{}, Remote: []string{}}
+	code, out, err := s.gitExec(ctx, cid, guest, ws,
+		"for-each-ref", "--format=%(refname:short)", "refs/heads")
+	if err != nil || code != 0 {
+		// Not a repo (or git failed) — the same soft answer gitStatus gives.
+		view.Repo = false
+		writeJSON(w, http.StatusOK, view)
+		return
+	}
+	view.Local = splitLines(out)
+	if _, cur, err := s.gitExec(ctx, cid, guest, ws, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+		view.Current = strings.TrimSpace(cur)
+	}
+	if _, rem, err := s.gitExec(ctx, cid, guest, ws,
+		"for-each-ref", "--format=%(refname:short)", "refs/remotes"); err == nil {
+		view.Remote = splitLines(rem)
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// gitCheckout switches branches, optionally creating one from HEAD.
+func (s *Server) gitCheckout(w http.ResponseWriter, r *http.Request) {
+	_, cid, guest, ws, _, err := s.gitContext(r)
+	if err != nil {
+		s.gitCtxErr(w, err)
+		return
+	}
+	var body struct {
+		Branch string `json:"branch"`
+		Create bool   `json:"create"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("a branch name is required"))
+		return
+	}
+	// Validate BEFORE any git call: this string is about to become argv.
+	if !validBranchName(body.Branch) {
+		writeErr(w, http.StatusBadRequest, errors.New("invalid branch name"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	// Option handling, verified against git 2.47.3 rather than assumed:
+	//
+	//   create=true  -> `checkout -b <name> --`. Already immune: -b consumes
+	//                   the next argv entry as its VALUE, so a dash-leading
+	//                   name is a bad branch name, not an option.
+	//   create=false -> `checkout --end-of-options <name> --`. The operand
+	//                   would otherwise sit in the option stream, and a
+	//                   TRAILING `--` does not save it — git parses left to
+	//                   right and has consumed the operand long before it
+	//                   reaches the separator. (`git checkout --orphan=x --`
+	//                   really does create an orphan branch.) --end-of-options
+	//                   is git's actual primitive for this and turns the same
+	//                   input into "invalid reference". It cannot be used with
+	//                   -b, where it would be eaten as the branch name — which
+	//                   is fine, since that form is already safe.
+	//
+	// validBranchName still rejects a leading "-" first; this is the second
+	// gate the previous comment only CLAIMED to be (security review 2026-09-04).
+	args := []string{"checkout"}
+	if body.Create {
+		args = append(args, "-b", body.Branch)
+	} else {
+		args = append(args, "--end-of-options", body.Branch)
+	}
+	// Trailing `--`: separates the ref from any pathspec. It does not, and
+	// never did, terminate options.
+	args = append(args, "--")
+	s.gitRun(w, ctx, cid, guest, ws, args...)
+}
+
+type gitCommitView struct {
+	Hash      string `json:"hash"`
+	ShortHash string `json:"shortHash"`
+	Subject   string `json:"subject"`
+	Author    string `json:"author"`
+	Date      string `json:"date"`
+}
+
+type gitLogView struct {
+	State   string          `json:"state"`
+	Repo    bool            `json:"repo"`
+	Commits []gitCommitView `json:"commits"`
+}
+
+// gitLog lists recent commits, newest first.
+func (s *Server) gitLog(w http.ResponseWriter, r *http.Request) {
+	_, cid, guest, ws, _, err := s.gitContext(r)
+	if err != nil {
+		if errors.Is(err, errVMNotRunning) {
+			writeJSON(w, http.StatusOK, gitLogView{State: "stopped", Commits: []gitCommitView{}})
+			return
+		}
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	limit := 50
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 && n <= 200 {
+			limit = n
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+	view := gitLogView{State: "running", Repo: true, Commits: []gitCommitView{}}
+	// NUL-separated so a subject containing anything at all still parses.
+	code, out, err := s.gitExec(ctx, cid, guest, ws, "log",
+		"--max-count="+strconv.Itoa(limit),
+		"--format=%H%x00%h%x00%s%x00%an%x00%aI")
+	if err != nil || code != 0 {
+		// No repo, or no commits yet. Both are 200: an empty list is the
+		// honest representation of "nothing to show", and the panel needs an
+		// empty state regardless. (gitPush's 409 for "no commits" is right
+		// THERE because pushing nothing is a failed action; listing nothing
+		// is not.)
+		// Always false here: reaching this branch with code == 0 requires
+		// err != nil, and orchestrator.Exec returns -1 on error. Written
+		// plainly rather than as an expression that only looks conditional.
+		view.Repo = false
+		writeJSON(w, http.StatusOK, view)
+		return
+	}
+	for _, line := range splitLines(out) {
+		f := strings.Split(line, "\x00")
+		if len(f) != 5 {
+			continue
+		}
+		view.Commits = append(view.Commits, gitCommitView{
+			Hash: f[0], ShortHash: f[1], Subject: f[2], Author: f[3], Date: f[4],
+		})
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+type gitStashEntry struct {
+	Ref     string `json:"ref"`
+	Subject string `json:"subject"`
+}
+
+// gitStash runs one of a closed set of stash operations.
+func (s *Server) gitStash(w http.ResponseWriter, r *http.Request) {
+	_, cid, guest, ws, _, err := s.gitContext(r)
+	if err != nil {
+		s.gitCtxErr(w, err)
+		return
+	}
+	var body struct {
+		Op string `json:"op"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, errors.New("an op is required"))
+		return
+	}
+	args, ok := stashOps[body.Op]
+	if !ok {
+		writeErr(w, http.StatusBadRequest, errors.New(`op must be "push", "pop" or "list"`))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if body.Op == "list" {
+		entries := []gitStashEntry{}
+		code, out, err := s.gitExec(ctx, cid, guest, ws, args...)
+		if err == nil && code == 0 {
+			for _, line := range splitLines(out) {
+				if ref, subject, found := strings.Cut(line, "\x00"); found {
+					entries = append(entries, gitStashEntry{Ref: ref, Subject: subject})
+				}
+			}
+		}
+		// A repo with no stash exits 0 with no output; a missing repo exits
+		// non-zero. Both are an empty list — parsing porcelain is the SERVER's
+		// job, and the panel gets a typed array either way.
+		writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+		return
+	}
+	// push/pop. A conflicting `pop` exits non-zero, writes conflict markers
+	// into the tree AND KEEPS the stash entry (git's own behaviour, and the
+	// safe half of it). gitRun surfaces git's line as a 409; nothing here
+	// attempts to auto-resolve, because unwinding could destroy the very work
+	// the user was trying to restore. The UI says the entry was kept.
+	s.gitRun(w, ctx, cid, guest, ws, args...)
+}
+
+// splitLines returns non-empty trimmed lines.
+func splitLines(out string) []string {
+	var lines []string
+	for _, l := range strings.Split(out, "\n") {
+		if l = strings.TrimRight(l, "\r"); strings.TrimSpace(l) != "" {
+			lines = append(lines, l)
+		}
+	}
+	if lines == nil {
+		return []string{}
+	}
+	return lines
+}
+
 // gitRun executes a git command and answers 200 with its output, or an error
 // with git's first output line.
 func (s *Server) gitRun(w http.ResponseWriter, ctx context.Context, cid, guest, ws string, args ...string) {
@@ -448,7 +719,13 @@ func (s *Server) gitRun(w http.ResponseWriter, ctx context.Context, cid, guest, 
 		return
 	}
 	if code != 0 {
-		writeErr(w, http.StatusConflict, errors.New(firstLine(out)))
+		// guestErrMessage, not firstLine: this text is written by the guest
+		// and, for fetch/pull, partly by a REMOTE server (sideband `remote:`
+		// lines) and by remote names the guest put in .git/config. It lands in
+		// a toast, so control and bidi bytes could spoof the UI. The helper
+		// strips them, redacts a credential riding in a URL, and caps the
+		// length (security review 2026-09-04).
+		writeErr(w, http.StatusConflict, errors.New(guestErrMessage("git", out)))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"output": strings.TrimSpace(out)})
@@ -460,6 +737,65 @@ func (s *Server) gitCtxErr(w http.ResponseWriter, err error) {
 		return
 	}
 	writeErr(w, http.StatusNotFound, err)
+}
+
+// maxRefLen bounds a branch name before it reaches argv. Git itself has no
+// hard limit short of the filesystem's, but nothing a human types needs more.
+const maxRefLen = 255
+
+// validBranchName is the SECURITY gate on a user-supplied branch name — not a
+// reimplementation of git-check-ref-format(1).
+//
+// The distinction matters. What must be caught here is what argv makes
+// dangerous: a leading "-" (git would read the name as an OPTION, e.g.
+// `--output=…`), embedded NUL/newline/control bytes, and unbounded length.
+// Those are rejected outright. Everything else that merely makes a ref
+// INVALID — "a..b", "a@{0}", "a.lock", a trailing "/" — is left to git, which
+// rejects it authoritatively and returns its own message; duplicating those
+// rules in Go would be hand-rolling a spec we do not own, and drifting from it
+// silently. `gitExec` builds a []string and never a shell string, so quoting
+// is not part of the exposure.
+func validBranchName(s string) bool {
+	if s == "" || len(s) > maxRefLen {
+		return false
+	}
+	if s[0] == '-' {
+		return false
+	}
+	// Reject invalid UTF-8 BEFORE ranging. argv carries bytes, but `range`
+	// over a string decodes runes, and a lone 0x9B (a C1 control as a raw
+	// byte) decodes to utf8.RuneError — which would sail past the C1 check
+	// below. Caught by TestValidBranchName; without this the byte reaches git.
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		// C0, DEL and C1: a control byte can hide the rest of a name from a
+		// log line or a confirmation dialog.
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return false
+		}
+		// Space is not a *security* problem in argv, but git forbids it in a
+		// ref and rejecting it here gives a better message than git's.
+		if r == ' ' {
+			return false
+		}
+	}
+	return true
+}
+
+// stashOps is a CLOSED set. The op never reaches argv as data — it selects a
+// fixed argument slice — so an unknown op is a 400 rather than anything git
+// ever sees.
+var stashOps = map[string][]string{
+	// -u: WITH untracked files. Same reasoning as `add -A` over `commit -a`
+	// for fast commit — a "stash my work" button that silently leaves new
+	// files in the tree loses exactly the work its user thought they had put
+	// away. Ignored files are NOT included (that would need -a); build output
+	// is not work in progress.
+	"push": {"stash", "push", "-u"},
+	"pop":  {"stash", "pop"},
+	"list": {"stash", "list", "--format=%gd%x00%gs"},
 }
 
 // validCommitHash accepts only an abbreviated-or-full hex object name.

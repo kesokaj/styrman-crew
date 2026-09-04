@@ -154,7 +154,15 @@ selections before a keypress can land — the runtime image's tmux
    repo-less workspace it finds (adopted pre-R13 projects). The Git side
    panel tab is a real git client (v1.7.0): branch + ahead/behind, Push, a
    commit-message box, "Staged"/"Changes" file groups with per-file stage/
-   unstage/discard, and a colored per-file diff viewer — every command runs
+   unstage/discard, and a colored per-file diff viewer. v1.22.0 widened it:
+   diffs open in the MAIN pane as a third view beside Terminal and Editor
+   (the old in-panel box was 64px tall inside a 320px panel), a Fast commit
+   button stages everything and commits a generated UUID behind a confirm
+   naming the file count, and the header gained Pull (`--ff-only`), a branch
+   dropdown that switches or creates, a Commits list whose entries open that
+   commit's diff in the pane, and Stash (`push -u`, so untracked work is
+   captured too). A conflicting `pop` leaves conflict markers AND keeps the
+   entry — the UI says so rather than unwinding it. Every command runs
    inside the guest VM so the user's identity and the broker's credential
    helper apply, and commits are authored correctly (`git commit` in a
    terminal works too as of v1.7.1 — the broker syncs the git identity, not
@@ -425,7 +433,9 @@ rotated token, or a tool signed into inside a project instead of at setup).
   files).
 - **Git**: the Git tab is a real client (v1.7.0) — branch bar with Push, a
   commit-message box, "Staged"/"Changes" file lists with per-file stage/
-  unstage/discard, and a colored per-file diff viewer. (Automatic
+  unstage/discard, and a colored per-file diff viewer. v1.22.0 added Pull,
+  a branch dropdown (switch / create), a Commits list, Stash push/pop, a
+  Fast commit button, and moved diffs into the MAIN pane. (Automatic
   checkpoint snapshots were REMOVED in v1.7.0 — see §1 idea 5. There is no
   backup feature to replace them with: durability is git — commit and
   push. See deploy.md's "Durability" section.)
