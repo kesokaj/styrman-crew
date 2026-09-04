@@ -346,14 +346,22 @@ func (c *Config) SetOperator(diskGB int, idle time.Duration) error {
 // NOTE (ADR-031): homes are PER-PROJECT now. UserHome remains the per-user
 // BASE (HomesDir/<user>) — used for the setup VM and as the parent of the
 // per-project homes. Project microVMs mount ProjectHome instead.
-func (c *Config) UserHome(user string) string { return filepath.Join(c.HomesDir, user) }
+// TenantDir is HomesDir/<user>: the server-only parent of base/ and p/. No
+// guest ever mounts it (ADR-064); what a guest CAN write is a separate bind
+// below it — base/ (the setup VM) and p/<uuid> (each project).
+func (c *Config) TenantDir(user string) string { return filepath.Join(c.HomesDir, user) }
+
+// UserHome is the setup VM's home, HomesDir/<user>/base (ADR-064). It was the
+// tenant dir itself, which put every project home inside a root guest's
+// mount — the layout behind BUG-002/003.
+func (c *Config) UserHome(user string) string { return filepath.Join(c.TenantDir(user), "base") }
 
 // ProjectHome is a project's OWN home directory (ADR-031): each project gets
 // a fresh, individual home so no tool state leaks between projects. The only
 // thing shared across a user's projects is credentials (via the broker,
 // ADR-030). Keyed by UUID; the parent is never mounted into any guest.
 func (c *Config) ProjectHome(user, project string) string {
-	return filepath.Join(c.HomesDir, user, "p", project)
+	return filepath.Join(c.TenantDir(user), "p", project)
 }
 
 // LegacyWorkspaceExists reports whether a project's PRE-ADR-027 workspace is

@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"github.com/docker/docker/api/types/container"
 	"os"
 	"path/filepath"
 	"testing"
@@ -67,5 +68,24 @@ func TestProjectHomeIsRealAllowsMissingRefusesLinks(t *testing.T) {
 	}
 	if err := projectHomeIsReal(base, live); err == nil {
 		t.Error("a symlink to an existing host dir must be refused")
+	}
+}
+
+// A setup container created before ADR-064 binds homes/<user>; one created
+// after binds homes/<user>/base. Only the latter is kept.
+func TestSetupHomeStale(t *testing.T) {
+	old := []container.MountPoint{{Destination: "/home/simon", Source: "/x/homes/simon"}}
+	cur := []container.MountPoint{{Destination: "/home/simon", Source: "/x/homes/simon/base/"}}
+	if !setupHomeStale(old, "simon", "/x/homes/simon/base") {
+		t.Error("the pre-ADR-064 bind must read as stale")
+	}
+	if setupHomeStale(cur, "simon", "/x/homes/simon/base") {
+		t.Error("the current bind (trailing slash cleaned) must not read as stale")
+	}
+	if !setupHomeStale(nil, "simon", "/x/homes/simon/base") {
+		t.Error("no home bind at all must read as stale")
+	}
+	if !setupHomeStale(cur, "other", "/x/homes/simon/base") {
+		t.Error("a bind for a different guest name must read as stale")
 	}
 }

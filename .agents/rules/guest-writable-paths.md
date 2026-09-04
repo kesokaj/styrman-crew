@@ -5,11 +5,13 @@ description: Any host path with a component a guest can replace is untrusted as 
 
 # Guest-writable paths (BUG-002, BUG-003)
 
-A project home lives at `HomesDir/<user>/p/<uuid>`, INSIDE the base home
-the setup VM bind-mounts with a root guest (ADR-031). So `p` and `p/<uuid>`
-— and everything the guest writes below any mounted home — can be replaced
-by a symlink between two server operations. A path is only as trusted as
-its least-trusted parent.
+The tenant dir `HomesDir/<user>` is server-only since ADR-064; what a guest
+can write is a separate bind below it — `base/` (the setup VM) and
+`p/<uuid>` (each project). Before ADR-064 the setup VM mounted the tenant
+dir itself, with every project home inside it, so `p/<uuid>` could be
+replaced by a symlink between two server operations (BUG-002/003). The
+guards below stay: a path is only as trusted as its least-trusted parent,
+and everything the guest writes below any mounted home can still be a link.
 
 - **Roots:** open through `internal/files` (`files.Trust` registers the tenant
   bases; `openRoot` reaches the root with `os.OpenRoot(<base>/<tenant>)` +
@@ -35,6 +37,6 @@ its least-trusted parent.
   plants the symlink (`internal/files/trust_test.go`,
   `cmd/styrman/prune_test.go`, `internal/orchestrator/realbelow_test.go`).
 
-The residual is the race between the check and the operation; the durable
-fix is to stop nesting tenant trees under guest-writable directories
-(`TODO.md`, the un-nesting ADR proposal).
+The race between a check and the operation was the residual while tenant
+trees sat under a guest-writable directory; ADR-064 (v1.21.0) removed that
+layout, and the guards above remain as a second line.

@@ -173,3 +173,22 @@ func TestLoadRefusesNonVMRuntime(t *testing.T) {
 		}
 	})
 }
+
+// The home layout since ADR-064: the tenant dir is server-only; the setup
+// VM's home and every project home are separate directories below it, so no
+// guest mount contains another guest's home.
+func TestHomeLayoutKeepsGuestMountsApart(t *testing.T) {
+	c := &Config{HomesDir: "/x/homes"}
+	if got := c.TenantDir("u"); got != "/x/homes/u" {
+		t.Errorf("TenantDir = %q", got)
+	}
+	if got := c.UserHome("u"); got != "/x/homes/u/base" {
+		t.Errorf("UserHome = %q", got)
+	}
+	if got := c.ProjectHome("u", "id"); got != "/x/homes/u/p/id" {
+		t.Errorf("ProjectHome = %q", got)
+	}
+	if strings.HasPrefix(c.ProjectHome("u", "id"), c.UserHome("u")+"/") {
+		t.Error("a project home must not sit inside the setup VM's home")
+	}
+}

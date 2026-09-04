@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/docker/docker/api/types/filters"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -20,7 +21,6 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
@@ -223,7 +223,7 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 	// 2026-09-03 round 3, BUG-003). Refuse a symlink component on every
 	// path; a home that does not exist yet is fine (create makes it and
 	// checks again).
-	if err := projectHomeIsReal(o.cfg.UserHome(user), o.cfg.ProjectHome(user, project)); err != nil {
+	if err := projectHomeIsReal(o.cfg.TenantDir(user), o.cfg.ProjectHome(user, project)); err != nil {
 		return "", fmt.Errorf("project home: %w", err)
 	}
 	switch {
@@ -264,22 +264,22 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 		// seeds from the image (dotfiles + harness). Created before the mount
 		// so Docker doesn't auto-create it root-owned.
 		phome := o.cfg.ProjectHome(user, project)
-		// Created through an os.Root at the base home, not by path:
-		// os.MkdirAll follows a symlink the guest planted at `p` and would
-		// create a root-owned directory anywhere on the host (release review
-		// 2026-09-04, same class as BUG-003). The base home itself is below
-		// the server-controlled HomesDir.
-		if err := os.MkdirAll(o.cfg.UserHome(user), 0o700); err != nil {
-			return "", fmt.Errorf("create base home: %w", err)
+		// Created through an os.Root at the tenant dir, not by path:
+		// os.MkdirAll follows a symlink planted at `p` and would create a
+		// directory anywhere on the host (release review 2026-09-04, BUG-003
+		// class). Since ADR-064 the tenant dir homes/<user> is server-only —
+		// the guest mounts are base/ and p/<uuid> — so this is belt and braces.
+		if err := os.MkdirAll(o.cfg.TenantDir(user), 0o700); err != nil {
+			return "", fmt.Errorf("create tenant dir: %w", err)
 		}
-		if err := mkdirAllConfined(o.cfg.UserHome(user), filepath.Join("p", project), 0o700); err != nil {
+		if err := mkdirAllConfined(o.cfg.TenantDir(user), filepath.Join("p", project), 0o700); err != nil {
 			return "", fmt.Errorf("create project home: %w", err)
 		}
 		// Re-check now that the home exists: MkdirAll returns nil through a
 		// symlink-to-dir (the check above allowed a missing home). The
-		// window between this check and the create/start is the residual
-		// recorded in BUG-003; the durable fix is un-nesting (TODO.md).
-		if err := realBelow(o.cfg.UserHome(user), phome); err != nil {
+		// window between this check and the create/start was BUG-003's
+		// residual; ADR-064 closed it by keeping the tenant dir server-only.
+		if err := realBelow(o.cfg.TenantDir(user), phome); err != nil {
 			return "", fmt.Errorf("project home: %w", err)
 		}
 		// Same rule for the workspace's mount TARGET inside the home bind
@@ -562,6 +562,13 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context, user, guestUser string) 
 	l.Lock()
 	defer l.Unlock()
 
+	// base/ becomes a bind SOURCE on every path below (Docker re-resolves a
+	// stored source on each start): refuse a symlink component now; a base
+	// that does not exist yet is fine (the create path makes it and checks
+	// again). Security review 2026-09-04, same rule as projectHomeIsReal.
+	if err := projectHomeIsReal(o.cfg.TenantDir(user), o.cfg.UserHome(user)); err != nil {
+		return "", fmt.Errorf("setup home: %w", err)
+	}
 	insp, err := o.docker.ContainerInspect(ctx, config.SetupContainer(user))
 	if err != nil && !errdefs.IsNotFound(err) {
 		return "", fmt.Errorf("inspect setup container: %w", err)
@@ -581,6 +588,16 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context, user, guestUser string) 
 		}
 		exists = false
 	}
+	// A setup VM created before ADR-064 binds the tenant dir homes/<user>
+	// (with every project home inside it) instead of homes/<user>/base:
+	// recreate it so the layout change takes effect without an operator step.
+	if exists && setupHomeStale(insp.Mounts, guestUser, o.cfg.UserHome(user)) {
+		o.logger.Info("setup VM home moved — recreating", "user", user, "want", o.cfg.UserHome(user))
+		if err := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+			return "", fmt.Errorf("remove stale setup container: %w", err)
+		}
+		exists = false
+	}
 	if exists {
 		id = insp.ID
 		if insp.State == nil || !insp.State.Running {
@@ -589,10 +606,18 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context, user, guestUser string) 
 			}
 		}
 	} else {
-		// The setup VM uses the per-user BASE home (onboarding lives here);
-		// create it before the mount so Docker doesn't make it root-owned.
-		if err := os.MkdirAll(o.cfg.UserHome(user), 0o700); err != nil {
+		// The setup VM's home is homes/<user>/base (ADR-064): created before
+		// the mount so Docker doesn't make it root-owned, through an os.Root
+		// at the server-only tenant dir, and required to be a real directory
+		// before it becomes a bind source (a planted symlink is refused).
+		if err := os.MkdirAll(o.cfg.TenantDir(user), 0o700); err != nil {
+			return "", fmt.Errorf("create tenant dir: %w", err)
+		}
+		if err := mkdirAllConfined(o.cfg.TenantDir(user), "base", 0o700); err != nil {
 			return "", fmt.Errorf("create setup home: %w", err)
+		}
+		if err := realBelow(o.cfg.TenantDir(user), o.cfg.UserHome(user)); err != nil {
+			return "", fmt.Errorf("setup home: %w", err)
 		}
 		id, err = o.create(ctx, createSpec{
 			name:      config.SetupContainer(user),
@@ -1288,4 +1313,53 @@ func mkdirAllConfined(base, rel string, perm os.FileMode) error {
 	}
 	defer rt.Close()
 	return rt.MkdirAll(rel, perm)
+}
+
+// setupHomeStale reports whether an existing setup container binds a home
+// other than want at /home/<guestUser>. True after ADR-064 moved the setup
+// VM's home from homes/<user> to homes/<user>/base, and for a container with
+// no recognisable home bind at all — either way it is recreated.
+func setupHomeStale(mounts []container.MountPoint, guestUser, want string) bool {
+	dst := "/home/" + guestUser
+	for _, m := range mounts {
+		if m.Destination == dst {
+			return filepath.Clean(m.Source) != filepath.Clean(want)
+		}
+	}
+	return true
+}
+
+// RemoveStaleSetupVMs force-removes every setup container whose home bind
+// is not the current base home (ADR-064 moved it from homes/<user> to
+// homes/<user>/base). Run at startup before the base homes are migrated,
+// so no guest holds the old mount while the server renames under it; the
+// per-user check in EnsureSetup remains for anything created in between.
+// A setup VM is ephemeral onboarding state — the broker already holds what
+// it harvested — so an interrupted session loses nothing.
+func (o *Orchestrator) RemoveStaleSetupVMs(ctx context.Context) (int, error) {
+	list, err := o.docker.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("label", config.LabelSystem+"=setup")),
+	})
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, c := range list {
+		insp, err := o.docker.ContainerInspect(ctx, c.ID)
+		if err != nil || insp.Config == nil {
+			continue
+		}
+		user := insp.Config.Labels[config.LabelUser]
+		if user == "" || !setupHomeStale(insp.Mounts, containerGuest(insp.Config.Env), o.cfg.UserHome(user)) {
+			continue
+		}
+		if err := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+			o.logger.Warn("stale setup VM: remove failed", "user", user, "error", err)
+			continue
+		}
+		o.logger.Info("stale setup VM removed (home layout changed, ADR-064)", "user", user)
+		removed++
+	}
+	return removed, nil
 }

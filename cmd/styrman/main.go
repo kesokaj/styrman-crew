@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -58,6 +60,20 @@ func main() {
 		logger.Error("orchestrator init failed", "error", err)
 		os.Exit(1)
 	}
+	// ADR-064: a setup VM created before the layout change still binds the
+	// tenant dir with every project home inside it. Remove those first, so
+	// no guest holds the old mount while the base homes are migrated below.
+	// Bounded: this is synchronous Docker work ahead of the listener, the
+	// shape that once hung startup (the adoption note below).
+	sweepCtx, cancelSweep := context.WithTimeout(context.Background(), 60*time.Second)
+	n, err := orch.RemoveStaleSetupVMs(sweepCtx)
+	cancelSweep()
+	if err != nil {
+		logger.Warn("stale setup VM sweep failed", "error", err)
+	} else if n > 0 {
+		logger.Info("removed stale setup VMs (home layout changed, ADR-064)", "count", n)
+	}
+	migrateBaseHomes(cfg, logger)
 
 	// ADR-027 migration AFTER the orchestrator exists: project microVMs keep
 	// running across server upgrades (restart: unless-stopped), so a project
@@ -180,8 +196,15 @@ func migrateLegacy(cfg *config.Config, logger *slog.Logger) {
 	// 1. Home dir.
 	if st, err := os.Stat(cfg.HomeDir); err == nil && st.IsDir() {
 		target := cfg.UserHome(user)
-		if _, err := os.Stat(target); os.IsNotExist(err) {
-			if err := os.Rename(cfg.HomeDir, target); err != nil {
+		// Skip when base/ exists OR the tenant dir already holds anything: a
+		// half-migrated host must not get the legacy home renamed on top of
+		// its own entries (security review 2026-09-04).
+		tenantEntries, _ := os.ReadDir(cfg.TenantDir(user))
+		if _, err := os.Stat(target); os.IsNotExist(err) && len(tenantEntries) == 0 {
+			// The target is homes/<user>/base since ADR-064: its parent must exist.
+			if err := os.MkdirAll(cfg.TenantDir(user), 0o700); err != nil {
+				logger.Error("legacy home migration failed", "mkdir", cfg.TenantDir(user), "error", err)
+			} else if err := os.Rename(cfg.HomeDir, target); err != nil {
 				logger.Error("legacy home migration failed", "from", cfg.HomeDir, "to", target, "error", err)
 			} else {
 				logger.Info("migrated legacy home", "to", target)
@@ -367,10 +390,11 @@ func pruneTranscripts(cfg *config.Config, logger *slog.Logger) {
 		if !u.IsDir() {
 			continue
 		}
-		// Everything below the tenant's base home is guest-writable: the
-		// setup VM mounts it with a root guest, and the project homes sit
-		// INSIDE it at p/<uuid> (ADR-031). So `p` and every entry under it
-		// are listed and opened through an os.Root at the base home — a
+		// The tenant dir homes/<u> is server-only since ADR-064 (the guest
+		// mounts are base/ and p/<uuid>, each guest-writable); before that the
+		// setup VM mounted the tenant dir itself with the project homes INSIDE
+		// it. `p` and every entry under it are still listed and opened through
+		// an os.Root at the tenant dir — belt and braces now, once the only defense — a
 		// symlink the guest plants at p/<uuid> (or at p itself) toward the
 		// host or another tenant is refused, never followed; before this the
 		// project root was opened by raw path and would have been (security
@@ -417,4 +441,84 @@ func pruneTranscripts(cfg *config.Config, logger *slog.Logger) {
 		logger.Info("transcript janitor pruned old transcripts",
 			"files", pruned, "ttl", cfg.TranscriptTTL.String())
 	}
+}
+
+// migrateBaseHomes moves each tenant's pre-ADR-064 base home into
+// homes/<user>/base. Before ADR-064 the setup VM mounted homes/<user>
+// itself, which put every project home (p/<uuid>) inside a root guest's
+// mount (BUG-002/003). Everything except base/ and p/ moves; p/ is never
+// touched. Every operation goes through an os.Root at the tenant dir, so a
+// `base` swapped for a symlink between two steps cannot redirect a rename
+// outside the tenant (security review 2026-09-04); a `base` that is not a
+// real directory is refused up front, and an entry whose destination already
+// exists is left in place. Runs after the stale setup VMs are removed, so no
+// guest holds the old mount while it works. Idempotent: a tenant with
+// nothing outside base/ and p/ is skipped; a symlinked tenant entry is
+// skipped. Logs counts, never entry names. Never aborts startup.
+func migrateBaseHomes(cfg *config.Config, logger *slog.Logger) {
+	users, err := os.ReadDir(cfg.HomesDir)
+	if err != nil {
+		return
+	}
+	for _, u := range users {
+		if !u.IsDir() { // a symlinked tenant entry reports as not a dir: skipped
+			continue
+		}
+		rt, err := os.OpenRoot(cfg.TenantDir(u.Name()))
+		if err != nil {
+			logger.Warn("base home migration: cannot open tenant dir", "user", u.Name(), "error", err)
+			continue
+		}
+		moved, left, failed, err := migrateTenantIntoBase(rt)
+		rt.Close()
+		switch {
+		case err != nil:
+			logger.Error("base home migration refused", "user", u.Name(), "error", err)
+		case moved+left+failed == 0:
+			// already migrated, or a fresh tenant
+		default:
+			logger.Info("migrated base home", "user", u.Name(), "to", cfg.UserHome(u.Name()),
+				"entries", moved, "leftInPlace", left, "failed", failed)
+		}
+	}
+}
+
+// migrateTenantIntoBase does one tenant's move inside its confined root.
+// It returns the counts and a refusal error when base exists but is not a
+// real directory.
+func migrateTenantIntoBase(rt *os.Root) (moved, left, failed int, err error) {
+	entries, err := fs.ReadDir(rt.FS(), ".")
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	var move []string
+	for _, e := range entries {
+		if e.Name() == "base" || e.Name() == "p" {
+			continue
+		}
+		move = append(move, e.Name())
+	}
+	if len(move) == 0 {
+		return 0, 0, 0, nil
+	}
+	if st, err := rt.Lstat("base"); err == nil {
+		if !st.IsDir() {
+			return 0, 0, 0, errors.New("base exists but is not a real directory (a planted symlink?) — nothing moved")
+		}
+	} else if err := rt.Mkdir("base", 0o700); err != nil {
+		return 0, 0, 0, fmt.Errorf("create base: %w", err)
+	}
+	for _, name := range move {
+		dst := "base/" + name
+		if _, err := rt.Lstat(dst); err == nil {
+			left++ // a partial earlier run, or a stale setup VM recreated it: never replace
+			continue
+		}
+		if err := rt.Rename(name, dst); err != nil {
+			failed++
+			continue
+		}
+		moved++
+	}
+	return moved, left, failed, nil
 }
