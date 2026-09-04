@@ -65,7 +65,7 @@ func main() {
 	// no guest holds the old mount while the base homes are migrated below.
 	// Bounded: this is synchronous Docker work ahead of the listener, the
 	// shape that once hung startup (the adoption note below).
-	sweepCtx, cancelSweep := context.WithTimeout(context.Background(), 60*time.Second)
+	sweepCtx, cancelSweep := context.WithTimeout(context.Background(), 10*time.Second)
 	n, err := orch.RemoveStaleSetupVMs(sweepCtx)
 	cancelSweep()
 	if err != nil {
@@ -469,13 +469,18 @@ func migrateBaseHomes(cfg *config.Config, logger *slog.Logger) {
 			logger.Warn("base home migration: cannot open tenant dir", "user", u.Name(), "error", err)
 			continue
 		}
-		moved, left, failed, err := migrateTenantIntoBase(rt)
+		moved, left, failed, firstErr, err := migrateTenantIntoBase(rt)
 		rt.Close()
 		switch {
 		case err != nil:
 			logger.Error("base home migration refused", "user", u.Name(), "error", err)
 		case moved+left+failed == 0:
 			// already migrated, or a fresh tenant
+		case failed > 0:
+			// An entry left at the tenant top level is reachable from no guest:
+			// name the first cause (the error carries a path, not a secret).
+			logger.Error("base home migration incomplete", "user", u.Name(), "to", cfg.UserHome(u.Name()),
+				"entries", moved, "leftInPlace", left, "failed", failed, "firstError", firstErr)
 		default:
 			logger.Info("migrated base home", "user", u.Name(), "to", cfg.UserHome(u.Name()),
 				"entries", moved, "leftInPlace", left, "failed", failed)
@@ -486,10 +491,10 @@ func migrateBaseHomes(cfg *config.Config, logger *slog.Logger) {
 // migrateTenantIntoBase does one tenant's move inside its confined root.
 // It returns the counts and a refusal error when base exists but is not a
 // real directory.
-func migrateTenantIntoBase(rt *os.Root) (moved, left, failed int, err error) {
+func migrateTenantIntoBase(rt *os.Root) (moved, left, failed int, firstErr error, err error) {
 	entries, err := fs.ReadDir(rt.FS(), ".")
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, nil, err
 	}
 	var move []string
 	for _, e := range entries {
@@ -499,14 +504,14 @@ func migrateTenantIntoBase(rt *os.Root) (moved, left, failed int, err error) {
 		move = append(move, e.Name())
 	}
 	if len(move) == 0 {
-		return 0, 0, 0, nil
+		return 0, 0, 0, nil, nil
 	}
 	if st, err := rt.Lstat("base"); err == nil {
 		if !st.IsDir() {
-			return 0, 0, 0, errors.New("base exists but is not a real directory (a planted symlink?) — nothing moved")
+			return 0, 0, 0, nil, errors.New("base exists but is not a real directory (a planted symlink?) — nothing moved")
 		}
 	} else if err := rt.Mkdir("base", 0o700); err != nil {
-		return 0, 0, 0, fmt.Errorf("create base: %w", err)
+		return 0, 0, 0, nil, fmt.Errorf("create base: %w", err)
 	}
 	for _, name := range move {
 		dst := "base/" + name
@@ -516,9 +521,12 @@ func migrateTenantIntoBase(rt *os.Root) (moved, left, failed int, err error) {
 		}
 		if err := rt.Rename(name, dst); err != nil {
 			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
 			continue
 		}
 		moved++
 	}
-	return moved, left, failed, nil
+	return moved, left, failed, firstErr, nil
 }

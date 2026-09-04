@@ -92,8 +92,13 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.20.0**, deployed: https://crew.styrman.xyz (Google sign-in).
+**v1.21.0**, deployed: https://crew.styrman.xyz (Google sign-in).
 
+- **v1.21.0** (2026-09-04): the setup VM's home is now `homes/<user>/base`,
+  not `homes/<user>` itself, so no guest mount contains the project homes
+  (ADR-064). The server migrates an old base home into `base/` once at
+  startup and recreates a stale setup VM by itself. This closes the
+  check-to-mount window v1.20.0 had accepted (BUG-002/003).
 - **v1.20.0** (2026-09-04): the agent harness every project home receives is
   now a verbatim mirror of the operator's `styrman-harness` repo, installed
   by `sh-agent` — 28 skills, 7 subagents, global context, no hooks, scripts,
