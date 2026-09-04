@@ -603,7 +603,7 @@ smallest, most isolated changes land first.
 - [x] Full `go test ./...`, the vendored ingress module, `go vet`, web checks, integration, e2e — verify: `verifier`, AI
 - [x] `bash deploy/vulncheck.sh` — the two accepted unfixable `docker/docker` findings only (`TODO.md:62`), unchanged by this release — verify: AI
 - [x] `deploy/verify-commit.sh` — OK on `acb5918`, then RE-RUN on the final release commit after the gate fixes, since the gate must run against what is actually tagged — verify: AI
-- [x] Tag + release v1.22.0. Signed tag `v1.22.0` -> `209edce`, pushed 14:55; the auto-updater built all three images and deployed at 14:59, `styrman-server:1.22.0` healthy, no `failed-version` latch. `deploy/verify-commit.sh` was re-run on `209edce` (the commit actually tagged) after the gate fixes, not just on `acb5918`. REMAINING, and only the operator can do it: a FRESH Google sign-in — `versioning.md` is explicit that an existing session staying logged in proves nothing, and caddy-security surviving a version bump is the riskiest step — verify: user
+- [x] Tag + release v1.22.0. Signed tag `v1.22.0` -> `209edce`, pushed 14:55; the auto-updater built all three images and deployed at 14:59, `styrman-server:1.22.0` healthy, no `failed-version` latch. `deploy/verify-commit.sh` was re-run on `209edce` (the commit actually tagged) after the gate fixes, not just on `acb5918`. The fresh Google sign-in — the one step an agent cannot do, and the riskiest part of any deploy here — was CONFIRMED WORKING by the operator ("login works fine", 2026-09-04). caddy-security survived the version bump; the release is fully verified — verify: user, DONE
 
 ## Cold-reader resolutions (round 1, 2026-09-04)
 
