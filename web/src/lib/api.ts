@@ -592,15 +592,22 @@ export const api = {
     request<GitStatus>(`/api/projects/${project}/git/status`),
   gitDiff: (
     project: string,
-    opts: { path?: string; staged?: boolean; untracked?: boolean } = {},
+    opts: {
+      path?: string;
+      staged?: boolean;
+      untracked?: boolean;
+      /** A single commit's diff; overrides path/staged server-side. */
+      commit?: string;
+    } = {},
   ) => {
     const q = new URLSearchParams();
     if (opts.path) q.set("path", opts.path);
     if (opts.staged) q.set("staged", "true");
     if (opts.untracked) q.set("untracked", "true");
+    if (opts.commit) q.set("commit", opts.commit);
     const qs = q.toString();
     return request<{ state: string; diff: string }>(
-      `/api/projects/${project}/git/diff${qs ? `?${qs}` : ""}`,
+      `/api/projects/${encodeURIComponent(project)}/git/diff${qs ? `?${qs}` : ""}`,
     );
   },
   gitStage: (project: string, body: { path?: string; all?: boolean }) =>
@@ -618,11 +625,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ path, untracked }),
     }),
-  gitCommit: (project: string, message: string) =>
-    request<{ output: string }>(`/api/projects/${project}/git/commit`, {
-      method: "POST",
-      body: JSON.stringify({ message }),
-    }),
+  gitCommit: (
+    project: string,
+    message: string,
+    opts: { all?: boolean } = {},
+  ) =>
+    request<{ output: string }>(
+      `/api/projects/${encodeURIComponent(project)}/git/commit`,
+      {
+        method: "POST",
+        body: JSON.stringify({ message, all: opts.all ?? false }),
+      },
+    ),
   gitPush: (project: string) =>
     request<{ output: string }>(`/api/projects/${project}/git/push`, {
       method: "POST",

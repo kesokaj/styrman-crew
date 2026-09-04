@@ -6,6 +6,7 @@ import { SidePanel } from "../components/SidePanel";
 import { TerminalPane } from "../components/TerminalPane";
 import { TerminalStatusBar } from "../components/TerminalStatusBar";
 import { EditorPane } from "../components/EditorPane";
+import { DiffPane } from "../components/DiffPane";
 import { ConfirmDialog } from "../components/ui";
 import { basename, useEditorPane } from "../lib/editorPane";
 
@@ -42,6 +43,12 @@ function TerminalPage() {
   // remount — harmless: it only decides whether the editor subtree exists.)
   const editorUsed = useRef(false);
   if (pane.view === "editor" || pane.file) editorUsed.current = true;
+  // Same latch for the diff view. DiffPane is cheaper to unmount than the
+  // editor (no unsaved buffer, no socket), so this is consistency and one
+  // saved refetch rather than correctness — but a fourth pane view arriving
+  // later should find ONE pattern in this file, not two.
+  const diffUsed = useRef(false);
+  if (pane.view === "diff" || pane.diff) diffUsed.current = true;
   // Bumped on every switch back to the terminal so it reclaims keyboard focus
   // (it is hidden, not unmounted, so nothing else would).
   const [focusToken, setFocusToken] = useState(0);
@@ -107,7 +114,8 @@ function TerminalPage() {
               [
                 ["terminal", "Terminal"],
                 ["editor", "Editor"],
-              ] as Array<["terminal" | "editor", string]>
+                ["diff", "Diff"],
+              ] as Array<["terminal" | "editor" | "diff", string]>
             ).map(([mode, label]) => (
               <button
                 key={mode}
@@ -131,7 +139,9 @@ function TerminalPage() {
                 title={
                   mode === "editor"
                     ? "Show the editor in this pane (the terminal keeps running)"
-                    : "Show the terminal"
+                    : mode === "diff"
+                      ? "Show the git diff in this pane (the terminal keeps running)"
+                      : "Show the terminal"
                 }
               >
                 {label}
@@ -170,7 +180,9 @@ function TerminalPage() {
             `hidden` rather than unmounted: TerminalPane closes its WebSocket on
             unmount, so unmounting would tear down the session on every toggle. */}
         <div className="min-h-0 flex-1">
-          <div className={`h-full ${pane.view === "editor" ? "hidden" : ""}`}>
+          <div
+            className={`h-full ${pane.view === "terminal" ? "" : "hidden"}`}
+          >
             <TerminalPane
               key={`${project}/${term}`}
               target={{ kind: "term", project, id: term }}
@@ -178,6 +190,16 @@ function TerminalPage() {
               focusToken={focusToken}
             />
           </div>
+          {diffUsed.current && (
+            <div className={`h-full ${pane.view === "diff" ? "" : "hidden"}`}>
+              <DiffPane
+                key={`${project}/${term}`}
+                project={project}
+                term={term}
+                onShowTerminal={showTerminal}
+              />
+            </div>
+          )}
           {editorUsed.current && (
             <div className={`h-full ${pane.view === "editor" ? "" : "hidden"}`}>
               <EditorPane

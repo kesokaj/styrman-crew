@@ -97,7 +97,7 @@ export function SidePanel({
         {tab === "ports" && <PortsTab project={project} term={term} />}
         {tab === "env" && <EnvTab project={project} />}
         {tab === "history" && <HistoryTab project={project} />}
-        {tab === "git" && <GitTab project={project} />}
+        {tab === "git" && <GitTab project={project} term={term} />}
         {tab === "clips" && <ClipsTab />}
       </div>
     </aside>

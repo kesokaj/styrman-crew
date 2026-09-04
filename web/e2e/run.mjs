@@ -66,6 +66,13 @@ const panel = () => page.locator("aside").last();
 // repeats file basenames inside the same aside, and an unscoped getByText
 // would strict-mode-collide with them.
 const fileList = () => panel().getByTestId("file-list");
+/** Wait until the MAIN pane's rendered text contains `needle`. */
+const mainContains = (needle, timeout = 20000) =>
+  page.waitForFunction(
+    (n) => (document.querySelector("main")?.innerText ?? "").includes(n),
+    needle,
+    { timeout },
+  );
 
 try {
   // ── Home ────────────────────────────────────────────────────────────────
@@ -825,6 +832,55 @@ try {
     await page.waitForSelector("aside >> text=Push");
     await page.waitForSelector('aside textarea[placeholder^="Commit message"]');
   });
+  // ── Git diff in the MAIN pane + fast commit (v1.22.0) ──────────────────
+  // A commit needs an identity. The server injects `-c user.name/-c user.email`
+  // from the BASE home's .gitconfig (git.go:72), which this isolated e2e state
+  // dir has none of — so without this the commit fails with git's own "please
+  // tell me who you are" as a 409. Set it in the guest's global config, which
+  // git then falls back to.
+  await check("git diff opens in the MAIN pane, not the side panel", async () => {
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.locator(".xterm textarea").first().focus();
+    await page.keyboard.type(
+      "git config --global user.email e2e@styrman.test; git config --global user.name e2e; echo diffme >> one.txt; echo second >> two.txt",
+    );
+    await page.keyboard.press("Enter");
+    await page.waitForTimeout(1500);
+    await panel().getByText("Git", { exact: true }).click();
+    await page.waitForSelector("aside >> text=/Changes \\(/", { timeout: 20000 });
+    // panel() IS the aside — do not nest another "aside >>" inside it.
+    await panel().getByText("one.txt", { exact: true }).first().click();
+    // waitForFunction on innerText, NOT `main >> text=...`: DiffView renders
+    // every diff line as its own <div> with white-space:pre, and the text
+    // engine does not match inside them (verified — the pane demonstrably
+    // contained "+diffme" while `main >> text=diffme` timed out).
+    await mainContains("diffme");
+    // The point of the move: the diff is no longer inside the 320px panel.
+    if (await panel().locator("text=diffme").count())
+      throw new Error("diff still rendered inside the side panel");
+  });
+
+  await check("clicking a SECOND file swaps the diff (set() no-op guard)", async () => {
+    // The pane store's bail-out compares fields by identity; with `diff` left
+    // out of that comparison this click is a silent no-op and the pane keeps
+    // showing one.txt.
+    await panel().getByText("two.txt", { exact: true }).first().click();
+    await mainContains("second");
+  });
+
+  await check("fast commit stages everything and commits a UUID", async () => {
+    await panel().getByRole("button", { name: "Fast commit" }).click();
+    await page
+      .getByRole("button", { name: "Commit everything", exact: true })
+      .click();
+    await page.waitForSelector("text=/Committed as [0-9a-f-]{8}-/", {
+      timeout: 30000,
+    });
+    await page.waitForSelector("aside >> text=Nothing to commit", {
+      timeout: 30000,
+    });
+  });
+
   // Clips tab must open without spinning: getClips backs useSyncExternalStore,
   // and an unstable snapshot infinite-loops the SPA (regression guard).
   await check("clips tab opens (no render loop)", async () => {

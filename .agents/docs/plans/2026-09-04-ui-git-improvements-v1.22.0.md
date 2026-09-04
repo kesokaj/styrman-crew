@@ -572,16 +572,16 @@ smallest, most isolated changes land first.
 - [x] `web/dist` rebuilt — verify: freshness step, AI
 
 ### Phase 5 — Git diff in the main pane + fast commit
-- [ ] `PaneState.diff` + `openDiffInPane`; add `diff` to `set()`'s no-op guard — verify: tier 1, AI
-- [ ] Extract `DiffView` out of `SidePanelGit.tsx` into a shared component — verify: tier 1, AI
-- [ ] `DiffPane.tsx` + third header segment (always rendered, `aria-label="Diff"`, empty state) — verify: tier 3, AI
-- [ ] `diffUsed` lazy-mount ref + hidden-div toggle mirroring `editorUsed` (`p.$project.$term.tsx:39-44`) — verify: tier 3, AI
-- [ ] `SidePanel.tsx:100` passes `term={term}` to `GitTab` (it already threads it to `PortsTab` at `:97`) — verify: tier 1 `npm run check`, AI
-- [ ] Git-tab file rows route to the main pane; drop the `max-h-64` box; add a working-tree diff button — verify: tier 3, AI
-- [ ] Server: `commit {all:true}` = `add -A` + commit, one handler — verify: tier 1 + tier 2, AI
-- [ ] Fast-commit button, `crypto.randomUUID()` message, confirm showing the file count — verify: tier 3, both
-- [ ] `api.md` records the staged-tree-on-partial-failure behaviour — verify: reread, AI
-- [ ] `web/dist` rebuilt — verify: freshness step, AI
+- [x] `PaneState.diff` + `openDiffInPane`; `diff` added to `set()`'s no-op guard. NOT unit-tested: `editorPane.test.ts`'s header records that this store's internals are deliberately unreachable from unit tests (the state Map is unexported and widening the API for tests was rejected), so the guard is covered by a dedicated e2e check that clicks a SECOND file and asserts the pane swaps — verify: tier 3, AI
+- [x] Extract `DiffView` into `components/DiffView.tsx`, shared by the panel and the pane — verify: tier 1, AI
+- [x] `DiffPane.tsx` + third header segment (always rendered, empty state mirroring the editor's) — verify: tier 3, AI
+- [x] `diffUsed` lazy-mount ref + hidden-div toggle mirroring `editorUsed`; the terminal's own visibility class had to flip from `view === "editor" ? hidden` to `view === "terminal" ? ""`, since "not the editor" no longer means "the terminal" — verify: tier 3, AI
+- [x] `SidePanel.tsx:100` passes `term={term}` to `GitTab` — verify: tier 1 `npm run check`, AI
+- [x] Git-tab file rows route to the main pane; `max-h-64` box gone; working-tree Diff button in the header — verify: tier 3, AI
+- [x] Server: `commit {all:true}` = `add -A` + commit in one handler; `diff?commit=` via `git show --format= --patch` with its exit code checked (the sibling `--no-index` branch deliberately still ignores its own, since it exits 1 on difference). Handler-level unit tests are NOT possible — `Server.orch` is a concrete `*orchestrator.Orchestrator` with no exec seam, the same gap already recorded for checkFile/formatFile in TODO.md and as BUG-003's residual — so `validCommitHash` is unit-tested and the handlers are covered by e2e — verify: tier 1 + tier 3, AI
+- [x] Fast-commit button, `crypto.randomUUID()` message, confirm showing the file count — verify: tier 3, both
+- [x] `api.md` records the staged-tree-on-partial-failure behaviour, and the deliberate exit-code asymmetry in `gitDiff` — verify: reread, AI
+- [x] `web/dist` rebuilt — verify: freshness step, AI
 
 ### Phase 6 — Git verbs (fetch, pull, branches, log, stash)
 - [ ] Ref/hash/op validation helpers + their table test FIRST — verify: tier 1 `-race`, AI

@@ -19,10 +19,29 @@ import type { Scope } from "./api";
  * open is session context, not a durable preference.
  */
 export type PaneFile = { scope: Scope; path: string };
+
+/**
+ * What the diff view is showing. `path` absent means the whole working tree.
+ *
+ * `subject` travels WITH the target rather than being looked up: the log view
+ * already has it from GET /git/log, so DiffPane can render its header from its
+ * own inputs instead of firing a second request for text it was handed. A
+ * `commit` that arrives without one falls back to the short hash.
+ */
+export type DiffTarget = {
+  path?: string;
+  staged: boolean;
+  untracked: boolean;
+  commit?: string;
+  subject?: string;
+};
+
 export type PaneState = {
-  view: "terminal" | "editor";
+  view: "terminal" | "editor" | "diff";
   /** The file the editor pane is showing, or null before one is opened. */
   file: PaneFile | null;
+  /** What the diff view is showing, or null before one is opened. */
+  diff: DiffTarget | null;
   /**
    * The pane has unsaved edits. Lives here, not inside the pane, because the
    * TERMINAL view has to show it: the editor is hidden, so its only other
@@ -43,7 +62,13 @@ export type PaneState = {
   draft: { path: string; text: string } | null;
 };
 
-const DEFAULT: PaneState = { view: "terminal", file: null, dirty: false, draft: null };
+const DEFAULT: PaneState = {
+  view: "terminal",
+  file: null,
+  diff: null,
+  dirty: false,
+  draft: null,
+};
 
 const states = new Map<string, PaneState>();
 const listeners = new Set<() => void>();
@@ -73,6 +98,11 @@ function set(project: string, term: string, next: PaneState) {
   if (
     prev.view === next.view &&
     prev.file === next.file &&
+    // `diff` MUST be in this comparison. Left out, opening a second diff while
+    // already on the diff view is a silent no-op — the state changes, the
+    // guard says nothing did, and the pane keeps showing the previous file's
+    // diff. (`draft` is left out deliberately; see its docstring.)
+    prev.diff === next.diff &&
     prev.dirty === next.dirty
   ) {
     return;
@@ -99,9 +129,27 @@ export function openFileInPane(
   set(project, term, {
     view: "editor",
     file: { scope, path },
+    diff: get(project, term).diff,
     dirty: get(project, term).dirty,
     draft: get(project, term).draft,
   });
+}
+
+/**
+ * Show a diff in the terminal's main pane and switch the view to it.
+ *
+ * Deliberately does NOT call noteRecent: a diff is not an opened file, and
+ * letting it displace the recents list would evict chips the user still wants.
+ * Everything else on the pane (the open file, its unsaved buffer, the dirty
+ * flag) is carried through untouched — the editor is hidden, not discarded.
+ */
+export function openDiffInPane(
+  project: string,
+  term: string,
+  target: DiffTarget,
+) {
+  const prev = get(project, term);
+  set(project, term, { ...prev, view: "diff", diff: target });
 }
 
 /** Last path segment — the display name for chips and the header badge. */

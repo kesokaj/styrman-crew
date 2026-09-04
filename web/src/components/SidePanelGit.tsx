@@ -3,8 +3,16 @@ import { api, type GitFile } from "../lib/api";
 import { usePolled } from "../lib/hooks";
 import { toast } from "../lib/toast";
 import { ConfirmDialog } from "./ui";
+import { openDiffInPane } from "../lib/editorPane";
 
-export function GitTab({ project }: { project: string }) {
+export function GitTab({
+  project,
+  term,
+}: {
+  project: string;
+  /** The terminal whose main pane diffs open in. */
+  term: string;
+}) {
   const { data, refresh, error } = usePolled(
     () => api.gitStatus(project),
     8000,
@@ -14,8 +22,8 @@ export function GitTab({ project }: { project: string }) {
   const [busy, setBusy] = useState(false);
   const [sel, setSel] = useState<GitFile | null>(null);
   const [selStaged, setSelStaged] = useState(false);
-  const [diff, setDiff] = useState("");
   const [discarding, setDiscarding] = useState<GitFile | null>(null);
+  const [fastCommitting, setFastCommitting] = useState(false);
 
   const files = data?.files ?? [];
   const staged = files.filter((f) => f.staged && f.staged !== "?");
@@ -33,20 +41,17 @@ export function GitTab({ project }: { project: string }) {
     }
   };
 
-  const view = async (f: GitFile, isStaged: boolean) => {
+  // The diff opens in the MAIN pane, not in a 64px-tall box down here
+  // (operator request 2026-09-04). This only records which row is highlighted;
+  // DiffPane does the fetching, so a slow diff no longer blocks the panel.
+  const view = (f: GitFile, isStaged: boolean) => {
     setSel(f);
     setSelStaged(isStaged);
-    setDiff("Loading…");
-    try {
-      const d = await api.gitDiff(project, {
-        path: f.path,
-        staged: isStaged,
-        untracked: f.untracked,
-      });
-      setDiff(d.diff || "(no textual diff)");
-    } catch (e) {
-      setDiff("error: " + (e as Error).message);
-    }
+    openDiffInPane(project, term, {
+      path: f.path,
+      staged: isStaged,
+      untracked: f.untracked,
+    });
   };
 
   if (!data) {
@@ -92,6 +97,16 @@ export function GitTab({ project }: { project: string }) {
           }
         >
           Push{data.ahead > 0 ? ` ${data.ahead}` : ""}
+        </button>
+        <button
+          onClick={() =>
+            openDiffInPane(project, term, { staged: false, untracked: false })
+          }
+          disabled={busy || data.clean}
+          className="rounded px-2 py-0.5 text-text-dim hover:bg-bg-hover hover:text-text disabled:opacity-40"
+          title="Show the whole working tree's diff in the main pane"
+        >
+          Diff
         </button>
         <button
           onClick={refresh}
@@ -141,6 +156,16 @@ export function GitTab({ project }: { project: string }) {
               className="text-xs text-text-dim hover:text-text disabled:opacity-40"
             >
               Unstage all
+            </button>
+          )}
+          {!data.clean && (
+            <button
+              onClick={() => setFastCommitting(true)}
+              disabled={busy}
+              className="ml-auto text-xs text-text-dim hover:text-text disabled:opacity-40"
+              title="Stage everything and commit it with a generated UUID message"
+            >
+              Fast commit
             </button>
           )}
         </div>
@@ -206,24 +231,25 @@ export function GitTab({ project }: { project: string }) {
         )}
       </div>
 
-      {sel && (
-        <div className="flex max-h-64 shrink-0 flex-col border-t border-border">
-          <div className="flex items-center gap-2 bg-bg-raised px-2 py-1 text-[11px]">
-            <span className="min-w-0 flex-1 truncate font-mono" title={sel.path}>
-              {sel.path}
-            </span>
-            <span className="text-text-dim">
-              {selStaged ? "staged" : "working"}
-            </span>
-            <button
-              onClick={() => setSel(null)}
-              className="text-text-dim hover:text-text"
-            >
-              ✕
-            </button>
-          </div>
-          <DiffView text={diff} />
-        </div>
+      {fastCommitting && (
+        <ConfirmDialog
+          title="Commit everything?"
+          body={`All ${files.length} changed file${files.length === 1 ? "" : "s"} — including any you have not looked at — will be staged and committed with a generated UUID as the message. Nothing is pushed.`}
+          confirmLabel="Commit everything"
+          onConfirm={() =>
+            run(async () => {
+              // Generated client-side so the toast can show the id you will
+              // grep the log for. crypto.randomUUID is available in every
+              // browser this SPA supports and over HTTPS/localhost only, which
+              // is the deployment (R8: the ingress terminates TLS).
+              const message = crypto.randomUUID();
+              await api.gitCommit(project, message, { all: true });
+              setFastCommitting(false);
+              toast("success", `Committed as ${message}`);
+            })
+          }
+          onClose={() => setFastCommitting(false)}
+        />
       )}
 
       {discarding && (
@@ -324,31 +350,5 @@ function ActBtn({
     >
       {label}
     </button>
-  );
-}
-
-function DiffView({ text }: { text: string }) {
-  return (
-    <div className="min-h-0 flex-1 overflow-auto bg-bg font-mono text-[11px] leading-snug">
-      {text.split("\n").map((line, i) => {
-        let cls = "text-text";
-        if (line.startsWith("+") && !line.startsWith("+++")) cls = "text-ok";
-        else if (line.startsWith("-") && !line.startsWith("---"))
-          cls = "text-danger";
-        else if (line.startsWith("@@")) cls = "text-accent";
-        else if (
-          line.startsWith("diff ") ||
-          line.startsWith("index ") ||
-          line.startsWith("+++") ||
-          line.startsWith("---")
-        )
-          cls = "text-text-dim";
-        return (
-          <div key={i} className={`whitespace-pre px-2 ${cls}`}>
-            {line || " "}
-          </div>
-        );
-      })}
-    </div>
   );
 }

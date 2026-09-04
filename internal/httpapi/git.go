@@ -6,6 +6,9 @@ import (
 	"errors"
 	"net/http"
 	"os/exec"
+	// `path`, not `path/filepath`: ws is a GUEST-side POSIX path, and its
+	// meaning must not depend on the server's OS.
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -85,8 +88,26 @@ func (s *Server) gitIdentity(user string) (name, email string) {
 func (s *Server) gitExec(ctx context.Context, cid, guest, ws string, args ...string) (int, string, error) {
 	return s.orch.Exec(ctx, cid, orchestrator.ExecSpec{
 		User: guest,
-		Env:  []string{"HOME=/home/" + guest, "USER=" + guest},
-		Cmd:  append([]string{"git", "-C", ws}, args...),
+		Env: []string{
+			"HOME=/home/" + guest,
+			"USER=" + guest,
+			// Stop git's repository discovery from walking ABOVE the
+			// workspace. R13 says the workspace is always a repo, but if
+			// `<ws>/.git` is ever missing — mid-reinit, or removed from inside
+			// the guest — git would otherwise search upward and operate on
+			// whatever repo it found next, with the project HOME as the work
+			// tree. `add -A` there would stage the docker disk image and the
+			// broker's materialized credentials, and the push endpoint would
+			// then send them to a guest-controlled origin. With the ceiling
+			// set, discovery fails and the command exits non-zero instead,
+			// which every caller here already handles (gitStatus reports
+			// repo:false; the rest surface git's message).
+			// The ceiling itself is not searched, so this permits <ws> and
+			// forbids its parent (security review 2026-09-04).
+			"GIT_CEILING_DIRECTORIES=" + path.Dir(ws),
+			"GIT_DISCOVERY_ACROSS_FILESYSTEM=0",
+		},
+		Cmd: append([]string{"git", "-C", ws}, args...),
 	})
 }
 
@@ -265,6 +286,8 @@ func (s *Server) gitCommit(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Message string `json:"message"`
+		// All stages EVERYTHING before committing (the UI's fast-commit).
+		All bool `json:"all"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Message) == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("a commit message is required"))
@@ -272,6 +295,29 @@ func (s *Server) gitCommit(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
+	if body.All {
+		// `add -A`, NOT `commit -a`: -a skips untracked files, and a button
+		// labelled "commit everything" that quietly omits new files is worse
+		// than no button. Staging and committing share one handler and one
+		// timeout so they cannot be interleaved with another request.
+		//
+		// If this succeeds and the commit below then fails, the tree is left
+		// STAGED. That is observable, so it is documented in specs/styrman/api.md
+		// and surfaced by the UI rather than silently unwound — an automatic
+		// reset here could discard staging the user did by hand beforehand.
+		if code, out, err := s.gitExec(ctx, cid, guest, ws, "add", "-A"); err != nil || code != 0 {
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, err)
+				return
+			}
+			// guestErrMessage, not firstLine: this text is guest-controlled,
+			// and the helper strips control characters, redacts a token that
+			// rode in on a URL, and caps the length (security review).
+			writeErr(w, http.StatusConflict,
+				errors.New(guestErrMessage("git add failed", out)))
+			return
+		}
+	}
 	// Inject the author from the shared home (per-project homes carry no
 	// identity). `-c` flags precede the subcommand; direct argv keeps a name
 	// with spaces safe. If none is configured yet, git falls back and reports
@@ -341,12 +387,44 @@ func (s *Server) gitDiff(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	// A single commit's diff. `git show --format= --patch`, NOT
+	// `git diff <hash>~1..<hash>`: `~1` fails outright on a ROOT commit, while
+	// show renders it correctly against the empty tree. The empty --format=
+	// suppresses the commit header, which the pane renders itself from the
+	// subject it was handed. A merge commit shows an empty patch (git's
+	// default without -m/--cc); the pane's "No changes" state covers that.
+	if c := r.URL.Query().Get("commit"); c != "" {
+		if !validCommitHash(c) {
+			writeErr(w, http.StatusBadRequest, errors.New("invalid commit hash"))
+			return
+		}
+		// This branch DOES check the exit code, unlike the two below. git show
+		// exits non-zero on an unknown revision, and without the check a
+		// well-formed-but-nonexistent hash would return 200 with an empty diff
+		// — indistinguishable from "this commit changed nothing".
+		code, out, err := s.gitExec(ctx, cid, guest, ws,
+			"show", "--format=", "--patch", "--no-color", c, "--")
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err)
+			return
+		}
+		if code != 0 {
+			writeErr(w, http.StatusNotFound, errors.New("unknown revision"))
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"state": "running", "diff": out})
+		return
+	}
 	args := []string{"diff", "--no-color"}
 	if r.URL.Query().Get("staged") == "true" {
 		args = append(args, "--cached")
 	}
 	path := r.URL.Query().Get("path")
 	untracked := r.URL.Query().Get("untracked") == "true"
+	// The two branches below deliberately DISCARD the exit code, and must keep
+	// doing so: `git diff --no-index` exits 1 when the files DIFFER, which is
+	// the normal success case for an untracked file. Adding a code check here
+	// would turn every untracked-file diff into an error.
 	var out string
 	if untracked && path != "" {
 		// Untracked files have no diff base; show the whole file as an addition.
@@ -382,6 +460,27 @@ func (s *Server) gitCtxErr(w http.ResponseWriter, err error) {
 		return
 	}
 	writeErr(w, http.StatusNotFound, err)
+}
+
+// validCommitHash accepts only an abbreviated-or-full hex object name.
+//
+// This is the first user-supplied string this file turns into git argv, so it
+// is checked before it can reach one. The hex-only rule also rules out a
+// leading "-" (which git would read as an option, not a revision) and every
+// refspec form — `HEAD@{1}`, `..`, `^`, a branch name — none of which the UI
+// ever sends: the diff pane only ever passes a hash it got from git log.
+func validCommitHash(s string) bool {
+	if len(s) < 7 || len(s) > 40 {
+		return false
+	}
+	for _, c := range s {
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func firstLine(s string) string {
