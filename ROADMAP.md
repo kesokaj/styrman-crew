@@ -12,7 +12,7 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**v1.20.0 shipped 2026-09-04** (`.agents/docs/changes/2026-09-04-v1.20.0-harness-replacement-and-session-expiry.md`): the harness migration is complete — scope A (the repo's own layout) and scope B (the image seeds `sh-agent` from a `styrman-harness` mirror, ADR-062) — plus BUG-001 and eight-hour sessions (ADR-063). Left for the operator: the manual Tier 5 step 4 (`claude -p` / `agy` inside a fresh project on production), and the decisions queued in `TODO.md` — the un-nesting ADR for project homes (the durable fix behind BUG-002/003), the upstream `sh-agent` items, and the ingress lows.
+Un-nesting the project homes (operator decision 2026-09-04): the setup VM's home moves to `HomesDir/<user>/base` so no guest mount contains the project homes — plan `.agents/docs/plans/2026-09-04-unnest-project-homes.md`, release `v1.21.0`. Shipped before it: v1.20.0 (`changes/2026-09-04-v1.20.0-harness-replacement-and-session-expiry.md`), the harness migration complete end to end.
 
 ## Next
 
