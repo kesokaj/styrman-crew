@@ -1,7 +1,7 @@
 ---
 owner: main
 date: 2026-09-03
-status: shipped in v1.20.0 (2026-09-04); manual Tier 5 step 4 pending on the operator — cold-read by `reviewer` 2026-09-03 (`reviews/2026-09-03-review-plan-image-harness-replacement.md`, 3 medium / 4 low, all resolved below); the operator's answers to the open questions recorded 2026-09-03
+status: shipped in v1.20.0 (2026-09-04), e2e complete — cold-read by `reviewer` 2026-09-03 (`reviews/2026-09-03-review-plan-image-harness-replacement.md`, 3 medium / 4 low, all resolved below); the operator's answers to the open questions recorded 2026-09-03
 ---
 # Plan — replace the image-seeded harness with sh-agent (styrman-harness)
 
@@ -65,7 +65,7 @@ No reason was found not to follow any of them. One consequence to state: with no
 
 ## Phase 5 — e2e and release
 
-- [~] Dev image built and run locally; new project created; `docker exec` → `sh-agent status` no drift; boot latency recorded (1.69 s, `testing/2026-09-03-e2e-harness-upgrade-path.md`); `claude -p` / `agy` inside a project: manual, needs the operator's sign-in — pending on the released version
+- [x] Dev image built and run locally; new project created; `docker exec` → `sh-agent status` no drift; boot latency recorded (1.69 s, `testing/2026-09-03-e2e-harness-upgrade-path.md`); `claude -p` / `agy` inside a fresh project on the released image: PASS (`testing/2026-09-04-tier5-agent-cli-smoke.md`)
 - [x] Upgrade path on a real existing dev project (stop, start on the new image) → migration evidence (backup dir listing, `settings.json` gone, user files intact) — `testing/2026-09-03-e2e-harness-upgrade-path.md`
 - [x] `/preflight` for `v1.20.0` — shipped 2026-09-04 (`reviews/2026-09-04-preflight-v1.20.0.md`, tag `v1.20.0` on `1a172db`, deployed by the auto-updater 200 s after the push)
 - Verification: e2e criteria below; `deploy/verify-commit.sh` on the release commit
