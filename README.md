@@ -31,7 +31,7 @@ containers disposable always.
   its workspace storage (ADR-027), its Docker daemon and disk, its network —
   and its apt packages: what you `apt install` is captured at shutdown and
   replayed when the VM is ever recreated (ADR-028). Because the home is
-  per-project, no tool state (`~/go`, `~/.npm`, caches, global installs,
+  per-project, no tool state (`~/.go`, `~/.npm`, caches, global installs,
   history) leaks between projects. Terminals get generated friendly names and
   an optional autostart command (start your dev server or a container the
   moment the session opens).

@@ -99,6 +99,23 @@ check "28 skills and 7 agy agents seeded" \
     "[ \"\$(docker exec ${CN} sh -c 'ls ${GH}/.claude/skills | wc -l')\" = 28 ] && [ \"\$(docker exec ${CN} sh -c 'ls ${GH}/.gemini/config/agents | wc -l')\" = 7 ]"
 check "no previous-harness artifacts (shell gates, GEMINI.md, settings.json)" \
     "! docker exec ${CN} sh -c 'test -e ${GH}/.agents/bin || test -e ${GH}/.gemini/GEMINI.md || test -e ${GH}/.claude/settings.json'"
+
+say "shell skel (v1.22.0: GOPATH is \$HOME/.go, seeded write-once per file)"
+check "seeded .bash_exports carries the new GOPATH" \
+    "docker exec ${CN} grep -qx 'export GOPATH=\"\$HOME/.go\"' ${GH}/.bash_exports"
+# The value a shell actually resolves — proves the seed AND the sourcing chain
+# (.profile -> .bashrc -> .bash_exports), not just the file's bytes.
+# MUST be `-lic`, not `-lc`: .bashrc returns early for a non-interactive shell
+# (`case $- in *i*) ;; *) return ;; esac`, skel/bashrc:7), so a plain `-lc`
+# never reaches .bash_exports and reports an empty GOPATH. A styrman terminal
+# is an interactive login shell under tmux, which `-lic` reproduces.
+check "login shell resolves GOPATH to \$HOME/.go" \
+    "[ \"\$(docker exec ${CN} runuser -u ${ME} -- bash -lic 'echo \$GOPATH' 2>/dev/null)\" = '${GH}/.go' ]"
+# ~/.go/bin joins PATH only once it exists (the `[[ -d ]]` guard in bashrc:24),
+# so create it FIRST and read PATH from a SECOND shell — doing both in one
+# shell tests nothing, the guard has already run by then.
+check "\$HOME/.go/bin joins PATH once it exists" \
+    "docker exec ${CN} runuser -u ${ME} -- mkdir -p ${GH}/.go/bin && docker exec ${CN} runuser -u ${ME} -- bash -lic 'echo \$PATH' 2>/dev/null | tr : '\\n' | grep -qx '${GH}/.go/bin'"
 # R1 boot budget, from the container's own clock: the gap between its start
 # and the entrypoint's ready line. The harness seed sits on that path — a
 # blocking call there once cost 60 s (ADR-047) and nothing asserted it.

@@ -21,7 +21,7 @@ bind '"\e[B": history-search-forward' 2>/dev/null
 
 # ─── PATH ───────────────────────────────────────────────────────────────────
 [[ -d "$HOME/.local/bin" ]] && PATH="$HOME/.local/bin:$PATH"
-[[ -d "$HOME/go/bin" ]] && PATH="$HOME/go/bin:$PATH"
+[[ -d "$HOME/.go/bin" ]] && PATH="$HOME/.go/bin:$PATH"
 [[ -d "$HOME/.npm-global/bin" ]] && PATH="$HOME/.npm-global/bin:$PATH"
 # Dedup while preserving order.
 export PATH=$(awk -v RS=: -v ORS=: '!seen[$0]++' <<< "$PATH" | sed 's/:$//')

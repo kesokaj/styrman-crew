@@ -6,7 +6,7 @@ No mocks in the orchestrator path.
 ## Tiers
 
 1. **Unit** — `go build ./...`, `go vet ./...`, `go test -race ./...` (store, validation; fast, no Docker). The vendored Caddy ingress is a SEPARATE Go module and is not covered by the root `go test ./...` run — test it explicitly: `(cd deploy/caddy/ingress && go test ./...)`. Frontend: `cd web && npm run check` (tsc -b), `npm run lint` (oxlint), and `npm test` (`vitest run` — added 2026-09-02; `web` previously had no unit-test framework at all) — 17 tests across three files: `web/src/lib/api.test.ts` (`projectNameFromRepoURL`, `cloneURLError`, `projectNameError` — pure, security- or UX-load-bearing string logic that was the frontend's entire test-coverage story before this), `web/src/lib/editorPane.test.ts` (`basename`), and `web/src/lib/api.session.test.ts` (6 tests, BUG-001: `request()`/`uploadFiles` against a stubbed browser facing the ingress's cross-origin session-expiry redirect — re-auth once, the reload cap under partial failure, the deferred counter clear, malformed and corrupt counter records). Deliberately NOT unit-tested: the editor pane store's per-terminal draft behavior (parked on unmount, restored only for the file it belongs to, dropped when that file closes or is evicted) — its state lives in a module-level `Map` that is not exported, so reaching it from a unit test would mean either widening the module's API just for tests or pulling in a React renderer; `editorPane.test.ts`'s own header comment says so explicitly rather than faking coverage with an assertion that would always pass. That behavior is covered by Tier 4 e2e instead. Outside these two files, most TypeScript/React logic is still covered only by type-checking + lint plus, where applicable, Tier 4 e2e — a changed function/component with no unit test and no e2e exercise has no automated coverage at all, note it explicitly when verifying.
-2. **Integration (65 checks; 3 auto-SKIP on firewall-hardened hosts)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
+2. **Integration (68 checks; 3 auto-SKIP on firewall-hardened hosts)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
    (default `styrman-runtime:test` — see the warning under Prereqs about
    `:dev`). Isolated server (own state dir, port
    18080) through the full lifecycle: legacy-layout migration, async create
@@ -18,7 +18,14 @@ No mocks in the orchestrator path.
    rename, wipe, and (since ADR-062) the seeded agent harness: `sh-agent
    status` no drift, the two-line `CLAUDE.md`, 28 skills / 7 agy agents, no
    previous-harness artifacts, and boot→ready within R1's 15 s hard limit
-   (measured and printed; the 5 s soft target is reported, not asserted). Safe next to a real install. (The old host-side `/diff` +
+   (measured and printed; the 5 s soft target is reported, not asserted), and
+   (since v1.22.0) the seeded shell skel: `~/.bash_exports` carries
+   `GOPATH="$HOME/.go"`, a login shell resolves it, and `~/.go/bin` joins
+   PATH once the directory exists. Those three MUST use an INTERACTIVE login
+   shell (`bash -lic`): `skel/bashrc:7` returns early for a non-interactive
+   shell, so a plain `bash -lc` never reaches `.bash_exports` and reports an
+   empty `GOPATH` — a real styrman terminal is interactive under tmux.
+   Safe next to a real install. (The old host-side `/diff` +
    checkpoint checks were replaced with `/git/status` + `/git/diff` checks
    when those routes were removed in the git-RCE fix, ADR-039.)
 3. **Manual / UX** — things scripts can't judge:

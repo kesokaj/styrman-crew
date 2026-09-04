@@ -159,6 +159,18 @@ Steps, in order:
      onboarding) (v1.5.6).
    - There is no `GET /keyring` step — that broker tier and this snippet's
      former `secret-tool store` block are both deleted (ADR-040).
+   - **The skel dotfiles are write-once PER FILE, not version-keyed.** The
+     copy loop is guarded by `[ ! -e "${dst}" ]` (`entrypoint.sh:84-92`), so
+     unlike the harness above — which the `/styrman/VERSION` vs
+     `~/.styrman/.harness-version` stamp deliberately RE-seeds on a version
+     bump — a dotfile that already exists is never touched again, at any
+     version. A change to `image/skel/` therefore reaches **new project homes
+     only**. Concretely, v1.22.0 moved `GOPATH` to `$HOME/.go`
+     (`skel/bash_exports`, `skel/bashrc`): homes created before it keep
+     `$HOME/go` and anything `go install`-ed there stays on the old path
+     until the user edits their own `~/.bash_exports` or the project is
+     recreated. This is intended (operator decision 2026-09-04) — the files
+     are the user's after first boot and provisioning must not clobber them.
 7. Default `~/.tmux.conf` if the user has none (status off, login shells,
    `mouse off` — mouse mode steals selection from the browser terminal, so
    it's off so xterm.js can select natively and copy-on-select works).

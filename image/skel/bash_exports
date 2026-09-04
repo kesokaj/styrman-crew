@@ -4,7 +4,7 @@ export VISUAL=vim
 export PAGER=less
 export LESS='-R'
 
-export GOPATH="$HOME/go"
+export GOPATH="$HOME/.go"
 export NPM_CONFIG_PREFIX="$HOME/.npm-global"
 
 # No telemetry from CLI tools that honor it.
