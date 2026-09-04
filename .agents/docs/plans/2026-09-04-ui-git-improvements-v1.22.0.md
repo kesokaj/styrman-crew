@@ -559,10 +559,10 @@ smallest, most isolated changes land first.
 - [x] `web/dist` rebuilt and committed (it is `go:embed`-ed) — verify: `deploy/verify-commit.sh` freshness step, AI
 
 ### Phase 3 — Explorer path navigation
-- [ ] History stack + Back/Forward/Up controls, reset on scope change — verify: tier 1 + tier 3, AI
-- [ ] `Alt+←`/`Alt+→` bound on the panel — verify: tier 3, AI
-- [ ] Crumb bar at `text-xs` with hit targets and middle elision — verify: tier 3 + eyes, both
-- [ ] `web/dist` rebuilt — verify: freshness step, AI
+- [x] History stack + Back/Forward/Up controls, reset on scope change — extracted as a testable reducer, `lib/explorerHistory.ts` (13 unit tests) — verify: tier 1 + tier 3, AI
+- [x] `Alt+←`/`Alt+→` bound on the panel (NOT window — xterm sends Alt+Arrow to the guest for readline word motion) — verify: tier 3, AI
+- [x] Crumb bar at `text-xs` with hit targets and middle elision; the root crumb gained an explicit `aria-label` because its visible text is the user-renameable project name — verify: tier 3 + eyes, both
+- [x] `web/dist` rebuilt — verify: freshness step, AI
 
 ### Phase 4 — Recent files grid
 - [ ] `RECENTS_CAP` 8 → 16 + sanitiser test — verify: tier 1, AI

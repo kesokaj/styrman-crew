@@ -118,6 +118,19 @@ export const ChevronRightIcon = (p: SVGProps<SVGSVGElement>) => (
   </Svg>
 );
 
+export const ChevronLeftIcon = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}>
+    <path d="m15 18-6-6 6-6" />
+  </Svg>
+);
+
+export const ArrowUpIcon = (p: SVGProps<SVGSVGElement>) => (
+  <Svg {...p}>
+    <path d="M12 19V5" />
+    <path d="m5 12 7-7 7 7" />
+  </Svg>
+);
+
 export const FileIcon = (p: SVGProps<SVGSVGElement>) => (
   <Svg {...p}>
     <path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z" />

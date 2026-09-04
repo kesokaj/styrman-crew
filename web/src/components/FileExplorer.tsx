@@ -1,4 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  canGoBack,
+  canGoForward,
+  currentPath,
+  crumbTrail,
+  goBack,
+  goForward,
+  initialHistory,
+  parentOf,
+  pushPath,
+  type History,
+} from "../lib/explorerHistory";
 import { api, tryUI, type FileEntry, type Scope } from "../lib/api";
 import {
   closeFileInPane,
@@ -11,6 +23,8 @@ import {
 } from "../lib/editorPane";
 import { ConfirmDialog, IconButton, PromptDialog } from "./ui";
 import {
+  ArrowUpIcon,
+  ChevronLeftIcon,
   ChevronRightIcon,
   DownloadIcon,
   FileIcon,
@@ -52,7 +66,12 @@ export function FileExplorer({
   term: string;
 }) {
   const [scope, setScope] = useState<Scope>({ kind: "project", project });
-  const [path, setPath] = useState("");
+  // Back/forward history for THIS scope (see lib/explorerHistory). `path` is
+  // derived from it — there is no separate path state to fall out of sync.
+  const [history, setHistory] = useState<History>(() => initialHistory());
+  const path = currentPath(history);
+  const setPath = (p: string) => setHistory((h) => pushPath(h, p));
+  const goUp = () => setPath(parentOf(path));
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [error, setError] = useState<string>();
   const [dragging, setDragging] = useState(false);
@@ -61,7 +80,10 @@ export function FileExplorer({
   // Switching project resets the view to that project's root.
   useEffect(() => {
     setScope({ kind: "project", project });
-    setPath("");
+    setHistory(initialHistory());
+    // setPath is intentionally absent: it is recreated every render and this
+    // effect must run on a project change only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
 
   /**
@@ -135,7 +157,7 @@ export function FileExplorer({
     return () => clearInterval(t);
   }, [load, savedTick]);
 
-  const crumbs = path ? path.split("/") : [];
+  const { crumbs, elided } = crumbTrail(path);
 
   // A file/dir name typed by the user; rejects separators and dot-navigation.
   const nameError = (v: string): string | undefined => {
@@ -213,7 +235,25 @@ export function FileExplorer({
     });
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="flex h-full flex-col"
+      // Bound on the PANEL, not on window: the terminal owns the keyboard
+      // everywhere else, and a global Alt+Arrow would fight it (xterm sends
+      // Alt+Arrow to the guest, where readline uses it for word motion).
+      // tabIndex -1 so the container can hold focus when a click lands on
+      // padding rather than on a control.
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        if (!e.altKey || e.ctrlKey || e.metaKey) return;
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          setHistory(goBack);
+        } else if (e.key === "ArrowRight") {
+          e.preventDefault();
+          setHistory(goForward);
+        }
+      }}
+    >
       <div className="flex items-center gap-1 border-b border-border px-2 py-1.5 text-xs">
         {(
           [
@@ -229,7 +269,9 @@ export function FileExplorer({
                   ? { kind: "home", project }
                   : { kind: "project", project },
               );
-              setPath("");
+              // A different tree: carrying history across would offer "back"
+              // to a path that need not exist on this side.
+              setHistory(initialHistory());
             }}
             className={`rounded-full px-2.5 py-1 ${
               scope.kind === k
@@ -277,25 +319,61 @@ export function FileExplorer({
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-0.5 px-2 py-1 text-[11px] text-text-dim">
-        <button
-          className="hover:text-text"
-          onClick={() => setPath("")}
-          title={scope.kind === "home" ? "Home" : `Project ID ${project}`}
+      {/* Path bar. Was an 11px unpadded crumb row with no back/forward at all
+          (operator, 2026-09-04). Now: real controls, text-xs, per-crumb hit
+          targets, and middle elision instead of wrapping onto a second line
+          and shoving the listing down in a 320px panel. */}
+      <div className="flex items-center gap-0.5 border-b border-border px-1.5 py-1 text-xs">
+        <IconButton label="Back" onClick={() => setHistory(goBack)} disabled={!canGoBack(history)}>
+          <ChevronLeftIcon />
+        </IconButton>
+        <IconButton
+          label="Forward"
+          onClick={() => setHistory(goForward)}
+          disabled={!canGoForward(history)}
         >
-          {scope.kind === "home" ? "~" : (projectName ?? project)}
-        </button>
-        {crumbs.map((c, i) => (
-          <span key={i} className="flex items-center gap-0.5">
-            <ChevronRightIcon className="h-3 w-3 opacity-60" />
-            <button
-              className="hover:text-text"
-              onClick={() => setPath(crumbs.slice(0, i + 1).join("/"))}
-            >
-              {c}
-            </button>
-          </span>
-        ))}
+          <ChevronRightIcon />
+        </IconButton>
+        <IconButton label="Up one level" onClick={goUp} disabled={path === ""}>
+          <ArrowUpIcon />
+        </IconButton>
+        <div className="ml-0.5 flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden">
+          <button
+            className="shrink-0 truncate rounded px-1 py-0.5 text-text-dim hover:bg-bg-hover hover:text-text"
+            onClick={() => setPath("")}
+            title={scope.kind === "home" ? "Home" : `Project ID ${project}`}
+            // Explicit: the visible label is the project's FRIENDLY NAME,
+            // which the user can rename to anything, so it is useless as a
+            // stable accessible name (and `title` does not supply one when the
+            // button already has text).
+            aria-label={scope.kind === "home" ? "Home root" : "Project root"}
+          >
+            {scope.kind === "home" ? "~" : (projectName ?? project)}
+          </button>
+          {elided && (
+            <>
+              <ChevronRightIcon className="h-3 w-3 shrink-0 opacity-60" />
+              {/* Not a button: the dropped segments are still reachable with
+                  Up, and a control that needs its own tooltip to explain
+                  itself is worse than a plain marker. */}
+              <span className="shrink-0 px-0.5 text-text-dim" title={path}>
+                …
+              </span>
+            </>
+          )}
+          {crumbs.map((c) => (
+            <span key={c.path} className="flex min-w-0 items-center gap-0.5">
+              <ChevronRightIcon className="h-3 w-3 shrink-0 opacity-60" />
+              <button
+                className="truncate rounded px-1 py-0.5 text-text-dim hover:bg-bg-hover hover:text-text"
+                onClick={() => setPath(c.path)}
+                title={c.path}
+              >
+                {c.name}
+              </button>
+            </span>
+          ))}
+        </div>
       </div>
 
       <div
@@ -321,7 +399,7 @@ export function FileExplorer({
         {path !== "" && (
           <button
             className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-text-dim hover:bg-bg-hover"
-            onClick={() => setPath(crumbs.slice(0, -1).join("/"))}
+            onClick={goUp}
           >
             ../
           </button>

@@ -57,7 +57,9 @@ export function IconButton({
     <button
       aria-label={label}
       title={label}
-      className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-dim transition-colors ${
+      // A disabled icon button that still looks live is a lie — the explorer's
+      // Back/Forward sit at the ends of their range most of the time.
+      className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-dim transition-colors disabled:pointer-events-none disabled:opacity-30 ${
         danger
           ? "hover:bg-danger-soft hover:text-danger"
           : "hover:bg-bg-hover hover:text-text"

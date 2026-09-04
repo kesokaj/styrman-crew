@@ -229,6 +229,39 @@ try {
     await fileList().getByText("subdir", { exact: true }).click();
     await page.waitForSelector("aside >> text=nested.txt");
   });
+
+  // ── Path navigation (v1.22.0): back/forward/up, none of which existed ────
+  await check("explorer back/forward/up navigate and disable at the ends", async () => {
+    const back = panel().getByRole("button", { name: "Back" });
+    const fwd = panel().getByRole("button", { name: "Forward" });
+    const up = panel().getByRole("button", { name: "Up one level" });
+    // We are inside subdir, reached from the root: nothing ahead.
+    if (await fwd.isEnabled())
+      throw new Error("Forward enabled with no forward history");
+    await back.click();
+    await page.waitForSelector("aside >> text=subdir");
+    if (!(await fwd.isEnabled()))
+      throw new Error("Forward still disabled after going back");
+    if (await back.isEnabled())
+      throw new Error("Back still enabled at the oldest entry");
+    await fwd.click();
+    await page.waitForSelector("aside >> text=nested.txt");
+    await up.click();
+    await page.waitForSelector("aside >> text=subdir");
+    // Leave the explorer inside subdir — the editor checks below open
+    // nested.txt from this listing and would not find it at the root.
+    await fileList().getByText("subdir", { exact: true }).click();
+    await page.waitForSelector("aside >> text=nested.txt");
+  });
+
+  await check("breadcrumb jumps straight to an ancestor", async () => {
+    // The crumb for the project root carries the friendly name; clicking it
+    // must land at the root regardless of how deep we are.
+    await panel().getByRole("button", { name: "Project root" }).click();
+    await page.waitForSelector("aside >> text=subdir");
+    await fileList().getByText("subdir", { exact: true }).click();
+    await page.waitForSelector("aside >> text=nested.txt");
+  });
   await shot("04-files");
 
   // ── Editor pane (2026-09-01): the editor shares the main pane with the
