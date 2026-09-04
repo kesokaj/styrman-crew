@@ -5,6 +5,12 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import {
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
+  FONT_STACKS,
+  type FontFamilyPref,
+} from "./fonts";
 
 /** Poll an async fetcher on an interval; exposes an immediate refresh. */
 export function usePolled<T>(
@@ -180,6 +186,135 @@ export function useTheme(): {
     resolved: pref === "system" ? (sysDark ? "dark" : "light") : pref,
     setPref: setThemePref,
   };
+}
+
+// ─── Module-level appearance store (fonts) ────────────────────────────────
+// Same shape as the theme store above, and for the same reason: a font change
+// in Settings has to reach a LIVE xterm and a LIVE CodeMirror instance that
+// are nowhere near it in the tree.
+//
+// ONE key holding ONE JSON object, with per-FIELD fallback — that is what
+// keeps a single corrupt value from taking the others down, not per-key
+// storage. Deliberately per-browser (like the theme), not server-side: it is
+// a display preference, and the server has no settings store for it.
+
+const APPEARANCE_KEY = "styrman.appearance.v1";
+
+// The font vocabulary lives in ./fonts (no React, no xterm) so the terminal
+// and the editor can take the UNION type rather than an arbitrary string; see
+// that file for why. Re-exported here so existing importers keep working.
+export {
+  FONT_STACKS,
+  FONT_FAMILY_LABELS,
+  FONT_SIZE_MIN,
+  FONT_SIZE_MAX,
+} from "./fonts";
+export type { FontFamilyPref } from "./fonts";
+
+export type Appearance = {
+  termFontSize: number;
+  termFontFamily: FontFamilyPref;
+  editorFontSize: number;
+  editorFontFamily: FontFamilyPref;
+};
+
+/**
+ * Today's hardcoded values, and they differ between the two surfaces ON
+ * PURPOSE: the terminal was 13px/Google Sans Code (`terminal.ts`), the editor
+ * 12px on the bare system stack (`CodeEditor.tsx`). Flattening them into one
+ * default would silently restyle every existing user's editor on upgrade.
+ */
+// Frozen for real (security review 2026-09-04): storedAppearance() hands this
+// exact reference out as the live value on the no-key and throw paths, so an
+// accidental in-place mutation would corrupt the process-wide default that
+// useSyncExternalStore can never re-render past. Now it throws instead.
+const APPEARANCE_DEFAULT: Appearance = Object.freeze({
+  termFontSize: 13,
+  termFontFamily: "google-sans-code",
+  editorFontSize: 12,
+  editorFontFamily: "system",
+});
+
+const clampSize = (v: unknown, fallback: number): number =>
+  typeof v === "number" &&
+  Number.isFinite(v) &&
+  v >= FONT_SIZE_MIN &&
+  v <= FONT_SIZE_MAX
+    ? Math.round(v)
+    : fallback;
+
+// hasOwnProperty, not `in`: `"toString" in FONT_STACKS` is true and would let
+// a prototype key through as a "valid" family.
+const familyOr = (v: unknown, fallback: FontFamilyPref): FontFamilyPref =>
+  typeof v === "string" && Object.hasOwn(FONT_STACKS, v)
+    ? (v as FontFamilyPref)
+    : fallback;
+
+/** Per-field fallback — one bad field never discards the other three. */
+function sanitizeAppearance(input: unknown): Appearance {
+  const o =
+    input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  return {
+    termFontSize: clampSize(o.termFontSize, APPEARANCE_DEFAULT.termFontSize),
+    termFontFamily: familyOr(
+      o.termFontFamily,
+      APPEARANCE_DEFAULT.termFontFamily,
+    ),
+    editorFontSize: clampSize(
+      o.editorFontSize,
+      APPEARANCE_DEFAULT.editorFontSize,
+    ),
+    editorFontFamily: familyOr(
+      o.editorFontFamily,
+      APPEARANCE_DEFAULT.editorFontFamily,
+    ),
+  };
+}
+
+const storedAppearance = (): Appearance => {
+  try {
+    // Private windows throw on ACCESS, not just on write — hence the wrapper
+    // around the read as well. JSON.parse throws on a corrupt value.
+    const raw = localStorage.getItem(APPEARANCE_KEY);
+    return raw ? sanitizeAppearance(JSON.parse(raw)) : APPEARANCE_DEFAULT;
+  } catch {
+    return APPEARANCE_DEFAULT;
+  }
+};
+
+let appearance: Appearance = storedAppearance();
+const appearanceListeners = new Set<() => void>();
+
+export function setAppearance(patch: Partial<Appearance>): void {
+  // Re-sanitise the MERGED object, so a bad value cannot enter through the
+  // patch either.
+  appearance = sanitizeAppearance({ ...appearance, ...patch });
+  try {
+    localStorage.setItem(APPEARANCE_KEY, JSON.stringify(appearance));
+  } catch {
+    /* private mode — the in-memory value still applies for this session */
+  }
+  appearanceListeners.forEach((l) => l());
+}
+
+const subscribeAppearance = (l: () => void) => {
+  appearanceListeners.add(l);
+  return () => {
+    appearanceListeners.delete(l);
+  };
+};
+
+/**
+ * Terminal and editor font preferences. The server snapshot is the frozen
+ * default object so hydration matches the prerender; the stored value applies
+ * right after mount, exactly as `useTheme` does it.
+ */
+export function useAppearance(): Appearance {
+  return useSyncExternalStore(
+    subscribeAppearance,
+    () => appearance,
+    () => APPEARANCE_DEFAULT,
+  );
 }
 
 /** Reactive media query (drawer-vs-rail breakpoints and the like). */

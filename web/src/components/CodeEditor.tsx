@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { FONT_STACKS, type FontFamilyPref } from "../lib/fonts";
 import { EditorView, basicSetup } from "codemirror";
 import { Compartment, EditorState, StateEffect } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
@@ -126,6 +127,27 @@ const LANGUAGES = [
   }),
 ];
 
+/** This editor's font before it was configurable, and still the fallback when
+ *  a call site supplies no preference (the Settings credential viewer). Note
+ *  it is 12px on the BARE SYSTEM STACK — deliberately not the terminal's
+ *  13px/Google Sans Code — so an upgrade changes nobody's editor. */
+export const DEFAULT_EDITOR_FONT_SIZE = 12;
+export const DEFAULT_EDITOR_FONT_FAMILY: FontFamilyPref = "system";
+
+/** The compartmentalised slice of the editor theme: exactly the two font
+ *  rules, nothing else, so reconfiguring cannot disturb layout.
+ *
+ *  `family` is the UNION, resolved here rather than taken as a string:
+ *  style-mod concatenates a theme value into a CSS rule with no escaping
+ *  (`prop + ": " + value + ";"`), so a `;` or `}` in it would emit further
+ *  declarations or close the rule outright. Only the three constants in
+ *  `lib/fonts.ts` can reach it (security review 2026-09-04). */
+const editorFontTheme = (size: number, family: FontFamilyPref) =>
+  EditorView.theme({
+    "&": { fontSize: `${size}px` },
+    ".cm-scroller": { fontFamily: FONT_STACKS[family] },
+  });
+
 /** Imperative handle: replace the whole document (used by Format). */
 export interface CodeEditorHandle {
   setContent: (text: string) => void;
@@ -146,6 +168,17 @@ const CodeEditor = forwardRef<
     /** Soft-wrap long lines instead of scrolling horizontally. */
     wrap: boolean;
     /**
+     * Font size in px and CSS font stack for the editor surface.
+     *
+     * OPTIONAL, unlike `dark`/`wrap`, and defaulting to the values this
+     * editor used before either was configurable. `settings.tsx`'s read-only
+     * credential viewer is a second call site: it shows secrets, not code, so
+     * it has no business following the user's *editor* font preference, and
+     * optional props let it stay exactly as it was.
+     */
+    fontSize?: number;
+    fontFamily?: FontFamilyPref;
+    /**
      * Runs the language's real checker in the project VM and returns its
      * diagnostics. Omitted (e.g. the read-only Settings viewer) disables the
      * lint gutter entirely.
@@ -155,7 +188,18 @@ const CodeEditor = forwardRef<
     onSave: () => void;
   }
 >(function CodeEditor(
-  { value, filename, dark, readOnly, wrap, check, onChange, onSave },
+  {
+    value,
+    filename,
+    dark,
+    readOnly,
+    wrap,
+    fontSize = DEFAULT_EDITOR_FONT_SIZE,
+    fontFamily = DEFAULT_EDITOR_FONT_FAMILY,
+    check,
+    onChange,
+    onSave,
+  },
   ref,
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -164,6 +208,12 @@ const CodeEditor = forwardRef<
   // Separate compartment so toggling wrap reconfigures in place — remounting
   // would lose cursor, scroll position, and undo history.
   const wrapComp = useRef(new Compartment());
+  // Third compartment, same reason as wrap: a font change from Settings must
+  // reconfigure an OPEN buffer in place. Remounting would lose cursor, scroll
+  // position and undo history — and remount-on-filename-change (see the mount
+  // effect) does not fire when only the preference changed, so it could not
+  // serve as the mechanism even if that loss were acceptable.
+  const fontComp = useRef(new Compartment());
   // Keep the latest check fn reachable from the mount-once linter extension.
   const checkRef = useRef(check);
   checkRef.current = check;
@@ -241,16 +291,12 @@ const CodeEditor = forwardRef<
           },
           { delay: 1000 },
         ),
+        // Layout stays static; ONLY the two font rules are compartmentalised,
+        // so the reconfigure carries the smallest possible slice.
         EditorView.theme({
-          "&": {
-            height: "100%",
-            fontSize: "12px",
-            backgroundColor: "transparent",
-          },
-          ".cm-scroller": {
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-          },
+          "&": { height: "100%", backgroundColor: "transparent" },
         }),
+        fontComp.current.of(editorFontTheme(fontSize, fontFamily)),
       ],
     });
     viewRef.current = view;
@@ -289,6 +335,15 @@ const CodeEditor = forwardRef<
       ),
     });
   }, [wrap]);
+
+  // Same for the font — reconfigure, never remount.
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: fontComp.current.reconfigure(
+        editorFontTheme(fontSize, fontFamily),
+      ),
+    });
+  }, [fontSize, fontFamily]);
 
   return <div ref={hostRef} className="min-h-0 flex-1 overflow-hidden" />;
 });

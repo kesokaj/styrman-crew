@@ -772,6 +772,103 @@ try {
   await check("settings shows runtime info", () =>
     page.waitForSelector("text=Kata microVM"),
   );
+
+  // ── Appearance: fonts (v1.22.0) ─────────────────────────────────────────
+  // NOTE ON SCOPE: /settings is a different route, so opening it UNMOUNTS the
+  // terminal page and its editor (see the comment at p.$project.$term.tsx:30).
+  // There is therefore no in-tab path where a font change reaches a surface
+  // that is already mounted — what these checks prove is that the preference
+  // persists and is applied on the next mount. CodeEditor's fontComp
+  // compartment and TerminalPane's live-apply effect are correctness/robustness
+  // measures for that store, not behaviour a user can currently observe.
+  const APPEARANCE_KEY = "styrman.appearance.v1";
+  const readPref = (field) =>
+    page.evaluate(
+      ([k, f]) => JSON.parse(localStorage.getItem(k) ?? "{}")[f],
+      [APPEARANCE_KEY, field],
+    );
+
+  await check("appearance exposes terminal and editor font controls", async () => {
+    for (const label of [
+      "Terminal font size",
+      "Terminal font family",
+      "Editor font size",
+      "Editor font family",
+    ]) {
+      await page.waitForSelector(`[aria-label="${label}"]`, { timeout: 10000 });
+    }
+  });
+
+  await check("terminal font size persists", async () => {
+    await page.locator('input[aria-label="Terminal font size"]').fill("18");
+    const v = await readPref("termFontSize");
+    if (v !== 18) throw new Error(`stored termFontSize=${v}`);
+  });
+
+  await check("editor font family persists", async () => {
+    await page
+      .locator('[aria-label="Editor font family"]')
+      .getByRole("radio", { name: "JetBrains Mono" })
+      .click();
+    const v = await readPref("editorFontFamily");
+    if (v !== "jetbrains-mono") throw new Error(`stored editorFontFamily=${v}`);
+  });
+
+  await check("the chosen terminal font size reaches a live xterm", async () => {
+    await page.goto(`${BASE}/p/${PID}/1`);
+    await page.waitForSelector(".xterm-rows", { timeout: 30000 });
+    // xterm applies the size to its own elements; read whichever reports one
+    // rather than pinning an internal class that could move between versions.
+    const size = await page.evaluate(() => {
+      for (const sel of [".xterm-rows", ".xterm-screen", ".xterm"]) {
+        const el = document.querySelector(sel);
+        const fs = el && getComputedStyle(el).fontSize;
+        if (fs && fs !== "0px") return `${sel}=${fs}`;
+      }
+      return null;
+    });
+    if (!size || !size.endsWith("=18px"))
+      throw new Error(`xterm font-size ${size}`);
+  });
+
+  await check("the chosen editor font reaches a freshly opened buffer", async () => {
+    // The goto above was a FULL page load, which resets the per-terminal pane
+    // store (module-level, deliberately not persisted — editorPane.ts:19), so
+    // the Editor view would show its "No file open" empty state. Open a file
+    // through the Files panel first, exactly as the editor checks above do.
+    await panel().getByText("Files", { exact: true }).click();
+    await page.waitForTimeout(500);
+    // one.txt, at the workspace ROOT, is the file still standing this late in
+    // the run: subdir/nested.txt is deleted by the scoped-delete check above
+    // and Dockerfile by the stale-path check, so neither can be used here.
+    await fileList().getByText("one.txt", { exact: true }).click();
+    await page.waitForSelector(".cm-content", { timeout: 15000 });
+    const fam = await page.evaluate(
+      () =>
+        getComputedStyle(document.querySelector(".cm-scroller")).fontFamily,
+    );
+    if (!/JetBrains Mono Variable/.test(fam))
+      throw new Error(`cm-scroller fontFamily=${fam}`);
+  });
+
+  // ORDERING: this overwrites the stored appearance and RELOADS, so it runs
+  // last in this block and puts the defaults back when it is done.
+  await check("a corrupt appearance value falls back to defaults", async () => {
+    await page.goto(`${BASE}/settings`);
+    await page.waitForSelector('input[aria-label="Terminal font size"]');
+    await page.evaluate(
+      (k) => localStorage.setItem(k, "{{{ not json at all"),
+      APPEARANCE_KEY,
+    );
+    await page.reload();
+    const slider = page.locator('input[aria-label="Terminal font size"]');
+    await slider.waitFor({ timeout: 15000 });
+    const v = await slider.inputValue();
+    if (v !== "13") throw new Error(`slider showed ${v}, expected the 13 default`);
+    // Leave storage clean for whatever runs after this.
+    await page.evaluate((k) => localStorage.removeItem(k), APPEARANCE_KEY);
+  });
+
   await shot("07-settings");
 
   // ── Setup page ──────────────────────────────────────────────────────────

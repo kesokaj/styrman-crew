@@ -12,6 +12,7 @@
 // - Ctrl/Cmd+C copy-when-selected (else SIGINT), Ctrl/Cmd+V paste, plus
 //   copy-on-select (clipboard writes the instant a selection is highlighted)
 
+import { FONT_STACKS, type FontFamilyPref } from "./fonts";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -94,16 +95,30 @@ export interface TerminalOptions {
   /** Start with the dark palette (default true). Swap later via
    *  `term.options.theme = terminalTheme(dark)`. */
   dark?: boolean;
+  /** Initial font size in px. Optional — omitting it keeps the historical
+   *  13px, so no call site is forced to care. Change it later by assigning
+   *  `term.options.fontSize`; see TerminalPane for the re-measure the change
+   *  requires. */
+  fontSize?: number;
+  /** Initial font family. A PREFERENCE, not a raw stack: resolution to a CSS
+   *  string happens in here, so no caller can hand this an arbitrary string
+   *  (security review 2026-09-04). */
+  fontFamily?: FontFamilyPref;
 }
+
+/** The terminal's historical font, still the default when no preference is
+ *  supplied. There is now exactly ONE copy of the stack itself, in
+ *  `lib/fonts.ts`, so nothing can drift apart from it. */
+export const DEFAULT_TERM_FONT_SIZE = 13;
+export const DEFAULT_TERM_FONT_FAMILY: FontFamilyPref = "google-sans-code";
 
 export function createTerminal(
   host: HTMLElement,
   opts: TerminalOptions = {},
 ): StyrmanTerminal {
   const term = new Terminal({
-    fontSize: 13,
-    fontFamily:
-      "'Google Sans Code Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: opts.fontSize ?? DEFAULT_TERM_FONT_SIZE,
+    fontFamily: FONT_STACKS[opts.fontFamily ?? DEFAULT_TERM_FONT_FAMILY],
     cursorBlink: true,
     scrollback: 10000,
     allowProposedApi: true, // unicode11 + search decorations

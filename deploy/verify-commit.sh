@@ -90,6 +90,22 @@ if [ -z "${SKIP_WEB_FRESHNESS:-}" ] && command -v npm >/dev/null 2>&1; then
         exit 1
     fi
     echo "    committed assets match a fresh build"
+
+    # Fonts are BUNDLED, never fetched from a CDN. Until now that property was
+    # asserted only in a comment in web/src/index.css, so an `@import
+    # url(https://fonts.googleapis.com/...)` would have shipped green
+    # (security review 2026-09-04). On a platform whose premise is isolation,
+    # that is not cosmetic: it turns every page load into a third-party
+    # request leaking the viewer's IP and referrer off the self-hosted box.
+    # Data URIs are fine — vite inlines small font subsets as data:font/woff2.
+    offenders="$(grep -roE "url\(['\"]?https?:" "${WT}/web/dist/client/assets/" --include='*.css' || true)"
+    if [ -n "${offenders}" ]; then
+        echo "FAIL: built CSS fetches from an absolute http(s) URL — fonts and" >&2
+        echo "      other assets must be self-hosted, never a CDN." >&2
+        printf '%s\n' "${offenders}" | head -10 >&2
+        exit 1
+    fi
+    echo "    built CSS references no external origin"
 fi
 
 echo "==> gofmt"

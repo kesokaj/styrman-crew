@@ -1,8 +1,15 @@
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
-/* Self-hosted brand fonts (OFL, bundled — no CDN, R9): latin subsets only. */
+/* Self-hosted brand fonts (OFL, bundled — never a CDN). The app must render
+   with no third-party network access; that is a deployment property, not the
+   numbered requirement this comment used to cite (R9 was rewritten on
+   2026-08-30 to mean the deployment target). google-sans-flex is the UI face;
+   the other two are the selectable monospace faces behind Settings →
+   Appearance (`FONT_STACKS` in lib/hooks.ts). "System monospace" is the third
+   choice and bundles nothing. */
 @import "@fontsource-variable/google-sans-flex";
 @import "@fontsource-variable/google-sans-code";
+@import "@fontsource-variable/jetbrains-mono";
 
 /* Theme tokens — Material 3-derived tonal ladder on cool blue-tinted
    neutrals, Google-blue primary (v1.3 redesign, operator Q1/Q2).

@@ -1,7 +1,19 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { api, tryUI, type CredItem } from "../lib/api";
-import { usePolled, useTheme, type ThemePref } from "../lib/hooks";
+import {
+  FONT_FAMILY_LABELS,
+  FONT_SIZE_MAX,
+  FONT_STACKS,
+  FONT_SIZE_MIN,
+  setAppearance,
+  usePolled,
+  useAppearance,
+  useTheme,
+  type Appearance,
+  type FontFamilyPref,
+  type ThemePref,
+} from "../lib/hooks";
 import { useProjects } from "../lib/projects";
 import { toast } from "../lib/toast";
 import { useModalA11y } from "../components/ui";
@@ -721,6 +733,7 @@ function SettingsPage() {
   const navigate = useNavigate();
   const { data, refresh, error } = usePolled(() => api.settings(), 15000);
   const { pref, setPref } = useTheme();
+  const appearance = useAppearance();
 
   // Surface a failed load instead of "Loading…" forever (audit finding).
   if (!data && error)
@@ -806,6 +819,18 @@ function SettingsPage() {
               ))}
             </div>
           </Row>
+          <FontRows
+            label="Terminal font"
+            appearance={appearance}
+            sizeKey="termFontSize"
+            familyKey="termFontFamily"
+          />
+          <FontRows
+            label="Editor font"
+            appearance={appearance}
+            sizeKey="editorFontSize"
+            familyKey="editorFontFamily"
+          />
         </Section>
 
         <Section title="Runtime">
@@ -837,6 +862,75 @@ function SettingsPage() {
         </Section>
       </div>
     </div>
+  );
+}
+
+/**
+ * One surface's font size + family. Both write straight through
+ * `setAppearance`, which sanitises and persists; the live xterm and CodeMirror
+ * instances pick the change up through the store, no reload.
+ */
+function FontRows({
+  label,
+  appearance,
+  sizeKey,
+  familyKey,
+}: {
+  label: string;
+  appearance: Appearance;
+  sizeKey: "termFontSize" | "editorFontSize";
+  familyKey: "termFontFamily" | "editorFontFamily";
+}) {
+  const size = appearance[sizeKey];
+  const family = appearance[familyKey];
+  return (
+    <>
+      <Row label={`${label} size`}>
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            min={FONT_SIZE_MIN}
+            max={FONT_SIZE_MAX}
+            step={1}
+            value={size}
+            aria-label={`${label} size`}
+            onChange={(e) =>
+              setAppearance({ [sizeKey]: Number(e.target.value) })
+            }
+            className="h-1 w-40 cursor-pointer accent-accent"
+          />
+          <span className="w-10 tabular-nums text-text-dim">{size}px</span>
+        </div>
+      </Row>
+      <Row label={`${label} family`}>
+        <div
+          className="inline-flex rounded-full bg-bg p-0.5"
+          role="radiogroup"
+          aria-label={`${label} family`}
+        >
+          {FONT_FAMILY_LABELS.map(([value, text]) => (
+            <button
+              key={value}
+              role="radio"
+              aria-checked={family === value}
+              onClick={() =>
+                setAppearance({ [familyKey]: value as FontFamilyPref })
+              }
+              // The button previews the face it selects — picking a monospace
+              // font from a list rendered in the UI face tells you nothing.
+              style={{ fontFamily: FONT_STACKS[value] }}
+              className={`rounded-full px-3 py-1 ${
+                family === value
+                  ? "bg-accent-soft font-medium text-on-accent-soft"
+                  : "text-text-dim hover:text-text"
+              }`}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
+      </Row>
+    </>
   );
 }
 

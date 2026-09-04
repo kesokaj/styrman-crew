@@ -5,7 +5,7 @@ import {
   CLOSE_STOPPED,
   termSocketUrl,
 } from "../lib/api";
-import { useTheme } from "../lib/hooks";
+import { FONT_STACKS, useAppearance, useTheme } from "../lib/hooks";
 import {
   createTerminal,
   terminalTheme,
@@ -110,14 +110,41 @@ export function TerminalPane({
     if (s) s.term.options.theme = terminalTheme(resolved === "dark");
   }, [resolved]);
 
+  // Live font, same idea as the theme above but with one extra step: a font
+  // change alters the CELL size, so rows/cols change and tmux has to be told.
+  // Assigning the options is enough to make xterm re-measure (its options
+  // service only re-measures when the value actually CHANGES, which is why the
+  // mount-time remeasure below has to toggle the value to something else and
+  // back — here the new value genuinely differs, so one assignment does it).
+  // Then reuse the existing refit-and-ship path rather than duplicating it:
+  // onResizeRef does fit() + the resize frame, and its shipSize() already
+  // skips the frame when the geometry did not actually change.
+  const { termFontSize, termFontFamily } = useAppearance();
+  useEffect(() => {
+    const s = styrRef.current;
+    if (!s) return; // pre-mount; createTerminal receives these via opts
+    s.term.options.fontSize = termFontSize;
+    s.term.options.fontFamily = FONT_STACKS[termFontFamily];
+    // onResizeRef is the IMMEDIATE path — it deliberately skips the 120ms
+    // debounce. Safe today because the only control that writes these lives on
+    // /settings, a different route, so no terminal is mounted while a slider is
+    // being dragged. If a font control ever lands somewhere a terminal is
+    // visible, route this through the debounce instead: a range input fires
+    // onChange per pixel of travel, and each one would be a real tmux pane
+    // resize inside the microVM.
+    onResizeRef.current?.();
+  }, [termFontSize, termFontFamily]);
+
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
 
     const styr = createTerminal(host, {
-      // Captured at effect run (targetKey change); the theme effect above
-      // keeps it current afterwards.
+      // Captured at effect run (targetKey change); the theme and font effects
+      // above keep them current afterwards.
       dark: resolved === "dark",
+      fontSize: termFontSize,
+      fontFamily: termFontFamily,
       onCopy: () => {
         setToast("Copied");
         clearTimeout(toastTimer.current);

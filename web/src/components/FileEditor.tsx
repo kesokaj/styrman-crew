@@ -13,7 +13,7 @@ import {
   type FileContent,
   type Scope,
 } from "../lib/api";
-import { useTheme } from "../lib/hooks";
+import { useAppearance, useTheme } from "../lib/hooks";
 import { toast } from "../lib/toast";
 import { Button } from "./ui";
 
@@ -379,6 +379,7 @@ export function FileEditorBody({
   st: FileEditorState;
 }) {
   const { resolved } = useTheme();
+  const { editorFontSize, editorFontFamily } = useAppearance();
   if (file.binary) {
     return (
       <p className="p-4 text-xs text-text-dim">
@@ -409,6 +410,8 @@ export function FileEditorBody({
         dark={resolved === "dark"}
         readOnly={file.truncated}
         wrap={st.wrap}
+        fontSize={editorFontSize}
+        fontFamily={editorFontFamily}
         check={st.runCheck}
         onChange={st.setText}
         onSave={st.save}

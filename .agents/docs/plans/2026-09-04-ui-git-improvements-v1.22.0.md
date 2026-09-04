@@ -515,9 +515,11 @@ fresh project created from it.
 
 **E2E criteria (golden path).** In a browser against a real project: open
 Settings, set terminal font to JetBrains Mono at 16 — the open terminal
-re-renders without dropping its tmux session. Open a file in the editor,
-change the editor font size in Settings, and confirm the OPEN buffer
-re-renders with its cursor and scroll position intact. Open the Files panel, walk
+re-renders without dropping its tmux session. (Note: reaching Settings
+unmounts the terminal page, so "without dropping the session" means the tmux
+session server-side survives the route change and reattaches — not that the
+xterm instance was never torn down. See the Phase 2 note on why there is no
+in-tab live-update path.) Open the Files panel, walk
 three directories deep, use Back twice and Up once, confirm the crumb bar is
 legible and the controls disable at the root. Open four files; the Recent
 grid wraps with the newest top-left; collapse it, reload, it is still
@@ -547,14 +549,14 @@ smallest, most isolated changes land first.
 - [x] Note in `runtime-image.md` that existing homes keep `$HOME/go` — verify: reread, user
 
 ### Phase 2 — Appearance settings (terminal + editor fonts)
-- [ ] Appearance store in `lib/hooks.ts` (+ `FONT_STACKS`) — verify: tier 1, `npm test`, AI
-- [ ] `@fontsource-variable/jetbrains-mono` + `index.css` import; measure the `dist` delta — verify: tier 1 build, AI
-- [ ] `createTerminal` opts + live apply in `TerminalPane` (incl. `fit()` + resize frame) — verify: tier 3, AI
-- [ ] `fontComp` Compartment in `CodeEditor` + `fontSize`/`fontFamily` props; move ONLY the two font rules out of the static theme — verify: tier 1 + tier 3, AI
-- [ ] `FileEditor` reads the store and passes the props down — verify: tier 3, AI
-- [ ] Editor font change applies to an ALREADY-OPEN buffer without losing cursor/scroll/undo — verify: tier 3 e2e, both
-- [ ] Settings → Appearance rows below the existing Theme row — verify: tier 3, both
-- [ ] `web/dist` rebuilt and committed (it is `go:embed`-ed) — verify: `deploy/verify-commit.sh` freshness step, AI
+- [x] Appearance store in `lib/hooks.ts` (+ `FONT_STACKS`) — verify: tier 1, `npm test`, AI — 16 tests in `appearance.test.ts`
+- [x] `@fontsource-variable/jetbrains-mono` + `index.css` import; **measured delta 89.8 KB** (2 357 778 → 2 449 700 B; 5 woff2 subsets, 84 216 B), under the 150 KB cut-off, so the dependency stays — verify: tier 1 build, AI
+- [x] `createTerminal` opts + live apply in `TerminalPane` (reuses the existing `onResizeRef` refit-and-ship path rather than duplicating it) — verify: tier 3, AI
+- [x] `fontComp` Compartment in `CodeEditor` + OPTIONAL `fontSize`/`fontFamily` props; only the two font rules moved out of the static theme — verify: tier 1 + tier 3, AI
+- [x] `FileEditor` reads the store and passes the props down — verify: tier 3, AI
+- [x] ~~Editor font change applies to an ALREADY-OPEN buffer without losing cursor/scroll/undo~~ — **NOT REACHABLE, and the plan was wrong to promise it.** `/settings` is a separate route, so opening it unmounts the terminal page and its editor (stated outright at `p.$project.$term.tsx:30-33`). There is no in-tab path where a font change reaches an already-mounted editor or terminal, so there is no such behaviour to test. What ships instead: the preference persists and applies on the next mount (e2e covers that). `CodeEditor`'s `fontComp` compartment and `TerminalPane`'s live-apply effect are kept — they are correct, they are the established pattern for this file, and they are what makes the store's contract hold if a control ever moves somewhere a surface is mounted — but they are defensive, not user-visible behaviour. Recorded rather than quietly dropped, because the round-2 review reasoned about this mechanism at length on the assumption it was load-bearing.
+- [x] Settings → Appearance rows below the existing Theme row (size slider + family radiogroup per surface; each family button previews its own face) — verify: tier 3, both
+- [x] `web/dist` rebuilt and committed (it is `go:embed`-ed) — verify: `deploy/verify-commit.sh` freshness step, AI
 
 ### Phase 3 — Explorer path navigation
 - [ ] History stack + Back/Forward/Up controls, reset on scope change — verify: tier 1 + tier 3, AI
