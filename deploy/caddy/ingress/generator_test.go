@@ -377,3 +377,16 @@ func TestPrivateWildcardBlock(t *testing.T) {
 		t.Error("private block emitted for a public target app")
 	}
 }
+
+// The portal's session lifetime is set explicitly (ADR-063): caddy-security's
+// 900 s default made every project reload on the quarter hour once BUG-001
+// surfaced expiry. A missing directive means the plugin default is back.
+func TestGenerateCaddyfile_SessionLifetimeIsExplicit(t *testing.T) {
+	apps := []App{{Name: "wiki", Hostname: "wiki", ContainerIP: "172.18.0.3", Port: 3000, Mode: ModeAuthenticated, RPS: 100}}
+	result := GenerateCaddyfile(apps, testConfig())
+	assertContains(t, result, "authentication portal myportal")
+	assertContains(t, result, "crypto default token lifetime 28800")
+	if SessionLifetimeSeconds != 8*60*60 {
+		t.Errorf("SessionLifetimeSeconds = %d, want a working day (28800)", SessionLifetimeSeconds)
+	}
+}

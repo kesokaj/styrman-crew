@@ -2371,3 +2371,16 @@ Verification: .agents/docs/plans/2026-09-03-image-harness-replacement.md (phases
 
 Source: REQUIREMENTS.md R5, ROADMAP.md "Now".
 Verification: .agents/docs/changes/2026-09-03-harness-replacement-phase4.md (the proposal), this session's release entry.
+
+---
+
+## ADR-063: The ingress session lifetime is set deliberately to a working day (2026-09-04)
+
+**Context:** The authentication portal never set `crypto default token lifetime`, so caddy-security's 900 s default governed every session. Before BUG-001 that expiry surfaced as "Failed to fetch" on every REST-backed view until F5; after it, as a toast and a full page reload every 15 minutes of use (in-memory UI state lost, terminals reconnect). The security review of BUG-001 (`reviews/2026-09-03-security-fail-to-fetch.md`, observation) noted that the lifetime is not the revocation control here — `authGuard` re-checks the userstore on every request, so removing a user takes effect immediately regardless of the JWT's remaining life — and recommended choosing the value deliberately. The operator approved a fix on 2026-09-04 ("fix then commit to the newest version").
+
+**Decision:** `deploy/caddy/ingress/generator.go` writes `crypto default token lifetime 28800` (eight hours, `SessionLifetimeSeconds`) into the `authentication portal` block. A generator test asserts the directive is present.
+
+**Consequences:** A signed-in browser reloads to re-authenticate at most once per working day instead of every quarter hour. The trade: a stolen or replayed cookie stays valid up to eight hours, zone-wide (`cookie domain` is the base domain), where it was fifteen minutes; authorization is still re-checked per request, so this widens exposure of an already-compromised browser session, not of a removed user. Changing the value is one constant plus the test. Because `STYRMAN_JWT_KEY` pins the signing key, sessions SURVIVE a Caddy redeploy: tokens issued before this release keep their old 900 s expiry, tokens issued after it live eight hours, and there is no deny list — rotating `STYRMAN_JWT_KEY` is the only way to force every session out at once (security review 2026-09-04).
+
+Source: deploy/caddy/ingress/generator.go (`SessionLifetimeSeconds`, `writeSecurityBlock`), deploy/caddy/ingress/generator_test.go.
+Verification: this release's changelog entry; `(cd deploy/caddy/ingress && go test ./...)`.

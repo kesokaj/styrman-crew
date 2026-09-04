@@ -238,6 +238,10 @@ func writeGlobalOptions(b *strings.Builder, apps []App, cfg GeneratorConfig, nee
 	b.WriteString("}\n\n")
 }
 
+// SessionLifetimeSeconds is the caddy-security JWT/session lifetime the
+// portal issues (ADR-063). caddy-security's own default is 900 s.
+const SessionLifetimeSeconds = 28800
+
 // writeSecurityBlock writes the caddy-security configuration including the
 // OAuth identity provider, authentication portal with user transforms,
 // and per-app authorization policies.
@@ -258,6 +262,13 @@ func writeSecurityBlock(b *strings.Builder, apps []App, cfg GeneratorConfig) {
 	b.WriteString("            enable identity provider google\n")
 	fmt.Fprintf(b, "            cookie domain %s\n", cfg.BaseDomain)
 	fmt.Fprintf(b, "            trust login redirect uri domain suffix %s path prefix /\n", cfg.BaseDomain)
+	// Session lifetime, set deliberately instead of inheriting the plugin's
+	// 900 s default (BUG-001 made expiry visible: a toast and a reload every
+	// 15 minutes of use). Eight hours — a working day. The lifetime is not
+	// the revocation control: the styrman server re-checks the userstore on
+	// every request, so removing a user takes effect at once; the trade is
+	// how long a stolen cookie stays valid (ADR-063, operator 2026-09-04).
+	fmt.Fprintf(b, "            crypto default token lifetime %d\n", SessionLifetimeSeconds)
 	if cfg.JWTKey != "" {
 		// Pin the token signing key so sessions survive a Caddy restart and
 		// the portal + authorizers always agree (auto-generated keys reset).

@@ -86,6 +86,7 @@ defaults in compose):
 - `STYRMAN_JWT_KEY` — pins caddy-security's JWT signing key so browser
   sessions survive a Caddy restart/redeploy instead of logging everyone
   out.
+- Session lifetime: the portal issues eight-hour tokens (`crypto default token lifetime 28800`, ADR-063), set in the generator rather than inherited from caddy-security's 900 s default; the styrman server re-checks the userstore on every request, so a removed user is out at once regardless. Expiry shows in the SPA as one toast and a reload (BUG-001).
 
 `STYRMAN_KEYRING_PW` is fully removed: `docker-compose.yml`, `deploy/.env.example`,
 and `host-setup.sh` carry zero references to it (the broker keyring tier it
