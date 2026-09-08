@@ -12,6 +12,9 @@ Environment=STYRMAN_UPDATE_STATE_DIR=/etc/styrman/update
 # health-checked deploy (same ADR-052 shape: no in-script default).
 Environment=STYRMAN_UPDATER_BIN=/usr/local/bin/styrman-update
 Environment=STYRMAN_UPDATER_UNIT_DIR=/etc/systemd/system
+# Where host_converge installs the firewall script from the verified tag
+# (ADR-065; same ADR-052 shape). The units go to STYRMAN_UPDATER_UNIT_DIR.
+Environment=STYRMAN_FW_INSTALL_BIN=/usr/local/sbin/styrman-firewall.sh
 # The docker CLI insists on creating $DOCKER_CONFIG (/root/.docker by default)
 # and ProtectHome=yes (below) makes /root INACCESSIBLE and empty — which killed
 # the first real end-to-end deploy at `docker build`, and its rollback with it

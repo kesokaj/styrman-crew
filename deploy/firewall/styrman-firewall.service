@@ -1,0 +1,24 @@
+[Unit]
+Description=styrman project network isolation + per-project LAN policy (R12, ADR-029/036/065)
+# Ordered after Docker (DOCKER-USER must exist) but NOT Wants=docker.service:
+# this unit runs every 60 s and on every toggle, and must never start a
+# dockerd the operator stopped on purpose.
+After=docker.service
+# Bounded, not unlimited (security review): 20 starts a minute is far above
+# any admin's toggling and a hard ceiling on the root work a flooded spool
+# can drive. A StartLimit failure propagates to the .path unit, which the
+# script revives at most once per ten minutes.
+StartLimitIntervalSec=60
+StartLimitBurst=20
+
+[Service]
+Type=oneshot
+# The ONLY place the production paths are pinned (ADR-052): the script has no
+# defaults, so a bare invocation applies the base rules only.
+Environment=STYRMAN_FW_STATE_DIR=/var/lib/styrman
+Environment=STYRMAN_FW_RUN_DIR=/run/styrman-firewall
+Environment=STYRMAN_FW_CONF=/etc/styrman/firewall.conf
+Environment=STYRMAN_FW_PATH_UNIT=styrman-firewall.path
+ExecStart=/usr/local/sbin/styrman-firewall.sh
+# The script's lock wait is 25 s; a run that cannot finish in 30 s is stuck.
+TimeoutStartSec=30s

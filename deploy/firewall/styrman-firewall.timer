@@ -1,0 +1,10 @@
+[Unit]
+Description=Re-apply styrman network isolation rules (self-heal)
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

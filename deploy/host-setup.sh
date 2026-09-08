@@ -146,124 +146,11 @@ else
     log "daemon.json already correct — not restarting docker"
 fi
 
-# ─── 3b. Project→host + project→LAN isolation (R12, ADR-029/036) ────────────
-# A project microVM must reach the INTERNET but nothing private: not the host,
-# not the LAN, not other projects, not cloud metadata. Two paths guard this,
-# both keyed on the bridge INTERFACE `-i sdb-+` — styrman names project bridges
-# sdb-<hash> (config.BridgeNameFor) precisely so this matches; Docker's default
-# br-<hash> names would slip past it (the 2026-08-29 leak: full host + LAN).
-#   INPUT       → STYRMAN-IN  : traffic addressed to the host itself.
-#   DOCKER-USER → STYRMAN-FWD : traffic ROUTED onward; runs first in FORWARD.
-# The wildcard lives only on the chain JUMPS; the drop/return logic sits in
-# dedicated chains so the self-heal timer can re-apply everything by
-# INSERT-IF-MISSING and never delete a live rule — no window where isolation is
-# briefly absent (the old delete-then-insert had one every 60s). A physdev
-# RETURN exempts genuinely same-bridge L2 traffic so a project keeps reaching
-# the credential broker + port-preview proxy on its OWN bridge (both are the
-# server's IPs there); with bridge-nf-call-iptables=1 that traffic DOES traverse
-# DOCKER-USER, so without the exemption the broker is silently dropped (the
-# 2026-08-29 creds-broken regression).
-cat > /usr/local/sbin/styrman-firewall.sh <<'FWEOF'
-#!/usr/bin/env bash
-# Keep project microVMs (bridges sdb-*) isolated from host / LAN / other projects
-# / cloud metadata while leaving the internet AND the same-bridge broker + proxy
-# reachable (R12, ADR-029/036). Self-heal-safe: every rule is INSERT-IF-MISSING,
-# never delete-then-insert, so the 60s timer re-runs open no unprotected window.
-# The `-i sdb-+` wildcard appears only on the chain jumps (matched textually via
-# -S, which renders it stably); the chains' own rules carry no wildcard, so `-C`
-# is reliable for them.
-set -eu
-
-modprobe xt_physdev 2>/dev/null || true   # same-bridge exemption below needs it
-
-ip4="$(command -v iptables)"
-ensure_chain() { "$ip4" -nL "$1" >/dev/null 2>&1 || "$ip4" -N "$1"; }
-ensure_rule()  { local c="$1"; shift; "$ip4" -C "$c" "$@" 2>/dev/null || "$ip4" -A "$c" "$@"; }
-ensure_jump()  { # parent iface target — textual presence test is wildcard-safe
-    "$ip4" -S "$1" 2>/dev/null | grep -qF -- "-i $2 -j $3" || "$ip4" -I "$1" -i "$2" -j "$3"
-}
-
-# One-time migration off the pre-chain direct rules from earlier versions.
-"$ip4" -D INPUT -i sdb-+ -j DROP 2>/dev/null || true
-for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
-    "$ip4" -D DOCKER-USER -i sdb-+ -d "$net" -j DROP 2>/dev/null || true
-done
-
-# Host itself: a project bridge may send it nothing.
-ensure_chain STYRMAN-IN
-ensure_rule  STYRMAN-IN -j DROP
-ensure_jump  INPUT sdb-+ STYRMAN-IN
-
-# Routed egress: RETURN genuinely same-bridge L2 first (broker + proxy on the
-# project's OWN bridge), then drop every private range. Other projects live in
-# 172.16/12 too, so cross-project stays blocked; public internet falls through.
-ensure_chain STYRMAN-FWD
-ensure_rule  STYRMAN-FWD -m physdev --physdev-is-bridged -j RETURN 2>/dev/null \
-    || echo "styrman-firewall: WARN xt_physdev unavailable — broker may be blocked" >&2
-# 100.64.0.0/10 is CGNAT — where Tailscale/headscale put their tailnet, so a
-# project could otherwise reach the operator's whole private mesh; 198.18.0.0/15
-# is the benchmark range some VPNs and container fabrics route real traffic on.
-# Both were missing from the original RFC1918 list (2026-09-01 audit).
-for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 \
-           100.64.0.0/10 198.18.0.0/15; do
-    ensure_rule STYRMAN-FWD -d "$net" -j DROP
-done
-ensure_jump  DOCKER-USER sdb-+ STYRMAN-FWD
-
-# IPv6: this isolation is IPv4. Don't silently rely on the host's ipv6.disable
-# boot flag — turn IPv6 off on each project bridge, and best-effort mirror the
-# drops so a future IPv6-enabled bridge cannot bypass isolation.
-for ifp in /sys/class/net/sdb-*; do
-    [ -e "$ifp" ] || continue
-    sysctl -qw "net.ipv6.conf.${ifp##*/}.disable_ipv6=1" 2>/dev/null || true
-done
-if command -v ip6tables >/dev/null 2>&1; then
-    ip6="$(command -v ip6tables)"
-    "$ip6" -nL STYRMAN-IN6 >/dev/null 2>&1 || "$ip6" -N STYRMAN-IN6 2>/dev/null || true
-    "$ip6" -C STYRMAN-IN6 -j DROP 2>/dev/null || "$ip6" -A STYRMAN-IN6 -j DROP 2>/dev/null || true
-    "$ip6" -S INPUT 2>/dev/null | grep -qF -- "-i sdb-+ -j STYRMAN-IN6" \
-        || "$ip6" -I INPUT -i sdb-+ -j STYRMAN-IN6 2>/dev/null || true
-    "$ip6" -nL STYRMAN-FWD6 >/dev/null 2>&1 || "$ip6" -N STYRMAN-FWD6 2>/dev/null || true
-    for net6 in fc00::/7 fe80::/10; do
-        "$ip6" -C STYRMAN-FWD6 -d "$net6" -j DROP 2>/dev/null || "$ip6" -A STYRMAN-FWD6 -d "$net6" -j DROP 2>/dev/null || true
-    done
-    "$ip6" -S FORWARD 2>/dev/null | grep -qF -- "-i sdb-+ -j STYRMAN-FWD6" \
-        || "$ip6" -I FORWARD -i sdb-+ -j STYRMAN-FWD6 2>/dev/null || true
-fi
-FWEOF
-chmod 0755 /usr/local/sbin/styrman-firewall.sh
-cat > /etc/systemd/system/styrman-firewall.service <<'EOF'
-[Unit]
-Description=styrman project→host/LAN network isolation (R12/ADR-029)
-After=docker.service
-Wants=docker.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/sbin/styrman-firewall.sh
-EOF
-# A timer re-applies the (idempotent) rules every minute — self-healing, so a
-# Docker daemon restart, a firewall-manager reload, or a manual flush can't leave
-# the VMs exposed for more than ~1 min. The rules use the `sdb-+` wildcard, so
-# NEW project bridges are covered without any per-network rule.
-cat > /etc/systemd/system/styrman-firewall.timer <<'EOF'
-[Unit]
-Description=Re-apply styrman network isolation rules (self-heal)
-
-[Timer]
-OnBootSec=15s
-OnUnitActiveSec=60s
-AccuracySec=5s
-
-[Install]
-WantedBy=timers.target
-EOF
-systemctl daemon-reload
-# Apply once immediately, then let the timer keep it applied.
-systemctl start styrman-firewall.service 2>/dev/null || true
-systemctl enable --now styrman-firewall.timer 2>/dev/null \
-    && log "project isolation active + self-healing (styrman-firewall.timer, 60s)" \
-    || log "WARN: could not enable styrman-firewall.timer — apply /usr/local/sbin/styrman-firewall.sh manually"
+# ─── 3b. Project→host + project→LAN isolation (R12, ADR-029/036/065) ────────
+# Moved to §5c (deploy/firewall/install.sh): the firewall script, its timer
+# and path units, the run dir, the marker dir and the operator's LAN
+# definition. It runs after §5 because the installer needs the state dir to
+# exist and belong to the operator (the server's uid owns the marker dir).
 
 # ─── 4. Host tuning: KSM (merges identical microVM pages) ───────────────────
 if [[ -w /sys/kernel/mm/ksm/run ]]; then
@@ -280,8 +167,13 @@ fi
 # projects/<user>/<uuid> workspaces — both created lazily by the server; only
 # the roots are needed here. chown is NON-recursive: a re-run must not walk
 # every project home/workspace/sparse docker.img (idempotence).
+# Refuse a symlink at any of the three roots rather than chown through it
+# (security review 2026-09-08: chown/chmod dereference, mkdir -p traverses).
+for d in "${STATE_DIR}" "${STATE_DIR}/homes" "${STATE_DIR}/projects"; do
+    if [[ -L "${d}" ]]; then echo "FATAL: ${d} is a symlink — refusing to provision through it"; exit 1; fi
+done
 mkdir -p "${STATE_DIR}/homes" "${STATE_DIR}/projects"
-chown "${OPERATOR}:${OPERATOR}" "${STATE_DIR}" "${STATE_DIR}/homes" "${STATE_DIR}/projects"
+chown -h "${OPERATOR}:${OPERATOR}" "${STATE_DIR}" "${STATE_DIR}/homes" "${STATE_DIR}/projects"
 log "state dir ready: ${STATE_DIR} (owner ${OPERATOR})"
 
 # ─── 5b. Deployment .env: computed identity values ──────────────────────────
@@ -304,6 +196,26 @@ if [[ ! -f "${SCRIPT_DIR}/.env" && -f "${SCRIPT_DIR}/.env.example" ]]; then
     chown "${OPERATOR}:${OPERATOR}" "${SCRIPT_DIR}/.env"
     chmod 600 "${SCRIPT_DIR}/.env"
     log "created deploy/.env with computed identity — fill in the secrets section"
+fi
+
+# ─── 5c. Project→host + project→LAN isolation (R12, ADR-029/036/065) ────────
+# A project microVM must reach the INTERNET but nothing private: not the host,
+# not the LAN, not other projects, not cloud metadata — except the LAN, for a
+# project an admin toggles on (ADR-065). Both halves are root-owned host
+# state outside the container stack: /usr/local/sbin/styrman-firewall.sh (base
+# isolation + per-project reconcile), styrman-firewall.timer (60 s self-heal),
+# styrman-firewall.path (applies a toggle within a second), the run dir
+# /run/styrman-firewall, the server-written marker dir under the state dir,
+# and — written only if absent — /etc/styrman/firewall.conf, the operator's
+# definition of "local network", discovered from the default route and
+# printed. deploy/firewall/install.sh is idempotent and narrow; the
+# auto-updater's host_converge re-applies the script and units from every
+# verified release tag, so this is the last time a firewall change needs a
+# hand-run of host-setup.sh (the 2026-08-30 → 2026-09-02 drift, ADR-065).
+if STYRMAN_STATE_DIR="${STATE_DIR}" bash "${SCRIPT_DIR}/firewall/install.sh"; then
+    log "project isolation active + self-healing (styrman-firewall.timer 60 s, styrman-firewall.path on change)"
+else
+    log "WARN: deploy/firewall/install.sh failed — projects stay isolated only if a previous script is installed; run: sudo bash ${SCRIPT_DIR}/firewall/install.sh"
 fi
 
 # ─── 6. Verify Kata ──────────────────────────────────────────────────────────

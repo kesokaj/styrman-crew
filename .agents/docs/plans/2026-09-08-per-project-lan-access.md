@@ -298,9 +298,11 @@ top; `set -eu`; requires `STYRMAN_FW_STATE_DIR`, `STYRMAN_FW_RUN_DIR`,
 a hand-run without them applies the base section and logs "per-project LAN
 reconcile skipped (the unit sets STYRMAN_FW_*)"). Sections, in order:
 
+0. **Base section FIRST** (security review: nothing a lower-privileged uid
+   controls may delay R12 enforcement), then the LAN prelude below.
 1. `flock -w 25 "$RUN/lock"` (blocking — a unit run waits for a hand-run
    rather than exiting with the spool full; `TimeoutStartSec=30s`) (critic).
-2. **Drain the spool FIRST** (`find "$RUN/spool" -mindepth 1 -delete`, count
+2. **Drain the spool FIRST in the LAN section** (`find "$RUN/spool" -mindepth 1 -delete`, count
    kept for the status line) and install an `EXIT` trap that drains again,
    so no exit path — guard failure, base-section death, iptables error — can
    leave `DirectoryNotEmpty` true and the unit re-triggering in a tight loop
@@ -322,25 +324,30 @@ reconcile skipped (the unit sets STYRMAN_FW_*)"). Sections, in order:
    `/sys/class/net/$I` is absent → `pending=$U:no-bridge`; else
    `S=$(ip -o -4 route show dev "$I" scope link | awk '{print $1}')` (must
    match the CIDR regex). Desired = {(I, LAN_DEV, S, C, U) : C ∈ LAN_CIDRS}.
-7. **Current**: every `iptables -S STYRMAN-FWD` line is matched against the
-   ONE strict regex of our rendering
+7. **Current** (as implemented after the security review — deletion is BY
+   SPEC, never by a number another root writer could shift): every
+   `iptables -S STYRMAN-FWD` line is matched against the ONE strict regex of
+   our rendering
    (`^-A STYRMAN-FWD -s <cidr> -d <cidr> -i sdb-[0-9a-f]{11} -o [A-Za-z0-9_.-]{1,15} -m comment --comment "styrman-lan:<uuid>" -j RETURN$`),
-   with its 1-based index (the `-S` order equals rule numbers once the `-N`
-   line is skipped). A line containing `styrman-lan:` that does NOT match =
-   not ours = deleted. **All deletions are by rule NUMBER, highest first**
-   (`iptables -D STYRMAN-FWD <n>`) — nothing from `-S` is ever re-tokenised
-   or replayed (critic hole: the comment is double-quoted and could carry
-   spaces or quotes). Also deleted by number: a well-formed rule whose index
-   is after the first `-j DROP` (order guard; only tampering causes it) and
-   any duplicate.
+   with its 1-based index. A well-formed key is kept only when it occurs
+   exactly once, before the first `-j DROP`, and is desired; otherwise EVERY
+   instance is deleted by full spec rebuilt from the five regex captures
+   (`-D STYRMAN-FWD -i … -o … -s … -d … -m comment --comment … -j RETURN`,
+   repeated while `-C` succeeds) and, if desired, re-inserted at the head. A
+   line carrying `styrman-lan:` that does NOT match the regex is malformed:
+   the chain is re-read and the exact line is deleted by its then-current
+   number only if it is still there — nothing from `-S` is ever re-tokenised
+   or replayed as argv (critic hole + security review medium).
 8. **Delete current∖desired FIRST (tighten before loosen), then insert
    desired∖current** with `iptables -C … || iptables -w 5 -I STYRMAN-FWD 1 …`
    (a bare `-I` duplicates). A no-op tick performs reads only (`-S`, `-C`):
    zero writes, so the 60 s self-heal never drops a packet of a live flow.
    Per-rule failures are caught (`error=`) and the run continues.
-9. **Status** written atomically; then `systemctl is-active --quiet
-   styrman-firewall.path || systemctl start styrman-firewall.path || true`
-   (heals BOTH a failed and a job-deleted inactive path unit — critic).
+9. **Status** written atomically as root 0640 with the state dir's group
+   (security review: it names every LAN-enabled project); then, if the path
+   unit is inactive, `systemctl start` it — at most once per ten minutes
+   (`<run>/.revived`), so a flooded spool buys one bounded burst per revive,
+   not one per timer tick (security review).
 10. One journal line only when something changed or warned:
     `styrman-firewall: lan desired=2 added=1 removed=0 dev=enp114s0 cidrs=192.168.86.0/24 spool=1 run_ms=180`;
     `lan ON project=<uuid> iface=sdb-… src=172.20.0.0/16`; WARN lines for
@@ -356,7 +363,8 @@ gets a drop-in `styrman-firewall.service.d/override.conf` written by
 [Unit]
 Description=styrman project network isolation + per-project LAN policy (R12, ADR-029/036/065)
 After=docker.service            # Wants= dropped: a 60 s tick must not start a dockerd the operator stopped (critic hole)
-StartLimitIntervalSec=0         # live default 5 starts/10 s; a StartLimit hit FAILS the .path unit
+StartLimitIntervalSec=60        # bounded, not unlimited (security review): 20 starts/min is a hard
+StartLimitBurst=20              # ceiling on the root work a flooded spool can drive
 [Service]
 Type=oneshot
 Environment=STYRMAN_FW_STATE_DIR=/var/lib/styrman
@@ -376,8 +384,8 @@ Description=Apply styrman per-project LAN policy on change
 [Path]
 DirectoryNotEmpty=/run/styrman-firewall/spool
 Unit=styrman-firewall.service
-TriggerLimitIntervalSec=10s
-TriggerLimitBurst=100
+TriggerLimitIntervalSec=60s
+TriggerLimitBurst=20
 [Install]
 WantedBy=paths.target
 ```
@@ -385,7 +393,12 @@ WantedBy=paths.target
 No `MakeDirectory=` (it would create root-owned dirs the server cannot write);
 `/etc/tmpfiles.d/styrman-firewall.conf` is GENERATED by `install.sh` from
 the state-dir owner: `d /run/styrman-firewall 0755 root root -` and `d
-/run/styrman-firewall/spool 0700 <uid> <gid> -`.
+/run/styrman-firewall/spool 0700 <uid> <gid> -`. The spool is additionally a
+dedicated tmpfs (`run-styrman\x2dfirewall-spool.mount`, also generated:
+`size=1M,nr_inodes=1024,mode=0700,uid=,gid=,nosuid,nodev,noexec`, mounted at
+boot before docker) so the server's uid can never fill `/run` through it
+(security review medium). A server container that bound the run dir before
+the mount existed must be restarted once to see it.
 
 **`deploy/firewall/install.sh`** (root, idempotent, narrow): flags
 `--state-dir` (default `${STYRMAN_STATE_DIR:-/var/lib/styrman}`),
@@ -762,22 +775,22 @@ Model note for the operator: Phases 0, 1 and 2 are the security-critical
 ones (root-run script, R12 enforcement, authz); Phases 3–5 are routine.
 
 ### Phase 0 — Decision record + drift converge (no feature code)
-- [ ] Operator answers D1–D7; the plan is updated where an answer differs — verify: reread, user
-- [ ] Converge the live host's existing drift NOW: copy `deploy/host-setup.sh:167-232` over `/usr/local/sbin/styrman-firewall.sh`, `systemctl start styrman-firewall.service`, confirm six DROPs in `sudo iptables -S STYRMAN-FWD` — a security gap independent of the feature — verify: `iptables -S` shows 100.64/10 and 198.18/15, AI; record in a `changes/` entry
-- [ ] ADR-065 + amendment entry in `DECISIONS.md`, R12 edit in `REQUIREMENTS.md` (approval quoted verbatim), ROADMAP "Now" → this plan, in ONE commit — verify: reread, both
-- [ ] Fix pre-existing doc drift the readers found: `deploy.md:582` four→six ranges; "60 checks" in `deploy/local.md:40` and `guide.md:520` (README says 68) — verify: grep, AI
-- [ ] Cold-reader check of this plan (`reviewer`, plan file only) → both "ready" tokens — verify: review file
+- [x] Operator answers D1–D7 ("Go do work", 2026-09-08 — all seven recommendations) — verify: reread, user
+- [ ] **OPERATOR (root; the agent's attempt was blocked by the auto-mode classifier):** converge the live host's existing drift NOW: copy `deploy/host-setup.sh:167-232` over `/usr/local/sbin/styrman-firewall.sh`, `systemctl start styrman-firewall.service`, confirm six DROPs in `sudo iptables -S STYRMAN-FWD` — a security gap independent of the feature — verify: `iptables -S` shows 100.64/10 and 198.18/15, AI; record in a `changes/` entry
+- [x] ADR-065 + amendment entry in `DECISIONS.md`, R12 edit in `REQUIREMENTS.md` (approval quoted verbatim), ROADMAP "Now" → this plan, in ONE commit (`9aff5d6`) — verify: reread, both
+- [x] Fix pre-existing doc drift the readers found: `deploy.md:582` four→six ranges; "60 checks" in `deploy/local.md:40` and `guide.md:520` now point at the README (`dbe66a8`) — verify: grep, AI
+- [x] Cold-reader check of this plan (`reviewer`, plan file only) → both "ready" tokens on round 2 (`reviews/2026-09-08-cold-reader-lan-access-plan.md`) — verify: review file
 
 ### Phase 1 — Host half (root script, units, installer, updater) — security-critical
-- [ ] `deploy/firewall/styrman-firewall.sh`: version constant, env guards, blocking flock, drain-first + EXIT-trap drain, base section verbatim, conf parse/validate, desired/current, delete-by-number, insert-if-missing, status, path self-heal, change-only log — verify: tier 1 netns test via `go test ./internal/netpolicy/`, AI
-- [ ] `deploy/firewall/{service,timer,path}` per Interfaces (no `After=` on the path, no `Wants=` on the service) — verify: `systemd-analyze verify`, AI
-- [ ] `deploy/firewall/test.sh` (every case under Verification) + `internal/netpolicy/script_test.go` wrapper (`unshare -Urnm` + sysfs remount, skip-not-fail) — verify: `go test ./...` on this host runs it, not skips; the verifier states the skip status
-- [ ] `deploy/firewall/install.sh` (flags, `--dry-run`, tmpfiles, both-level chown, conf discovery ONLY IF ABSENT, drop-in for a non-default state dir) — verify: `bash -n`, shellcheck, `--dry-run` output reviewed, AI
-- [ ] `deploy/host-setup.sh` §3b → `bash "${SCRIPT_DIR}/firewall/install.sh"`; `SCRIPT_DIR` defined above §3b — verify: `bash -n`, diff shows the heredoc removed and nothing else, AI
-- [ ] `deploy/update/styrman-update`: `host_converge()` + unit env + WARN-every-tick skip — verify: tier 1 `bash -n`/shellcheck; reasoned reread, AI
-- [ ] `deploy/verify-commit.sh`: shell lint + `systemd-analyze verify` steps — verify: run it, AI
-- [ ] Measure spool→rule latency with a transient `systemd-run` path unit on a scratch dir (not the live units) and record it — verify: number in the changelog, AI
-- [ ] `security` agent over the script + installer + updater diff — verify: findings fixed or rebutted in writing
+- [x] `deploy/firewall/styrman-firewall.sh`: version constant, env guards, blocking flock, drain-first + drain-on-failed-exit, base section verbatim, conf parse/validate, desired/current, delete-by-number, insert-if-missing, status, path self-heal, change-only log — verify: tier 1 netns test via `go test ./internal/netpolicy/` (83 checks), AI
+- [x] `deploy/firewall/{service,timer,path}` per Interfaces (no `After=` on the path, no `Wants=` on the service) — verify: `systemd-analyze verify` clean, AI
+- [x] `deploy/firewall/test.sh` (every case under Verification) + `internal/netpolicy/script_test.go` wrapper (`unshare -Urnm` + sysfs remount, skip-not-fail; host chain compared before/after via `sudo -n`) — verify: `go test ./...` on this host runs it (4.8 s), not skips; the verifier states the skip status
+- [x] `deploy/firewall/install.sh` (flags, `--dry-run`, tmpfiles, both-level chown, conf discovery ONLY IF ABSENT, drop-in for a non-default state dir) — verify: `bash -n`, shellcheck, `--dry-run` output reviewed (discovers enp114s0 / 192.168.86.0/24 here), AI
+- [x] `deploy/host-setup.sh` §3b → a pointer; the `install.sh` call became §5c AFTER the state dir exists and is chowned (the installer needs both), so `SCRIPT_DIR` did not have to move — verify: `bash -n`, diff shows the heredoc removed and nothing else, AI
+- [x] `deploy/update/styrman-update`: `host_converge()` + unit env + WARN-every-tick skip; the two early-exit blocks moved below the function definitions unchanged — verify: tier 1 `bash -n`/shellcheck; reasoned reread, AI
+- [x] `deploy/verify-commit.sh`: shell lint + `systemd-analyze verify` steps — verify: run it (Phase 1 checkpoint), AI
+- [x] Measure spool→rule latency with a transient `systemd-run --user` path unit on a scratch dir (not the live units): trigger 30–62 ms over five runs, script run 80–120 ms in the netns → a toggle lands in about 0.2 s — verify: number in the changelog, AI
+- [x] `security` agent over the script + installer + updater diff (1 high, 3 medium, 7 low) and `reviewer` (1 high, 1 medium, 2 low): all fixed except three rebutted in writing — see the Phase 1 `changes/` entry — verify: findings fixed or rebutted in writing
 - [ ] Converge THIS host with `sudo bash deploy/firewall/install.sh` run from `/opt/styrman` at the Phase-1 commit (never the working tree); record status file present, `version=3`, `applied_at` advancing, zero projects, `systemctl status styrman-firewall.path` active — verify: outputs pasted in the `changes/` entry, both
 - [ ] Changelog "host-only, applied live", commit, push — checkpoint
 

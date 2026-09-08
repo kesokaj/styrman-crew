@@ -344,27 +344,11 @@ fi
 
 log "deployed=${CURRENT} latest-stable=${LATEST}"
 
-# A previously failed tag is not retried automatically — only --force (or a
-# newer tag) gets past this. Retrying a known-broken release on every tick
-# would rebuild both images every few minutes and churn the live server.
-if [ "$(cat "${FAILED}" 2>/dev/null || true)" = "${LATEST}" ] && [ "${FORCE}" = false ]; then
-    log "${LATEST} previously FAILED to deploy and was rolled back — skipping."
-    log "  investigate, then re-run with --force (or push a newer tag)."
-    exit 0
-fi
-if [ "${FORCE}" = true ]; then
-    rm -f "${FAILED}"
-fi
-
-if [ "${CURRENT}" = "${LATEST}" ] && [ "${FORCE}" = false ]; then
-    log "already up to date"
-    exit 0
-fi
-if [ "${CHECK_ONLY}" = true ]; then
-    log "update AVAILABLE: ${CURRENT} → ${LATEST}"
-    git --no-pager log --oneline "${CURRENT}..${LATEST}" 2>/dev/null | head -20 || true
-    exit 0
-fi
+# The FAILED-tag latch, the "already up to date" exit and the --check exit
+# moved below the function definitions (ADR-065): host_converge runs on
+# EVERY tick — including no-op ticks and ticks after a failed release — and
+# needs the helpers defined further down. Nothing between here and there has
+# side effects; it is all definitions.
 
 # ─── Self-install ───────────────────────────────────────────────────────────
 # The updater deploys the container STACK from the verified checkout, but it
@@ -466,6 +450,81 @@ self_install() {
     return 0
 }
 
+# ─── Host converge (ADR-065) ────────────────────────────────────────────────
+# The firewall script and its units live OUTSIDE the container stack, and
+# until ADR-065 nothing delivered a change to them: this host ran a 2026-08-30
+# script for a week after the repo grew two DROPs. On EVERY tick — before the
+# "already up to date" exit as well as after a deploy or rollback — install
+# deploy/firewall/{styrman-firewall.sh,.service,.timer,.path} from the
+# VERIFIED git object when they differ from what is installed. Gate: signature
+# enforcement on, the targets unit-pinned (ADR-052), and HEAD equal to the SHA
+# this host recorded when the deployed tag verified — a hand-checked-out clone
+# is skipped, and says so on every tick rather than once. It never touches
+# /etc/styrman/firewall.conf or the tmpfiles entry: what "local network" means
+# stays the operator's one-time decision (deploy/firewall/install.sh).
+FW_INSTALL_BIN="${STYRMAN_FW_INSTALL_BIN:-}"
+host_converge() {
+    if [ -z "${FW_INSTALL_BIN}" ] || [ -z "${UPDATER_UNIT_DIR}" ]; then
+        log "host-converge skipped: STYRMAN_FW_INSTALL_BIN/STYRMAN_UPDATER_UNIT_DIR unset (the unit sets them)"
+        return 0
+    fi
+    if [ "${REQUIRE_SIGNED}" != "1" ]; then
+        log "WARN: host-converge skipped: signature enforcement is OFF — an unverified tree must not become root's firewall script"
+        return 0
+    fi
+    local bin bindir unitdir head want src changed=0 failed=0 f out
+    bin="$(realpath -m -- "${FW_INSTALL_BIN}")"; bindir="$(dirname "${bin}")"
+    unitdir="$(realpath -m -- "${UPDATER_UNIT_DIR}")"
+    if [ "$(basename "${bin}")" != "styrman-firewall.sh" ]; then
+        log "WARN: host-converge skipped: STYRMAN_FW_INSTALL_BIN must be named styrman-firewall.sh (got ${bin})"; return 0
+    fi
+    if ! trusted_dir "${bindir}" || ! trusted_dir "${unitdir}"; then
+        log "WARN: host-converge skipped: ${bindir} or ${unitdir} is missing, not root-owned, or group/world-writable"; return 0
+    fi
+    want="$(cat "${STATE_SHA}" 2>/dev/null || true)"
+    if ! printf '%s' "${want}" | grep -qE '^[0-9a-f]{40}$'; then
+        log "WARN: host-converge skipped: no verified deployed-sha in ${STATE_DIR} — deploy a signed tag first (or run deploy/firewall/install.sh by hand)"; return 0
+    fi
+    head="$(git rev-parse HEAD 2>/dev/null)" || { log "WARN: host-converge skipped: cannot resolve HEAD"; return 0; }
+    if [ "${head}" != "${want}" ]; then
+        log "WARN: host-converge skipped: ${DEPLOY_DIR} is at ${head:0:12}, not the verified deployed commit ${want:0:12}"; return 0
+    fi
+    SELF_HEAD="${head}"
+    src="deploy/firewall"
+    for f in styrman-firewall.sh styrman-firewall.service styrman-firewall.timer styrman-firewall.path; do
+        git cat-file -e "${SELF_HEAD}:${src}/${f}" 2>/dev/null || { log "host-converge: ${src}/${f} not in the deployed tree (pre-ADR-065 release) — skipped"; return 0; }
+    done
+    # --check promises to change nothing (usage text above): report drift,
+    # install nothing (review finding — the very drift this exists to fix is
+    # when a preview run would otherwise silently apply it).
+    if [ "${CHECK_ONLY}" = true ]; then
+        local n=0
+        differs "${src}/styrman-firewall.sh" "${bin}" && n=$((n + 1))
+        for f in styrman-firewall.service styrman-firewall.timer styrman-firewall.path; do
+            differs "${src}/${f}" "${unitdir}/${f}" && n=$((n + 1))
+        done
+        if [ "${n}" -gt 0 ]; then log "host-converge: ${n} firewall file(s) differ from the verified tree — a real run would install them (--check changes nothing)"; fi
+        return 0
+    fi
+    rm -f "${bin}.new."* "${unitdir}/styrman-firewall.service.new."* "${unitdir}/styrman-firewall.timer.new."* "${unitdir}/styrman-firewall.path.new."* 2>/dev/null || true
+    if differs "${src}/styrman-firewall.sh" "${bin}"; then
+        if atomic_install 755 "${src}/styrman-firewall.sh" "${bin}"; then changed=1; else failed=1; log "WARN: could not install ${bin}"; fi
+    fi
+    for f in styrman-firewall.service styrman-firewall.timer styrman-firewall.path; do
+        if differs "${src}/${f}" "${unitdir}/${f}"; then
+            if atomic_install 644 "${src}/${f}" "${unitdir}/${f}"; then changed=1; else failed=1; log "WARN: could not install ${unitdir}/${f}"; fi
+        fi
+    done
+    if [ "${changed}" = "1" ]; then
+        if ! out="$(systemctl daemon-reload 2>&1)"; then log "WARN: daemon-reload after host-converge: ${out}"; fi
+        if ! out="$(systemctl enable --now styrman-firewall.timer styrman-firewall.path 2>&1)"; then log "WARN: enabling the firewall units: ${out}"; fi
+        if ! out="$(systemctl start styrman-firewall.service 2>&1)"; then log "WARN: starting styrman-firewall.service: ${out}"; fi
+        log "host-converge: firewall script + units installed from ${SELF_HEAD:0:12} (see journalctl -u styrman-firewall)"
+    fi
+    [ "${failed}" = "0" ] || log "WARN: host-converge incomplete — the previous firewall script may still be installed"
+    return 0
+}
+
 # ─── Deploy ─────────────────────────────────────────────────────────────────
 # deploy <tag> — checkout, rebuild both images, bring the stack up.
 # deploy <ref> <version> [trusted]
@@ -558,6 +617,33 @@ reports_version() {
     return 1
 }
 
+# ─── Every-tick host converge, then the early exits ─────────────────────────
+# Converge FIRST: the deployed tree's firewall half must be kept installed
+# whatever this tick decides about a new tag — even while a broken release
+# stays latched as FAILED (review finding). Under --check it only reports.
+host_converge
+# A previously failed tag is not retried automatically — only --force (or a
+# newer tag) gets past this. Retrying a known-broken release on every tick
+# would rebuild both images every few minutes and churn the live server.
+if [ "$(cat "${FAILED}" 2>/dev/null || true)" = "${LATEST}" ] && [ "${FORCE}" = false ]; then
+    log "${LATEST} previously FAILED to deploy and was rolled back — skipping."
+    log "  investigate, then re-run with --force (or push a newer tag)."
+    exit 0
+fi
+if [ "${FORCE}" = true ]; then
+    rm -f "${FAILED}"
+fi
+
+if [ "${CURRENT}" = "${LATEST}" ] && [ "${FORCE}" = false ]; then
+    log "already up to date"
+    exit 0
+fi
+if [ "${CHECK_ONLY}" = true ]; then
+    log "update AVAILABLE: ${CURRENT} → ${LATEST}"
+    git --no-pager log --oneline "${CURRENT}..${LATEST}" 2>/dev/null | head -20 || true
+    exit 0
+fi
+
 PREVIOUS="${CURRENT}"
 PREVIOUS_SHA="$(cat "${STATE_SHA}" 2>/dev/null || true)"
 # Only a full 40-hex object name is usable as a rollback ref.
@@ -575,6 +661,7 @@ if deploy "${LATEST}" "${LATEST#v}" && reports_version "${LATEST#v}"; then
     fi
     rm -f "${FAILED}"
     self_install
+    host_converge
     log "OK — ${LATEST} is live"
     exit 0
 fi
@@ -602,6 +689,7 @@ if deploy "${rollback_ref}" "${PREVIOUS#v}" "${rollback_trust}" && reports_versi
     # The updater must match what is DEPLOYED, so the rolled-back tree's
     # copies are installed too (this run keeps executing the old inode).
     self_install
+    host_converge
     fail "rolled back to ${PREVIOUS}. ${LATEST} is marked FAILED and will not be retried automatically — fix it and re-run with --force, or push a newer tag."
 fi
 fail "rollback to ${PREVIOUS} ALSO failed — manual intervention required"
