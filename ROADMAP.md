@@ -34,20 +34,36 @@ converged pre-existing production drift (the live script had carried four
 private-range DROPs since 2026-08-30 where the repo has had six since
 2026-09-02) — `STYRMAN-FWD` now shows six, `/run/styrman-firewall/status`
 reports `version=3`, timer and path units active, no root command from a
-human needed. One operator step remains, and it is the only thing between
-here and a usable feature: `sudo bash /opt/styrman/deploy/firewall/install.sh`
-once on the host, which writes `/etc/styrman/firewall.conf` (the LAN
-definition, discovered from the default route) and mounts the bounded spool
-tmpfs — until it runs the feature is deployed but INERT and fails closed
-(status reports no prefix configured, Settings shows the row red, every
-enable refused with 503). After it, the last plan box is the manual
-applied-state check on production (toggle on, in-guest ping to the gateway
-succeeds while the host stays unreachable, toggle off cuts it), or the
-opt-in `STYRMAN_IT_LIVE_LAN=1` integration block, logged into
-`.agents/docs/testing/`. The plan
-`.agents/docs/plans/2026-09-08-per-project-lan-access.md` has 42 of 44 boxes
-ticked; the two open ones are that operator step and the check that follows
-it.
+human needed. The remaining operator step has been run: on 2026-09-08, from `/opt/styrman`
+at the v1.23.0 tag, after a dry run, `sudo bash
+/opt/styrman/deploy/firewall/install.sh` wrote `/etc/styrman/firewall.conf`
+with the LAN definition discovered from the default route
+(`LAN_DEV=enp114s0`, `LAN_CIDRS=192.168.86.0/24`) and mounted the bounded
+1 MiB spool tmpfs; the script and units were already in place from
+`host_converge`, so those steps were no-ops on identical bytes. Two things
+that could only be proven on the real host are now proven: (1) the spool
+tmpfs, mounted minutes after the server container had started, appears in
+that container's own mount table correctly owned and bounded with no
+restart — the `rslave` propagation fix (BUG-016) working as designed; (2)
+end-to-end reachability — with `STYRMAN_IT_LIVE_LAN=1` the integration suite
+ran 83 passed / 0 failed / 3 skipped, showing in one run that an unmarked
+project cannot ping the LAN gateway, a marked one can within 5 s, the host
+itself stays unreachable from the guest either way, and removing the marker
+cuts it again within 5 s. The host was left clean afterward: no markers, no
+`styrman-lan:` rules, spool drained, only the two production containers
+running. The plan `.agents/docs/plans/2026-09-08-per-project-lan-access.md`
+is CLOSED at 44 of 44 boxes. Records:
+`changes/2026-09-08-lan-access-host-installed-and-proven.md` and
+`testing/2026-09-08-verify-lan-live.md`; commit `3d02384`. The only thing deliberately left unautomated is a human
+flipping the switch in a browser once; every layer beneath it is covered by
+tests. One flaw was recorded rather than fixed and is in `TODO.md`: the
+opt-in live LAN block races the production server's 2-minute marker sweep
+(it plants a marker for a project only the test server knows about, and
+production correctly deletes markers it cannot account for) — it passed by
+timing, not by design.
+
+There is no active plan right now — v1.23.0 is shipped and fully verified,
+and `Later / Ideas` is still deliberately empty awaiting operator input.
 
 **v1.22.0 shipped 2026-09-04** (`.agents/docs/changes/`, six phase entries plus the release entry; gate: `.agents/docs/reviews/2026-09-04-preflight-v1.22.0.md`): `GOPATH=$HOME/.go` in the seeded skel (NEW project homes only — existing homes keep `$HOME/go`), terminal/editor font settings, file-explorer back/forward/up with a readable crumb bar, the Recent strip as a collapsible resizable grid, git diffs in the main pane plus a UUID fast-commit, and six new git verbs (fetch, pull, branches, log, stash). Before it, v1.21.0 (ADR-064, the un-nested project homes).
 
