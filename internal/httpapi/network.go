@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -32,6 +33,9 @@ type lanView struct {
 	LanState     netpolicy.State `json:"lanState"`
 	LanMessage   string          `json:"lanMessage"`
 	LanChangedAt *time.Time      `json:"lanChangedAt,omitempty"`
+	// CredentialImpact names what LAN access costs this project, so the UI
+	// need not encode the policy. Empty when nothing is withheld.
+	CredentialImpact string `json:"credentialImpact,omitempty"`
 	// Host is the operator's view of the root half — admins only, so a
 	// tenant never learns the operator's LAN prefix from a project they own.
 	Host *hostFirewallView `json:"host,omitempty"`
@@ -47,13 +51,30 @@ type hostFirewallView struct {
 	LanCidrs        []string   `json:"lanCidrs"`
 	LanProjects     int        `json:"lanProjects"`
 	Warnings        []string   `json:"warnings"`
+	// ADR-066: what the host CONF opted into, as root read it. A script
+	// converged to version 4 grants nothing until a human edits the conf, so
+	// the UI must show "on, but the host does not include X" rather than a
+	// switch that silently means less than it says.
+	AllowHost           bool     `json:"allowHost"`
+	AllowPublishedPorts bool     `json:"allowPublishedPorts"`
+	HostAddrs           []string `json:"hostAddrs"`
+	PubSubnets          []string `json:"pubSubnets"`
+	IngressBridge       string   `json:"ingressBridge,omitempty"`
 }
 
 func (s *Server) hostFirewall(st *netpolicy.Status, now time.Time) hostFirewallView {
-	v := hostFirewallView{RequiredVersion: netpolicy.MinScriptVersion, LanCidrs: []string{}, Warnings: []string{}}
+	v := hostFirewallView{RequiredVersion: netpolicy.MinScriptVersion, LanCidrs: []string{},
+		Warnings: []string{}, HostAddrs: []string{}, PubSubnets: []string{}}
 	v.Available, v.Reason = netpolicy.Availability(st, now)
 	if st == nil {
 		return v
+	}
+	v.AllowHost, v.AllowPublishedPorts = st.AllowHost, st.AllowPublishedPorts
+	v.IngressBridge = st.IngressBridge
+	v.HostAddrs = append(v.HostAddrs, st.HostAddrs...)
+	v.PubSubnets = append(v.PubSubnets, st.PubSubnets...)
+	if w := s.ingressBridgeMismatch(st); w != "" {
+		v.Warnings = append(v.Warnings, w)
 	}
 	t := st.AppliedAt
 	v.Version, v.AppliedAt, v.LanDev, v.LanProjects = st.Version, &t, st.LanDev, len(st.Applied)
@@ -63,6 +84,39 @@ func (s *Server) hostFirewall(st *netpolicy.Status, now time.Time) hostFirewallV
 		v.Warnings = append(v.Warnings, "conf_error: "+st.ConfError)
 	}
 	return v
+}
+
+// ingressBridgeMismatch cross-checks the bridge root excluded from the
+// published-port allowlist against the one this server's own ingress network
+// actually uses. Root cannot make this check — a root firewall script must
+// not depend on the Docker daemon — so it reports what it used and this is
+// the other half.
+//
+// A wrong-but-valid value is the dangerous case: it passes root's shape and
+// existence checks while leaving the REAL ingress inside the reachable set,
+// the exact opposite of the key's purpose. An empty answer from Docker is "no
+// opinion" and never a mismatch.
+//
+// Cached: this costs a NetworkInspect, and lanView is rendered per project in
+// a listing.
+func (s *Server) ingressBridgeMismatch(st *netpolicy.Status) string {
+	if st == nil || !st.AllowPublishedPorts || st.IngressBridge == "" {
+		return ""
+	}
+	s.ingressBrMu.Lock()
+	defer s.ingressBrMu.Unlock()
+	if time.Since(s.ingressBrAt) > time.Minute {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		s.ingressBr = s.orch.BridgeNameForNetwork(ctx, s.cfg.IngressNetwork)
+		cancel()
+		s.ingressBrAt = time.Now()
+	}
+	if s.ingressBr == "" || s.ingressBr == st.IngressBridge {
+		return ""
+	}
+	return fmt.Sprintf("INGRESS_BRIDGE in the host conf is %s but the %s network uses %s — "+
+		"published-port access may expose the ingress; fix /etc/styrman/firewall.conf on the server",
+		st.IngressBridge, s.cfg.IngressNetwork, s.ingressBr)
 }
 
 // lanFor derives one project's state from the record and root's status.
@@ -89,6 +143,13 @@ func (s *Server) lanView(p project.Project, admin bool, now time.Time) lanView {
 	st := s.netpol.Status(now)
 	state, msg := s.lanFor(p, st, now, admin)
 	v := lanView{LanAccess: p.LanAccess, LanState: state, LanMessage: msg}
+	// What being LAN-enabled costs this project. Derived from the same union
+	// the broker gates on, so the UI cannot disagree with what is actually
+	// served. Not operator-sensitive — it describes the owner's own project —
+	// so unlike Host it is not admin-gated.
+	if netpolicy.Exposed(p.LanAccess, p.ID, st, now) {
+		v.CredentialImpact = "ssh-key-withheld"
+	}
 	if !p.LanChangedAt.IsZero() {
 		t := p.LanChangedAt
 		v.LanChangedAt = &t

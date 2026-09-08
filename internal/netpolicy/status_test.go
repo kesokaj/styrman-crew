@@ -159,3 +159,36 @@ func TestExposed(t *testing.T) {
 		}
 	}
 }
+
+// ADR-066 keys. A v3 script writes none of them, and that must parse as
+// "opted into nothing" rather than as an error — the normal state of a host
+// mid-upgrade.
+func TestParseStatusADR066Keys(t *testing.T) {
+	st := parse(t, statusText(now, "lan_allow_host=1\nlan_allow_published_ports=1\ningress_bridge=br-02a045873a1d\nlan_host_addrs=192.168.86.58/32\nlan_pub_subnets=172.17.0.0/16\n"))
+	if !st.AllowHost || !st.AllowPublishedPorts {
+		t.Errorf("opt-ins not parsed: %+v", st)
+	}
+	if st.IngressBridge != "br-02a045873a1d" {
+		t.Errorf("IngressBridge = %q", st.IngressBridge)
+	}
+	if len(st.HostAddrs) != 1 || st.HostAddrs[0] != "192.168.86.58/32" {
+		t.Errorf("HostAddrs = %v", st.HostAddrs)
+	}
+	if len(st.PubSubnets) != 1 || st.PubSubnets[0] != "172.17.0.0/16" {
+		t.Errorf("PubSubnets = %v", st.PubSubnets)
+	}
+
+	old := parse(t, statusText(now, ""))
+	if old.AllowHost || old.AllowPublishedPorts || old.IngressBridge != "" {
+		t.Errorf("a status without the ADR-066 keys must opt into nothing: %+v", old)
+	}
+	if old.HostAddrs == nil || old.PubSubnets == nil {
+		t.Error("empty slices must be non-nil so the JSON is [] not null")
+	}
+
+	// Only "1" is on; anything else is off rather than an error.
+	off := parse(t, statusText(now, "lan_allow_host=0\nlan_allow_published_ports=yes\n"))
+	if off.AllowHost || off.AllowPublishedPorts {
+		t.Errorf("non-1 values must read as off: %+v", off)
+	}
+}

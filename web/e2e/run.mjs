@@ -6,6 +6,8 @@
 //
 // Usage: node web/e2e/run.mjs [--base http://127.0.0.1:8080] [--shots /tmp/shots]
 import { chromium } from "playwright";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 const arg = (name, def) => {
   const i = process.argv.indexOf(name);
@@ -725,6 +727,94 @@ try {
     const me = list.projects.find((p) => p.id === PID);
     if (me?.lanAccess) throw new Error("a refused enable must not persist");
   });
+  // ── ADR-066: with a plausible root status planted, the switch becomes
+  // usable and the confirmation must state BOTH consequences — whether the
+  // host itself is inside the allowance, and that the SSH key is withheld.
+  // The status file is a fake in the scratch dir; no reconciler exists, so a
+  // successful enable settles at "pending", which is the honest outcome.
+  const FW = process.env.STYRMAN_E2E_FW_DIR;
+  if (FW) {
+    const plantStatus = (allowHost) => {
+      mkdirSync(FW, { recursive: true });
+      writeFileSync(
+        join(FW, "status"),
+        [
+          "schema=1",
+          "version=4",
+          `applied_at=${Math.floor(Date.now() / 1000)}`,
+          "lan_dev=e2e0",
+          "lan_cidrs=192.0.2.0/24",
+          `lan_allow_host=${allowHost ? 1 : 0}`,
+          "lan_allow_published_ports=0",
+          allowHost ? "lan_host_addrs=192.0.2.1/32" : "lan_host_addrs=",
+          "spool=0",
+          "run_ms=1",
+          "",
+        ].join("\n"),
+      );
+    };
+    const lanSwitch = () => panel().getByRole("switch", { name: "Local network access" });
+
+    await check("host conf NOT including the host: the dialog says so", async () => {
+      plantStatus(false);
+      // 2 s status cache + 5 s UI poll; poll rather than race it.
+      for (let i = 0; i < 40; i++) {
+        if (!(await lanSwitch().isDisabled())) break;
+        await page.waitForTimeout(500);
+      }
+      if (await lanSwitch().isDisabled()) throw new Error("switch still disabled with a usable status file");
+      await lanSwitch().click();
+      await page.getByText(/This server itself stays blocked/).waitFor({ timeout: 10000 });
+      await page.getByText(/no longer be given your SSH key/).waitFor({ timeout: 5000 });
+      await page.getByRole("button", { name: /cancel/i }).click();
+    });
+
+    await check("host conf including the host: the dialog names it as danger", async () => {
+      plantStatus(true);
+      await page.waitForTimeout(8000);
+      await lanSwitch().click();
+      await page.getByText(/This server itself \(192\.0\.2\.1\/32\) is inside that allowance/).waitFor({ timeout: 10000 });
+      await page.getByText(/attempt to log in to the machine it runs on/).waitFor({ timeout: 5000 });
+    });
+
+    await check("confirming enables, and the withheld-key note appears", async () => {
+      await page.getByRole("button", { name: "Allow LAN access" }).click();
+      await panel().getByText(/SSH key is withheld from this project/).waitFor({ timeout: 15000 });
+      const list = await (await page.request.get(`${BASE}/api/projects`)).json();
+      const me = list.projects.find((p) => p.id === PID);
+      if (!me?.lanAccess) throw new Error("the enable did not persist");
+    });
+
+    // No reconciler exists here, so the enable settles at "pending" — and a
+    // pending record must NOT be flippable from the UI, which is the whole
+    // point of deriving state from root's word rather than the request's.
+    // (An earlier draft of this check tried to click it off and timed out;
+    // the component was right and the check was wrong.)
+    await check("a pending record cannot be flipped from the switch", async () => {
+      if (!(await lanSwitch().isDisabled())) {
+        throw new Error("the switch must be disabled while root has not applied the change");
+      }
+    });
+
+    // Disabling is always accepted — tightening is never refused, pending or
+    // not — so it goes through the API, which is the path a real owner's
+    // click takes once root has settled.
+    await check("disable is accepted even while pending, and clears the note", async () => {
+      const res = await page.request.put(`${BASE}/api/projects/${PID}/network`, {
+        data: { lanAccess: false },
+      });
+      if (!res.ok()) throw new Error(`disable returned ${res.status()}`);
+      await panel().getByText(/SSH key is withheld from this project/).waitFor({ state: "detached", timeout: 15000 });
+      const net = await (await page.request.get(`${BASE}/api/projects/${PID}/network`)).json();
+      if (net.lanAccess) throw new Error("still on after disable");
+    });
+
+    // Put the world back: later checks (the settings page's host-firewall
+    // card) assert the NOT-installed branch, and a planted status file would
+    // make them fail for a reason that has nothing to do with them.
+    rmSync(join(FW, "status"), { force: true });
+    await page.waitForTimeout(8000);
+  }
   // The preview proxy needs the TEST server (a host process) to reach the
   // guest bridge IP; the hardened host firewall DROPs that (production's
   // containerized server is exempt). Probe once and SKIP the proxy-path

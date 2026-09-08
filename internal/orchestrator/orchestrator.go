@@ -372,6 +372,29 @@ func brokerIPForSubnet(n *net.IPNet) net.IP {
 	return out
 }
 
+// BridgeNameForNetwork returns the host-side interface name of a Docker
+// network: `br-` + the first 12 hex of its id, which is how Docker names one,
+// unless the network overrides it with com.docker.network.bridge.name.
+//
+// Used only to cross-check the root firewall's INGRESS_BRIDGE (ADR-066). A
+// root firewall script must not depend on the Docker daemon, so it reports
+// the bridge it excluded and the server — which does talk to the daemon —
+// says whether that was the right one. Empty means "could not determine",
+// which the caller must treat as "no opinion", never as a mismatch.
+func (o *Orchestrator) BridgeNameForNetwork(ctx context.Context, netName string) string {
+	insp, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{})
+	if err != nil {
+		return ""
+	}
+	if n := insp.Options["com.docker.network.bridge.name"]; n != "" {
+		return n
+	}
+	if len(insp.ID) < 12 {
+		return ""
+	}
+	return "br-" + insp.ID[:12]
+}
+
 // bridgeSubnet returns the first IPv4 subnet of a project bridge.
 func (o *Orchestrator) bridgeSubnet(ctx context.Context, netName string) *net.IPNet {
 	insp, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{})

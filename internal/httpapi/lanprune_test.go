@@ -143,3 +143,74 @@ func TestServerLanExposed(t *testing.T) {
 		t.Error("a stale status must read as exposed")
 	}
 }
+
+// ADR-066 fields on the API. The host view is admin-only (it carries the
+// operator's prefixes); credentialImpact describes the owner's own project
+// and is not.
+func TestLanViewADR066Fields(t *testing.T) {
+	n := newNetHarness(t)
+	n.writeStatus(t, time.Now(), "lan_allow_host=1\nlan_allow_published_ports=1\ningress_bridge=br-0123456789ab\nlan_host_addrs=192.0.2.1/32\nlan_pub_subnets=172.17.0.0/16\n")
+
+	sp, err := n.s.space(identity.DeriveUsername(n.admin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := sp.projects.Get(n.pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	v := n.s.lanView(p, true, time.Now())
+	if v.Host == nil {
+		t.Fatal("an admin must get the host view")
+	}
+	if !v.Host.AllowHost || !v.Host.AllowPublishedPorts {
+		t.Errorf("opt-ins not surfaced: %+v", v.Host)
+	}
+	if v.Host.IngressBridge != "br-0123456789ab" {
+		t.Errorf("IngressBridge = %q", v.Host.IngressBridge)
+	}
+	if len(v.Host.HostAddrs) != 1 || len(v.Host.PubSubnets) != 1 {
+		t.Errorf("addrs/subnets = %v / %v", v.Host.HostAddrs, v.Host.PubSubnets)
+	}
+	if v.CredentialImpact != "" {
+		t.Errorf("a project with LAN off withholds nothing, got %q", v.CredentialImpact)
+	}
+
+	// A non-admin owner gets no host view at all — the operator's prefixes
+	// and bridge names are not theirs to see (BUG-017).
+	if nv := n.s.lanView(p, false, time.Now()); nv.Host != nil {
+		t.Error("a non-admin must not receive the host view")
+	}
+
+	// Turning it on surfaces the credential cost, admin or not.
+	if err := sp.projects.SetLanAccess(n.pid, true, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	p, _ = sp.projects.Get(n.pid)
+	if got := n.s.lanView(p, false, time.Now()).CredentialImpact; got != "ssh-key-withheld" {
+		t.Errorf("CredentialImpact = %q, want ssh-key-withheld", got)
+	}
+}
+
+// The mismatch check must stay silent unless it actually knows better: no
+// published-port opt-in, no reported bridge, or no answer from Docker all
+// mean "no opinion", never a false alarm.
+func TestIngressBridgeMismatchStaysSilentWithoutAnAnswer(t *testing.T) {
+	n := newNetHarness(t)
+	n.writeStatus(t, time.Now(), "lan_allow_published_ports=1\ningress_bridge=br-0123456789ab\n")
+	st := n.s.netpol.Status(time.Now())
+	if st == nil {
+		t.Fatal("status")
+	}
+	// No Docker in this harness, so BridgeNameForNetwork answers "" — which
+	// must read as no opinion rather than as a mismatch.
+	if w := n.s.ingressBridgeMismatch(st); w != "" {
+		t.Errorf("unknown bridge must not warn, got %q", w)
+	}
+	// Not opted in: nothing to check at all.
+	n.writeStatus(t, time.Now(), "ingress_bridge=br-0123456789ab\n")
+	if w := n.s.ingressBridgeMismatch(n.s.netpol.Status(time.Now())); w != "" {
+		t.Errorf("no opt-in must not warn, got %q", w)
+	}
+}

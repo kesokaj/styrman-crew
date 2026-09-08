@@ -65,4 +65,9 @@ done
 curl -fsS "${API}/api/health" >/dev/null 2>&1 || { echo "server failed to start"; cat "${STATE}/server.log"; exit 1; }
 
 echo "== running Playwright checks =="
-node "${REPO}/web/e2e/run.mjs" --base "${API}"
+# STYRMAN_E2E_FW_DIR lets the browser checks plant a FAKE root status file in
+# the scratch firewall dir, so the ADR-066 UI (host included / not included,
+# the withheld SSH key) can be exercised without a real reconciler and without
+# touching production's. Nothing root-owned is involved: the server only READS
+# this file, and the marker it writes lands in the scratch state dir.
+STYRMAN_E2E_FW_DIR="${STATE}/fw" node "${REPO}/web/e2e/run.mjs" --base "${API}"

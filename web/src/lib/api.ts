@@ -40,6 +40,20 @@ export interface HostFirewall {
   lanCidrs: string[];
   lanProjects: number;
   warnings: string[];
+  /**
+   * What the host CONF opted into (ADR-066), as root read it. A server whose
+   * script has converged to version 4 still grants nothing until a human
+   * edits `/etc/styrman/firewall.conf`, so these are reported rather than
+   * assumed — the switch must not claim more than the host will do.
+   */
+  allowHost: boolean;
+  allowPublishedPorts: boolean;
+  /** The host's own addresses a LAN-enabled project may reach, when allowHost. */
+  hostAddrs: string[];
+  /** Bridge subnets reachable through a published port, when allowPublishedPorts. */
+  pubSubnets: string[];
+  /** The bridge root excluded from the published-port allowlist. */
+  ingressBridge?: string;
 }
 
 /** GET/PUT /api/projects/{id}/network. `host` is present for admins only. */
@@ -48,6 +62,13 @@ export interface ProjectNetwork {
   lanState: LanState;
   lanMessage: string;
   lanChangedAt?: string;
+  /**
+   * What LAN access costs this project. "ssh-key-withheld" means the
+   * credential broker is not serving it the SSH key (ADR-066 part 4). Sent to
+   * owners as well as admins — it describes their own project, not the
+   * operator's network.
+   */
+  credentialImpact?: string;
   host?: HostFirewall;
 }
 

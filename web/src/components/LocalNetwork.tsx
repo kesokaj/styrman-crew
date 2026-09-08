@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api, tryUI, type ProjectNetwork } from "../lib/api";
 import { usePolled } from "../lib/hooks";
-import { lanLine } from "../lib/lan";
+import { lanLine, preferOverride } from "../lib/lan";
 import { toast } from "../lib/toast";
 import { ConfirmDialog, Switch } from "./ui";
 
@@ -23,20 +23,29 @@ export function LocalNetwork({ project }: { project: string }) {
     5000,
     [project],
   );
-  // The PUT's reply is authoritative until the poll reports the same change
-  // (same lanChangedAt) — the PortShare pattern; without it a 5 s poll could
-  // briefly show the pre-change state after the toast.
+  // The PUT's reply is authoritative until the poll catches up with it — the
+  // PortShare pattern; without it a 5 s poll could briefly show the
+  // pre-change state after the toast. See preferOverride for why "catches up"
+  // is not an equality test.
   const [override, setOverride] = useState<ProjectNetwork>();
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
-  const view =
-    override && data?.lanChangedAt !== override.lanChangedAt ? override : data;
+  const view = preferOverride(override, data);
 
   const admin = view?.host !== undefined;
   const on = view?.lanAccess ?? false;
   const state = view?.lanState;
   const cidrs = view?.host?.lanCidrs;
   const where = cidrs && cidrs.length > 0 ? cidrs.join(", ") : "the operator's local network";
+  // ADR-066: the host conf decides whether the allowance INCLUDES the server
+  // itself and its published ports. A script converged to version 4 still
+  // grants neither until a human opts in, so the dialog is written from what
+  // root reports rather than from what the feature can do.
+  const allowHost = view?.host?.allowHost ?? false;
+  const allowPub = view?.host?.allowPublishedPorts ?? false;
+  const hostAddrs = view?.host?.hostAddrs ?? [];
+  const hostWhere = hostAddrs.length > 0 ? hostAddrs.join(", ") : "this server";
+  const keyWithheld = view?.credentialImpact === "ssh-key-withheld";
   // While OFF the server derives "off" even when the host half is missing —
   // there is nothing to report about a rule that does not exist. The admin's
   // reply carries whether an enable WOULD be accepted (`host.available`), so
@@ -117,6 +126,21 @@ export function LocalNetwork({ project }: { project: string }) {
       <p className={`mt-1 text-[11px] ${state === "error" ? "text-danger" : "text-text-dim"}`}>
         {line}
       </p>
+      {/* On, but the host conf grants less than the switch implies. Says so
+          rather than letting the operator believe the host is included. */}
+      {on && state === "on" && admin && !allowHost && (
+        <p className="mt-0.5 text-[11px] text-text-dim">
+          This server itself is not included — set{" "}
+          <code className="text-text">LAN_ALLOW_HOST=1</code> in{" "}
+          <code className="text-text">/etc/styrman/firewall.conf</code> to
+          include it.
+        </p>
+      )}
+      {on && keyWithheld && (
+        <p className="mt-0.5 text-[11px] text-text-dim">
+          The SSH key is withheld from this project while this is on.
+        </p>
+      )}
       {confirm && (
         <ConfirmDialog
           title={`Allow local network access?`}
@@ -136,12 +160,33 @@ export function LocalNetwork({ project }: { project: string }) {
                 those connections arrive as this server's own address — so any
                 device that trusts this host by IP trusts this project too.
               </p>
+              {allowHost ? (
+                <p className="mt-2">
+                  <span className="text-danger">
+                    This server itself ({hostWhere}) is inside that allowance
+                  </span>
+                  , including its SSH service. An agent in this project can
+                  attempt to log in to the machine it runs on.
+                  {allowPub && " Docker containers this host publishes are reachable too."}
+                </p>
+              ) : (
+                <p className="mt-2">
+                  This server itself stays blocked, as do its published ports —
+                  the operator has not opted in to those on this host.
+                </p>
+              )}
               <p className="mt-2">
-                This project holds your git, SSH and cloud credentials through the
-                broker; any LAN machine that trusts them becomes reachable from an
-                AI agent. This server, other projects and cloud metadata stay
-                blocked, and LAN hosts still cannot connect in. Turning it off
-                later cuts open connections immediately.
+                In exchange, this project will no longer be given your SSH key:
+                the credential broker withholds it while local network access is
+                on, so pushing over SSH from this project will stop working
+                (HTTPS with your token still does). A copy already written into
+                this project's home is removed — but if the project has run
+                before, treat that key as having been exposed to it.
+              </p>
+              <p className="mt-2">
+                Other projects, the ingress and cloud metadata stay blocked, and
+                LAN hosts still cannot connect in. Turning it off later cuts open
+                connections immediately.
               </p>
             </>
           }

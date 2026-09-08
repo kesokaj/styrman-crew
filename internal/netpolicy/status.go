@@ -29,6 +29,19 @@ type Status struct {
 	Warnings  []string
 	Spool     int
 	RunMS     int
+	// ADR-066. What the host conf opted into, as ROOT read it — the server
+	// reports these rather than assuming, because a script converged to
+	// version 4 grants nothing until a human edits the conf.
+	AllowHost bool
+	// AllowPublishedPorts is only ever true when root also had a usable
+	// IngressBridge; root skips the family otherwise.
+	AllowPublishedPorts bool
+	// IngressBridge is the bridge root EXCLUDED from the published-port
+	// allowlist. Root cannot tell whether it is the right one without the
+	// docker daemon, so it reports what it used and the server compares.
+	IngressBridge string
+	HostAddrs     []string
+	PubSubnets    []string
 }
 
 // State is what the UI renders for one project.
@@ -73,6 +86,16 @@ func ParseStatus(r io.Reader) (*Status, error) {
 			st.LanDev = val
 		case "lan_cidrs":
 			st.LanCidrs = strings.Fields(val)
+		case "lan_allow_host":
+			st.AllowHost = val == "1"
+		case "lan_allow_published_ports":
+			st.AllowPublishedPorts = val == "1"
+		case "ingress_bridge":
+			st.IngressBridge = val
+		case "lan_host_addrs":
+			st.HostAddrs = strings.Fields(val)
+		case "lan_pub_subnets":
+			st.PubSubnets = strings.Fields(val)
 		case "lan":
 			for _, id := range strings.Fields(val) {
 				if uuidRe.MatchString(id) {
@@ -118,6 +141,12 @@ func ParseStatus(r io.Reader) (*Status, error) {
 	}
 	if st.Warnings == nil {
 		st.Warnings = []string{}
+	}
+	if st.HostAddrs == nil {
+		st.HostAddrs = []string{}
+	}
+	if st.PubSubnets == nil {
+		st.PubSubnets = []string{}
 	}
 	return st, nil
 }

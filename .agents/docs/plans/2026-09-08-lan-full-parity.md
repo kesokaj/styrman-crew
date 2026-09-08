@@ -419,10 +419,34 @@ for a confinement property that has never been shown to fail without the
 confinement is not evidence.
 
 ### Phase 5 — API + UI
-- [ ] `lanView` capability + impact fields — verify: `go test ./internal/httpapi/`, AI
-- [ ] Server compares root's `ingress_bridge=` against its OWN ingress network's bridge and surfaces a mismatch — root cannot know which bridge is the ingress without the docker daemon, so this is the half that catches a wrong-but-valid conf value — verify: `go test ./internal/httpapi/`, AI
-- [ ] `LocalNetwork.tsx` confirmation naming both consequences; conf-not-opted-in note — verify: `npm run check && npm test`, AI
-- [ ] Browser walk of the golden path and the edge case — verify: e2e, both
+- [x] `netpolicy.Status` parses the ADR-066 keys — a prerequisite this plan implied but did not list: `ParseStatus` ignored them, so the server could not see the opt-ins at all — verify: `go test ./internal/netpolicy/`, AI
+- [x] `lanView` capability + impact fields — verify: `go test ./internal/httpapi/`, AI
+- [x] Server compares root's `ingress_bridge=` against its OWN ingress network's bridge and surfaces a mismatch — root cannot know which bridge is the ingress without the docker daemon, so this is the half that catches a wrong-but-valid conf value — verify: `go test ./internal/httpapi/`, AI
+- [x] `LocalNetwork.tsx` confirmation naming both consequences; conf-not-opted-in note — verify: `npm run check && npm test`, AI
+- [x] Browser walk of the golden path and the edge case — verify: e2e, both
+
+**Phase 5 result (2026-09-08):** browser e2e **89 passed / 0 failed / 2
+skipped** (was 84/2 skipped before this phase), including five new ADR-066
+checks that plant a fake root status file in the e2e's scratch firewall dir
+and drive the real UI: the dialog when the host conf does NOT include the
+host, the dialog when it does, confirming and seeing the withheld-key note,
+a pending record refusing to flip, and disable being accepted while pending.
+`npm run check`/`lint` clean, vitest **85** (was 80). `go vet`,
+`go test ./...` and `test.sh` (120/0) clean.
+
+**A pre-existing bug fell out of the e2e.** `LocalNetwork.tsx` chose between
+its optimistic PUT reply and the poll with an EQUALITY test on
+`lanChangedAt`, so any out-of-band change (another tab, another admin, the
+API) moved the poll's timestamp past the override's and pinned the component
+to a stale reply for as long as it stayed mounted. Extracted to a pure,
+unit-tested `preferOverride` in `lan.ts` and changed to an ordering
+comparison. Recorded as a numbered bug.
+
+**One e2e check was wrong, not the code.** A first draft tried to click the
+switch off while the record was pending; the component correctly disables it
+then ("nothing flips while pending"). The check now asserts that, and
+disables through the API — which is legitimate because tightening is never
+refused.
 
 ### Phase 6 — Records
 - [ ] ADR-066 amending ADR-065 (5) and D3, carrying the negated-`-o` finding — verify: read, AI

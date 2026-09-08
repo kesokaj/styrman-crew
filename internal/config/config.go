@@ -122,6 +122,13 @@ type Config struct {
 	// on the shared bridge from reaching :8080 and spoofing X-Caddy-Email.
 	// Empty = disabled (current behavior) — enable with the ingress.
 	IngressToken string
+
+	// IngressNetwork is the Docker network the ingress and the server share.
+	// Only used to CROSS-CHECK the root firewall's INGRESS_BRIDGE (ADR-066):
+	// root excludes that bridge from the published-port allowlist but cannot
+	// ask the daemon whether it named the right one, so the server — which
+	// can — compares and surfaces a mismatch.
+	IngressNetwork string
 	// FirewallRunDir: the root-owned run dir of the host firewall script
 	// (ADR-065) — its spool/ (server-writable, root-consumed trigger files)
 	// and status (root-written, server-read). STYRMAN_FIREWALL_DIR, default
@@ -171,6 +178,7 @@ func Load() (*Config, error) {
 		SelfContainer:  os.Getenv("STYRMAN_SELF_CONTAINER"),
 		IngressToken:   os.Getenv("STYRMAN_INGRESS_TOKEN"),
 		FirewallRunDir: envOr("STYRMAN_FIREWALL_DIR", "/run/styrman-firewall"),
+		IngressNetwork: envOr("STYRMAN_INGRESS_NETWORK", "styrman-ingress"),
 	}
 	for _, e := range strings.Split(os.Getenv("STYRMAN_ALLOWED_EMAILS"), ",") {
 		if e = strings.TrimSpace(e); e != "" {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatClock, lanChip, lanLine } from "./lan";
+import { formatClock, lanChip, lanLine, preferOverride } from "./lan";
 
 describe("lanChip", () => {
   it("renders nothing while off or unavailable", () => {
@@ -58,5 +58,43 @@ describe("formatClock", () => {
   });
   it("formats a real stamp as a time", () => {
     expect(formatClock("2026-09-08T10:00:00Z")).toMatch(/\d/);
+  });
+});
+
+describe("preferOverride", () => {
+  const at = (s: string) => ({ lanChangedAt: s });
+
+  it("shows the reply until the poll catches up", () => {
+    const o = at("2026-09-08T10:00:00Z");
+    const stalePoll = at("2026-09-08T09:59:00Z");
+    expect(preferOverride(o, stalePoll)).toBe(o);
+  });
+
+  it("hands over once the poll reports the same change", () => {
+    const o = at("2026-09-08T10:00:00Z");
+    const same = at("2026-09-08T10:00:00Z");
+    expect(preferOverride(o, same)).toBe(same);
+  });
+
+  // The bug: an out-of-band change moves the poll PAST the override, and an
+  // equality test pinned the component to the stale reply forever.
+  it("hands over when the record changed out of band", () => {
+    const o = at("2026-09-08T10:00:00Z");
+    const newer = at("2026-09-08T10:05:00Z");
+    expect(preferOverride(o, newer)).toBe(newer);
+  });
+
+  it("falls back to equality when a timestamp is unusable", () => {
+    const o = { lanChangedAt: undefined };
+    const d = { lanChangedAt: undefined };
+    expect(preferOverride(o, d)).toBe(d);
+    const junk = { lanChangedAt: "not a date" };
+    expect(preferOverride(junk, at("2026-09-08T10:00:00Z"))).toBe(junk);
+  });
+
+  it("copes with either side missing", () => {
+    const d = at("2026-09-08T10:00:00Z");
+    expect(preferOverride(undefined, d)).toBe(d);
+    expect(preferOverride(d, undefined)).toBe(d);
   });
 });

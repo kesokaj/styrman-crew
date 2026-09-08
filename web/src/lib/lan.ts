@@ -69,3 +69,33 @@ export function formatClock(iso: string): string {
   if (Number.isNaN(t)) return iso;
   return new Date(t).toLocaleTimeString();
 }
+
+/**
+ * Which of the PUT's reply and the 5 s poll to render (ADR-065's "the server
+ * is authoritative" rule, ADR-066 fix).
+ *
+ * The reply is shown until the poll CATCHES UP with it, so a flip does not
+ * flash the pre-change state for up to five seconds. "Caught up" has to mean
+ * "the server's change is no older than ours" — the original test was
+ * equality, which pinned the component to a stale reply forever as soon as
+ * anything changed the record out of band (another tab, another admin, the
+ * API): the poll's timestamp then moved PAST the override's and never came
+ * back to it. Caught by the ADR-066 e2e, which disabled through the API and
+ * watched the UI keep claiming the project was still on.
+ */
+export function preferOverride<T extends { lanChangedAt?: string }>(
+  override: T | undefined,
+  data: T | undefined,
+): T | undefined {
+  if (!override) return data;
+  if (!data) return override;
+  const o = Date.parse(override.lanChangedAt ?? "");
+  const d = Date.parse(data.lanChangedAt ?? "");
+  // Unparseable on either side (never changed, or a malformed clock): fall
+  // back to the original equality test rather than guessing an order.
+  const caughtUp =
+    Number.isNaN(o) || Number.isNaN(d)
+      ? data.lanChangedAt === override.lanChangedAt
+      : d >= o;
+  return caughtUp ? data : override;
+}

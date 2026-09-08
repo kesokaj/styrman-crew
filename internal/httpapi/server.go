@@ -109,7 +109,12 @@ type Server struct {
 	// setProjectNetwork's store-write + marker + kick against other PUTs (the
 	// periodic Sync is covered by the marker dir's own lock).
 	netpol *netpolicy.Dir
-	netMu  sync.Mutex
+	// ingressBr caches the bridge name of cfg.IngressNetwork for the ADR-066
+	// cross-check; a NetworkInspect per project per listing would be absurd.
+	ingressBrMu sync.Mutex
+	ingressBr   string
+	ingressBrAt time.Time
+	netMu       sync.Mutex
 
 	// creds is the credential broker's store (ADR-030); nil disables the
 	// onboarding endpoints. Set by main after construction.
