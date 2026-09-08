@@ -12,29 +12,26 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**Unreleased security fixes are sitting on `main`.** Production runs v1.24.0
-(`7cbced7`); eight commits since then include the whole-project audit and its
-fixes. The one that matters: a **cross-tenant DoS** — six opens on
-guest-writable trees lacked the `O_NONBLOCK` that `internal/files` sets
-elsewhere for exactly this reason, so any project owner could plant a FIFO in
-their own home and pin a goroutine *and* an OS thread per request, walking the
-runtime into its 10k-thread limit and taking every tenant down with the
-process. Fixed in `271a7e8`, **not deployed**. Also unreleased: the ingress
-Caddyfile email injection, the updater's unasserted worktree root, the
-`docker/docker` convergence, and a path traversal.
+**v1.24.1 released** — the whole-project audit's fixes reach production. A
+patch: everything in it fixes released behaviour and nothing adds a
+capability. The release exists for one finding in particular, a cross-tenant
+DoS — six opens on guest-writable trees lacked the `O_NONBLOCK` that
+`internal/files` sets elsewhere for exactly that reason, so any project owner
+could pin a goroutine and an OS thread per request. Also: the ingress
+Caddyfile email injection, the updater's unasserted worktree root, a path
+traversal, the firewall prefilter trap, an installer that failed after
+succeeding, and the `docker/docker` convergence. Records:
+`changes/2026-09-08-v1.24.1-release.md`, audit at
+`reviews/2026-09-08-audit-project.md` (no high findings; 10 fixed, 1 false
+finding, 9 recorded as not-now with reasons).
 
-None is remotely exploitable — all need an authenticated project owner — but
-they are fixes to live isolation code that production does not have. Cutting
-v1.25.0 is a short job: the tree is clean, `verify-commit.sh` is green on
-`80765ca`, and the release path is the documented one.
-
-**Whole-project audit, 2026-09-08** — `reviews/2026-09-08-audit-project.md`.
-No high findings; no path found that escapes a project to another tenant or
-the host. 11 medium, 11 low. Ten fixed with mutation-checked tests, one
-identified as a false finding, nine recorded as not-now with reasons
-(refactors and design decisions, not fixes). The recurring shape: a guard
-correct where it was written and absent where it was not — the same pattern
-the ADR-066 gate hit sixteen times, found in code that predates it.
+**The one thing still not done, and it is the point of the whole day's
+work:** no LAN allowance has ever been applied by the v4 script on real
+hardware. ADR-066's feature has never been used. It is blocked behind
+`install.sh --lan-allow-host 1`, which correctly refuses while this host
+accepts sshd password authentication (R12). Hardening sshd needs the
+operator's OWN client public key — the key on this host is the host's, and
+hardening without theirs locks them out. That fact is the only blocker.
 
 **v1.24.0 shipped and is live** — tag on `7cbced7`, SSH-signed, verified
 against the host's allowed-signers file before pushing, and deployed
