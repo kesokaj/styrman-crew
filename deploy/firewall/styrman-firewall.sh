@@ -196,15 +196,38 @@ CIDR_RE='^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$'
 # Anything carrying our tag that does not match is not ours and is removed by
 # number, after re-reading the chain and confirming the exact line is still
 # at that number.
-RULE_RE='^-A STYRMAN-FWD -s ([0-9./]+) -d ([0-9./]+) -i (sdb-[0-9a-f]{11}) -o ([A-Za-z0-9_.-]{1,15}) -m comment --comment "styrman-lan:([0-9a-f-]{36})" -j RETURN$'
+# A rule FAMILY is (tag, chain, regex, key-builder, args-builder). Everything
+# below — collect, scan, reconcile, count — is generic over this table, so a
+# new family is a row plus two small functions and never a copy of the
+# machinery: a delete-by-spec or ordering fix has exactly one place to land
+# (BUG-013 was a near miss of that kind). Capture order is the order
+# `iptables -S` RENDERS a rule, which is NOT the order the arguments are
+# written in: -s, -d, -i, -o, then the matches.
+FAMILY_TAGS=(lan)
+declare -A FAM_CHAIN=( [lan]=STYRMAN-FWD )
+declare -A FAM_RE=(
+    [lan]='^-A STYRMAN-FWD -s ([0-9./]+) -d ([0-9./]+) -i (sdb-[0-9a-f]{11}) -o ([A-Za-z0-9_.-]{1,15}) -m comment --comment "styrman-lan:([0-9a-f-]{36})" -j RETURN$'
+)
+# fam_key_<tag>: called with BASH_REMATCH still set from the family's regex;
+# sets KEY. The key's FIRST field is always the tag and its LAST is always the
+# uuid — the generic code relies on exactly those two positions and on nothing
+# else, so families may differ in arity.
+fam_key_lan() { KEY="lan ${BASH_REMATCH[3]} ${BASH_REMATCH[4]} ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[5]}"; }
+KEY=""
+CHAINS_CACHE=""
+# The distinct chains the table touches, deduplicated and stable-ordered.
+chains() {
+    [ -n "${CHAINS_CACHE}" ] || CHAINS_CACHE="$(printf '%s\n' "${FAM_CHAIN[@]}" | sort -u)"
+    printf '%s\n' "${CHAINS_CACHE}"
+}
 
 LAN_DEV=""
 LAN_CIDRS=()
 CONF_ERROR=""
 PENDING=()
 ERRORS=()
-declare -A DESIRED=()      # "iface dev src dst uuid" → 1
-declare -A WANT_COUNT=()   # uuid → number of (uuid, cidr) rules wanted
+declare -A DESIRED=()      # "<tag> <family fields…> <uuid>" → 1
+declare -A WANT_COUNT=()   # uuid → rules wanted for it across ALL families
 declare -A SEEN=()         # key → occurrences in the chain
 declare -A PURGE=()        # key → 1: delete every instance by spec
 declare -A APPLIED_COUNT=()
@@ -296,8 +319,20 @@ read_conf() {
 # Residual: between these checks and the glob the owning uid could still
 # swap the directory, but root reads only NAMES here and that uid can create
 # any name directly, so nothing is gained by the swap.
+# desire_<tag> <iface> <bridge subnet> <uuid> — add this family's wanted rules
+# for one project and bump its want-count. WANT_COUNT is the total across
+# families, so `lan=` keeps its all-or-nothing meaning: a project is reported
+# ON only when every rule it wants, in every family, is present.
+desire_lan() {
+    local iface="$1" subnet="$2" uuid="$3" c
+    for c in "${LAN_CIDRS[@]}"; do
+        DESIRED["lan ${iface} ${LAN_DEV} ${subnet} ${c} ${uuid}"]=1
+        WANT_COUNT["${uuid}"]=$(( ${WANT_COUNT[${uuid}]:-0} + 1 ))
+    done
+}
+
 collect_desired() {
-    local parent="${STATE}/netpolicy" markers="${STATE}/netpolicy/lan" f name iface subnet c owner d
+    local parent="${STATE}/netpolicy" markers="${STATE}/netpolicy/lan" f name iface subnet tag owner d
     owner="$(stat -c %u "${STATE}")"
     for d in "${parent}" "${markers}"; do
         if [ ! -e "${d}" ]; then note "marker dir ${markers} missing (the server creates it) - no allowances"; return 0; fi
@@ -312,62 +347,84 @@ collect_desired() {
         if [ ! -e "/sys/class/net/${iface}" ]; then PENDING+=("${name}:no-bridge"); continue; fi
         subnet="$(ip -o -4 route show dev "${iface}" scope link 2>/dev/null | awk '{print $1; exit}')"
         if ! [[ "${subnet}" =~ ${CIDR_RE} ]]; then PENDING+=("${name}:no-subnet"); continue; fi
-        for c in "${LAN_CIDRS[@]}"; do DESIRED["${iface} ${LAN_DEV} ${subnet} ${c} ${name}"]=1; done
-        WANT_COUNT["${name}"]=${#LAN_CIDRS[@]}
+        for tag in "${FAMILY_TAGS[@]}"; do "desire_${tag}" "${iface}" "${subnet}" "${name}"; done
     done
     shopt -u nullglob
     if [ "${ignored}" -gt 0 ]; then note "${ignored} marker entries ignored (not a plain file named by a uuid)"; fi
 }
 
-# rule_args <key> — the argv of a well-formed rule, rebuilt from its captures
-# (all regex-validated: iface, device, two CIDRs, uuid).
+# rule_args <key> — sets ARGS (the argv of a well-formed rule, rebuilt from
+# its regex-validated captures) and CHAIN (the chain it belongs in),
+# dispatching on the key's leading tag. Every caller uses CHAIN rather than a
+# literal, which is what lets one reconcile serve every family.
 rule_args() {
+    local tag="${1%% *}" rest="${1#* }"
+    CHAIN="${FAM_CHAIN[${tag}]}"
+    "rule_args_${tag}" "${rest}"
+}
+rule_args_lan() {
     local iface dev src dst uuid
     read -r iface dev src dst uuid <<<"$1"
     ARGS=(-i "${iface}" -o "${dev}" -s "${src}" -d "${dst}" -m comment --comment "styrman-lan:${uuid}" -j RETURN)
 }
+CHAIN=""
 
 # CURRENT: walk `-S` once. A well-formed key is kept only when it occurs
 # exactly once, before the first DROP, and is desired; otherwise every
 # instance is purged by spec and, if desired, re-inserted at the head.
+# Walked ONCE PER DISTINCT CHAIN, not once per family: two families sharing a
+# chain (lan and lanpub both live in STYRMAN-FWD) must see the same single
+# read, or their first-DROP positions would disagree. Within a line, the
+# families bound to that chain are tried in FAMILY_TAGS order and the first
+# match wins; a line carrying our comment prefix that matches NO family regex
+# is malformed and is removed by number, carrying its chain so the re-read
+# confirms the right list.
 scan_current() {
-    local n=0 first_drop=0 line key
-    while IFS= read -r line; do
-        case "${line}" in "-A STYRMAN-FWD "*) ;; *) continue ;; esac
-        n=$((n + 1))
-        if [ "${first_drop}" -eq 0 ] && [[ "${line}" == *" -j DROP" ]]; then first_drop=${n}; fi
-        case "${line}" in *styrman-lan:*) ;; *) continue ;; esac
-        if [[ "${line}" =~ ${RULE_RE} ]]; then
-            key="${BASH_REMATCH[3]} ${BASH_REMATCH[4]} ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[5]}"
+    local chain n first_drop line tag key uuid
+    for chain in $(chains); do
+        n=0; first_drop=0
+        while IFS= read -r line; do
+            case "${line}" in "-A ${chain} "*) ;; *) continue ;; esac
+            n=$((n + 1))
+            if [ "${first_drop}" -eq 0 ] && [[ "${line}" == *" -j DROP" ]]; then first_drop=${n}; fi
+            case "${line}" in *'--comment "styrman-lan'*) ;; *) continue ;; esac
+            key=""
+            for tag in "${FAMILY_TAGS[@]}"; do
+                [ "${FAM_CHAIN[${tag}]}" = "${chain}" ] || continue
+                if [[ "${line}" =~ ${FAM_RE[${tag}]} ]]; then "fam_key_${tag}"; key="${KEY}"; break; fi
+            done
+            if [ -z "${key}" ]; then
+                MALFORMED+=("${chain} ${line}"); warn "malformed styrman-lan rule removed"; continue
+            fi
+            uuid="${key##* }"
             SEEN["${key}"]=$(( ${SEEN[${key}]:-0} + 1 ))
             if [ "${SEEN[${key}]}" -gt 1 ]; then
-                PURGE["${key}"]=1; warn "duplicate allow rule for project ${BASH_REMATCH[5]} - purged and re-inserted"
+                PURGE["${key}"]=1; warn "duplicate allow rule for project ${uuid} - purged and re-inserted"
             elif [ "${first_drop}" -ne 0 ] && [ "${n}" -gt "${first_drop}" ]; then
-                PURGE["${key}"]=1; warn "allow rule for project ${BASH_REMATCH[5]} found after a DROP - re-inserted at the head"
+                PURGE["${key}"]=1; warn "allow rule for project ${uuid} found after a DROP - re-inserted at the head"
             elif [ -z "${DESIRED[${key}]:-}" ]; then
-                PURGE["${key}"]=1; log "lan OFF project=${BASH_REMATCH[5]} iface=${BASH_REMATCH[3]} dst=${BASH_REMATCH[2]}"
+                PURGE["${key}"]=1; log "lan OFF project=${uuid} rule=${key}"
             fi
-        else
-            MALFORMED+=("${line}"); warn "malformed styrman-lan rule removed"
-        fi
-    done < <(ipt -S STYRMAN-FWD 2>/dev/null || true)
+        done < <(ipt -S "${chain}" 2>/dev/null || true)
+    done
 }
 
 # delete_malformed: by number, but only after re-reading the chain and
 # confirming the exact line is still at that number — the only way to name a
 # rule whose text we do not trust enough to replay.
 delete_malformed() {
-    local target line n
-    for target in "${MALFORMED[@]}"; do
+    local entry chain target line n
+    for entry in "${MALFORMED[@]}"; do
+        chain="${entry%% *}"; target="${entry#* }"
         n=0
         while IFS= read -r line; do
-            case "${line}" in "-A STYRMAN-FWD "*) ;; *) continue ;; esac
+            case "${line}" in "-A ${chain} "*) ;; *) continue ;; esac
             n=$((n + 1))
             if [ "${line}" = "${target}" ]; then
-                if ipt -D STYRMAN-FWD "${n}"; then removed=$((removed + 1)); else ERRORS+=("rule ${n}:delete failed"); fi
+                if ipt -D "${chain}" "${n}"; then removed=$((removed + 1)); else ERRORS+=("rule ${n}:delete failed"); fi
                 break
             fi
-        done < <(ipt -S STYRMAN-FWD 2>/dev/null || true)
+        done < <(ipt -S "${chain}" 2>/dev/null || true)
     done
 }
 
@@ -377,8 +434,8 @@ reconcile() {
     # by spec — a spec delete can only ever remove a rule that IS the rule.
     for key in "${!PURGE[@]}"; do
         rule_args "${key}"
-        while ipt -C STYRMAN-FWD "${ARGS[@]}" 2>/dev/null; do
-            if ipt -D STYRMAN-FWD "${ARGS[@]}"; then removed=$((removed + 1)); else ERRORS+=("${key##* }:delete failed"); break; fi
+        while ipt -C "${CHAIN}" "${ARGS[@]}" 2>/dev/null; do
+            if ipt -D "${CHAIN}" "${ARGS[@]}"; then removed=$((removed + 1)); else ERRORS+=("${key##* }:delete failed"); break; fi
         done
     done
     delete_malformed
@@ -387,11 +444,11 @@ reconcile() {
     for key in "${!DESIRED[@]}"; do
         if [ -n "${SEEN[${key}]:-}" ] && [ -z "${PURGE[${key}]:-}" ]; then continue; fi
         rule_args "${key}"
-        if ipt -C STYRMAN-FWD "${ARGS[@]}" 2>/dev/null; then continue; fi
-        if ipt -I STYRMAN-FWD 1 "${ARGS[@]}"; then
+        if ipt -C "${CHAIN}" "${ARGS[@]}" 2>/dev/null; then continue; fi
+        if ipt -I "${CHAIN}" 1 "${ARGS[@]}"; then
             added=$((added + 1)); log "lan ON project=${key##* } rule=${key% *}"
         else
-            ERRORS+=("${key##* }:${key#* * * }:insert failed")
+            ERRORS+=("${key##* }:${key%% *} insert failed")
         fi
     done
 }
@@ -399,14 +456,21 @@ reconcile() {
 # APPLIED: what the kernel holds after the reconcile — one read; a uuid is
 # reported only when EVERY one of its (uuid, cidr) rules is present.
 count_applied() {
-    local line key uuid
-    while IFS= read -r line; do
-        [[ "${line}" =~ ${RULE_RE} ]] || continue
-        key="${BASH_REMATCH[3]} ${BASH_REMATCH[4]} ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[5]}"
-        [ -n "${DESIRED[${key}]:-}" ] || continue
-        uuid="${BASH_REMATCH[5]}"
-        APPLIED_COUNT["${uuid}"]=$(( ${APPLIED_COUNT[${uuid}]:-0} + 1 ))
-    done < <(ipt -S STYRMAN-FWD 2>/dev/null || true)
+    local chain line tag uuid
+    for chain in $(chains); do
+        while IFS= read -r line; do
+            for tag in "${FAMILY_TAGS[@]}"; do
+                [ "${FAM_CHAIN[${tag}]}" = "${chain}" ] || continue
+                [[ "${line}" =~ ${FAM_RE[${tag}]} ]] || continue
+                "fam_key_${tag}"
+                if [ -n "${DESIRED[${KEY}]:-}" ]; then
+                    uuid="${KEY##* }"
+                    APPLIED_COUNT["${uuid}"]=$(( ${APPLIED_COUNT[${uuid}]:-0} + 1 ))
+                fi
+                break
+            done
+        done < <(ipt -S "${chain}" 2>/dev/null || true)
+    done
     for uuid in "${!WANT_COUNT[@]}"; do
         if [ "${WANT_COUNT[${uuid}]}" -gt 0 ] && [ "${APPLIED_COUNT[${uuid}]:-0}" -eq "${WANT_COUNT[${uuid}]}" ]; then
             lan_list+="${uuid} "

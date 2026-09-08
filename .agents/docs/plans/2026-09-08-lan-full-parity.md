@@ -147,14 +147,30 @@ fixed in one copy and missed in the others is precisely BUG-013 again.
 | `lanhost` | `STYRMAN-IN` | iface, bridge subnet, host addr | one per host address on `LAN_DEV` |
 | `lanpub` | `STYRMAN-FWD` | iface, bridge subnet, allowed bridge subnet | one per allowed bridge subnet |
 
-- Keys carry the tag as their first field: `"<tag> <iface> <f1> <f2> <uuid>"`.
-  `DESIRED`, `SEEN`, `PURGE`, `MALFORMED` stay single associative arrays.
+- Keys carry the tag as their **first** field and the uuid as their **last**;
+  the fields between are the family's own and their COUNT VARIES BY FAMILY
+  (`lan` needs three — uplink dev, bridge subnet, lan cidr — where `lanhost`
+  and `lanpub` need two). The generic code addresses only those two fixed
+  positions, via `${key%% *}` and `${key##* }`, and never parses the middle;
+  only `rule_args_<tag>` and `fam_key_<tag>` know a family's arity. So the
+  `lan` key is `lan <iface> <dev> <src> <dst> <uuid>` (six fields) while
+  `lanhost` is `lanhost <iface> <src> <dst> <uuid>` (five). `DESIRED`, `SEEN`,
+  `PURGE`, `MALFORMED` stay single associative arrays.
 - `rule_args` dispatches on the key's tag to `rule_args_<tag>`, which builds
   `ARGS` and also yields the family's chain — so `reconcile` needs no chain
   argument, it reads one off the key.
 - `scan_current` runs **once per distinct chain** (two: `STYRMAN-FWD`,
-  `STYRMAN-IN`), matching each line against every family regex bound to that
-  chain. The first-DROP position test stays per-chain.
+  `STYRMAN-IN`), not once per family — `lan` and `lanpub` share
+  `STYRMAN-FWD`, and two reads would give them disagreeing first-DROP
+  positions. Within one line: skip unless it is `-A <chain> `; count it;
+  record the first `-j DROP` position; skip unless it carries the
+  `--comment "styrman-lan` prefix; then try each family bound to THIS chain
+  in `FAMILY_TAGS` order and take the first regex that matches, which yields
+  the key via `fam_key_<tag>`. The families' regexes are disjoint by
+  construction — each pins its own literal tag inside the comment — so
+  "first match wins" is not an ordering dependency, and a tagged line matching
+  none of them is malformed. The first-DROP test then applies to the key
+  regardless of which family produced it.
 - `delete_malformed` takes the chain as a parameter; `MALFORMED` entries
   carry `(chain, line)` so the re-read-and-confirm-by-number step targets the
   right chain. This answers the reviewer's question 2: one function, a
@@ -187,12 +203,40 @@ discarded), values `0`/`1` only, anything else is a `conf_error` that closes
 every allowance. `INGRESS_BRIDGE` validated as `br-[0-9a-f]{12}`, must exist,
 must not be `sdb-*`.
 
+**Why a wrong value here is dangerous, and what makes it detectable.** This
+key is a safety EXCLUSION: if it names the wrong bridge, the real ingress
+bridge stays inside the allowed set and a LAN-enabled project can reach the
+ingress through a published-port DNAT — the opposite of the key's purpose.
+Three things close that, and none of them is "trust the operator":
+
+1. **Derivation, not typing.** Docker names a bridge `br-` + the first 12 hex
+   of its network id, so the value is deterministic:
+   `br-$(docker network inspect styrman-ingress --format '{{.Id}}' | cut -c1-12)`
+   — verified live 2026-09-08 (`styrman-ingress` → `02a045873a1d` →
+   `br-02a045873a1d`, matching the host's actual interface).
+   `install.sh` derives it that way and **`die`s if it cannot**, exactly as it
+   already does for `LAN_DEV` (`install.sh:130-141`); it is never defaulted
+   and never guessed. A `--ingress-bridge` flag overrides for a host whose
+   docker CLI is unavailable.
+2. **A stale value fails closed by itself.** Because the name is derived from
+   the network id, recreating `styrman-ingress` changes the bridge name — so
+   a conf left behind by a recreate names an interface that no longer exists,
+   the existence check fails, and the published-port family is skipped
+   entirely with a `conf_error`. Stale is loud, not silent.
+3. **Wrong-but-valid is caught by the server, not root.** Root cannot tell
+   which docker bridge is the ingress without the docker daemon, which a root
+   firewall script must not depend on. So the script REPORTS what it used —
+   `ingress_bridge=` in the status file — and the server, which does know its
+   own ingress network, compares and surfaces a mismatch in the host-firewall
+   view. Root fails closed on absence; the server flags divergence.
+
 ### Status file additions
 
 ```
 lan_allow_host=1
 lan_allow_published_ports=1
 lan_host_addrs=192.168.86.58
+ingress_bridge=br-02a045873a1d
 ```
 
 Additive; `schema` stays 1. **Confirmed 2026-09-08**, so this is settled and
@@ -290,10 +334,25 @@ opted in".
 The safety property of this phase is that it changes nothing observable:
 `deploy/firewall/test.sh` must pass **unmodified** at the end of it, and a
 run against the live chains must produce a byte-identical status file.
-- [ ] Introduce the family table and tag-prefixed keys; port the existing `lan` family onto it as the only family — verify: `test.sh` unmodified, AI
-- [ ] `rule_args` dispatches on tag and yields the chain; `scan_current` loops over distinct chains; `delete_malformed` takes a chain parameter — verify: `test.sh` unmodified, AI
-- [ ] `WANT_COUNT`/`APPLIED_COUNT` summed across families (one family today, so identical results) — verify: `test.sh` unmodified, AI
-- [ ] Diff read end to end for delete-by-spec (BUG-013) and `inherit_errexit` (BUG-010) survival — verify: read + `security` agent, AI
+- [x] Introduce the family table and tag-prefixed keys; port the existing `lan` family onto it as the only family — verify: `test.sh` unmodified, AI
+- [x] `rule_args` dispatches on tag and yields the chain; `scan_current` loops over distinct chains; `delete_malformed` takes a chain parameter — verify: `test.sh` unmodified, AI
+- [x] `WANT_COUNT`/`APPLIED_COUNT` summed across families (one family today, so identical results) — verify: `test.sh` unmodified, AI
+- [x] Diff read end to end for delete-by-spec (BUG-013) and `inherit_errexit` (BUG-010) survival — verify: read + `security` agent, AI
+
+**Phase 1 result (2026-09-08):** 105 insertions, 41 deletions in
+`styrman-firewall.sh`; `test.sh` untouched and passing **83/0, identical to
+the pre-change baseline**. `bash -n` and `shellcheck -S warning` clean,
+`go vet ./...` clean, `go test ./...` green including
+`TestFirewallScriptInNetns` and `TestMinScriptVersionMatchesScript`. Also
+exercised against the LIVE host chains with a scratch state dir: conf parsed,
+`lan_dev`/`lan_cidrs` populated, empty marker dir yielding no allowances, and
+`STYRMAN-FWD`/`STYRMAN-IN` byte-identical before and after. Version stays 3 —
+the bump belongs to Phase 2, which is why `test.sh`'s `version=3` assertion
+still holds unmodified. One deliberate text change: the insert-failure
+`ERRORS` entry is now `<uuid>:<tag> insert failed` (was `<uuid>:<dst uuid>:
+insert failed`, whose field-stripping assumed the old fixed arity); it is an
+error path no test asserts, and the tag is more useful now there are three
+families.
 
 ### Phase 2 — Root: host reachability
 - [ ] Parse `LAN_ALLOW_HOST`; discover host addresses on `LAN_DEV`; validate each is inside `LAN_CIDRS` — verify: `test.sh`, AI
@@ -303,7 +362,9 @@ run against the live chains must produce a byte-identical status file.
 - [ ] `install.sh` writes the new keys; `--lan-allow-host` flag — verify: `test.sh` + dry run, AI
 
 ### Phase 3 — Root: published ports
-- [ ] `INGRESS_BRIDGE` conf key, validation, fail-closed skip when unset — verify: `test.sh`, AI
+- [ ] `INGRESS_BRIDGE` conf key, validation, fail-closed skip when unset OR when the named interface does not exist — verify: `test.sh`, AI
+- [ ] `install.sh` DERIVES it from `docker network inspect styrman-ingress` and `die`s on failure, as it already does for `LAN_DEV`; `--ingress-bridge` override — verify: `test.sh` + dry run, AI
+- [ ] Report `ingress_bridge=` in the status file — verify: unit, AI
 - [ ] Allowed-bridge-subnet derivation excluding `sdb-*` and the ingress bridge — verify: `test.sh`, AI
 - [ ] `lanpub` family with `-m conntrack --ctstate DNAT` — verify: `test.sh`, AI
 - [ ] Live proof with a real published container (`docker run -p`) — closes the "reasoned, not observed" gap from the v1.23.0 handoff — verify: `integration.sh`, both
@@ -316,6 +377,7 @@ run against the live chains must produce a byte-identical status file.
 
 ### Phase 5 — API + UI
 - [ ] `lanView` capability + impact fields — verify: `go test ./internal/httpapi/`, AI
+- [ ] Server compares root's `ingress_bridge=` against its OWN ingress network's bridge and surfaces a mismatch — root cannot know which bridge is the ingress without the docker daemon, so this is the half that catches a wrong-but-valid conf value — verify: `go test ./internal/httpapi/`, AI
 - [ ] `LocalNetwork.tsx` confirmation naming both consequences; conf-not-opted-in note — verify: `npm run check && npm test`, AI
 - [ ] Browser walk of the golden path and the edge case — verify: e2e, both
 
