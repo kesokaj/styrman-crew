@@ -132,7 +132,9 @@ export function LocalNetwork({ project }: { project: string }) {
               <p>
                 Everything this project runs — the agent, its shells, its Docker
                 containers — will be able to open connections to devices on{" "}
-                <span className="text-text">{where}</span> by IP address.
+                <span className="text-text">{where}</span> by IP address, and
+                those connections arrive as this server's own address — so any
+                device that trusts this host by IP trusts this project too.
               </p>
               <p className="mt-2">
                 This project holds your git, SSH and cloud credentials through the

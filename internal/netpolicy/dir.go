@@ -77,9 +77,6 @@ func New(cfg *config.Config, logger *slog.Logger) *Dir {
 // Enabled reports whether a firewall run dir is configured at all.
 func (d *Dir) Enabled() bool { return d.statusPath != "" }
 
-// MarkerDir is the directory the markers live in (created by main at boot).
-func (d *Dir) MarkerDir() string { return d.markers }
-
 // checkMarkersDir creates the marker dir if absent and refuses to use one
 // that is not a real directory — the server's own uid is the only writer
 // there, but a symlink would send markers somewhere root does not read.

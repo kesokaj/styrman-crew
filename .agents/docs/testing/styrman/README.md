@@ -237,7 +237,7 @@ go test ./... && bash .agents/docs/testing/styrman/integration.sh
 Image changes: rebuild the image first; the integration script always creates
 fresh containers so it picks the new image up automatically.
 
-## Tier 4 — Browser e2e (Playwright, 86 checks + a final client-error gate; firewall-hardened hosts run 84 + 2 auto-SKIP. ADR-065 added three: the Ports tab's "Local network" block reports the host half as unavailable with the switch disabled and reading off, an enable is refused with 503 and nothing persists, and Settings shows the host firewall as not installed — the harness points `STYRMAN_FIREWALL_DIR` at a scratch dir, so the applied-state UI (pending → on, the chip, the danger dialog) is verified by hand on the converged production host and logged in `testing/`. v1.22.0 added six appearance checks, two path-navigation checks, three recents-strip checks, three git-diff/fast-commit checks and six git-verb checks (branch create, branch SWITCH — a different argv shape that runs `checkout --end-of-options`, invalid-name rejection, fetch/pull controls reachable, commit history into the pane, stash push -u / pop). The client-error gate now records the failing URL alongside the browser's message, which otherwise names neither endpoint nor caller; re-measure after any further check additions before citing a pass count as current)
+## Tier 4 — Browser e2e (Playwright, 85 checks + a final client-error gate; firewall-hardened hosts run 83 + 2 auto-SKIP, so a green run there prints `passed=84` — the 83 checks plus the gate. ADR-065 added three: the Ports tab's "Local network" block reports the host half as unavailable with the switch disabled and reading off, an enable is refused with 503 and nothing persists, and Settings shows the host firewall as not installed — the harness points `STYRMAN_FIREWALL_DIR` at a scratch dir, so the applied-state UI (pending → on, the chip, the danger dialog) is verified by hand on the converged production host and logged in `testing/`. v1.22.0 added six appearance checks, two path-navigation checks, three recents-strip checks, three git-diff/fast-commit checks and six git-verb checks (branch create, branch SWITCH — a different argv shape that runs `checkout --end-of-options`, invalid-name rejection, fetch/pull controls reachable, commit history into the pane, stash push -u / pop). The client-error gate now records the failing URL alongside the browser's message, which otherwise names neither endpoint nor caller; re-measure after any further check additions before citing a pass count as current)
 
 `bash web/e2e/run.sh [image-tag]` — self-hosts: builds the web SPA
 (`cd web && npm run build`) FIRST, then the server, then starts its own
@@ -325,7 +325,7 @@ attach-before-provisioning ORDERING** — see `provision.go`'s doc comment and
 `guide.md`'s "Project creation is async" bullet for the credential-delivery
 path itself, which only Tier 3 (real Kata, real broker) or manual testing
 against a containerized server can exercise — and full
-cleanup — 82 checks + the client-error gate (80 pass on firewall-hardened
+cleanup — 85 checks + the client-error gate (83 pass on firewall-hardened
 hosts, plus 2 auto-SKIP) plus a final no-client-errors gate + screenshots.
 Prereq: `cd web && npm i && npx playwright install chromium` (once).
 Self-cleaning: deletes any leftover `e2e-ui` project at start.

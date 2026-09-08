@@ -129,6 +129,19 @@ type Config struct {
 	// compose. Empty disables the per-project LAN feature: every marker is
 	// removed at boot (root then closes every allowance), enables answer 503,
 	// and a record still on reports "cannot confirm".
+	//
+	// The production path IS the default here, deliberately — unlike the
+	// root-run script and the updater, which take every path from their unit
+	// with no in-code default (ADR-052). The asymmetry is the point: those
+	// are root, and a bare invocation of them must never alias production,
+	// whereas for THIS field an operator whose compose env lost the key would
+	// otherwise tear down every live allowance at the next boot. That is a
+	// silent availability loss for a feature meant to be off by default, not
+	// off by accident. The cost is that a host-process dev run on the
+	// production machine reads root's status file and can drop a trigger in
+	// its spool (an idempotent reconcile, nothing more);
+	// .agents/docs/deploy/local.md tells a developer to point this at a
+	// scratch dir. Weighed at the v1.23.0 release review, 2026-09-08.
 	FirewallRunDir string
 }
 

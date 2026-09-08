@@ -70,12 +70,6 @@ ensure_jump()  { # parent iface target — textual presence test is wildcard-saf
     ipt -S "$1" 2>/dev/null | grep -qF -- "-i $2 -j $3" || ipt -I "$1" -i "$2" -j "$3"
 }
 
-# One-time migration off the pre-chain direct rules from earlier versions.
-ipt -D INPUT -i sdb-+ -j DROP 2>/dev/null || true
-for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
-    ipt -D DOCKER-USER -i sdb-+ -d "$net" -j DROP 2>/dev/null || true
-done
-
 # Host itself: a project bridge may send it nothing.
 ensure_chain STYRMAN-IN
 ensure_rule  STYRMAN-IN -j DROP
@@ -97,6 +91,17 @@ for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 \
     ensure_rule STYRMAN-FWD -d "$net" -j DROP
 done
 ensure_jump  DOCKER-USER sdb-+ STYRMAN-FWD
+
+# One-time migration off the pre-chain direct rules from earlier versions,
+# LAST: the replacement chains and jumps above are already in place, so a
+# first run on a pre-chain host never has a window with the old rules gone
+# and the new ones not yet inserted. (They ran first until the 2026-09-08
+# release review pointed out that this file's own never-delete-then-insert
+# promise did not hold for its one deleting step.)
+ipt -D INPUT -i sdb-+ -j DROP 2>/dev/null || true
+for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16; do
+    ipt -D DOCKER-USER -i sdb-+ -d "$net" -j DROP 2>/dev/null || true
+done
 
 # IPv6: this isolation is IPv4. Don't silently rely on the host's ipv6.disable
 # boot flag — turn IPv6 off on each project bridge, and best-effort mirror the

@@ -10,6 +10,9 @@ Add new items below as they arise.
 
 ## Inbox
 
+- [ ] Bump `STYRMAN_FW_VERSION` in `deploy/firewall/styrman-firewall.sh` whenever the script changes materially: the version handshake is what turns a silently skipped `host_converge` into a visible "outdated" row in Settings and a 503 on enable, and `TestMinScriptVersionMatchesScript` only pins Go and shell to each other, not that a change bumped them. From the v1.23.0 security review. (added 2026-09-08)
+- [ ] `web/dist/client/_shell.html` carries a raw NUL at offset 7417 and git treats it as binary, so a reviewer cannot read it; pre-existing generated SPA build output, not BUG-007. Decide whether to patch the generator or accept it permanently. From the v1.23.0 security review. (added 2026-09-08)
+
 - [ ] 🟢 ADR-065 follow-ups (recorded, not built — plan
   `.agents/docs/plans/2026-09-08-per-project-lan-access.md`): (a) a
   `lanPolicy = admins|owners|off` operator knob via `operatorOverrides` /

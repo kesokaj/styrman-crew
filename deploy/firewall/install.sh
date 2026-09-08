@@ -109,25 +109,17 @@ else
     mv -fT "${MOUNT_UNIT}.new.$$" "${MOUNT_UNIT}"
 fi
 
-# ─── 3. Marker directory (server-written, root-read; both levels chowned) ───
-# The tree sits inside a directory the server's uid owns, so root creates each
-# level with a plain mkdir (never -p, which traverses a planted symlink),
-# refuses any symlink outright, and asserts the owner before chowning
-# (security review: chown/chmod dereference; a link to /etc would have handed
-# that uid /etc). Refuse, never retarget.
-log "marker dir ${STATE_DIR}/netpolicy/lan (owner ${OWNER_UID}:${OWNER_GID}, 0750, non-recursive)"
-for d in "${STATE_DIR}/netpolicy" "${STATE_DIR}/netpolicy/lan"; do
-    if [ -L "${d}" ]; then die "${d} is a symlink — refusing to touch it (planted? see .agents/rules/guest-writable-paths.md)"; fi
-    if [ ! -e "${d}" ]; then
-        run mkdir -m 0750 "${d}"
-        [ "${DRY}" = 1 ] && continue
-    fi
-    [ -d "${d}" ] || die "${d} exists and is not a directory"
-    owner="$(stat -c %u "${d}")"
-    if [ "${owner}" != "${OWNER_UID}" ] && [ "${owner}" != "0" ]; then die "${d} is owned by uid ${owner}, expected ${OWNER_UID} or root — refusing"; fi
-    run chown -h "${OWNER_UID}:${OWNER_GID}" "${d}"
-    run chmod 0750 "${d}"
-done
+# ─── 3. Marker directory — deliberately NOT created here ────────────────────
+# The server creates <STATE_DIR>/netpolicy/lan itself at boot (cmd/styrman,
+# 0750) as its own uid, inside its own state dir. Root used to create and
+# chown it here, and the security review of 2026-09-08 showed that guard
+# could only ever be narrowed, not closed: STATE_DIR is owned by that same
+# uid, so it can swap a path component between root's check and root's
+# chown/chmod (both dereference), and between one loop iteration and the
+# next. The fix is to take root out of the path entirely — nothing is lost,
+# because the server makes the directory with the right owner by
+# construction, and the reconciler already treats an absent marker dir as
+# "no allowances" and says so in its status (BUG-009).
 
 # ─── 4. LAN definition — written ONLY IF ABSENT ─────────────────────────────
 CONF="${ETC_DIR}/firewall.conf"

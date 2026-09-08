@@ -465,7 +465,11 @@ rotated token, or a tool signed into inside a project instead of at setup).
   connections immediately. A small `LAN` chip flags the project in the
   sidebar and on the dashboard while it is on or pending. Works for a
   stopped project (it applies when the project next starts). Access is by
-  IP only — LAN names and `.local` do not resolve inside the microVM.
+  IP only — LAN names and `.local` do not resolve inside the microVM. The
+  traffic is NAT'd, so it reaches the LAN as the styrman host's own address:
+  any device whose access list trusts this host by IP trusts a LAN-enabled
+  project too, which is the sharpest edge of the feature and why enabling it
+  is admin-only.
   Admins see the host half under Settings → Host firewall: script version,
   last applied, the configured prefix and device, how many projects are on.
 - **Terminals**: sidebar, per project; generated friendly names; ⏸ pause /

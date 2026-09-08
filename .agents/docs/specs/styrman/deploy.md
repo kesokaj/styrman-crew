@@ -669,7 +669,12 @@ enable with 503 whenever that file is absent, stale, below
 (`DirectoryNotEmpty` on the spool) applies a toggle in about 0.2 s; the 60 s
 timer remains the backstop; the path unit carries no `After=docker.service`
 (an ordering cycle) and is revived by the script at most once per ten
-minutes. Still dropped for a LAN-enabled project: the host itself
+minutes. The allowed traffic is masqueraded like any other bridge egress, so
+it reaches the LAN as the HOST's address, not as a per-project one: a LAN
+ACL keyed on this machine's IP admits every LAN-enabled project, and the LAN
+cannot tell them apart. That is inherent to the NAT topology, not something
+the allow rule chooses, and it is the reason enabling is admin-only.
+Still dropped for a LAN-enabled project: the host itself
 (`STYRMAN-IN`), host-published Docker ports (the drop sees the post-DNAT
 container address), every other project and system bridge, the ingress
 bridge, cloud metadata, the tailnet; LAN hosts cannot initiate connections
