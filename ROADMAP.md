@@ -12,94 +12,39 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**v1.23.0 shipped and is live** — tag `v1.23.0` on commit `7bf0607`,
-SSH-signed and verified against the host's allowed-signers file; the
-tag-gated auto-updater deployed it in 160 s (`styrman-server` and
-`styrman-caddy` both on `1.23.0`, server healthy,
-`deployed-version=v1.23.0`). Release gate:
-`.agents/docs/reviews/2026-09-08-preflight-v1.23.0.md` (VERDICT SHIP; 0
-high, 2 medium, 6 low — five fixed in the release commit, two rebutted in
-writing, one accepted as pre-existing generated build output). Ships
-ADR-065, per-project local-network access: an admin-only, per-project,
-runtime-switchable Ports-tab switch letting one project's microVM reach the
-operator's LAN, off by default, applied by the root-owned firewall in about
-0.2 s; R12 amended with the operator's approval. Six changelog entries:
-`changes/2026-09-08-lan-access-phase{0,1,2,3,4}-*.md` plus
-`2026-09-08-v1.23.0-release.md`, and the deploy record
-`2026-09-08-v1.23.0-deployed.md`. The delivery gap ADR-065 part (6) exists
-to close was demonstrated closed on its first release, unattended: the
-updater's new `host_converge` installed the firewall script and its three
-units from the verified object on the tick after the deploy, which also
-converged pre-existing production drift (the live script had carried four
-private-range DROPs since 2026-08-30 where the repo has had six since
-2026-09-02) — `STYRMAN-FWD` now shows six, `/run/styrman-firewall/status`
-reports `version=3`, timer and path units active, no root command from a
-human needed. The remaining operator step has been run: on 2026-09-08, from `/opt/styrman`
-at the v1.23.0 tag, after a dry run, `sudo bash
-/opt/styrman/deploy/firewall/install.sh` wrote `/etc/styrman/firewall.conf`
-with the LAN definition discovered from the default route
-(`LAN_DEV=enp114s0`, `LAN_CIDRS=192.168.86.0/24`) and mounted the bounded
-1 MiB spool tmpfs; the script and units were already in place from
-`host_converge`, so those steps were no-ops on identical bytes. Two things
-that could only be proven on the real host are now proven: (1) the spool
-tmpfs, mounted minutes after the server container had started, appears in
-that container's own mount table correctly owned and bounded with no
-restart — the `rslave` propagation fix (BUG-016) working as designed; (2)
-end-to-end reachability — with `STYRMAN_IT_LIVE_LAN=1` the integration suite
-ran 83 passed / 0 failed / 3 skipped, showing in one run that an unmarked
-project cannot ping the LAN gateway, a marked one can within 5 s, the host
-itself stays unreachable from the guest either way, and removing the marker
-cuts it again within 5 s. The host was left clean afterward: no markers, no
-`styrman-lan:` rules, spool drained, only the two production containers
-running. The plan `.agents/docs/plans/2026-09-08-per-project-lan-access.md`
-is CLOSED at 44 of 44 boxes. Records:
-`changes/2026-09-08-lan-access-host-installed-and-proven.md` and
-`testing/2026-09-08-verify-lan-live.md`; commit `3d02384`. The one step
-deliberately left unautomated — a human flipping the switch in a browser —
-was run by the operator on 2026-09-08 and agreed with the tests: LAN gateway
-reachable with the switch ON, unreachable with it OFF, the host itself
-unreachable either way (ADR-065 part (5), by design). Record:
-`changes/2026-09-08-lan-access-operator-flip-verified.md`. **Open decision
-from that run:** the operator wants ON to mean full same-network parity
-including the host, which is an R12 amendment awaiting the
-propose/approve/ADR path — nothing built. One flaw was recorded rather than fixed and is in `TODO.md`: the
-opt-in live LAN block races the production server's 2-minute marker sweep
-(it plants a marker for a project only the test server knows about, and
-production correctly deletes markers it cannot account for) — it passed by
-timing, not by design.
+**v1.24.0 shipped and is live** — tag on `7cbced7`, SSH-signed, verified
+against the host's allowed-signers file before pushing, and deployed
+unattended by the tag-gated updater. `styrman-server` and `styrman-caddy` on
+`1.24.0`, server healthy; `host_converge` installed the v4 firewall script
+from the tagged object with no human root command.
 
-**Active plan: `.agents/docs/plans/2026-09-08-lan-full-parity.md`** — LAN
-access grows to full same-network parity (ADR-066, in design): a LAN-enabled
-project reaches the host's own address and host-published Docker ports, and
-in exchange the credential broker stops serving it the operator's SSH key.
-Six phases; **Phases 1-6 are built, tested and committed** (`543d68f`,
-`b817a8d`, `dfb573e`, `df4c039`, `2321b99` plus the docs pass), 28 of 30
-boxes. ADR-066 is recorded and R12 amended with the operator's explicit
-approval of the exact text. The firewall carries three rule families over one
-generic reconcile; the host and host-published ports are reachable behind
-their own conf opt-ins that both default closed, so **deploying this changes
-nothing until a human runs `install.sh --lan-allow-host 1`**; the credential
-broker withholds the SSH key from a LAN-enabled project. Suites:
-`deploy/firewall/test.sh` 120/0 (was 83), browser e2e 89/0/2-skipped (was
-84), vitest 85 (was 80), `go vet`/`go test ./...`/ingress module clean.
-BUG-020 was found by the new e2e and fixed.
+Ships ADR-066 — **full same-network parity** for the per-project LAN switch:
+a LAN-enabled project reaches everything a peer on the operator's LAN
+reaches, host and host-published Docker ports included, each behind its own
+root-owned conf opt-in that **defaults closed**. NAT-only outbound; LAN hosts
+still cannot initiate in. In exchange, a project that has ever had LAN access
+is permanently no longer served the operator's SSH key (the latch amendment).
+Three rule families share one generic reconcile; the published-port allowance
+matches only DNATed traffic against a positive bridge allowlist.
 
-**Two things remain, both needing the operator.** (1) The live published-port
-proof — the "reasoned, not observed" gap from v1.23.0 — needs
-`LAN_ALLOW_PUBLISHED_PORTS=1` on the production conf and briefly publishes a
-port on the LAN. (2) The release itself: `/preflight` over the whole ADR-066
-diff, then tag and deploy. Before `LAN_ALLOW_HOST=1` is ever set on a host,
-its sshd must stop accepting password authentication — R12 requires it and
-`.agents/docs/deploy/remote.md` carries the exact five-step sequence. This
-host is **not** hardened and has **not** opted in. Two findings already came out of the
-design work: the host's real exposure is `sshd` password auth plus
-`NOPASSWD` sudo rather than the brokered key (so hardening sshd is a
-deployment precondition, and the broker narrowing is justified by the
-transitive LAN path instead), and the rule shape `TODO.md` had recorded for
-published ports is impossible — iptables refuses a second
-`--out-interface`, so the exclusion becomes a positive destination
-allowlist. `Later / Ideas` is still deliberately empty awaiting operator
-input.
+**Deploying it changed nothing on this host** — the conf has neither opt-in
+key, so `STYRMAN-IN` is still just `DROP` and `STYRMAN-FWD` still has zero
+allowance rules. That was the point.
+
+Release gate: `reviews/2026-09-08-preflight-v1.24.0.md`. Sixteen findings
+across three rounds, all closed — eleven fixed, one deleted by the latch
+amendment, four subsumed. Worth carrying forward: in each of the three
+rounds, the previous round's fixes introduced the next round's worst defect,
+and the two best outcomes were both deletions rather than repairs. The
+mechanical gate (`verify-commit.sh` and every suite) was green before all
+three rounds and caught none of the sixteen.
+
+**Open, and both needing an operator action:** no LAN allowance has ever been
+applied by the v4 script on real hardware, and the published-port path has
+never been exercised live. Both are blocked behind the opt-in, and
+`--lan-allow-host 1` correctly refuses on this host until sshd stops
+accepting password authentication (R12, enforced in `install.sh`). The
+five-step hardening sequence is in `deploy/remote.md`.
 
 **v1.22.0 shipped 2026-09-04** (`.agents/docs/changes/`, six phase entries plus the release entry; gate: `.agents/docs/reviews/2026-09-04-preflight-v1.22.0.md`): `GOPATH=$HOME/.go` in the seeded skel (NEW project homes only — existing homes keep `$HOME/go`), terminal/editor font settings, file-explorer back/forward/up with a readable crumb bar, the Recent strip as a collapsible resizable grid, git diffs in the main pane plus a UUID fast-commit, and six new git verbs (fetch, pull, branches, log, stash). Before it, v1.21.0 (ADR-064, the un-nested project homes).
 
