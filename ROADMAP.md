@@ -2,7 +2,7 @@
 
 <!-- Division of labor: ROADMAP.md = where the project is going; TODO.md = small deferred items; .agents/docs/plans/ = how. -->
 
-Last reviewed: 2026-09-03
+Last reviewed: 2026-09-08
 
 Empty by design past "Now" (operator directive 2026-08-30: "I want nothing
 in todo and roadmap — start fresh with new things"). See `TODO.md` for the
@@ -11,6 +11,15 @@ matching empty-slate Inbox and **ADR-045**
 closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
+
+**Active plan: `.agents/docs/plans/2026-09-08-per-project-lan-access.md`** —
+a per-project, admin-only, runtime-switchable local-network (LAN) allowance
+for a project's microVM. DRAFT as of 2026-09-08: awaiting the operator's
+decisions D1–D7 (the R12 amendment + ADR-065 must be approved before any
+code) and the cold-reader check. Phase 0 also converges a pre-existing
+production drift found during research: the live firewall script has four
+DROPs where the repo's has six (100.64/10 and 198.18/15 missing since
+2026-09-02).
 
 **v1.22.0 shipped 2026-09-04** (`.agents/docs/changes/`, six phase entries plus the release entry; gate: `.agents/docs/reviews/2026-09-04-preflight-v1.22.0.md`): `GOPATH=$HOME/.go` in the seeded skel (NEW project homes only — existing homes keep `$HOME/go`), terminal/editor font settings, file-explorer back/forward/up with a readable crumb bar, the Recent strip as a collapsible resizable grid, git diffs in the main pane plus a UUID fast-commit, and six new git verbs (fetch, pull, branches, log, stash). Before it, v1.21.0 (ADR-064, the un-nested project homes).
 
