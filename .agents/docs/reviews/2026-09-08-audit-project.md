@@ -108,3 +108,43 @@ order: the six missing `O_NONBLOCK` opens (a documented guard that stops at a
 boundary), a test harness for `styrman-update`, the firewall prefilter trap,
 and `files.Trust`'s silent fallback. The first and third are small; the
 second is the one that would have caught the most, for the longest.
+
+---
+
+## Dispositions (2026-09-08)
+
+Fixed, each with a test that fails without the fix (commits `271a7e8`,
+`00dd134`, `80765ca`, plus `05db066` for the spec):
+
+| Finding | Sev | Disposition |
+|---|---|---|
+| FIFO wedges a goroutine + OS thread (6 opens) | 🟡 | **Fixed** — `O_NONBLOCK` on all six, `searchOne` Lstats before opening. `internal/history/fifo_test.go` plants real FIFOs |
+| Firewall prefilter hard-coded, not from `FAMILY_TAGS` | 🟡 | **Fixed** — `is_ours()` derived from the table; `test.sh` §23c |
+| `install.sh` SIGPIPE fails the installer after success | 🟡 | **Fixed** — `\|\| true` on the display pipeline |
+| `styrman-update` never asserts the worktree root | 🟡 | **Fixed** — `trusted_dir "${DEPLOY_DIR}"` before `.git` |
+| Ingress writes emails verbatim into the Caddyfile | 🟡 | **Fixed** — shape validation excluding Caddyfile-significant bytes |
+| `docker/docker` diverges between modules | 🟡 | **Fixed** — both on `v28.5.2`; `verify-commit.sh` now blocks on it |
+| `api.md` a release behind | 🟡 | **Fixed** — `05db066` |
+| `files.Trust` silent fallback | 🟡 | **Partly** — warns once per root; deliberately NOT an error, reasoned in the code |
+| `git diff --no-index` path traversal | 🟢 | **Fixed** — routed through `scopeRel` |
+| `LanChecker` contract describes the superseded rule | 🟢 | **Fixed** |
+| No cross-language bridge-name assertion | 🟢 | **False finding** — both sides assert the same golden vector for the same uuid; the agent had not run the shell suite |
+| README integration count | — | **Fixed** — 82 → 83 |
+
+Not fixed, with reasons — these are judgements, not omissions:
+
+| Finding | Sev | Why not |
+|---|---|---|
+| `internal/httpapi` is 7 subsystems in one package | 🟡 | A refactor of 10,288 lines across 33 files, not a fix. Needs its own plan and ADR; doing it inside an audit pass is how the release gate's defects happened |
+| Credential harvest poisons sibling projects | 🟡 | The remediation is a UX decision about the import flow (name the source, diff and confirm on change). Worth doing; it is a design change, and the operator should choose the shape |
+| No per-user rate limit on project creation | 🟡 | `REQUIREMENTS.md` puts abuse hardening out of scope, and the audit itself records it as a documented accepted risk. Single-flighting `importCredentials` is the cheap half and is worth picking up |
+| `api.ts` returns `body as T` with no runtime validation | 🟢 | ~40 endpoints; adopting a validator is a design decision |
+| `ContainedPath` TOCTOU | 🟢 | Its only caller is the legacy ADR-027 migration, which since ADR-064 runs where no guest can race it. Documented in place |
+| Symlink guard implemented four ways | 🟢 | The audit itself says "nothing urgent". Unifying it touches every confinement site — the highest-risk refactor in the repo to do casually |
+| SPA catch-all / `allUsers` / `credentialContent` | 🟢 | The security pass marked the first "none required"; the others are informational-adjacent and unchanged by this pass |
+| `styrman-update` has no test harness | — | **Partly** — it now has its first automated test (the ordering check covers it), but not a real harness. That remains the largest untested surface and is its own task |
+| `web/src/components` + `routes` have zero `.test.tsx` | — | Large, and e2e covers the paths that matter today |
+
+Suites after the fixes: `deploy/firewall/test.sh` **128/0** (was 125), go
+`vet`/`test` clean both modules, web 85/85, `verify-commit.sh` green on
+`80765ca` including the new dependency guard.
