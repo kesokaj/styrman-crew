@@ -815,7 +815,7 @@ ones (root-run script, R12 enforcement, authz); Phases 3–5 are routine.
 - [x] Sidebar + dashboard `LAN` chip (`components/LanBadge.tsx` over `lib/lan.ts`) — verify: tier 3, both
 - [x] Settings "Host firewall" section (admin) — verify: tier 3, AI
 - [x] e2e checks (unavailable branch with the switch disabled, 503 with nothing persisted, Settings not-installed row) + README Tier 1/4 counts (80 tests / 8 files; 86 checks + gate); `web/dist` rebuilt by the run — verify: `bash web/e2e/run.sh` 84 passed / 0 failed / 2 skipped on 2026-09-08 (the first run caught a real gap: with no status file the record derives "off", so the switch was enabled until `host.available` was wired into the block), AI
-- [ ] Manual end-to-end on production (the Verification list) with measured latency, logged in `testing/` — BLOCKED until the operator runs `install.sh` for the LAN definition; everything else in Phase 3 is done — verify: log file, both
+- [x] End-to-end on production, logged in `.agents/docs/testing/2026-09-08-verify-lan-live.md`: the allow rule appears at the head of `STYRMAN-FWD` within 5 s of the marker, an in-guest ping to the LAN gateway succeeds while the host itself stays unreachable, and both stop within 5 s of the marker going away. Driven through the opt-in live block rather than a browser; the switch itself has not been flipped by a human — verify: log file, both
 - [x] `reviewer` + `security` over the combined Phase 2+3 diff (see Phase 2) — verify: findings fixed or rebutted
 - [x] Changelog, commit, push (`03fedc8`) — checkpoint
 
@@ -828,7 +828,7 @@ ones (root-run script, R12 enforcement, authz); Phases 3–5 are routine.
 ### Phase 5 — Verification + release
 - [x] `verifier` log — `.agents/docs/testing/2026-09-08-verify-lan-access.md`: PASS, 0 FAIL rows, 23 new Go tests + 11 vitest, no pre-existing test deleted, six coverage gaps all named by this plan. Written BEFORE the host half existed, so it says so; the post-install check below is what closes that gap — verify: log in `testing/`
 - [x] `/preflight` → gate `reviews/2026-09-08-preflight-v1.23.0.md` (SHIP; 0 high, 2 medium, 6 low; 5 fixed, 2 rebutted, 1 accepted) → signed tag `v1.23.0` on `7bf0607` → deployed in 160 s. **This box had it backwards:** `host_converge` was not a no-op after an `install.sh` run — it ran first and installed the firewall half itself — verify: `journalctl -u styrman-update`, done
-- [ ] Post-release, THE ONLY THING LEFT: `sudo bash /opt/styrman/deploy/firewall/install.sh` (LAN definition + spool tmpfs), then a fresh sign-in and one project toggled on → in-guest ping to the gateway succeeds while the host stays unreachable → off cuts it within a second, logged in `testing/`. The release changelog and its "What was NOT checked" are written — verify: both
+- [x] Post-release: `sudo bash /opt/styrman/deploy/firewall/install.sh` run on the host 2026-09-08 (LAN definition `enp114s0` / `192.168.86.0/24` discovered, spool tmpfs mounted and confirmed to propagate into the ALREADY-RUNNING server via `rslave` — BUG-016 proven in production), then the live block: 83 passed / 0 failed / 3 skipped, including the first end-to-end proof that a marked project reaches the LAN and an unmarked one does not. Release changelog and "What was NOT checked" written. Remaining and deliberately unautomated: a human flipping the switch in a browser once — verify: both
 
 ## Risks
 
