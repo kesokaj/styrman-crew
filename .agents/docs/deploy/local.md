@@ -26,11 +26,12 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) 
 | `STYRMAN_IMAGE` | — | Runtime image the server boots per project (`styrman-runtime:dev` locally) |
 | `STYRMAN_VERSION` | required by compose | Release version; compose refuses to run without it (no mutable tags, ADR-053) |
 | `deploy/.env` | `.env.example` | Secrets for production only: OAuth client, Cloudflare token, ingress token, JWT key — never committed |
+| `STYRMAN_FIREWALL_DIR` | `/run/styrman-firewall` | Per-project LAN feature (ADR-065): root's spool + status dir. The default is the SAME path the production host firewall reconciler uses — a host-process dev server left at the default reads the production reconciler's status file and can drop trigger files into its spool once `deploy/firewall/install.sh` is installed on that host. Set it to a scratch dir (or leave it pointed at an empty dir) for local runs so the dev server reports every project `unavailable` instead. |
 
 ## Run
 
 ```bash
-STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/     # loopback, no auth
+STYRMAN_IMAGE=styrman-runtime:dev STYRMAN_FIREWALL_DIR=.agents/scratch/firewall-dev go run ./cmd/styrman/     # loopback, no auth
 ```
 
 ## Verify

@@ -17,12 +17,18 @@ a per-project, admin-only, runtime-switchable local-network (LAN) allowance
 for a project's microVM. Approved 2026-09-08 (ADR-065 + the R12 amendment;
 the operator's reply "Go do work" to the seven decisions, each presented
 with the recommendation the plan was written under); cold-reader check
-passed on round two. Phase 0 in progress; the plan's unticked boxes are the
-remaining work. Phase 0 also converges a pre-existing production drift found
-during research: the live firewall script has four DROPs where the repo's
-has six (100.64/10 and 198.18/15 missing since 2026-09-02) — a root action
-the operator runs, since the agent's attempt was blocked by the auto-mode
-classifier.
+passed on round two. Phases 0–4 shipped on `main` (unreleased): the R12
+amendment + ADR-065, the `internal/netpolicy` package, `internal/httpapi/network.go`
+(GET/PUT), the store/config/UI plumbing (`LanAccess`, the Ports-tab "Local
+network" block, the `LAN` chip, the admin Settings "Host firewall" section),
+and `deploy/firewall/` (script, units, `install.sh`) plus the updater's
+`host_converge()`. Phase 5 is open — a root action on the production host:
+`sudo bash deploy/firewall/install.sh` run from `/opt/styrman` at the tagged
+commit (this also converges the pre-existing production drift found during
+research — the live firewall script had four DROPs where the repo's has six,
+100.64/10 and 198.18/15 missing since 2026-09-02), a manual end-to-end
+verification of the applied state on production (logged per the plan's
+"Verification" section), and the release.
 
 **v1.22.0 shipped 2026-09-04** (`.agents/docs/changes/`, six phase entries plus the release entry; gate: `.agents/docs/reviews/2026-09-04-preflight-v1.22.0.md`): `GOPATH=$HOME/.go` in the seeded skel (NEW project homes only — existing homes keep `$HOME/go`), terminal/editor font settings, file-explorer back/forward/up with a readable crumb bar, the Recent strip as a collapsible resizable grid, git diffs in the main pane plus a UUID fast-commit, and six new git verbs (fetch, pull, branches, log, stash). Before it, v1.21.0 (ADR-064, the un-nested project homes).
 
