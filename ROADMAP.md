@@ -14,12 +14,15 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 **Active plan: `.agents/docs/plans/2026-09-08-per-project-lan-access.md`** —
 a per-project, admin-only, runtime-switchable local-network (LAN) allowance
-for a project's microVM. DRAFT as of 2026-09-08: awaiting the operator's
-decisions D1–D7 (the R12 amendment + ADR-065 must be approved before any
-code) and the cold-reader check. Phase 0 also converges a pre-existing
-production drift found during research: the live firewall script has four
-DROPs where the repo's has six (100.64/10 and 198.18/15 missing since
-2026-09-02).
+for a project's microVM. Approved 2026-09-08 (ADR-065 + the R12 amendment;
+the operator's reply "Go do work" to the seven decisions, each presented
+with the recommendation the plan was written under); cold-reader check
+passed on round two. Phase 0 in progress; the plan's unticked boxes are the
+remaining work. Phase 0 also converges a pre-existing production drift found
+during research: the live firewall script has four DROPs where the repo's
+has six (100.64/10 and 198.18/15 missing since 2026-09-02) — a root action
+the operator runs, since the agent's attempt was blocked by the auto-mode
+classifier.
 
 **v1.22.0 shipped 2026-09-04** (`.agents/docs/changes/`, six phase entries plus the release entry; gate: `.agents/docs/reviews/2026-09-04-preflight-v1.22.0.md`): `GOPATH=$HOME/.go` in the seeded skel (NEW project homes only — existing homes keep `$HOME/go`), terminal/editor font settings, file-explorer back/forward/up with a readable crumb bar, the Recent strip as a collapsible resizable grid, git diffs in the main pane plus a UUID fast-commit, and six new git verbs (fetch, pull, branches, log, stash). Before it, v1.21.0 (ADR-064, the un-nested project homes).
 

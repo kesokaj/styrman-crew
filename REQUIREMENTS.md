@@ -75,8 +75,30 @@
     networking is for the Caddy ingress ONLY, never for projects. Verified
     adversarially (a project with NET_ADMIN adding a manual route through the
     server stays blocked). Enforced by naming the bridge interface `sdb-<hash>` (the Docker NETWORK is `sdb-<uuid>`; its kernel INTERFACE is `sdb-` + an 11-hex hash of the uuid — the 15-char iface limit — and the firewall matches the shared `sdb-` prefix)
-    (so the firewall matches), DOCKER-USER egress drops to RFC1918 + metadata,
-    and a self-healing firewall timer (ADR-036). See ADR-015.
+    (so the firewall matches), DOCKER-USER egress drops to RFC1918, the
+    CGNAT/benchmark ranges 100.64/10 and 198.18/15, and metadata 169.254/16
+    (was "RFC1918 + metadata"; the script has dropped six ranges since
+    2026-09-02), and a self-healing firewall timer (ADR-036). See ADR-015.
+    Local-network exception (ADR-065, operator approval 2026-09-08; was: the
+    private-range egress drop applied unconditionally to every project): an
+    admin may allow individual projects, each toggled separately, running or
+    stopped, to reach the host's local network — exactly the IPv4 prefixes the
+    operator configured in the root-owned `/etc/styrman/firewall.conf` (this
+    deployment: 192.168.86.0/24 via enp114s0), never wider than a /16 and
+    never overlapping 172.16/12, 169.254/16, 100.64/10, 198.18/15 or any
+    Docker bridge. The allowance is a per-bridge RETURN inserted ahead of the
+    drops by the same root-owned, self-healing firewall service, keyed on that
+    project's exact bridge interface, its bridge subnet and the uplink device,
+    driven by an intent file the server writes and root validates by name
+    only; it is off by default, visible in the UI while on, revocable at
+    runtime, removed with the project, and disappears fail-closed whenever
+    that service is absent. Everything else stays dropped for that project
+    too: the host itself (INPUT drop — it runs sshd and Caddy and the project
+    holds its owner's credentials), host-published Docker ports (the drop sees
+    the post-DNAT container address), every other project and system bridge,
+    cloud metadata and the tailnet; LAN hosts still cannot initiate
+    connections into any project. The cross-project guarantee in the first
+    sentence, `ip_forward=0` and the host-networking clause are unconditional.
 
 13. **R13 — Git is the substrate** (operator directive 2026-08-27): every
     project workspace IS a git repository, without exception — initialized
