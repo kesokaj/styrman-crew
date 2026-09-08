@@ -776,7 +776,7 @@ ones (root-run script, R12 enforcement, authz); Phases 3–5 are routine.
 
 ### Phase 0 — Decision record + drift converge (no feature code)
 - [x] Operator answers D1–D7 ("Go do work", 2026-09-08 — all seven recommendations) — verify: reread, user
-- [ ] **OPERATOR (root; the agent's attempt was blocked by the auto-mode classifier):** converge the live host's existing drift NOW: copy `deploy/host-setup.sh:167-232` over `/usr/local/sbin/styrman-firewall.sh`, `systemctl start styrman-firewall.service`, confirm six DROPs in `sudo iptables -S STYRMAN-FWD` — a security gap independent of the feature — verify: `iptables -S` shows 100.64/10 and 198.18/15, AI; record in a `changes/` entry
+- [x] **DONE 2026-09-08 13:53, and by nobody's hand:** the drift was converged by the updater's `host_converge` on the tick after the v1.23.0 deploy, installing the script from the verified object at `7bf0607`. Neither the manual copy this box proposed nor a hand-run of `install.sh` was needed. `sudo iptables -S STYRMAN-FWD` now shows six DROPs including 100.64/10 and 198.18/15 — verify: recorded in `changes/2026-09-08-v1.23.0-deployed.md`, AI
 - [x] ADR-065 + amendment entry in `DECISIONS.md`, R12 edit in `REQUIREMENTS.md` (approval quoted verbatim), ROADMAP "Now" → this plan, in ONE commit (`9aff5d6`) — verify: reread, both
 - [x] Fix pre-existing doc drift the readers found: `deploy.md:582` four→six ranges; "60 checks" in `deploy/local.md:40` and `guide.md:520` now point at the README (`dbe66a8`) — verify: grep, AI
 - [x] Cold-reader check of this plan (`reviewer`, plan file only) → both "ready" tokens on round 2 (`reviews/2026-09-08-cold-reader-lan-access-plan.md`) — verify: review file
@@ -791,8 +791,8 @@ ones (root-run script, R12 enforcement, authz); Phases 3–5 are routine.
 - [x] `deploy/verify-commit.sh`: shell lint + `systemd-analyze verify` steps — verify: run it (Phase 1 checkpoint), AI
 - [x] Measure spool→rule latency with a transient `systemd-run --user` path unit on a scratch dir (not the live units): trigger 30–62 ms over five runs, script run 80–120 ms in the netns → a toggle lands in about 0.2 s — verify: number in the changelog, AI
 - [x] `security` agent over the script + installer + updater diff (1 high, 3 medium, 7 low) and `reviewer` (1 high, 1 medium, 2 low): all fixed except three rebutted in writing — see the Phase 1 `changes/` entry — verify: findings fixed or rebutted in writing
-- [ ] Converge THIS host with `sudo bash deploy/firewall/install.sh` run from `/opt/styrman` at the Phase-1 commit (never the working tree); record status file present, `version=3`, `applied_at` advancing, zero projects, `systemctl status styrman-firewall.path` active — verify: outputs pasted in the `changes/` entry, both
-- [ ] Changelog "host-only, applied live", commit, push — checkpoint
+- [x] Converge THIS host — done by `host_converge` at the v1.23.0 release, not by the hand-run this box assumed: status file present, `version=3`, `applied_at` advancing, zero projects, `styrman-firewall.timer` and `.path` both active, six DROPs live — verify: outputs in `changes/2026-09-08-v1.23.0-deployed.md`, both
+- [x] Changelog + commit + push — the Phase 1 entry (`changes/2026-09-08-lan-access-phase1-host-half.md`, commit `893bf03`); the live-application record is the deploy entry above — checkpoint
 
 ### Phase 2 — Server half — security-critical (authz, root-read input)
 - [x] `config`: `NetPolicyDir`, `FirewallRunDir`/`STYRMAN_FIREWALL_DIR`; `main.go` creates `netpolicy/lan` — verify: tier 1, AI
@@ -805,8 +805,8 @@ ones (root-run script, R12 enforcement, authz); Phases 3–5 are routine.
 - [x] `deleteProject` marker removal + kick immediately before `sp.projects.Remove` (after the wipe block's early return); conditional kicks after `EnsureRunning` in `ensureFor`/`createProject`/`startProject` — verify: tier 1 for delete (`TestDeleteProjectRemovesMarker`; the failed-wipe case cannot be driven without a Docker double — stated); tier 2 live block / manual for the kicks, AI
 - [x] Compose volume + env; `api.md` rows; server env table — verify: reread, AI
 - [x] `integration.sh` block (R12 negative check, scratch-dir checks, opt-in live block) + README Tier 2 counts (82; 4 auto-SKIP) — verify: `bash integration.sh` 78 passed / 0 failed / 4 skipped on 2026-09-08 (the R12 negative check PASSED live); the live block runs once the operator has installed the host half
-- [ ] `reviewer` (diff only) + `security` — verify: findings fixed or rebutted
-- [ ] Changelog, commit, push — checkpoint
+- [x] `reviewer` (APPROVE, 2 low) + `security` (3 medium, 5 low) over the combined Phase 2+3 diff — all fixed except the config-default rebuttal; BUG-014..019 — verify: findings fixed or rebutted
+- [x] Changelog, commit, push (`4ebd5d9`) — checkpoint
 
 ### Phase 3 — UI
 - [x] `api.ts` types (+ `sharedPorts`) and verbs; `lib/lan.ts` + `lan.test.ts` (11 tests) — verify: tier 1 `npm test` 80/80, AI
@@ -815,20 +815,20 @@ ones (root-run script, R12 enforcement, authz); Phases 3–5 are routine.
 - [x] Sidebar + dashboard `LAN` chip (`components/LanBadge.tsx` over `lib/lan.ts`) — verify: tier 3, both
 - [x] Settings "Host firewall" section (admin) — verify: tier 3, AI
 - [x] e2e checks (unavailable branch with the switch disabled, 503 with nothing persisted, Settings not-installed row) + README Tier 1/4 counts (80 tests / 8 files; 86 checks + gate); `web/dist` rebuilt by the run — verify: `bash web/e2e/run.sh` 84 passed / 0 failed / 2 skipped on 2026-09-08 (the first run caught a real gap: with no status file the record derives "off", so the switch was enabled until `host.available` was wired into the block), AI
-- [ ] Manual end-to-end on production (the Verification list) with measured latency, logged in `testing/` — verify: log file, both
-- [ ] `reviewer` if ≥ 50 lines (it will be) — verify: findings fixed or rebutted
-- [ ] Changelog, commit, push — checkpoint
+- [ ] Manual end-to-end on production (the Verification list) with measured latency, logged in `testing/` — BLOCKED until the operator runs `install.sh` for the LAN definition; everything else in Phase 3 is done — verify: log file, both
+- [x] `reviewer` + `security` over the combined Phase 2+3 diff (see Phase 2) — verify: findings fixed or rebutted
+- [x] Changelog, commit, push (`03fedc8`) — checkpoint
 
 ### Phase 4 — Delivery + docs
 - [x] `remote.md` Prerequisites/Procedure/Verify (install.sh step; `sudo iptables -S STYRMAN-FWD | head`, `systemctl status styrman-firewall.path`, `cat /run/styrman-firewall/status`); `versioning.md` boxed host note; `deploy/README.md`; `deploy/.env.example` — verify: reread, AI
 - [x] `deploy.md` isolation section (the exception, six ranges, "styrman-lan-tagged RETURNs are the ONE class of rule the script deletes on demand", install.sh + host_converge, reserved keys); `guide.md` §2/§4 + troubleshooting row; `README.md` "Hard isolation" bullet; `AGENTS.md` architecture bullet + counts; testing README ADR-052 section (netns test); `guest-writable-paths.md` one line — verify: `documentation` agent (after the Phase 2/3 reviews), reread, AI
 - [x] `TODO.md` follow-ups (list under Scope) + the correction to the 2026-09-02 "DONE" item that production never received — verify: reread, AI
-- [ ] Changelog, commit, push — checkpoint
+- [x] Changelog, commit, push (`3aa7acf`, records in `f86fe08`) — checkpoint
 
 ### Phase 5 — Verification + release
-- [ ] `verifier` log naming which tiers ran with the host side installed, the test-count before/after, and the measured latency — verify: log in `testing/`
-- [ ] `/preflight` → signed tag → updater deploys; next tick `host_converge` is a no-op (install.sh already ran) — verify: `journalctl -u styrman-update`, both
-- [ ] Post-release: fresh sign-in; one project toggled on → ping → off end-to-end; release changelog with "What was NOT checked" (Docker live-restore preservation; the published-port DNAT shape — both deliberately outside the allowance); handoff — verify: both
+- [x] `verifier` log — `.agents/docs/testing/2026-09-08-verify-lan-access.md`: PASS, 0 FAIL rows, 23 new Go tests + 11 vitest, no pre-existing test deleted, six coverage gaps all named by this plan. Written BEFORE the host half existed, so it says so; the post-install check below is what closes that gap — verify: log in `testing/`
+- [x] `/preflight` → gate `reviews/2026-09-08-preflight-v1.23.0.md` (SHIP; 0 high, 2 medium, 6 low; 5 fixed, 2 rebutted, 1 accepted) → signed tag `v1.23.0` on `7bf0607` → deployed in 160 s. **This box had it backwards:** `host_converge` was not a no-op after an `install.sh` run — it ran first and installed the firewall half itself — verify: `journalctl -u styrman-update`, done
+- [ ] Post-release, THE ONLY THING LEFT: `sudo bash /opt/styrman/deploy/firewall/install.sh` (LAN definition + spool tmpfs), then a fresh sign-in and one project toggled on → in-guest ping to the gateway succeeds while the host stays unreachable → off cuts it within a second, logged in `testing/`. The release changelog and its "What was NOT checked" are written — verify: both
 
 ## Risks
 

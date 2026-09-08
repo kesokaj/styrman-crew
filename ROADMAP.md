@@ -12,23 +12,42 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**Active plan: `.agents/docs/plans/2026-09-08-per-project-lan-access.md`** —
-a per-project, admin-only, runtime-switchable local-network (LAN) allowance
-for a project's microVM. Approved 2026-09-08 (ADR-065 + the R12 amendment;
-the operator's reply "Go do work" to the seven decisions, each presented
-with the recommendation the plan was written under); cold-reader check
-passed on round two. Phases 0–4 shipped on `main` (unreleased): the R12
-amendment + ADR-065, the `internal/netpolicy` package, `internal/httpapi/network.go`
-(GET/PUT), the store/config/UI plumbing (`LanAccess`, the Ports-tab "Local
-network" block, the `LAN` chip, the admin Settings "Host firewall" section),
-and `deploy/firewall/` (script, units, `install.sh`) plus the updater's
-`host_converge()`. Phase 5 is open — a root action on the production host:
-`sudo bash deploy/firewall/install.sh` run from `/opt/styrman` at the tagged
-commit (this also converges the pre-existing production drift found during
-research — the live firewall script had four DROPs where the repo's has six,
-100.64/10 and 198.18/15 missing since 2026-09-02), a manual end-to-end
-verification of the applied state on production (logged per the plan's
-"Verification" section), and the release.
+**v1.23.0 shipped and is live** — tag `v1.23.0` on commit `7bf0607`,
+SSH-signed and verified against the host's allowed-signers file; the
+tag-gated auto-updater deployed it in 160 s (`styrman-server` and
+`styrman-caddy` both on `1.23.0`, server healthy,
+`deployed-version=v1.23.0`). Release gate:
+`.agents/docs/reviews/2026-09-08-preflight-v1.23.0.md` (VERDICT SHIP; 0
+high, 2 medium, 6 low — five fixed in the release commit, two rebutted in
+writing, one accepted as pre-existing generated build output). Ships
+ADR-065, per-project local-network access: an admin-only, per-project,
+runtime-switchable Ports-tab switch letting one project's microVM reach the
+operator's LAN, off by default, applied by the root-owned firewall in about
+0.2 s; R12 amended with the operator's approval. Six changelog entries:
+`changes/2026-09-08-lan-access-phase{0,1,2,3,4}-*.md` plus
+`2026-09-08-v1.23.0-release.md`, and the deploy record
+`2026-09-08-v1.23.0-deployed.md`. The delivery gap ADR-065 part (6) exists
+to close was demonstrated closed on its first release, unattended: the
+updater's new `host_converge` installed the firewall script and its three
+units from the verified object on the tick after the deploy, which also
+converged pre-existing production drift (the live script had carried four
+private-range DROPs since 2026-08-30 where the repo has had six since
+2026-09-02) — `STYRMAN-FWD` now shows six, `/run/styrman-firewall/status`
+reports `version=3`, timer and path units active, no root command from a
+human needed. One operator step remains, and it is the only thing between
+here and a usable feature: `sudo bash /opt/styrman/deploy/firewall/install.sh`
+once on the host, which writes `/etc/styrman/firewall.conf` (the LAN
+definition, discovered from the default route) and mounts the bounded spool
+tmpfs — until it runs the feature is deployed but INERT and fails closed
+(status reports no prefix configured, Settings shows the row red, every
+enable refused with 503). After it, the last plan box is the manual
+applied-state check on production (toggle on, in-guest ping to the gateway
+succeeds while the host stays unreachable, toggle off cuts it), or the
+opt-in `STYRMAN_IT_LIVE_LAN=1` integration block, logged into
+`.agents/docs/testing/`. The plan
+`.agents/docs/plans/2026-09-08-per-project-lan-access.md` has 42 of 44 boxes
+ticked; the two open ones are that operator step and the check that follows
+it.
 
 **v1.22.0 shipped 2026-09-04** (`.agents/docs/changes/`, six phase entries plus the release entry; gate: `.agents/docs/reviews/2026-09-04-preflight-v1.22.0.md`): `GOPATH=$HOME/.go` in the seeded skel (NEW project homes only — existing homes keep `$HOME/go`), terminal/editor font settings, file-explorer back/forward/up with a readable crumb bar, the Recent strip as a collapsible resizable grid, git diffs in the main pane plus a UUID fast-commit, and six new git verbs (fetch, pull, branches, log, stash). Before it, v1.21.0 (ADR-064, the un-nested project homes).
 
