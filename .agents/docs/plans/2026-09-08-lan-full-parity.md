@@ -464,7 +464,9 @@ throughout, plus the plain statement that this host is not hardened and has
 not opted in. `AGENTS.md`'s architecture bullet and the testing README's
 counts updated.
 
-- [ ] Release: `verifier`, `reviewer`, `security`, `/preflight` — verify: gate report, both
+- [x] Release: `verifier`, `reviewer`, `security`, `/preflight` — **DONE 2026-09-08**: gate
+  `reviews/2026-09-08-preflight-v1.24.0.md` (16 findings across three rounds, all closed),
+  shipped as v1.24.0 and deployed unattended; the audit's fixes followed as v1.24.1.
 
 ## Proposed R12 amendment (NOT applied — needs approval)
 
