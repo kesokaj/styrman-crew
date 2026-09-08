@@ -368,6 +368,20 @@ check "and the project reports applied, not 1-of-2" "[ \"\$(status lan)\" = '${U
 check "no per-project error recorded" "! grep -q '^error=${U}:' '${RUN}/status'"
 rm "${MARK}/${U}"; write_conf enp0 192.0.2.0/24; run >/dev/null 2>&1
 
+echo "=== 23c. the scan's family prefilter is a whitelist, not a prefix match"
+# The prefilter used to be the literal `--comment "styrman-lan`, which covered
+# the three tags only because they share that prefix. Two consequences: a
+# FOURTH family named otherwise would never be revoked (loosen-without-tighten,
+# untestable from outside), and a foreign rule that merely SHARES the prefix
+# was treated as ours and deleted. The second is testable, and it is the same
+# `is_ours` derivation either way.
+iptables -I STYRMAN-FWD 1 -i "${IFACE}" -m comment --comment "styrman-lanfoo:someone-elses" -j RETURN
+run >/dev/null 2>&1
+check "a rule whose tag is NOT a family is left alone" \
+    "rules | grep -q -- '--comment \"styrman-lanfoo:someone-elses\"'"
+check "and it is not counted as one of ours" "[ \$(allow_count) -eq \$(rules | grep -c 'styrman-lan:') ]"
+iptables -D STYRMAN-FWD -i "${IFACE}" -m comment --comment "styrman-lanfoo:someone-elses" -j RETURN
+
 echo "=== 24. no install.sh function is called before it is defined"
 # `bash -n` and shellcheck both accept a call placed ABOVE its definition, and
 # that is how a `derive_ingress_bridge: command not found` reached a release

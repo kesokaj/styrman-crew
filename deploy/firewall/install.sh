@@ -342,7 +342,11 @@ run systemctl start styrman-firewall.service
 run systemctl enable --now styrman-firewall.timer styrman-firewall.path
 if [ "${DRY}" = 0 ]; then
     log "STYRMAN-FWD (head):"
-    iptables -S STYRMAN-FWD | head -12 | sed 's/^/    /'
+    # `|| true`: head closes the pipe after 12 lines, iptables takes SIGPIPE,
+    # and under `set -euo pipefail` that failed the installer AFTER every step
+    # had succeeded — on a host with more than 12 rules, which is exactly a
+    # host that has LAN allowances (audit 2026-09-08).
+    iptables -S STYRMAN-FWD 2>/dev/null | head -12 | sed 's/^/    /' || true
     log "status (${RUN_DIR}/status):"
     sed 's/^/    /' "${RUN_DIR}/status" 2>/dev/null || echo "    (not written yet - check: journalctl -u styrman-firewall.service)"
     log "done. Verify: systemctl status styrman-firewall.timer styrman-firewall.path"

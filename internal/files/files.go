@@ -178,7 +178,10 @@ func List(root, rel string) ([]Entry, error) {
 	}
 	defer rt.Close()
 	rel = cleanRel(rel)
-	d, err := rt.Open(rel)
+	// O_NONBLOCK for the same reason openReg gives: a guest-planted FIFO or
+	// device on this tree would otherwise wedge the goroutine — and the OS
+	// thread — in open(2) forever (audit 2026-09-08).
+	d, err := rt.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -413,7 +416,7 @@ func ListNames(root, rel string) []string {
 		return nil
 	}
 	defer rt.Close()
-	d, err := rt.Open(cleanRel(rel))
+	d, err := rt.OpenFile(cleanRel(rel), os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil
 	}
@@ -447,7 +450,7 @@ func Save(root, rel string, data []byte, perm os.FileMode) error {
 			return err
 		}
 	}
-	f, err := rt.OpenFile(crel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	f, err := rt.OpenFile(crel, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NONBLOCK, perm)
 	if err != nil {
 		return err
 	}

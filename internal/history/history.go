@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -45,7 +46,12 @@ func List(homeDir, project string) ([]Transcript, error) {
 		return nil, err
 	}
 	defer rt.Close()
-	d, err := rt.Open(logsRel(project))
+	// O_NONBLOCK: this tree is guest-writable, and a planted FIFO or device
+	// would wedge this goroutine and its OS thread in open(2) forever —
+	// enough of them walks the runtime into its thread limit and takes every
+	// tenant down with the process. internal/files sets it for exactly this
+	// reason; these three siblings did not (audit 2026-09-08).
+	d, err := rt.OpenFile(logsRel(project), os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		// Missing dir — or a guest symlink escaping home, which os.Root
 		// refuses with a non-NotExist error we also treat as "none".
@@ -141,11 +147,20 @@ func Search(ctx context.Context, homeDir, project, query string) ([]Match, error
 
 // searchOne scans the tail of one transcript for q (already lowercased).
 func searchOne(rt *os.Root, rel, id, q string, budget int) []Match {
-	f, err := rt.Open(rel)
+	// Lstat BEFORE the open, not after: the previous order opened first and
+	// checked IsRegular second, so a guest-planted FIFO blocked in open(2)
+	// and the check never ran (audit 2026-09-08). O_NONBLOCK is belt and
+	// braces on top of the reordering.
+	if fi, serr := rt.Lstat(rel); serr != nil || !fi.Mode().IsRegular() {
+		return nil
+	}
+	f, err := rt.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
+	// Kept, and now authoritative: the pre-open Lstat stops the block, this
+	// stats the FD actually opened.
 	st, err := f.Stat()
 	if err != nil || !st.Mode().IsRegular() {
 		return nil
@@ -212,7 +227,7 @@ func Read(homeDir, project, id string, maxBytes int64) (string, error) {
 	defer rt.Close()
 	// Confined open: a guest symlink under ~/.styrman/logs pointing outside
 	// the home is refused, not followed.
-	f, err := rt.Open(path.Join(logsRel(project), id+".log"))
+	f, err := rt.OpenFile(path.Join(logsRel(project), id+".log"), os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return "", err
 	}

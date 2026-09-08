@@ -220,6 +220,24 @@ declare -A FAM_RE=(
 fam_key_lan() { KEY="lan ${BASH_REMATCH[3]} ${BASH_REMATCH[4]} ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[5]}"; }
 fam_key_lanhost() { KEY="lanhost ${BASH_REMATCH[3]} ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[4]}"; }
 fam_key_lanpub() { KEY="lanpub ${BASH_REMATCH[3]} ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[4]}"; }
+
+# is_ours <rule line> — does this line carry ANY family's comment tag,
+# well-formed or not? Derived from FAMILY_TAGS, never a hardcoded prefix.
+#
+# The prefilter used to be the literal `--comment "styrman-lan`, which covered
+# all three tags only because they happen to share that prefix. A fourth
+# family tagged anything else would have been skipped by scan_current — the
+# SOLE producer of PURGE — so its rules would be inserted and never revoked,
+# while count_applied, which has no prefilter, still reported the project as
+# applied. Loosen-without-tighten, the one shape this file forbids itself
+# (audit 2026-09-08).
+is_ours() {
+    local t
+    for t in "${FAMILY_TAGS[@]}"; do
+        case "$1" in *"--comment \"styrman-${t}:"*) return 0 ;; esac
+    done
+    return 1
+}
 KEY=""
 # The distinct chains the table touches, built ONCE into a real array.
 # Deliberately NOT a function called as `for chain in $(chains)`: a command
@@ -585,7 +603,7 @@ scan_current() {
             case "${line}" in "-A ${chain} "*) ;; *) continue ;; esac
             n=$((n + 1))
             if [ "${first_drop}" -eq 0 ] && [[ "${line}" == *" -j DROP" ]]; then first_drop=${n}; fi
-            case "${line}" in *'--comment "styrman-lan'*) ;; *) continue ;; esac
+            if ! is_ours "${line}"; then continue; fi
             key=""
             for tag in "${FAMILY_TAGS[@]}"; do
                 [ "${FAM_CHAIN[${tag}]}" = "${chain}" ] || continue
