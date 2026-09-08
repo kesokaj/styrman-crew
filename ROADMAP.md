@@ -72,8 +72,14 @@ timing, not by design.
 access grows to full same-network parity (ADR-066, in design): a LAN-enabled
 project reaches the host's own address and host-published Docker ports, and
 in exchange the credential broker stops serving it the operator's SSH key.
-Five phases, scope confirmed with the operator 2026-09-08, awaiting the
-cold-reader check before any code. Two findings already came out of the
+Six phases, scope confirmed with the operator 2026-09-08. **ADR-066 is
+recorded and R12 is amended with the operator's explicit approval of the
+exact text** ("approve the R12 text and start phase 1"), so requirement and
+design agree before code exists. Phase 1 is a behaviour-preserving refactor
+of the firewall's reconcile machinery — its pass condition is
+`deploy/firewall/test.sh` passing unmodified — because three near-copies of
+that code would put the next BUG-013-class bug in whichever copy was
+missed. Two findings already came out of the
 design work: the host's real exposure is `sshd` password auth plus
 `NOPASSWD` sudo rather than the brokered key (so hardening sshd is a
 deployment precondition, and the broker narrowing is justified by the

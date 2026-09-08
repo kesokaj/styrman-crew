@@ -92,13 +92,25 @@
     driven by an intent file the server writes and root validates by name
     only; it is off by default, visible in the UI while on, revocable at
     runtime, removed with the project, and disappears fail-closed whenever
-    that service is absent. Everything else stays dropped for that project
-    too: the host itself (INPUT drop — it runs sshd and Caddy and the project
-    holds its owner's credentials), host-published Docker ports (the drop sees
-    the post-DNAT container address), every other project and system bridge,
-    cloud metadata and the tailnet; LAN hosts still cannot initiate
-    connections into any project. The cross-project guarantee in the first
-    sentence, `ip_forward=0` and the host-networking clause are unconditional.
+    that service is absent. Full same-network parity (ADR-066, operator
+    approval 2026-09-08): a LAN-enabled project reaches the configured
+    prefixes with the same reach a peer on that network has — the host's own
+    address on the uplink included, and host-published Docker ports included,
+    both only when the root-owned conf opts in (`LAN_ALLOW_HOST`,
+    `LAN_ALLOW_PUBLISHED_PORTS`; absent means no). The host's sshd is inside
+    that allowance, so a deployment enabling it MUST NOT accept password
+    authentication on the uplink. Still dropped for that project: every other
+    project and system bridge, the ingress bridge, cloud metadata, the
+    tailnet and every private range outside the configured prefixes; LAN
+    hosts still cannot initiate connections into any project, which remains
+    NAT-only outbound. A LAN-enabled project is not served the operator's SSH
+    key by the credential broker. (Was, before ADR-066: the host, its
+    published ports and the SSH key were all inside the allowance's
+    exclusions — "the host itself (INPUT drop — it runs sshd and Caddy and
+    the project holds its owner's credentials), host-published Docker ports
+    (the drop sees the post-DNAT container address)".) The cross-project
+    guarantee in the first sentence, `ip_forward=0` and the host-networking
+    clause are unconditional.
 
 13. **R13 — Git is the substrate** (operator directive 2026-08-27): every
     project workspace IS a git repository, without exception — initialized
