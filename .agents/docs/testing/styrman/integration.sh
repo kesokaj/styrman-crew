@@ -44,6 +44,7 @@ cleanup() {
         : > "/run/styrman-firewall/spool/itest.cleanup.$$" 2>/dev/null || true
     fi
     [ -n "${CN}" ] && docker rm -f "${CN}" 2>/dev/null || true
+    [ -n "${PUBCN:-}" ] && docker rm -f "${PUBCN}" 2>/dev/null || true
     [ -n "${ID}" ] && docker network rm "sdb-${ID}" 2>/dev/null || true
     sudo rm -rf "${STATE}" 2>/dev/null || rm -rf "${STATE}" || true
     echo "passed=${PASS} failed=${FAIL} skipped=${SKIP} aborted=${ABORTED}"
@@ -288,6 +289,11 @@ if [ "${STYRMAN_IT_LIVE_LAN:-0}" = 1 ]; then
     LIVE_FW=/run/styrman-firewall
     LIVE_MARK="/var/lib/styrman/netpolicy/lan/${ID}"
     LIVE_VER="$(sed -n 's/^version=//p' "${LIVE_FW}/status" 2>/dev/null || true)"
+    # ADR-066: what the host conf actually opted into. The assertions below
+    # follow root's own report rather than assuming a deployment's choice —
+    # a host that has not opted in must still prove the host stays closed.
+    LIVE_ALLOW_HOST="$(sed -n 's/^lan_allow_host=//p' "${LIVE_FW}/status" 2>/dev/null || true)"
+    LIVE_ALLOW_PUB="$(sed -n 's/^lan_allow_published_ports=//p' "${LIVE_FW}/status" 2>/dev/null || true)"
     HOSTIP="$(ip -4 -o addr show "$(ip -4 route show default | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)"
     if [ -z "${LIVE_VER}" ] || [ "${LIVE_VER}" -lt 3 ] || [ ! -d "$(dirname "${LIVE_MARK}")" ] || [ -z "${GW}" ] || [ -z "${HOSTIP}" ] \
         || ! ping -c1 -W2 "${GW}" >/dev/null 2>&1 || ! sudo -n iptables -S STYRMAN-FWD >/dev/null 2>&1; then
@@ -300,7 +306,42 @@ if [ "${STYRMAN_IT_LIVE_LAN:-0}" = 1 ]; then
         check "live: allow rule at the head of STYRMAN-FWD within 5 s" \
             "sudo -n iptables -S STYRMAN-FWD | sed -n 2p | grep -q -- '-s .* -i ${IFACE} -o .*styrman-lan:${ID}'"
         check "live: in-guest ping to the gateway ${GW} now succeeds" "docker exec ${CN} ping -c1 -W2 ${GW} >/dev/null 2>&1"
-        check "live: the host itself (${HOSTIP}) stays unreachable" "! docker exec ${CN} ping -c1 -W2 ${HOSTIP} >/dev/null 2>&1"
+        if [ "${LIVE_ALLOW_HOST:-0}" = 1 ]; then
+            check "live: host allowance at the head of STYRMAN-IN (ADR-066)" \
+                "sudo -n iptables -S STYRMAN-IN | sed -n 1p | grep -q -- 'styrman-lanhost:${ID}'"
+            check "live: the host (${HOSTIP}) IS reachable with LAN_ALLOW_HOST=1" \
+                "docker exec ${CN} ping -c1 -W2 ${HOSTIP} >/dev/null 2>&1"
+        else
+            check "live: the host itself (${HOSTIP}) stays unreachable (conf has not opted in)" \
+                "! docker exec ${CN} ping -c1 -W2 ${HOSTIP} >/dev/null 2>&1"
+            check "live: and no host allowance exists for it" \
+                "! sudo -n iptables -S STYRMAN-IN | grep -q -- 'styrman-lanhost:${ID}'"
+        fi
+
+        # Published ports, proven against a REAL published container rather
+        # than reasoned about — the gap the v1.23.0 handoff recorded as
+        # "the published-port DNAT shape is reasoned, not observed".
+        if [ "${LIVE_ALLOW_PUB:-0}" = 1 ]; then
+            PUBPORT=18099
+            PUBCN="styrman-it-pub-$$"
+            if docker run -d --rm --name "${PUBCN}" -p "${PUBPORT}:8000" \
+                --entrypoint python3 "${IMAGE}" -m http.server 8000 >/dev/null 2>&1; then
+                for _ in $(seq 1 25); do curl -fsS -m2 "http://${HOSTIP}:${PUBPORT}/" >/dev/null 2>&1 && break; sleep 0.2; done
+                : > "${LIVE_FW}/spool/itest.$$.pub"
+                for _ in $(seq 1 25); do sudo -n iptables -S STYRMAN-FWD | grep -q -- "styrman-lanpub:${ID}" && break; sleep 0.2; done
+                check "live: published-port allowance exists for the project" \
+                    "sudo -n iptables -S STYRMAN-FWD | grep -q -- 'styrman-lanpub:${ID}'"
+                check "live: it never names the ingress bridge's subnet" \
+                    "! sudo -n iptables -S STYRMAN-FWD | grep 'styrman-lanpub:${ID}' | grep -q -- '-d 172.18.'"
+                check "live: the guest reaches the published port on ${HOSTIP}:${PUBPORT}" \
+                    "docker exec ${CN} sh -c 'curl -fsS -m3 http://${HOSTIP}:${PUBPORT}/ >/dev/null'"
+                docker rm -f "${PUBCN}" >/dev/null 2>&1 || true; PUBCN=""
+            else
+                skip "live: could not start the published-port container from ${IMAGE}"
+            fi
+        else
+            skip "live: published-port reachability (LAN_ALLOW_PUBLISHED_PORTS not opted in on this host)"
+        fi
         rm -f "${LIVE_MARK}"
         : > "${LIVE_FW}/spool/itest.$$.off"
         for _ in $(seq 1 25); do sudo -n iptables -S STYRMAN-FWD | grep -q -- "styrman-lan:${ID}" || break; sleep 0.2; done

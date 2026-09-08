@@ -203,11 +203,15 @@ CIDR_RE='^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$'
 # (BUG-013 was a near miss of that kind). Capture order is the order
 # `iptables -S` RENDERS a rule, which is NOT the order the arguments are
 # written in: -s, -d, -i, -o, then the matches.
-FAMILY_TAGS=(lan lanhost)
-declare -A FAM_CHAIN=( [lan]=STYRMAN-FWD [lanhost]=STYRMAN-IN )
+# lan and lanpub share STYRMAN-FWD. Their regexes are disjoint by
+# construction — lan pins an -o, lanpub pins -m conntrack — so "first match
+# wins" in the scan is not an ordering dependency.
+FAMILY_TAGS=(lan lanhost lanpub)
+declare -A FAM_CHAIN=( [lan]=STYRMAN-FWD [lanhost]=STYRMAN-IN [lanpub]=STYRMAN-FWD )
 declare -A FAM_RE=(
     [lan]='^-A STYRMAN-FWD -s ([0-9./]+) -d ([0-9./]+) -i (sdb-[0-9a-f]{11}) -o ([A-Za-z0-9_.-]{1,15}) -m comment --comment "styrman-lan:([0-9a-f-]{36})" -j RETURN$'
     [lanhost]='^-A STYRMAN-IN -s ([0-9./]+) -d ([0-9./]+) -i (sdb-[0-9a-f]{11}) -m comment --comment "styrman-lanhost:([0-9a-f-]{36})" -j RETURN$'
+    [lanpub]='^-A STYRMAN-FWD -s ([0-9./]+) -d ([0-9./]+) -i (sdb-[0-9a-f]{11}) -m conntrack --ctstate DNAT -m comment --comment "styrman-lanpub:([0-9a-f-]{36})" -j RETURN$'
 )
 # fam_key_<tag>: called with BASH_REMATCH still set from the family's regex;
 # sets KEY. The key's FIRST field is always the tag and its LAST is always the
@@ -215,6 +219,7 @@ declare -A FAM_RE=(
 # else, so families may differ in arity.
 fam_key_lan() { KEY="lan ${BASH_REMATCH[3]} ${BASH_REMATCH[4]} ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[5]}"; }
 fam_key_lanhost() { KEY="lanhost ${BASH_REMATCH[3]} ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[4]}"; }
+fam_key_lanpub() { KEY="lanpub ${BASH_REMATCH[3]} ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[4]}"; }
 KEY=""
 # The distinct chains the table touches, built ONCE into a real array.
 # Deliberately NOT a function called as `for chain in $(chains)`: a command
@@ -243,6 +248,9 @@ LAN_DEV=""
 LAN_CIDRS=()
 LAN_ALLOW_HOST=0
 LAN_HOST_ADDRS=()
+LAN_ALLOW_PUB=0
+INGRESS_BRIDGE=""
+LAN_PUB_SUBNETS=()
 CONF_ERROR=""
 PENDING=()
 ERRORS=()
@@ -257,7 +265,7 @@ lan_list=""
 
 # Fail closed on ANY conf problem: no prefixes, no host exposure. A partially
 # trusted conf is not a thing this script has.
-conf_fail() { CONF_ERROR="$1"; LAN_CIDRS=(); LAN_HOST_ADDRS=(); LAN_ALLOW_HOST=0; }
+conf_fail() { CONF_ERROR="$1"; LAN_CIDRS=(); LAN_HOST_ADDRS=(); LAN_ALLOW_HOST=0; LAN_PUB_SUBNETS=(); LAN_ALLOW_PUB=0; }
 is_docker_bridge_name() {
     case "$1" in docker0|sdb-*) return 0 ;; esac
     [[ "$1" =~ ^br-[0-9a-f]{12}$ ]]
@@ -348,30 +356,84 @@ validate_allow_host() {
     return 0
 }
 
+# The bridge subnets a published port may legitimately DNAT into: every
+# Docker bridge that is NOT a project bridge and NOT the ingress. Derived
+# fresh each run from root's own routing view, so a docker network appearing
+# or disappearing is picked up on the next tick — a third source of churn
+# beside LAN_CIDRS edits and DHCP address changes, and the correct behaviour
+# for parity with a LAN peer.
+discover_pub_subnets() {
+    local cidr dev
+    while read -r cidr dev; do
+        [ -n "${cidr}" ] || continue
+        [[ "${cidr}" =~ ${CIDR_RE} ]] || continue
+        is_docker_bridge_name "${dev}" || continue
+        case "${dev}" in sdb-*) continue ;; esac
+        [ "${dev}" != "${INGRESS_BRIDGE}" ] || continue
+        LAN_PUB_SUBNETS+=("${cidr}")
+    done < <(ip -o -4 route show scope link 2>/dev/null | awk '{print $1, $3}')
+    if [ ${#LAN_PUB_SUBNETS[@]} -eq 0 ]; then
+        note "LAN_ALLOW_PUBLISHED_PORTS=1 but no non-project, non-ingress Docker bridge exists - nothing to reach"
+    fi
+}
+
+# LAN_ALLOW_PUBLISHED_PORTS needs a trustworthy INGRESS_BRIDGE, because that
+# value is a safety EXCLUSION: naming the wrong bridge would leave the real
+# ingress inside the allowed set, the exact opposite of the key's purpose.
+# Root cannot ask Docker which bridge is the ingress (a root firewall script
+# must not depend on the daemon), so it does what it can — shape, existence,
+# not a project bridge — refuses the whole family otherwise, and REPORTS what
+# it used so the server, which does know its own ingress network, can compare.
+# A stale value fails closed by itself: Docker derives a bridge name from the
+# network id, so a recreated network yields a name that no longer exists.
+validate_allow_pub() {
+    local want="${1:-}" br="${2:-}"
+    case "${want}" in
+        ''|0) LAN_ALLOW_PUB=0; return 0 ;;
+        1)    ;;
+        *)    conf_fail "LAN_ALLOW_PUBLISHED_PORTS must be 0 or 1"; return 1 ;;
+    esac
+    if [ -z "${br}" ]; then
+        warn "LAN_ALLOW_PUBLISHED_PORTS=1 needs INGRESS_BRIDGE - published-port access NOT applied"; return 0
+    fi
+    if ! [[ "${br}" =~ ^br-[0-9a-f]{12}$ ]]; then
+        warn "INGRESS_BRIDGE ${br} is not a br-<12 hex> Docker bridge name - published-port access NOT applied"; return 0
+    fi
+    if [ ! -e "/sys/class/net/${br}" ]; then
+        warn "INGRESS_BRIDGE ${br} does not exist (recreated network leaves a stale name) - published-port access NOT applied"; return 0
+    fi
+    INGRESS_BRIDGE="${br}"
+    LAN_ALLOW_PUB=1
+    discover_pub_subnets
+    return 0
+}
+
 read_conf() {
-    local line key val dev="" cidrs="" allow_host=""
+    local line key val dev="" cidrs="" allow_host="" allow_pub="" ingress_br=""
     if [ ! -e "${CONF}" ]; then note "conf ${CONF} missing - no local-network prefix configured (deploy/firewall/install.sh writes it)"; return 0; fi
     if [ -L "${CONF}" ] || [ ! -f "${CONF}" ] || [ "$(stat -c %u "${CONF}")" != "0" ] || [ -n "$(find "${CONF}" -maxdepth 0 -perm /022)" ]; then
         conf_fail "conf ignored: must be a root-owned regular file not writable by group/others"; return 0
     fi
     while IFS= read -r line || [ -n "${line}" ]; do
         case "${line}" in ''|'#'*) continue ;; esac
-        if [[ "${line}" =~ ^(LAN_DEV|LAN_CIDRS|LAN_ALLOW_HOST|LAN_ALLOW_PUBLISHED_PORTS)=([A-Za-z0-9./\ ,_-]*)$ ]]; then
+        if [[ "${line}" =~ ^(LAN_DEV|LAN_CIDRS|LAN_ALLOW_HOST|LAN_ALLOW_PUBLISHED_PORTS|INGRESS_BRIDGE)=([A-Za-z0-9./\ ,_-]*)$ ]]; then
             key="${BASH_REMATCH[1]}"; val="${BASH_REMATCH[2]}"
             case "${key}" in
                 LAN_DEV) dev="${val}" ;;
                 LAN_CIDRS) cidrs="${val}" ;;
-                LAN_ALLOW_HOST) allow_host="${val}" ;;
-                # Reserved for Phase 3 of ADR-066: parsed as 0, never acted on.
-                *) if [ -n "${val}" ] && [ "${val}" != "0" ]; then note "conf: ${key} is reserved and ignored"; fi ;;
+                    LAN_ALLOW_HOST) allow_host="${val}" ;;
+                LAN_ALLOW_PUBLISHED_PORTS) allow_pub="${val}" ;;
+                INGRESS_BRIDGE) ingress_br="${val}" ;;
+                *) note "conf: ${key} is not acted on" ;;
             esac
         else
-            conf_fail "conf: unparseable line (only LAN_DEV=, LAN_CIDRS= and LAN_ALLOW_HOST= are accepted)"; return 0
+            conf_fail "conf: unparseable line (LAN_DEV=, LAN_CIDRS=, LAN_ALLOW_HOST=, LAN_ALLOW_PUBLISHED_PORTS=, INGRESS_BRIDGE=)"; return 0
         fi
     done < "${CONF}"
     validate_dev "${dev}" || return 0
     validate_cidrs "${cidrs}" || return 0
     validate_allow_host "${allow_host}" || return 0
+    validate_allow_pub "${allow_pub}" "${ingress_br}" || return 0
 }
 
 # DESIRED: one rule per (uuid marker, LAN prefix). The interface name is
@@ -402,6 +464,16 @@ desire_lanhost() {
     local iface="$1" subnet="$2" uuid="$3" a
     for a in "${LAN_HOST_ADDRS[@]}"; do
         DESIRED["lanhost ${iface} ${subnet} ${a} ${uuid}"]=1
+        WANT_COUNT["${uuid}"]=$(( ${WANT_COUNT[${uuid}]:-0} + 1 ))
+    done
+}
+# LAN_PUB_SUBNETS is empty unless the conf opted in AND a usable ingress
+# bridge was named, so the same register-always/desire-nothing rule applies:
+# turning the key off purges the rules rather than orphaning them.
+desire_lanpub() {
+    local iface="$1" subnet="$2" uuid="$3" d
+    for d in "${LAN_PUB_SUBNETS[@]}"; do
+        DESIRED["lanpub ${iface} ${subnet} ${d} ${uuid}"]=1
         WANT_COUNT["${uuid}"]=$(( ${WANT_COUNT[${uuid}]:-0} + 1 ))
     done
 }
@@ -460,6 +532,18 @@ rule_args_lanhost() {
     local iface src dst uuid
     read -r iface src dst uuid <<<"$1"
     ARGS=(-i "${iface}" -s "${src}" -d "${dst}" -m comment --comment "styrman-lanhost:${uuid}" -j RETURN)
+}
+# lanpub matches only DNATed connections — traffic the host redirected from a
+# published port to a container — so it cannot be used to reach an arbitrary
+# address in the destination bridge's subnet. The destination is a POSITIVE
+# allowlist of bridge subnets rather than a negation, because iptables accepts
+# only one --out-interface per rule and `! -o sdb-+ ! -o <ingress>` is
+# therefore unwritable (probed 2026-09-08).
+rule_args_lanpub() {
+    local iface src dst uuid
+    read -r iface src dst uuid <<<"$1"
+    ARGS=(-i "${iface}" -s "${src}" -d "${dst}" -m conntrack --ctstate DNAT \
+          -m comment --comment "styrman-lanpub:${uuid}" -j RETURN)
 }
 CHAIN=""
 
@@ -600,6 +684,9 @@ write_status() {
         echo "lan_cidrs=${LAN_CIDRS[*]:-}"
         echo "lan_allow_host=${LAN_ALLOW_HOST}"
         echo "lan_host_addrs=${LAN_HOST_ADDRS[*]:-}"
+        echo "lan_allow_published_ports=${LAN_ALLOW_PUB}"
+        echo "ingress_bridge=${INGRESS_BRIDGE}"
+        echo "lan_pub_subnets=${LAN_PUB_SUBNETS[*]:-}"
         echo "lan=${lan_list% }"
         for p in "${PENDING[@]}"; do echo "pending=${p}"; done
         for e in "${ERRORS[@]}"; do echo "error=${e}"; done

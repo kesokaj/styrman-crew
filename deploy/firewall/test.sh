@@ -62,6 +62,12 @@ write_conf() { printf 'LAN_DEV=%s\nLAN_CIDRS=%s\n' "$1" "$2" > "${CONF}"; chmod 
 # ADR-066: the same conf plus an explicit LAN_ALLOW_HOST value.
 write_conf_host() { printf 'LAN_DEV=%s\nLAN_CIDRS=%s\nLAN_ALLOW_HOST=%s\n' "$1" "$2" "$3" > "${CONF}"; chmod 0644 "${CONF}"; }
 in_rules() { iptables -S STYRMAN-IN | grep '^-A'; }
+# Published-port allowances, well-formed ones only (same reason as host_count).
+pub_count() { rules | grep 'styrman-lanpub:' | grep -c -- '-j RETURN' || true; }
+write_conf_pub() {
+    printf 'LAN_DEV=enp0\nLAN_CIDRS=192.0.2.0/24\nLAN_ALLOW_PUBLISHED_PORTS=%s\n%s' "$1" "${2:+INGRESS_BRIDGE=$2$'\n'}" > "${CONF}"
+    chmod 0644 "${CONF}"
+}
 # Only WELL-FORMED host allowances. Section 20 deliberately plants a tagged
 # DROP, which carries the same comment prefix and must not be counted as one.
 host_count() { in_rules | grep 'styrman-lanhost:' | grep -c -- '-j RETURN' || true; }
@@ -206,11 +212,13 @@ check "conf missing -> no conf_error, empty lan_cidrs, no allow rules" "! grep -
 write_conf enp0 192.0.2.0/24; run >/dev/null 2>&1
 check "valid conf again -> allow rule back" "[ \$(allow_count) -eq 1 ] && ! grep -q '^conf_error=' '${RUN}/status'"
 
-echo "=== 13. the still-reserved key is parsed as 0 and ignored"
-# LAN_ALLOW_HOST stopped being reserved in ADR-066 and is exercised in
-# sections 19-21; LAN_ALLOW_PUBLISHED_PORTS is the one still awaiting Phase 3.
-printf 'LAN_DEV=enp0\nLAN_CIDRS=192.0.2.0/24\nLAN_ALLOW_PUBLISHED_PORTS=1\n' > "${CONF}"; run >/dev/null 2>&1
-check "LAN_ALLOW_PUBLISHED_PORTS=1 changes nothing, notes it" "[ \$(allow_count) -eq 1 ] && grep -q '^warn=conf: LAN_ALLOW_PUBLISHED_PORTS is reserved' '${RUN}/status' && ! iptables -S INPUT | grep -q styrman-lan"
+echo "=== 13. an unknown conf key is a grammar error, not a silent ignore"
+# ADR-066 turned both formerly-reserved keys real, so nothing is "reserved"
+# any more; what must still hold is that a key outside the grammar closes
+# every allowance rather than being skipped.
+printf 'LAN_DEV=enp0\nLAN_CIDRS=192.0.2.0/24\nSOMETHING_ELSE=1\n' > "${CONF}"; run >/dev/null 2>&1
+check "unknown key -> conf_error and no allowances" "[ \$(allow_count) -eq 0 ] && grep -q '^conf_error=conf: unparseable line' '${RUN}/status'"
+check "base rules survive an unknown key" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
 write_conf enp0 192.0.2.0/24
 
 echo "=== 14. kernel-bridge uplink: warning only, rule pinned to it"
@@ -305,7 +313,51 @@ rm "${MARK}/${U}"
 run >/dev/null 2>&1
 check "removing the marker removes BOTH families" "[ \$(allow_count) -eq 0 ] && [ \$(host_count) -eq 0 ]"
 
-echo "=== 22. syntax"
+echo "=== 22. published ports: the ingress bridge is excluded by allowlist (ADR-066)"
+# A stand-in Docker topology: docker0 is where a published container lands,
+# and br-0123456789ab plays the ingress. The allowance must reach the first
+# and never the second.
+ip link add docker0 type dummy; ip addr add 172.17.0.1/16 dev docker0; ip link set docker0 up
+ip link add br-0123456789ab type dummy; ip addr add 172.18.0.1/16 dev br-0123456789ab; ip link set br-0123456789ab up
+: > "${MARK}/${U}"
+write_conf_pub 1 br-0123456789ab
+run >/dev/null 2>&1
+# shellcheck disable=SC2034  # referenced inside check() eval strings
+EXPECT_PUB="-A STYRMAN-FWD -s 172.20.0.0/16 -d 172.17.0.0/16 -i ${IFACE} -m conntrack --ctstate DNAT -m comment --comment \"styrman-lanpub:${U}\" -j RETURN"
+check "the docker0 allowance exists, verbatim" "rules | grep -qF -- \"\${EXPECT_PUB}\""
+check "exactly one published-port rule" "[ \$(pub_count) -eq 1 ]"
+check "the INGRESS bridge subnet is NOT reachable" "! rules | grep 'styrman-lanpub:' | grep -q -- '-d 172.18.0.0/16'"
+check "no project bridge subnet is reachable either" "! rules | grep 'styrman-lanpub:' | grep -q -- '-d 172.20.0.0/16'"
+check "status names the bridge root actually used" "[ \"\$(status ingress_bridge)\" = br-0123456789ab ]"
+check "status lan_allow_published_ports=1" "[ \"\$(status lan_allow_published_ports)\" = 1 ]"
+check "status lan_pub_subnets lists only docker0" "[ \"\$(status lan_pub_subnets)\" = 172.17.0.0/16 ]"
+check "it sits ahead of the DROPs" "[ \$(rules | sed -n '1,2p' | grep -c 'styrman-lanpub:') -eq 1 ]"
+before="$(rules)"; run >/dev/null 2>&1; after="$(rules)"
+if [ "${before}" = "${after}" ]; then ok "published-port rule idempotent"; else bad "published-port rule idempotent"; fi
+
+echo "=== 23. published ports fail closed without a usable ingress bridge"
+write_conf_pub 1 ""
+run >/dev/null 2>&1
+check "no INGRESS_BRIDGE -> no published-port rules" "[ \$(pub_count) -eq 0 ]"
+check "and it says why" "grep -q '^warn=LAN_ALLOW_PUBLISHED_PORTS=1 needs INGRESS_BRIDGE' '${RUN}/status'"
+write_conf_pub 1 br-ffffffffffff
+run >/dev/null 2>&1
+check "a stale INGRESS_BRIDGE -> no published-port rules" "[ \$(pub_count) -eq 0 ]"
+check "and it names the stale bridge" "grep -q '^warn=INGRESS_BRIDGE br-ffffffffffff does not exist' '${RUN}/status'"
+write_conf_pub notanumber br-0123456789ab
+run >/dev/null 2>&1
+check "an invalid value closes EVERY allowance" "[ \$(pub_count) -eq 0 ] && [ \$(allow_count) -eq 0 ]"
+check "conf_error names the key" "grep -q '^conf_error=LAN_ALLOW_PUBLISHED_PORTS must be 0 or 1' '${RUN}/status'"
+write_conf_pub 0 br-0123456789ab
+run >/dev/null 2>&1
+check "turning the key off removes the rules" "[ \$(pub_count) -eq 0 ]"
+check "status lan_allow_published_ports=0" "[ \"\$(status lan_allow_published_ports)\" = 0 ]"
+rm "${MARK}/${U}"
+ip link del docker0; ip link del br-0123456789ab
+write_conf enp0 192.0.2.0/24
+run >/dev/null 2>&1
+
+echo "=== 24. syntax"
 check "bash -n" "bash -n '${SCRIPT}' && bash -n '${HERE}/install.sh' && bash -n '${HERE}/test.sh'"
 if command -v shellcheck >/dev/null 2>&1; then
     check "shellcheck (warning+)" "shellcheck -S warning '${SCRIPT}' '${HERE}/install.sh' '${HERE}/test.sh'"

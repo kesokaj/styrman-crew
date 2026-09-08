@@ -24,6 +24,8 @@ RUN_DIR=/run/styrman-firewall
 LAN_DEV=""
 LAN_CIDRS=()
 ALLOW_HOST=""
+ALLOW_PUB=""
+INGRESS_BRIDGE=""
 DRY=0
 
 while [ $# -gt 0 ]; do
@@ -38,6 +40,10 @@ while [ $# -gt 0 ]; do
         --lan-allow-host)
             case "$2" in 0|1) ALLOW_HOST="$2" ;; *) die "--lan-allow-host takes 0 or 1" ;; esac
             shift 2 ;;
+        --lan-allow-published-ports)
+            case "$2" in 0|1) ALLOW_PUB="$2" ;; *) die "--lan-allow-published-ports takes 0 or 1" ;; esac
+            shift 2 ;;
+        --ingress-bridge) INGRESS_BRIDGE="$2"; shift 2 ;;
         --bin-dir) BIN_DIR="$2"; shift 2 ;;
         --unit-dir) UNIT_DIR="$2"; shift 2 ;;
         --tmpfiles-dir) TMPFILES_DIR="$2"; shift 2 ;;
@@ -130,17 +136,50 @@ fi
 # "no allowances" and says so in its status (BUG-009).
 
 # ─── 4. LAN definition — written ONLY IF ABSENT ─────────────────────────────
+# Docker names a bridge `br-` + the first 12 hex of the network id, so the
+# ingress bridge is DERIVED, never typed. Naming the wrong one would leave the
+# real ingress inside the LAN-reachable set, which is the opposite of what the
+# key is for — so a failure to derive is fatal, exactly as it is for LAN_DEV.
+derive_ingress_bridge() {
+    local id
+    [ -n "${INGRESS_BRIDGE}" ] && return 0
+    command -v docker >/dev/null 2>&1 \
+        || die "--lan-allow-published-ports 1 needs the ingress bridge: no docker CLI, pass --ingress-bridge br-<12 hex>"
+    id="$(docker network inspect styrman-ingress --format '{{.Id}}' 2>/dev/null || true)"
+    case "${id}" in
+        [0-9a-f]*) ;;
+        *) die "cannot resolve the styrman-ingress network: pass --ingress-bridge br-<12 hex>" ;;
+    esac
+    INGRESS_BRIDGE="br-$(printf '%s' "${id}" | cut -c1-12)"
+    [ -e "/sys/class/net/${INGRESS_BRIDGE}" ] \
+        || die "derived ingress bridge ${INGRESS_BRIDGE} does not exist - is the ingress running?"
+    log "derived ingress bridge ${INGRESS_BRIDGE} from the styrman-ingress network"
+}
+if [ "${ALLOW_PUB}" = 1 ]; then derive_ingress_bridge; fi
+
 CONF="${ETC_DIR}/firewall.conf"
-if [ -e "${CONF}" ] && [ -n "${ALLOW_HOST}" ]; then
-    # Targeted in-place update of the ONE key, preserving everything else.
+UPDATES=()
+[ -n "${ALLOW_HOST}" ] && UPDATES+=("LAN_ALLOW_HOST=${ALLOW_HOST}")
+[ -n "${ALLOW_PUB}" ] && UPDATES+=("LAN_ALLOW_PUBLISHED_PORTS=${ALLOW_PUB}")
+[ "${ALLOW_PUB}" = 1 ] && UPDATES+=("INGRESS_BRIDGE=${INGRESS_BRIDGE}")
+
+if [ -e "${CONF}" ] && [ ${#UPDATES[@]} -gt 0 ]; then
+    # Targeted in-place update of ONLY the named keys, preserving everything
+    # else. This is the one thing the installer changes in an existing conf:
+    # the file is otherwise never rewritten once present, and opting in to
+    # either allowance is meant to be a deliberate act rather than a hand-edit.
     [ -L "${CONF}" ] && die "${CONF} is a symlink"
     [ "$(stat -c %u "${CONF}")" = "0" ] || die "${CONF} is not root-owned"
-    log "setting LAN_ALLOW_HOST=${ALLOW_HOST} in ${CONF}"
-    if grep -q '^LAN_ALLOW_HOST=' "${CONF}"; then
-        new_conf="$(sed "s/^LAN_ALLOW_HOST=.*/LAN_ALLOW_HOST=${ALLOW_HOST}/" "${CONF}")"
-    else
-        new_conf="$(cat "${CONF}"; printf 'LAN_ALLOW_HOST=%s\n' "${ALLOW_HOST}")"
-    fi
+    new_conf="$(cat "${CONF}")"
+    for kv in "${UPDATES[@]}"; do
+        k="${kv%%=*}"
+        log "setting ${kv} in ${CONF}"
+        if printf '%s\n' "${new_conf}" | grep -q "^${k}="; then
+            new_conf="$(printf '%s\n' "${new_conf}" | sed "s|^${k}=.*|${kv}|")"
+        else
+            new_conf="$(printf '%s\n%s' "${new_conf}" "${kv}")"
+        fi
+    done
     printf '%s\n' "${new_conf}" | sed 's/^/    /'
     if [ "${DRY}" = 0 ]; then
         printf '%s\n' "${new_conf}" > "${CONF}.new.$$"
@@ -167,7 +206,7 @@ else
         log "discovered local prefix(es) on ${LAN_DEV}: ${LAN_CIDRS[*]}"
     fi
     log "writing ${CONF}:"
-    body="$(printf '# written by deploy/firewall/install.sh %s - edit, then: sudo systemctl start styrman-firewall.service\n# LAN_DEV: the uplink device; LAN_CIDRS: space-separated IPv4 prefixes (/16../30) a LAN-enabled\n# project may reach. Validated on every run; an invalid value closes every allowance (fail closed).\n# LAN_ALLOW_HOST (ADR-066): 1 lets a LAN-enabled project reach the HOST itself, sshd included -\n#   a deployment that sets it MUST NOT accept password authentication on the uplink. Default 0.\n# Reserved (parsed as 0): LAN_ALLOW_PUBLISHED_PORTS - needs its own ADR.\nLAN_DEV=%s\nLAN_CIDRS=%s\nLAN_ALLOW_HOST=%s\n' "$(date +%F)" "${LAN_DEV}" "${LAN_CIDRS[*]}" "${ALLOW_HOST:-0}")"
+    body="$(printf '# written by deploy/firewall/install.sh %s - edit, then: sudo systemctl start styrman-firewall.service\n# LAN_DEV: the uplink device; LAN_CIDRS: space-separated IPv4 prefixes (/16../30) a LAN-enabled\n# project may reach. Validated on every run; an invalid value closes every allowance (fail closed).\n# LAN_ALLOW_HOST (ADR-066): 1 lets a LAN-enabled project reach the HOST itself, sshd included -\n#   a deployment that sets it MUST NOT accept password authentication on the uplink. Default 0.\n# LAN_ALLOW_PUBLISHED_PORTS (ADR-066): 1 lets a LAN-enabled project reach host-published Docker\n#   ports. Needs INGRESS_BRIDGE, which excludes the ingress from the reachable set. Default 0.\nLAN_DEV=%s\nLAN_CIDRS=%s\nLAN_ALLOW_HOST=%s\nLAN_ALLOW_PUBLISHED_PORTS=%s\n%s' "$(date +%F)" "${LAN_DEV}" "${LAN_CIDRS[*]}" "${ALLOW_HOST:-0}" "${ALLOW_PUB:-0}" "${INGRESS_BRIDGE:+INGRESS_BRIDGE=${INGRESS_BRIDGE}$'\\n'}")"
     printf '%s\n' "${body}" | sed 's/^/    /'
     if [ "${DRY}" = 0 ]; then
         # Create only when absent; never re-mode an existing directory (the

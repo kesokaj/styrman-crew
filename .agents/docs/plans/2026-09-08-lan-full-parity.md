@@ -379,12 +379,22 @@ otherwise have to hand-edit it. Without the flag on an existing conf it prints
 a note saying the host is not reachable and how to opt in.
 
 ### Phase 3 — Root: published ports
-- [ ] `INGRESS_BRIDGE` conf key, validation, fail-closed skip when unset OR when the named interface does not exist — verify: `test.sh`, AI
-- [ ] `install.sh` DERIVES it from `docker network inspect styrman-ingress` and `die`s on failure, as it already does for `LAN_DEV`; `--ingress-bridge` override — verify: `test.sh` + dry run, AI
-- [ ] Report `ingress_bridge=` in the status file — verify: unit, AI
-- [ ] Allowed-bridge-subnet derivation excluding `sdb-*` and the ingress bridge — verify: `test.sh`, AI
-- [ ] `lanpub` family with `-m conntrack --ctstate DNAT` — verify: `test.sh`, AI
-- [ ] Live proof with a real published container (`docker run -p`) — closes the "reasoned, not observed" gap from the v1.23.0 handoff — verify: `integration.sh`, both
+- [x] `INGRESS_BRIDGE` conf key, validation, fail-closed skip when unset OR when the named interface does not exist — verify: `test.sh`, AI
+- [x] `install.sh` DERIVES it from `docker network inspect styrman-ingress` and `die`s on failure, as it already does for `LAN_DEV`; `--ingress-bridge` override — verify: `test.sh` + dry run, AI
+- [x] Report `ingress_bridge=` in the status file — verify: unit, AI
+- [x] Allowed-bridge-subnet derivation excluding `sdb-*` and the ingress bridge — verify: `test.sh`, AI
+- [x] `lanpub` family with `-m conntrack --ctstate DNAT` — verify: `test.sh`, AI
+- [ ] Live proof with a real published container (`docker run -p`) — closes the "reasoned, not observed" gap from the v1.23.0 handoff — verify: `integration.sh`, both — **written, not yet run against an opted-in host**: the assertions exist in `integration.sh` and take their expectations from root's own status file, so they are correct on a host that has NOT opted in (and assert the host stays closed there). Actually exercising the reachability half needs `LAN_ALLOW_PUBLISHED_PORTS=1` in the production conf, which is the operator's deliberate act.
+
+**Phase 3 result (2026-09-08):** `test.sh` **120 / 0** (was 102 after Phase 2;
++18 checks). `go vet`, `go test ./...` and the ingress module clean.
+Verified against the REAL host topology with a scratch state dir and no
+markers, so no rule was inserted and nothing was granted: root derived
+`lan_host_addrs=192.168.86.58/32`, `ingress_bridge=br-02a045873a1d` and
+`lan_pub_subnets=172.17.0.0/16` — docker0 only, with the ingress
+(`172.18.0.0/16`) and the live project bridge (`172.19.0.0/16`) both
+correctly excluded. `STYRMAN-FWD` and `STYRMAN-IN` byte-identical before and
+after.
 
 ### Phase 4 — Server: broker narrowing
 - [ ] `LanExposed` on `*httpapi.Server`: record OR `st.Applied` OR cannot-confirm, modelled on `network.go:182` `kickLAN` — verify: `go test ./internal/httpapi/`, AI
