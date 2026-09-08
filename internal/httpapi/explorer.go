@@ -434,7 +434,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	// user-management UI was removed (operator Q4, 2026-08-28) — access is
 	// managed via STYRMAN_ALLOWED_EMAILS plus the admin-only /settings/users
 	// endpoints, and the list shouldn't leak to non-admin sessions.
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"version":          Version,
 		"user":             email,
 		"username":         u.Username,
@@ -451,7 +451,14 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		// email-derived default) — the setup flow skips the picker if so.
 		"terminalUsernameChosen": s.usernameChosen(u.Username),
 		"setupComplete":          s.userSetupStatus(r.Context(), u.Username).Done,
-	})
+	}
+	// The host firewall's state (ADR-065) is the operator's business: it
+	// names the LAN prefix and every LAN-enabled project, so admins only.
+	if u.Admin {
+		now := time.Now()
+		resp["hostFirewall"] = s.hostFirewall(s.netpol.Status(now), now)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // updateRuntime changes the operator-tunable settings (admin only): idle

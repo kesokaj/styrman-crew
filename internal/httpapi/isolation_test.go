@@ -54,6 +54,7 @@ func TestProjectIsolationAcrossUsers(t *testing.T) {
 		"/api/projects/" + p.ID,
 		"/api/projects/" + p.ID + "/history",
 		"/api/projects/" + p.ID + "/git/status",
+		"/api/projects/" + p.ID + "/network",
 	} {
 		if w := doAs(t, h, "bob@gmail.com", "GET", path, ""); w.Code != http.StatusNotFound {
 			t.Errorf("bob GET %s: got %d, want 404 (cross-user access must be denied)", path, w.Code)

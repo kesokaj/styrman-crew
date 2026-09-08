@@ -122,6 +122,14 @@ type Config struct {
 	// on the shared bridge from reaching :8080 and spoofing X-Caddy-Email.
 	// Empty = disabled (current behavior) — enable with the ingress.
 	IngressToken string
+	// FirewallRunDir: the root-owned run dir of the host firewall script
+	// (ADR-065) — its spool/ (server-writable, root-consumed trigger files)
+	// and status (root-written, server-read). STYRMAN_FIREWALL_DIR, default
+	// /run/styrman-firewall, bind-mounted into the server container by
+	// compose. Empty disables the per-project LAN feature: every marker is
+	// removed at boot (root then closes every allowance), enables answer 503,
+	// and a record still on reports "cannot confirm".
+	FirewallRunDir string
 }
 
 // Load resolves configuration from the environment with sensible defaults.
@@ -142,13 +150,14 @@ func Load() (*Config, error) {
 		// boots it back exactly where it left off. Real in-guest work (running
 		// DinD containers, a non-shell foreground process in any tmux pane)
 		// blocks the stop regardless of this timer (stopIfIdle's busy probe).
-		idleTimeout:   envDurationOr("STYRMAN_IDLE_TIMEOUT", 8*time.Hour),
-		TranscriptTTL: envDurationOr("STYRMAN_TRANSCRIPT_TTL", 30*24*time.Hour),
-		BrokerAddr:    envOr("STYRMAN_BROKER_ADDR", ":8091"),
-		AuthMode:      envOr("STYRMAN_AUTH", "none"),
-		DevAddr:       os.Getenv("STYRMAN_DEV_ADDR"),
-		SelfContainer: os.Getenv("STYRMAN_SELF_CONTAINER"),
-		IngressToken:  os.Getenv("STYRMAN_INGRESS_TOKEN"),
+		idleTimeout:    envDurationOr("STYRMAN_IDLE_TIMEOUT", 8*time.Hour),
+		TranscriptTTL:  envDurationOr("STYRMAN_TRANSCRIPT_TTL", 30*24*time.Hour),
+		BrokerAddr:     envOr("STYRMAN_BROKER_ADDR", ":8091"),
+		AuthMode:       envOr("STYRMAN_AUTH", "none"),
+		DevAddr:        os.Getenv("STYRMAN_DEV_ADDR"),
+		SelfContainer:  os.Getenv("STYRMAN_SELF_CONTAINER"),
+		IngressToken:   os.Getenv("STYRMAN_INGRESS_TOKEN"),
+		FirewallRunDir: envOr("STYRMAN_FIREWALL_DIR", "/run/styrman-firewall"),
 	}
 	for _, e := range strings.Split(os.Getenv("STYRMAN_ALLOWED_EMAILS"), ",") {
 		if e = strings.TrimSpace(e); e != "" {
@@ -393,6 +402,15 @@ func (c *Config) ProjectWorkspace(user, projectID string) string {
 // UserStateDir returns where a user's metadata stores live.
 func (c *Config) UserStateDir(user string) string {
 	return filepath.Join(c.StateDir, "users", user)
+}
+
+// NetPolicyDir is the server-only tree the per-project LAN markers live in
+// (ADR-065): NetPolicyDir()/lan/<uuid>, an empty file whose NAME is the whole
+// grammar the root firewall script reads. Never a bind source — it sits
+// beside users/ and projects/, never under a mounted home — so no guest can
+// plant a symlink in it (.agents/rules/guest-writable-paths.md).
+func (c *Config) NetPolicyDir() string {
+	return filepath.Join(c.StateDir, "netpolicy")
 }
 
 // DefaultUser is the identity used when auth is off (dev door / local dev):

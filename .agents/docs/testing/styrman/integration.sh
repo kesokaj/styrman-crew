@@ -36,6 +36,13 @@ SKIP=0
 cleanup() {
     say "cleanup"
     kill "${SERVER_PID:-}" 2>/dev/null || true
+    # The opt-in live LAN block writes ONE marker named by this run's project
+    # into production's marker dir; remove it by exact name (ADR-052) — root's
+    # next reconcile then drops the rule.
+    if [ -n "${ID}" ] && [ "${STYRMAN_IT_LIVE_LAN:-0}" = 1 ]; then
+        rm -f "/var/lib/styrman/netpolicy/lan/${ID}" 2>/dev/null || true
+        : > "/run/styrman-firewall/spool/itest.cleanup.$$" 2>/dev/null || true
+    fi
     [ -n "${CN}" ] && docker rm -f "${CN}" 2>/dev/null || true
     [ -n "${ID}" ] && docker network rm "sdb-${ID}" 2>/dev/null || true
     sudo rm -rf "${STATE}" 2>/dev/null || rm -rf "${STATE}" || true
@@ -55,7 +62,11 @@ go build -o "${STATE}/wsprobe" ./cmd/wsprobe/
 
 say "start server (state=${STATE}, port=${PORT})"
 mkdir -p "${STATE}/home/projects"   # legacy layout: exercises the migration
+# STYRMAN_FIREWALL_DIR at a scratch dir (ADR-065): the LAN checks below are
+# deterministic on any host and never touch the production reconciler unless
+# STYRMAN_IT_LIVE_LAN=1 opts into the live block.
 STYRMAN_STATE_DIR="${STATE}" STYRMAN_IMAGE="${IMAGE}" STYRMAN_ADDR="127.0.0.1:${PORT}" \
+    STYRMAN_FIREWALL_DIR="${STATE}/fw" \
     "${STATE}/styrman" > "${STATE}/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 20); do
@@ -227,6 +238,79 @@ check "revoke deletes the link" \
 check "revoked link no longer serves" \
     "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/link/${LINK_TOK}/i.html) = 404 ]"
 
+# Per-project local-network access (ADR-065). The self-hosted server points
+# STYRMAN_FIREWALL_DIR at a scratch dir, so these checks are deterministic on
+# any host: the server half (refusal without root's status, marker + spool on
+# an accepted enable, state derived from root's word) is proven here; the root
+# reconciler itself is exercised by deploy/firewall/test.sh under go test, and
+# end to end by the opt-in live block at the end of this section.
+say "local network (ADR-065)"
+FW="${STATE}/fw"
+MARKER="${STATE}/netpolicy/lan/${ID}"
+NETAPI="${API}/api/projects/${ID}/network"
+# R12's first scripted negative check: a project must not reach the host's
+# LAN. Gated on the isolation chain being readable (a hardened host with
+# passwordless sudo) and the host itself reaching its gateway — otherwise
+# there is no signal to invert.
+GW="$(ip -4 route show default 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit }}')"
+if sudo -n iptables -S STYRMAN-FWD >/dev/null 2>&1 && [ -n "${GW}" ] && ping -c1 -W2 "${GW}" >/dev/null 2>&1; then
+    check "R12: in-guest ping to the LAN gateway ${GW} is dropped" \
+        "! docker exec ${CN} ping -c1 -W2 ${GW} >/dev/null 2>&1"
+else
+    skip "R12 negative check (STYRMAN-FWD not readable via sudo -n, or the host cannot ping its gateway)"
+fi
+check "enable refused without the root reconciler (503, fail closed)" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X PUT ${NETAPI} -d '{\"lanAccess\":true}') = 503 ]"
+check "no marker written by the refused enable" "[ ! -e '${MARKER}' ]"
+check "disable is always accepted (200)" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X PUT ${NETAPI} -d '{\"lanAccess\":false}') = 200 ]"
+check "lanAccess key required (400)" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X PUT ${NETAPI} -d '{}') = 400 ]"
+# Craft root's status so the server accepts an enable, then verify what the
+# server projects for root: the marker named by the uuid and a spool trigger.
+mkdir -p "${FW}/spool"
+printf 'schema=1\nversion=3\napplied_at=%s\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\nlan=\nspool=0\nrun_ms=1\n' "$(date +%s)" > "${FW}/status"
+sleep 2.1   # the server caches the status file for 2 s
+OUT=$(curl -s -X PUT "${NETAPI}" -d '{"lanAccess":true}')
+check "enable accepted with a fresh status → pending, never on" "echo '${OUT}' | grep -q '\"lanState\":\"pending\"'"
+check "marker projected for root (empty file named by the uuid)" "[ -f '${MARKER}' ] && [ ! -s '${MARKER}' ]"
+check "spool trigger dropped" "[ \$(ls -A '${FW}/spool' | wc -l) -ge 1 ]"
+check "project list carries lanState" "curl -fsS ${API}/api/projects | grep -q '\"lanState\":\"pending\"'"
+printf 'schema=1\nversion=3\napplied_at=%s\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\nlan=%s\nspool=0\nrun_ms=1\n' "$(date +%s)" "${ID}" > "${FW}/status"
+sleep 2.1
+check "root reporting it applied → on" "curl -fsS ${NETAPI} | grep -q '\"lanState\":\"on\"'"
+curl -fsS -X PUT "${NETAPI}" -d '{"lanAccess":false}' -o /dev/null
+check "disable removes the marker" "[ ! -e '${MARKER}' ]"
+# Opt-in: prove reachability through the PRODUCTION reconciler. Writes one
+# marker named by this run's own project uuid into the production marker dir
+# (owned by this uid) plus a spool trigger, and removes both by exact name.
+if [ "${STYRMAN_IT_LIVE_LAN:-0}" = 1 ]; then
+    LIVE_FW=/run/styrman-firewall
+    LIVE_MARK="/var/lib/styrman/netpolicy/lan/${ID}"
+    LIVE_VER="$(sed -n 's/^version=//p' "${LIVE_FW}/status" 2>/dev/null || true)"
+    HOSTIP="$(ip -4 -o addr show "$(ip -4 route show default | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)"
+    if [ -z "${LIVE_VER}" ] || [ "${LIVE_VER}" -lt 3 ] || [ ! -d "$(dirname "${LIVE_MARK}")" ] || [ -z "${GW}" ] || [ -z "${HOSTIP}" ] \
+        || ! ping -c1 -W2 "${GW}" >/dev/null 2>&1 || ! sudo -n iptables -S STYRMAN-FWD >/dev/null 2>&1; then
+        bad "live LAN block requested but the production reconciler (version>=3, marker dir, sudo -n iptables) or the gateway is unavailable"
+    else
+        IFACE="sdb-$(printf 'sdb-%s' "${ID}" | sha1sum | cut -c1-11)"
+        : > "${LIVE_MARK}"
+        : > "${LIVE_FW}/spool/itest.$$"
+        for _ in $(seq 1 25); do sudo -n iptables -S STYRMAN-FWD | grep -q -- "styrman-lan:${ID}" && break; sleep 0.2; done
+        check "live: allow rule at the head of STYRMAN-FWD within 5 s" \
+            "sudo -n iptables -S STYRMAN-FWD | sed -n 2p | grep -q -- '-s .* -i ${IFACE} -o .*styrman-lan:${ID}'"
+        check "live: in-guest ping to the gateway ${GW} now succeeds" "docker exec ${CN} ping -c1 -W2 ${GW} >/dev/null 2>&1"
+        check "live: the host itself (${HOSTIP}) stays unreachable" "! docker exec ${CN} ping -c1 -W2 ${HOSTIP} >/dev/null 2>&1"
+        rm -f "${LIVE_MARK}"
+        : > "${LIVE_FW}/spool/itest.$$.off"
+        for _ in $(seq 1 25); do sudo -n iptables -S STYRMAN-FWD | grep -q -- "styrman-lan:${ID}" || break; sleep 0.2; done
+        check "live: rule gone within 5 s of the marker" "! sudo -n iptables -S STYRMAN-FWD | grep -q -- 'styrman-lan:${ID}'"
+        check "live: in-guest ping to the gateway dropped again" "! docker exec ${CN} ping -c1 -W2 ${GW} >/dev/null 2>&1"
+    fi
+else
+    skip "live LAN reachability through the production reconciler (set STYRMAN_IT_LIVE_LAN=1)"
+fi
+
 # Git side panel is a real in-guest client now (the host-side /diff route and the
 # checkpoint machinery were removed as a guest→server RCE vector — ADR-039).
 say "git (in-guest client)"
@@ -290,6 +374,12 @@ OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/${TID}?cols=
     -send "echo revived\r" -wait 8s || true)
 check "boot=1 reconnect boots the stopped VM" "echo '${OUT}' | grep -q revived"
 check "VM running again after boot=1" "docker ps --format '{{.Names}}' | grep -q ${CN}"
+# Re-enable LAN access right before the delete so the destroy path's marker
+# removal (ADR-065: after the wipe block, before the record) is observable.
+printf 'schema=1\nversion=3\napplied_at=%s\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\nlan=\nspool=0\nrun_ms=1\n' "$(date +%s)" > "${STATE}/fw/status"
+sleep 2.1
+curl -fsS -X PUT "${API}/api/projects/${ID}/network" -d '{"lanAccess":true}' -o /dev/null
+check "marker present before the delete" "[ -f '${STATE}/netpolicy/lan/${ID}' ]"
 curl -fsS -X DELETE "${API}/api/projects/${ID}?wipe=true" -o /dev/null
 # Delete is ASYNC since v1.3 (202 + background: destroy container, THEN wipe,
 # THEN remove the record). Wait for the LAST step — the record leaving the
@@ -298,6 +388,7 @@ for _ in $(seq 1 60); do
     curl -fsS "${API}/api/projects" | grep -q "${ID}" || break
     sleep 2
 done
+check "delete removed the LAN marker with the record" "[ ! -e '${STATE}/netpolicy/lan/${ID}' ]"
 check "container gone (async delete)" "! docker ps -a --format '{{.Names}}' | grep -q ${CN}"
 check "workspace wiped" "[ ! -d '${STATE}/projects/${ME}/${ID}' ]"
 check "project gone from API" "! curl -fsS ${API}/api/projects | grep -q ${ID}"

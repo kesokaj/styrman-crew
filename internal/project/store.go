@@ -31,6 +31,15 @@ type Project struct {
 	// dashboard). Per-port so a share is least-privilege; an empty/absent entry
 	// is owner-only. Emails are authenticated by the Google OAuth ingress.
 	SharedPorts map[int][]string `json:"sharedPorts,omitempty"`
+	// LanAccess is the operator-approved local-network exception (ADR-065):
+	// while true the root firewall lets THIS project's microVM reach the
+	// configured LAN prefixes. This record is the intent; the server projects
+	// it as a marker file the root script reconciles, and reports the applied
+	// state from the script's status, never from this field alone.
+	// LanChangedAt is when LanAccess last flipped, so a change that root has
+	// not applied can be reported as pending, then as an error.
+	LanAccess    bool      `json:"lanAccess,omitempty"`
+	LanChangedAt time.Time `json:"lanChangedAt,omitzero"`
 }
 
 // nameRe accepts short kebab-case slugs. First char a letter so names are
@@ -101,6 +110,11 @@ func NewStore(path string) (*Store, error) {
 			slog.Error("quarantining project with invalid id/dir (preserved in .rejected)", "name", p.Name)
 			rejected = append(rejected, p)
 			continue
+		}
+		// A hand-edited lanAccess:true without a timestamp: date it now so the
+		// pending→error clock is defined (not persisted until the next save).
+		if p.LanAccess && p.LanChangedAt.IsZero() {
+			p.LanChangedAt = time.Now().UTC()
 		}
 		s.projects[p.ID] = p
 	}
@@ -201,6 +215,53 @@ func (s *Store) SetPortShares(id string, port int, emails []string) error {
 	}
 	p := prev
 	p.SharedPorts = next
+	s.projects[id] = p
+	if err := s.save(); err != nil {
+		s.projects[id] = prev // roll back (M20)
+		return err
+	}
+	return nil
+}
+
+// SetLanAccess records the local-network intent (ADR-065). LanChangedAt
+// moves only when the value actually changes, so a repeated PUT does not
+// reset the pending clock. Copy-on-write with rollback on a failed save, the
+// SetPortShares shape.
+func (s *Store) SetLanAccess(id string, on bool, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev, ok := s.projects[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if prev.LanAccess == on {
+		return nil
+	}
+	return s.setLanLocked(id, prev, on, now.UTC())
+}
+
+// RestoreLanAccess puts back an EXACT earlier (value, timestamp) pair — the
+// handler's rollback when the marker write fails after the record saved.
+// Unlike SetLanAccess it never stamps "now": a rollback is not a change the
+// user made, and stamping it would move the pending→error clock (review).
+func (s *Store) RestoreLanAccess(id string, on bool, changedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev, ok := s.projects[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if prev.LanAccess == on && prev.LanChangedAt.Equal(changedAt) {
+		return nil
+	}
+	return s.setLanLocked(id, prev, on, changedAt)
+}
+
+// setLanLocked must be called with s.mu held.
+func (s *Store) setLanLocked(id string, prev Project, on bool, changedAt time.Time) error {
+	p := prev
+	p.LanAccess = on
+	p.LanChangedAt = changedAt
 	s.projects[id] = p
 	if err := s.save(); err != nil {
 		s.projects[id] = prev // roll back (M20)

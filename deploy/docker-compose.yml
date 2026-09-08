@@ -108,6 +108,12 @@ services:
       - STYRMAN_PREVIEW_BASE=${STYRMAN_PUBLIC_DOMAIN:-}
       # Private share links (1.2): must equal the ingress PRIVATE_DOMAIN.
       - STYRMAN_PRIVATE_BASE=${STYRMAN_PRIVATE_DOMAIN:-}
+      # Per-project LAN access (ADR-065): the root firewall script's run dir,
+      # bind-mounted below. The server WRITES trigger files into its spool/
+      # (owned by the operator uid) and READS its status; it can change no
+      # rule itself. Before deploy/firewall/install.sh has run on the host the
+      # dir is empty and every project reports "unavailable" — harmless.
+      - STYRMAN_FIREWALL_DIR=/run/styrman-firewall
     # SECURITY: no auth-bypass dev listener in production. It bound 0.0.0.0
     # inside a container joined to every project bridge, handing any project
     # VM unauthenticated admin (confirmed live in the 2026-08-27 review). Local
@@ -118,6 +124,13 @@ services:
       # Same path inside as on the host: bind sources passed to project
       # containers must be valid host paths.
       - /var/lib/styrman:/var/lib/styrman
+      # Root-owned 0755 dir with an operator-owned 0700 spool/ inside (its own
+      # bounded tmpfs); the status file is root 0640, so this rw mount lets
+      # the server write the spool and nothing else (ADR-065). rslave: a
+      # spool tmpfs mounted on the host AFTER this container started still
+      # propagates in — with the default rprivate the container would keep
+      # writing to the unbounded directory underneath (security review).
+      - /run/styrman-firewall:/run/styrman-firewall:rslave
     networks: [styrman-ingress]
     labels:
       # Discovered by the vendored ingress: https://${STYRMAN_HOSTNAME}.${BASE_DOMAIN}

@@ -115,18 +115,18 @@ fi
 # refuses any symlink outright, and asserts the owner before chowning
 # (security review: chown/chmod dereference; a link to /etc would have handed
 # that uid /etc). Refuse, never retarget.
-log "marker dir ${STATE_DIR}/netpolicy/lan (owner ${OWNER_UID}:${OWNER_GID}, non-recursive)"
+log "marker dir ${STATE_DIR}/netpolicy/lan (owner ${OWNER_UID}:${OWNER_GID}, 0750, non-recursive)"
 for d in "${STATE_DIR}/netpolicy" "${STATE_DIR}/netpolicy/lan"; do
     if [ -L "${d}" ]; then die "${d} is a symlink — refusing to touch it (planted? see .agents/rules/guest-writable-paths.md)"; fi
     if [ ! -e "${d}" ]; then
-        run mkdir -m 0755 "${d}"
+        run mkdir -m 0750 "${d}"
         [ "${DRY}" = 1 ] && continue
     fi
     [ -d "${d}" ] || die "${d} exists and is not a directory"
     owner="$(stat -c %u "${d}")"
     if [ "${owner}" != "${OWNER_UID}" ] && [ "${owner}" != "0" ]; then die "${d} is owned by uid ${owner}, expected ${OWNER_UID} or root — refusing"; fi
     run chown -h "${OWNER_UID}:${OWNER_GID}" "${d}"
-    run chmod 0755 "${d}"
+    run chmod 0750 "${d}"
 done
 
 # ─── 4. LAN definition — written ONLY IF ABSENT ─────────────────────────────
