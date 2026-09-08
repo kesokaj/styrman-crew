@@ -72,14 +72,26 @@ timing, not by design.
 access grows to full same-network parity (ADR-066, in design): a LAN-enabled
 project reaches the host's own address and host-published Docker ports, and
 in exchange the credential broker stops serving it the operator's SSH key.
-Six phases, scope confirmed with the operator 2026-09-08. **ADR-066 is
-recorded and R12 is amended with the operator's explicit approval of the
-exact text** ("approve the R12 text and start phase 1"), so requirement and
-design agree before code exists. Phase 1 is a behaviour-preserving refactor
-of the firewall's reconcile machinery — its pass condition is
-`deploy/firewall/test.sh` passing unmodified — because three near-copies of
-that code would put the next BUG-013-class bug in whichever copy was
-missed. Two findings already came out of the
+Six phases; **Phases 1-6 are built, tested and committed** (`543d68f`,
+`b817a8d`, `dfb573e`, `df4c039`, `2321b99` plus the docs pass), 28 of 30
+boxes. ADR-066 is recorded and R12 amended with the operator's explicit
+approval of the exact text. The firewall carries three rule families over one
+generic reconcile; the host and host-published ports are reachable behind
+their own conf opt-ins that both default closed, so **deploying this changes
+nothing until a human runs `install.sh --lan-allow-host 1`**; the credential
+broker withholds the SSH key from a LAN-enabled project. Suites:
+`deploy/firewall/test.sh` 120/0 (was 83), browser e2e 89/0/2-skipped (was
+84), vitest 85 (was 80), `go vet`/`go test ./...`/ingress module clean.
+BUG-020 was found by the new e2e and fixed.
+
+**Two things remain, both needing the operator.** (1) The live published-port
+proof — the "reasoned, not observed" gap from v1.23.0 — needs
+`LAN_ALLOW_PUBLISHED_PORTS=1` on the production conf and briefly publishes a
+port on the LAN. (2) The release itself: `/preflight` over the whole ADR-066
+diff, then tag and deploy. Before `LAN_ALLOW_HOST=1` is ever set on a host,
+its sshd must stop accepting password authentication — R12 requires it and
+`.agents/docs/deploy/remote.md` carries the exact five-step sequence. This
+host is **not** hardened and has **not** opted in. Two findings already came out of the
 design work: the host's real exposure is `sshd` password auth plus
 `NOPASSWD` sudo rather than the brokered key (so hardening sshd is a
 deployment precondition, and the broker narrowing is justified by the

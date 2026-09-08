@@ -449,10 +449,21 @@ disables through the API — which is legitimate because tightening is never
 refused.
 
 ### Phase 6 — Records
-- [ ] ADR-066 amending ADR-065 (5) and D3, carrying the negated-`-o` finding — verify: read, AI
-- [ ] R12 amendment — **operator approval on the exact text first** — verify: user
-- [ ] Guide + `docs/deploy/remote.md` sshd precondition with exact commands — verify: `documentation`, AI
-- [ ] `TODO.md` item (b) corrected — **done 2026-09-08**, its recorded rule shape is invalid — verify: read, AI
+- [x] ADR-066 amending ADR-065 (5) and D3, carrying the negated-`-o` finding — verify: read, AI
+- [x] R12 amendment — operator approved the exact text 2026-09-08 ("approve the R12 text and start phase 1"); ADR-066's amendment entry records it verbatim with its scope — verify: user
+- [x] Guide + `docs/deploy/remote.md` sshd precondition with exact commands — verify: `documentation`, AI
+- [x] `TODO.md` item (b) corrected — its recorded rule shape is invalid, and Phase 3 marked it RESOLVED — verify: read, AI
+**Phase 6 docs (2026-09-08):** `guide.md` corrected in three places — the
+isolation bullet no longer claims the host and its published ports are
+unconditionally dropped, the Local network section describes parity and both
+consequences, and two troubleshooting rows added (ssh push failing after
+enable; the host still unreachable because the conf has not opted in).
+`deploy/remote.md` gained the opt-in commands and the **sshd hardening
+precondition** as a five-step sequence with a second session held open
+throughout, plus the plain statement that this host is not hardened and has
+not opted in. `AGENTS.md`'s architecture bullet and the testing README's
+counts updated.
+
 - [ ] Release: `verifier`, `reviewer`, `security`, `/preflight` — verify: gate report, both
 
 ## Proposed R12 amendment (NOT applied — needs approval)

@@ -90,12 +90,20 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
 - Per-project dockerd: overlay2 on loop-mounted `~/.dockerd/<uuid>.img`.
 - Project networks are isolated from each other (R12); the server joins
   them in the background for the port-preview proxy (ip_forward=0). The
-  root-owned host firewall (`deploy/firewall/`, ADR-065) drops all private
+  root-owned host firewall (`deploy/firewall/`, ADR-065/066) drops all private
   ranges; an admin may allow ONE project's LAN access per project — the
   server writes a name-only marker under `StateDir/netpolicy/lan/` and kicks
-  a root spool, root reconciles a head-of-chain RETURN and writes a status
+  a root spool, root reconciles head-of-chain RETURNs and writes a status
   file the server derives `off/pending/on/error/unavailable` from. The
-  server never touches iptables.
+  server never touches iptables. ADR-066 makes an allowance full
+  same-network parity OUTBOUND — the host itself (`STYRMAN-IN`) and
+  host-published Docker ports included, each behind its own
+  `/etc/styrman/firewall.conf` opt-in (`LAN_ALLOW_HOST`,
+  `LAN_ALLOW_PUBLISHED_PORTS`; absent means no, so converging the script
+  grants nothing). Three rule families share one generic reconcile keyed by
+  `(tag, chain, regex)`. In exchange the credential broker withholds the
+  SSH key from a LAN-enabled project. A deployment setting `LAN_ALLOW_HOST`
+  must first disable sshd password auth — see `.agents/docs/deploy/remote.md`.
 - Full rationale: `.agents/docs/architecture/DECISIONS.md` and
   `.agents/docs/plans/2026-08-26-super-devbox-architecture.md`.
 
