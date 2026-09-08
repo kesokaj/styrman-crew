@@ -131,38 +131,6 @@ func TestDerive(t *testing.T) {
 	}
 }
 
-// TestExposed pins the credential-side rule: the union of record, root's
-// applied set, and "cannot confirm" — never the record alone (ADR-066).
-func TestExposed(t *testing.T) {
-	fresh := parse(t, statusText(now, "lan="+u1+"\n"))
-	empty := parse(t, statusText(now, ""))
-	old := parse(t, statusText(now.Add(-24*time.Hour), "lan="+u1+"\n"))
-
-	for _, c := range []struct {
-		name   string
-		record bool
-		uuid   string
-		st     *Status
-		want   bool
-	}{
-		{"record on, root agrees", true, u1, fresh, true},
-		{"record on, root has not applied yet", true, u1, empty, true},
-		{"record off but root still has the rule", false, u1, fresh, true},
-		{"record off and root confirms it is gone", false, u1, empty, false},
-		{"record off, different project applied", false, u2, fresh, false},
-		{"no status at all is never off", false, u1, nil, true},
-		{"stale status is never off", false, u2, old, true},
-		{"stale status, record off, was applied", false, u1, old, true},
-	} {
-		if got := Exposed(c.record, c.uuid, c.st, now); got != c.want {
-			t.Errorf("%s: Exposed = %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
-// ADR-066 keys. A v3 script writes none of them, and that must parse as
-// "opted into nothing" rather than as an error — the normal state of a host
-// mid-upgrade.
 func TestParseStatusADR066Keys(t *testing.T) {
 	st := parse(t, statusText(now, "lan_allow_host=1\nlan_allow_published_ports=1\ningress_bridge=br-02a045873a1d\nlan_host_addrs=192.168.86.58/32\nlan_pub_subnets=172.17.0.0/16\n"))
 	if !st.AllowHost || !st.AllowPublishedPorts {

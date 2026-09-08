@@ -136,9 +136,13 @@ export function LocalNetwork({ project }: { project: string }) {
           include it.
         </p>
       )}
-      {on && keyWithheld && (
+      {/* Latched: shown whether or not the switch is currently on, because
+          the withholding does not end when LAN access does. */}
+      {keyWithheld && (
         <p className="mt-0.5 text-[11px] text-text-dim">
-          The SSH key is withheld from this project while this is on.
+          {on
+            ? "The SSH key is withheld from this project."
+            : "The SSH key stays withheld — this project has had local network access."}
         </p>
       )}
       {confirm && (
@@ -176,12 +180,14 @@ export function LocalNetwork({ project }: { project: string }) {
                 </p>
               )}
               <p className="mt-2">
-                In exchange, this project will no longer be given your SSH key:
-                the credential broker withholds it while local network access is
-                on, so pushing over SSH from this project will stop working
-                (HTTPS with your token still does). A copy already written into
-                this project's home is removed — but if the project has run
-                before, treat that key as having been exposed to it.
+                In exchange, this project stops being given your SSH key —{" "}
+                <span className="text-text">permanently</span>. The broker will
+                not serve it again even if you turn local network access back
+                off, because turning it off cannot un-expose a key the project
+                already had. Pushing over SSH from this project will stop
+                working; HTTPS with your token still does. A copy already
+                written into this project's home is removed. To get SSH push
+                back, create a new project.
               </p>
               <p className="mt-2">
                 Other projects and cloud metadata stay blocked, and LAN hosts

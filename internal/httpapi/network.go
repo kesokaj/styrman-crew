@@ -144,11 +144,10 @@ func (s *Server) lanView(p project.Project, admin bool, now time.Time) lanView {
 	st := s.netpol.Status(now)
 	state, msg := s.lanFor(p, st, now, admin)
 	v := lanView{LanAccess: p.LanAccess, LanState: state, LanMessage: msg}
-	// What being LAN-enabled costs this project. Derived from the same union
-	// the broker gates on, so the UI cannot disagree with what is actually
-	// served. Not operator-sensitive — it describes the owner's own project —
-	// so unlike Host it is not admin-gated.
-	if netpolicy.Exposed(p.LanAccess, p.ID, st, now) {
+	// The same latch the broker gates on, so the UI cannot disagree with what
+	// is actually served. Not operator-sensitive — it describes the owner's
+	// own project — so unlike Host it is not admin-gated.
+	if p.LanEverEnabled || p.LanAccess {
 		v.CredentialImpact = "ssh-key-withheld"
 	}
 	if !p.LanChangedAt.IsZero() {
@@ -295,15 +294,21 @@ func (s *Server) pruneHostReachingCreds(user, project string) {
 	}
 }
 
-// LanExposed implements credbroker.LanChecker (ADR-066 part 4): may this
-// project reach the local network right now? The Server is the only type that
-// can answer — it holds both the per-user project stores and root's last word,
-// where the orchestrator that serves as the broker's Resolver has neither.
+// LanExposed implements credbroker.LanChecker (ADR-066 part 4, as amended):
+// has this project EVER had local-network access?
 //
-// A deployment with no host firewall half has no LAN feature at all, so only
-// the record can matter there. Without that guard every local dev run would
-// read as "cannot confirm" and silently withhold the SSH key from every
-// project.
+// It reads one boolean off the record and consults root's firewall status not
+// at all. The earlier version asked "could this project reach the LAN right
+// now?" — a union of the record, root's applied set, and cannot-confirm —
+// because the key was meant to come back when LAN access was turned off.
+// That question has no reliable answer: root's rule can outlive the record by
+// up to a minute, and a failed revocation drops a project out of the applied
+// set while its rule is still live, which handed the key to a project that
+// still had LAN reach (release review round 3).
+//
+// Latching removes the question rather than answering it. Re-serving the key
+// later would not un-expose it — the project already had it — so the live
+// state was buying nothing and costing correctness.
 func (s *Server) LanExposed(user, projectID string) (bool, error) {
 	sp, err := s.space(user)
 	if err != nil {
@@ -313,16 +318,7 @@ func (s *Server) LanExposed(user, projectID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	// Installed(), not Enabled(): the latter tests whether a run dir is
-	// CONFIGURED, and STYRMAN_FIREWALL_DIR's production default makes it
-	// permanently true — so the guard written against it was dead code, and
-	// every deployment without a readable status file withheld the SSH key
-	// from every project (release review, 2026-09-08).
-	if !s.netpol.Installed() {
-		return p.LanAccess, nil
-	}
-	now := time.Now()
-	return netpolicy.Exposed(p.LanAccess, p.ID, s.netpol.Status(now), now), nil
+	return p.LanEverEnabled || p.LanAccess, nil
 }
 
 // kickLAN nudges root after a project boots, and only when its record is on

@@ -156,3 +156,33 @@ Fix the six open findings in a fresh session, with an independent review
 afterwards, before tagging. The mechanical gate has passed at every point in
 this release and caught none of the 16 findings; it confirms the tree builds,
 not that it is correct.
+
+---
+
+## Post-gate update (2026-09-08): finding 1 removed by design change, not by a fix
+
+The operator, reading the NO-SHIP report, made the observation that ends
+finding 1: *"A project does not need to have its ssh key copied on the host.
+If enough if we have full network access."*
+
+The live-state machinery existed so the SSH key could come BACK when LAN
+access was turned off. Nobody needed it back — and turning LAN access off
+cannot un-expose a key the project already held. So the withholding now
+**latches**: `Project.LanEverEnabled` is set once and never cleared, and
+`LanExposed` reads that boolean and consults root's firewall status not at
+all.
+
+**Finding 1 is deleted rather than fixed.** So is the class that produced
+three defects across three rounds — the dead `Enabled()` guard, its
+`Installed()` replacement (which `docker-compose`'s bind mount also made
+permanently true), and the failed-revocation hole. `netpolicy.Exposed` and
+`Dir.Installed` are gone; nothing in the credential path reads the status
+file any more. Recorded as an ADR-066 amendment.
+
+**Still open: findings 2-6** (`WANT_COUNT` dedup, the three `install.sh` sshd
+gate defects, and the ordering test's blind spots). The verdict stays
+NO-SHIP.
+
+Suites after the change: `go vet`/`go test ./...` clean,
+`deploy/firewall/test.sh` 121/0, browser e2e 89/0/2-skipped with all five
+ADR-066 checks passing including the new latch assertion, vitest 85.

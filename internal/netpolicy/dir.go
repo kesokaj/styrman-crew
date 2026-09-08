@@ -78,42 +78,9 @@ func New(cfg *config.Config, logger *slog.Logger) *Dir {
 // STYRMAN_FIREWALL_DIR carries a production default, so in practice this is
 // true on every deployment; it is the kill switch for an operator who sets
 // the variable to empty deliberately, not a test for "is the host half
-// present".
+// present". Nothing in the credential path consults it — that decision is a
+// latched boolean on the project record (ADR-066 amendment).
 func (d *Dir) Enabled() bool { return d.statusPath != "" }
-
-// Installed reports whether the host firewall half is actually PRESENT — the
-// root-owned run dir exists. Three states get confused easily and mean
-// different things:
-//
-//   - Enabled()  — a dir is configured. Always true in practice (see above).
-//   - Installed() — the run dir exists, so root's half has been installed.
-//   - Status() != nil — a status file is readable RIGHT NOW.
-//
-// The credential broker needs the middle one. "Installed but the status is
-// unreadable" means a rule may be live and a key must be withheld (BUG-014);
-// "not installed at all" means no rule can exist, and treating that as
-// "cannot confirm" would strip every project's SSH key on a local dev run or
-// a host whose firewall half was never installed. The release review of
-// 2026-09-08 caught exactly that: the guard had been written against
-// Enabled(), which can never be false.
-func (d *Dir) Installed() bool {
-	if d.statusPath == "" {
-		return false
-	}
-	// The STATUS FILE, not its directory. deploy/docker-compose.yml bind-mounts
-	// /run/styrman-firewall into the server, and Docker creates a missing bind
-	// source as an empty directory — so "the dir exists" is true on every
-	// compose host whether or not root's half was ever installed, and the
-	// first version of this check therefore fixed nothing in production
-	// (security review round 2, 2026-09-08).
-	//
-	// Only root can write in that dir, so only root can remove the file; and
-	// /run is a tmpfs, so a reboot clears it at the same moment it clears the
-	// iptables rules the file describes. Absent really does mean "root has
-	// applied nothing".
-	fi, err := os.Stat(d.statusPath)
-	return err == nil && fi.Mode().IsRegular()
-}
 
 // checkMarkersDir creates the marker dir if absent and refuses to use one
 // that is not a real directory — the server's own uid is the only writer

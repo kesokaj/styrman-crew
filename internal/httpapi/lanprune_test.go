@@ -90,44 +90,81 @@ func TestPruneRefusesToFollowAPlantedSymlink(t *testing.T) {
 	}
 }
 
-// LanExposed is the broker's gate. It must be the union of the record, root's
-// applied set, and "cannot confirm" — never the record alone, or a disable
-// would re-serve the key while the firewall rule was still live.
-func TestServerLanExposed(t *testing.T) {
+// LanExposed is the broker's gate, and since the ADR-066 amendment it is a
+// LATCH on the record — no dependency on root's firewall status at all. The
+// point of these cases is that no sequence of status files can make the key
+// come back.
+func TestServerLanExposedLatches(t *testing.T) {
 	n := newNetHarness(t)
 	user := identity.DeriveUsername(n.admin)
-
-	exposed := func(t *testing.T) bool {
+	sp, err := n.s.space(user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exposed := func() bool {
 		t.Helper()
 		got, err := n.s.LanExposed(user, n.pid)
 		if err != nil {
-			t.Fatalf("LanExposed: %v", err)
+			t.Fatal(err)
 		}
 		return got
 	}
 
-	// No status file at all means root's half has applied nothing — not
-	// "unreadable". Withholding here would strip every project's key on a dev
-	// box and on any compose host before the first timer tick, because the
-	// run dir is bind-mounted and always exists (security review round 2).
-	if exposed(t) {
-		t.Error("no status file must fall back to the record, not read as exposed")
+	// Never enabled: the key is served, whatever root's status says or does
+	// not say. This is the case the pre-amendment code got wrong — with no
+	// status file it withheld from every project on the host.
+	if exposed() {
+		t.Error("a project that has never had LAN access must get its key")
 	}
-
-	// Root confirms the rule is absent and the record is off.
 	n.writeStatus(t, time.Now(), "")
-	if exposed(t) {
-		t.Error("record off + root confirms gone must read as not exposed")
+	if exposed() {
+		t.Error("a readable status must not change that")
 	}
 
-	// Record off, but root still lists the rule — the disable window.
-	n.writeStatus(t, time.Now(), "lan="+n.pid+"\n")
-	if !exposed(t) {
-		t.Error("root still applying the rule must read as exposed")
+	// Enabled: withheld.
+	if err := sp.projects.SetLanAccess(n.pid, true, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !exposed() {
+		t.Fatal("an enabled project must be withheld from")
 	}
 
-	// Record on, root has not caught up yet — withhold from the instant of intent.
-	n.writeStatus(t, time.Now(), "")
+	// Disabled again: STILL withheld. Re-serving would not un-expose the key,
+	// and the live-state question it replaced had no reliable answer.
+	if err := sp.projects.SetLanAccess(n.pid, false, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if !exposed() {
+		t.Error("the latch must survive turning LAN access back off")
+	}
+
+	// No status file, stale status, root reporting the rule applied or gone:
+	// none of it can unlatch.
+	for _, extra := range []string{"", "lan=" + n.pid + "\n", "error=" + n.pid + ":delete failed\n"} {
+		n.writeStatus(t, time.Now(), extra)
+		if !exposed() {
+			t.Errorf("status %q must not unlatch", extra)
+		}
+	}
+	n.writeStatus(t, time.Now().Add(-24*time.Hour), "")
+	if !exposed() {
+		t.Error("a stale status must not unlatch")
+	}
+	if err := os.RemoveAll(n.fw); err != nil {
+		t.Fatal(err)
+	}
+	if !exposed() {
+		t.Error("removing the firewall half entirely must not unlatch")
+	}
+}
+
+// The rollback path must not clear the latch: it means the MARKER write
+// failed after the record saved, so the intent was recorded and the broker
+// may already have stopped serving. Un-latching is the one direction that can
+// hand a key back by accident.
+func TestLanLatchSurvivesRollback(t *testing.T) {
+	n := newNetHarness(t)
+	user := identity.DeriveUsername(n.admin)
 	sp, err := n.s.space(user)
 	if err != nil {
 		t.Fatal(err)
@@ -135,17 +172,22 @@ func TestServerLanExposed(t *testing.T) {
 	if err := sp.projects.SetLanAccess(n.pid, true, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if !exposed(t) {
-		t.Error("record on must read as exposed even before root applies it")
+	before, _ := sp.projects.Get(n.pid)
+	if !before.LanEverEnabled {
+		t.Fatal("enable must latch")
 	}
-
-	// A status too old to act on cannot confirm anything.
-	if err := sp.projects.SetLanAccess(n.pid, false, time.Now()); err != nil {
+	if err := sp.projects.RestoreLanAccess(n.pid, false, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	n.writeStatus(t, time.Now().Add(-24*time.Hour), "")
-	if !exposed(t) {
-		t.Error("a stale status must read as exposed")
+	after, _ := sp.projects.Get(n.pid)
+	if after.LanAccess {
+		t.Error("rollback must clear LanAccess")
+	}
+	if !after.LanEverEnabled {
+		t.Error("rollback must NOT clear the latch")
+	}
+	if got, _ := n.s.LanExposed(user, n.pid); !got {
+		t.Error("a rolled-back enable still withholds")
 	}
 }
 
@@ -217,86 +259,6 @@ func TestIngressBridgeMismatchStaysSilentWithoutAnAnswer(t *testing.T) {
 	n.writeStatus(t, time.Now(), "ingress_bridge=br-0123456789ab\n")
 	if w := n.s.ingressBridgeMismatch(n.s.netpol.Status(time.Now())); w != "" {
 		t.Errorf("no opt-in must not warn, got %q", w)
-	}
-}
-
-// Release review 2026-09-08: the guard was written against Enabled(), which
-// STYRMAN_FIREWALL_DIR's production default makes permanently true, so on any
-// deployment without a readable status file the broker withheld the SSH key
-// from EVERY project. The guard is Installed() — the run dir exists — and
-// this pins both halves so the dead-code version cannot come back.
-func TestLanExposedFallsBackToTheRecordWhenTheHostHalfIsAbsent(t *testing.T) {
-	n := newNetHarness(t)
-	user := identity.DeriveUsername(n.admin)
-
-	// A bind-mounted-but-empty run dir is NOT an installed host half: Docker
-	// creates a missing bind source as an empty dir, so the run dir exists on
-	// every compose host. With no status file, the record is all there is.
-	if n.s.netpol.Installed() {
-		t.Fatal("an empty run dir with no status file must not read as installed")
-	}
-	got, err := n.s.LanExposed(user, n.pid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got {
-		t.Error("no status file at all must fall back to the record, not withhold from everyone")
-	}
-
-	// Once root has written a status, an unreadable/absent-from-cache one
-	// means "cannot confirm" and must withhold.
-	n.writeStatus(t, time.Now(), "")
-	if !n.s.netpol.Installed() {
-		t.Fatal("a status file present means the host half is installed")
-	}
-	if err := os.Truncate(filepath.Join(n.fw, "status"), 0); err != nil {
-		t.Fatal(err)
-	}
-	n.s.netpol.Status(time.Now().Add(time.Hour)) // defeat the 2 s cache
-	got, err = n.s.LanExposed(user, n.pid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got {
-		t.Error("installed but unparseable status must read as exposed (BUG-014)")
-	}
-	if err := os.RemoveAll(n.fw); err != nil {
-		t.Fatal(err)
-	}
-	got, err = n.s.LanExposed(user, n.pid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got {
-		t.Error("no host firewall half at all must fall back to the record, not withhold from everyone")
-	}
-
-	// ...but an ON record still withholds, half present or not.
-	sp, err := n.s.space(user)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sp.projects.SetLanAccess(n.pid, true, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ = n.s.LanExposed(user, n.pid); !got {
-		t.Error("an enabled record must withhold even with the host half absent")
-	}
-}
-
-// Enabled() and Installed() are different questions; this pins that they are
-// not accidentally re-merged.
-func TestEnabledIsNotInstalled(t *testing.T) {
-	n := newNetHarness(t)
-	if !n.s.netpol.Enabled() {
-		t.Fatal("a configured run dir means Enabled")
-	}
-	os.RemoveAll(n.fw)
-	if !n.s.netpol.Enabled() {
-		t.Error("Enabled asks whether a dir is CONFIGURED — removing it changes nothing")
-	}
-	if n.s.netpol.Installed() {
-		t.Error("Installed asks whether root has written a STATUS FILE")
 	}
 }
 

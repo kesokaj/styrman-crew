@@ -765,7 +765,10 @@ try {
       if (await lanSwitch().isDisabled()) throw new Error("switch still disabled with a usable status file");
       await lanSwitch().click();
       await page.getByText(/This server itself stays blocked/).waitFor({ timeout: 10000 });
-      await page.getByText(/no longer be given your SSH key/).waitFor({ timeout: 5000 });
+      await page.getByText(/stops being given your SSH key/).waitFor({ timeout: 5000 });
+      // The permanence is the point of the ADR-066 amendment; assert it is
+      // stated, not merely that some credential sentence exists.
+      await page.getByText(/not serve it again even if you turn local network access back off/).waitFor({ timeout: 5000 });
       await page.getByRole("button", { name: /cancel/i }).click();
     });
 
@@ -799,14 +802,20 @@ try {
     // Disabling is always accepted — tightening is never refused, pending or
     // not — so it goes through the API, which is the path a real owner's
     // click takes once root has settled.
-    await check("disable is accepted even while pending, and clears the note", async () => {
+    // The withholding LATCHES (ADR-066 amendment): turning LAN access off
+    // does not hand the key back, because it cannot un-expose a key the
+    // project already held. The note must therefore CHANGE, not disappear.
+    await check("disable is accepted while pending, and the key stays withheld", async () => {
       const res = await page.request.put(`${BASE}/api/projects/${PID}/network`, {
         data: { lanAccess: false },
       });
       if (!res.ok()) throw new Error(`disable returned ${res.status()}`);
-      await panel().getByText(/SSH key is withheld from this project/).waitFor({ state: "detached", timeout: 15000 });
+      await panel().getByText(/SSH key stays withheld/).waitFor({ timeout: 15000 });
       const net = await (await page.request.get(`${BASE}/api/projects/${PID}/network`)).json();
       if (net.lanAccess) throw new Error("still on after disable");
+      if (net.credentialImpact !== "ssh-key-withheld") {
+        throw new Error(`the latch must survive disable, got ${net.credentialImpact}`);
+      }
     });
 
     // Put the world back: later checks (the settings page's host-firewall

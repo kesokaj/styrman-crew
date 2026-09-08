@@ -40,6 +40,18 @@ type Project struct {
 	// not applied can be reported as pending, then as an error.
 	LanAccess    bool      `json:"lanAccess,omitempty"`
 	LanChangedAt time.Time `json:"lanChangedAt,omitzero"`
+	// LanEverEnabled LATCHES the first time LanAccess is turned on and is
+	// never cleared (ADR-066 amendment). It is the whole of the credential
+	// decision: a project that has ever been LAN-enabled is never served the
+	// operator's SSH key again.
+	//
+	// Latching rather than tracking the live state is the point. Re-serving a
+	// key after LAN access is turned off does not un-expose it — the project
+	// had it — so the only thing the live state bought was a window in which
+	// the answer could be WRONG: root's rule can outlive the record by up to
+	// a minute, and a failed revocation drops the project out of the applied
+	// set while its rule is still present. This field cannot be wrong.
+	LanEverEnabled bool `json:"lanEverEnabled,omitempty"`
 }
 
 // nameRe accepts short kebab-case slugs. First char a letter so names are
@@ -262,6 +274,14 @@ func (s *Store) setLanLocked(id string, prev Project, on bool, changedAt time.Ti
 	p := prev
 	p.LanAccess = on
 	p.LanChangedAt = changedAt
+	// One-way. Set on the way ON and never cleared — including by
+	// RestoreLanAccess, whose rollback means the MARKER write failed after the
+	// record saved: the intent was recorded, the broker may already have
+	// stopped serving, and un-latching would be the one direction that can
+	// hand a key back by accident.
+	if on {
+		p.LanEverEnabled = true
+	}
 	s.projects[id] = p
 	if err := s.save(); err != nil {
 		s.projects[id] = prev // roll back (M20)
