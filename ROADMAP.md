@@ -54,9 +54,15 @@ cuts it again within 5 s. The host was left clean afterward: no markers, no
 running. The plan `.agents/docs/plans/2026-09-08-per-project-lan-access.md`
 is CLOSED at 44 of 44 boxes. Records:
 `changes/2026-09-08-lan-access-host-installed-and-proven.md` and
-`testing/2026-09-08-verify-lan-live.md`; commit `3d02384`. The only thing deliberately left unautomated is a human
-flipping the switch in a browser once; every layer beneath it is covered by
-tests. One flaw was recorded rather than fixed and is in `TODO.md`: the
+`testing/2026-09-08-verify-lan-live.md`; commit `3d02384`. The one step
+deliberately left unautomated — a human flipping the switch in a browser —
+was run by the operator on 2026-09-08 and agreed with the tests: LAN gateway
+reachable with the switch ON, unreachable with it OFF, the host itself
+unreachable either way (ADR-065 part (5), by design). Record:
+`changes/2026-09-08-lan-access-operator-flip-verified.md`. **Open decision
+from that run:** the operator wants ON to mean full same-network parity
+including the host, which is an R12 amendment awaiting the
+propose/approve/ADR path — nothing built. One flaw was recorded rather than fixed and is in `TODO.md`: the
 opt-in live LAN block races the production server's 2-minute marker sweep
 (it plants a marker for a project only the test server knows about, and
 production correctly deletes markers it cannot account for) — it passed by
