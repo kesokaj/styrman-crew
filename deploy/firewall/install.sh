@@ -26,6 +26,7 @@ LAN_CIDRS=()
 ALLOW_HOST=""
 ALLOW_PUB=""
 INGRESS_BRIDGE=""
+ACCEPT_SSH_PASSWORDS=0
 DRY=0
 
 while [ $# -gt 0 ]; do
@@ -44,6 +45,9 @@ while [ $# -gt 0 ]; do
             case "$2" in 0|1) ALLOW_PUB="$2" ;; *) die "--lan-allow-published-ports takes 0 or 1" ;; esac
             shift 2 ;;
         --ingress-bridge) INGRESS_BRIDGE="$2"; shift 2 ;;
+        # Deliberate override for a host whose sshd is not on the uplink, or
+        # whose operator accepts the risk knowingly. Never a default.
+        --i-accept-sshd-passwords) ACCEPT_SSH_PASSWORDS=1; shift ;;
         --bin-dir) BIN_DIR="$2"; shift 2 ;;
         --unit-dir) UNIT_DIR="$2"; shift 2 ;;
         --tmpfiles-dir) TMPFILES_DIR="$2"; shift 2 ;;
@@ -67,6 +71,31 @@ bash -n "${SRC}/styrman-firewall.sh"
 OWNER_UID="$(stat -c %u "${STATE_DIR}")"
 OWNER_GID="$(stat -c %g "${STATE_DIR}")"
 [ "${OWNER_UID}" != "0" ] || die "state dir ${STATE_DIR} is root-owned; host-setup.sh chowns it to the operator, and the server runs as that uid"
+
+# R12 states it as a REQUIREMENT: a deployment that lets projects reach the
+# host must not accept password authentication on the uplink. With
+# LAN_ALLOW_HOST=1 an agent inside a project can open connections to this
+# machine's sshd, and a sudo-group login on a NOPASSWD host is root. The
+# deploy guide said so and nothing enforced it (security review 2026-09-08) —
+# a precondition no code checks is a wish. This checks it.
+require_sshd_hardened() {
+    local pw
+    [ "${ACCEPT_SSH_PASSWORDS}" = 1 ] && { log "WARNING: --i-accept-sshd-passwords given; skipping the R12 sshd precondition"; return 0; }
+    command -v sshd >/dev/null 2>&1 || { log "no sshd binary on this host - precondition not applicable"; return 0; }
+    pw="$(sshd -T 2>/dev/null | sed -n 's/^passwordauthentication //p' | head -1)"
+    case "${pw}" in
+        no) log "sshd: passwordauthentication no - R12 precondition met" ;;
+        "") die "cannot read sshd's effective config to check the LAN_ALLOW_HOST precondition (R12). Fix that, or pass --i-accept-sshd-passwords if sshd is not reachable from the LAN." ;;
+        *)  die "REFUSING --lan-allow-host 1: sshd accepts password authentication (passwordauthentication ${pw}).
+    R12 forbids that on a host projects can reach: an agent in a LAN-enabled
+    project could guess its way to a shell, and a sudo-group login is root.
+    Harden first - the five-step sequence, with a second session held open, is
+    in .agents/docs/deploy/remote.md - then re-run this. To override
+    deliberately (sshd not exposed to the LAN), pass --i-accept-sshd-passwords." ;;
+    esac
+}
+
+if [ "${ALLOW_HOST}" = 1 ]; then require_sshd_hardened; fi
 
 # ─── 1. Script + units ──────────────────────────────────────────────────────
 log "installing ${BIN_DIR}/styrman-firewall.sh (version $(sed -n 's/^STYRMAN_FW_VERSION=\([0-9]*\)$/\1/p' "${SRC}/styrman-firewall.sh"))"
@@ -135,6 +164,8 @@ fi
 # construction, and the reconciler already treats an absent marker dir as
 # "no allowances" and says so in its status (BUG-009).
 
+if [ "${ALLOW_PUB}" = 1 ]; then derive_ingress_bridge; fi
+
 # ─── 4. LAN definition — written ONLY IF ABSENT ─────────────────────────────
 # Docker names a bridge `br-` + the first 12 hex of the network id, so the
 # ingress bridge is DERIVED, never typed. Naming the wrong one would leave the
@@ -155,7 +186,7 @@ derive_ingress_bridge() {
         || die "derived ingress bridge ${INGRESS_BRIDGE} does not exist - is the ingress running?"
     log "derived ingress bridge ${INGRESS_BRIDGE} from the styrman-ingress network"
 }
-if [ "${ALLOW_PUB}" = 1 ]; then derive_ingress_bridge; fi
+
 
 CONF="${ETC_DIR}/firewall.conf"
 UPDATES=()
@@ -206,7 +237,14 @@ else
         log "discovered local prefix(es) on ${LAN_DEV}: ${LAN_CIDRS[*]}"
     fi
     log "writing ${CONF}:"
-    body="$(printf '# written by deploy/firewall/install.sh %s - edit, then: sudo systemctl start styrman-firewall.service\n# LAN_DEV: the uplink device; LAN_CIDRS: space-separated IPv4 prefixes (/16../30) a LAN-enabled\n# project may reach. Validated on every run; an invalid value closes every allowance (fail closed).\n# LAN_ALLOW_HOST (ADR-066): 1 lets a LAN-enabled project reach the HOST itself, sshd included -\n#   a deployment that sets it MUST NOT accept password authentication on the uplink. Default 0.\n# LAN_ALLOW_PUBLISHED_PORTS (ADR-066): 1 lets a LAN-enabled project reach host-published Docker\n#   ports. Needs INGRESS_BRIDGE, which excludes the ingress from the reachable set. Default 0.\nLAN_DEV=%s\nLAN_CIDRS=%s\nLAN_ALLOW_HOST=%s\nLAN_ALLOW_PUBLISHED_PORTS=%s\n%s' "$(date +%F)" "${LAN_DEV}" "${LAN_CIDRS[*]}" "${ALLOW_HOST:-0}" "${ALLOW_PUB:-0}" "${INGRESS_BRIDGE:+INGRESS_BRIDGE=${INGRESS_BRIDGE}$'\\n'}")"
+    # The optional key is its own line, built BEFORE the printf. It used to be
+    # inlined as ${VAR:+...$'\n'}, and $'...' is not ANSI-C quoting inside
+    # double quotes — a fresh install wrote a literal backslash-n into the
+    # conf, whose grammar then rejected the line and closed EVERY allowance on
+    # that host (release review, 2026-09-08).
+    INGRESS_LINE=""
+    [ -n "${INGRESS_BRIDGE}" ] && INGRESS_LINE="INGRESS_BRIDGE=${INGRESS_BRIDGE}"
+    body="$(printf '# written by deploy/firewall/install.sh %s - edit, then: sudo systemctl start styrman-firewall.service\n# LAN_DEV: the uplink device; LAN_CIDRS: space-separated IPv4 prefixes (/16../30) a LAN-enabled\n# project may reach. Validated on every run; an invalid value closes every allowance (fail closed).\n# LAN_ALLOW_HOST (ADR-066): 1 lets a LAN-enabled project reach the HOST itself, sshd included -\n#   a deployment that sets it MUST NOT accept password authentication on the uplink. Default 0.\n# LAN_ALLOW_PUBLISHED_PORTS (ADR-066): 1 lets a LAN-enabled project reach host-published Docker\n#   ports. Needs INGRESS_BRIDGE, which excludes the ingress from the reachable set. Default 0.\nLAN_DEV=%s\nLAN_CIDRS=%s\nLAN_ALLOW_HOST=%s\nLAN_ALLOW_PUBLISHED_PORTS=%s\n%s\n' "$(date +%F)" "${LAN_DEV}" "${LAN_CIDRS[*]}" "${ALLOW_HOST:-0}" "${ALLOW_PUB:-0}" "${INGRESS_LINE}")"
     printf '%s\n' "${body}" | sed 's/^/    /'
     if [ "${DRY}" = 0 ]; then
         # Create only when absent; never re-mode an existing directory (the

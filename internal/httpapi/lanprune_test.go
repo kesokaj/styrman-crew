@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -212,5 +214,131 @@ func TestIngressBridgeMismatchStaysSilentWithoutAnAnswer(t *testing.T) {
 	n.writeStatus(t, time.Now(), "ingress_bridge=br-0123456789ab\n")
 	if w := n.s.ingressBridgeMismatch(n.s.netpol.Status(time.Now())); w != "" {
 		t.Errorf("no opt-in must not warn, got %q", w)
+	}
+}
+
+// Release review 2026-09-08: the guard was written against Enabled(), which
+// STYRMAN_FIREWALL_DIR's production default makes permanently true, so on any
+// deployment without a readable status file the broker withheld the SSH key
+// from EVERY project. The guard is Installed() — the run dir exists — and
+// this pins both halves so the dead-code version cannot come back.
+func TestLanExposedFallsBackToTheRecordWhenTheHostHalfIsAbsent(t *testing.T) {
+	n := newNetHarness(t)
+	user := identity.DeriveUsername(n.admin)
+
+	// Installed: no status file yet, so "cannot confirm" — withhold.
+	if !n.s.netpol.Installed() {
+		t.Fatal("the harness creates the run dir, so Installed must be true")
+	}
+	got, err := n.s.LanExposed(user, n.pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got {
+		t.Error("installed + no readable status must read as exposed")
+	}
+
+	// Remove the run dir entirely: the host half is absent, no rule can
+	// exist, and a project whose record is off must still get its key.
+	if err := os.RemoveAll(n.fw); err != nil {
+		t.Fatal(err)
+	}
+	if n.s.netpol.Installed() {
+		t.Fatal("Installed must be false once the run dir is gone")
+	}
+	got, err = n.s.LanExposed(user, n.pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		t.Error("no host firewall half at all must fall back to the record, not withhold from everyone")
+	}
+
+	// ...but an ON record still withholds, half present or not.
+	sp, err := n.s.space(user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sp.projects.SetLanAccess(n.pid, true, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = n.s.LanExposed(user, n.pid); !got {
+		t.Error("an enabled record must withhold even with the host half absent")
+	}
+}
+
+// Enabled() and Installed() are different questions; this pins that they are
+// not accidentally re-merged.
+func TestEnabledIsNotInstalled(t *testing.T) {
+	n := newNetHarness(t)
+	if !n.s.netpol.Enabled() {
+		t.Fatal("a configured run dir means Enabled")
+	}
+	os.RemoveAll(n.fw)
+	if !n.s.netpol.Enabled() {
+		t.Error("Enabled asks whether a dir is CONFIGURED — removing it changes nothing")
+	}
+	if n.s.netpol.Installed() {
+		t.Error("Installed asks whether it EXISTS")
+	}
+}
+
+// A wrong-but-VALID INGRESS_BRIDGE passes root's shape and existence checks
+// while leaving the real ingress reachable. Root cannot detect it; the server
+// must refuse the enable rather than merely noting it in an admin panel
+// (security review, 2026-09-08).
+func TestEnableRefusedOnIngressBridgeMismatch(t *testing.T) {
+	n := newNetHarness(t)
+	n.writeStatus(t, time.Now(), "lan_allow_published_ports=1\ningress_bridge=br-0123456789ab\n")
+
+	// Simulate Docker having answered with a DIFFERENT bridge. Without this
+	// the harness has no Docker, the lookup returns "" and the check is
+	// correctly silent — which is the other half of the contract.
+	n.s.ingressBrMu.Lock()
+	n.s.ingressBr = "br-ffffffffffff"
+	n.s.ingressBrAt = time.Now()
+	n.s.ingressBrMu.Unlock()
+
+	path := "/api/projects/" + n.pid + "/network"
+	w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":true}`)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("enable with a mismatched ingress bridge: got %d, want 503 — body %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "br-ffffffffffff") {
+		t.Errorf("the refusal must name the bridge the network actually uses: %s", w.Body.String())
+	}
+
+	// Disable is never refused, mismatch or not — tightening always wins.
+	if w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":false}`); w.Code != http.StatusOK {
+		t.Errorf("disable must still be accepted: %d %s", w.Code, w.Body.String())
+	}
+
+	// Agreement clears it.
+	n.s.ingressBrMu.Lock()
+	n.s.ingressBr = "br-0123456789ab"
+	n.s.ingressBrAt = time.Now()
+	n.s.ingressBrMu.Unlock()
+	if w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":true}`); w.Code != http.StatusOK {
+		t.Errorf("matching bridges must not block the enable: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// The broker and the prune must agree about which paths are host-reaching.
+// They were written separately and diverged on "./"-spelled paths — one
+// withheld what the other left on disk.
+func TestPrunePredicateMatchesTheBrokers(t *testing.T) {
+	for _, p := range []string{
+		"~/.ssh/id_ed25519", "$HOME/.ssh/id_rsa", ".ssh/config", "./.ssh/key", ".//.ssh/key", "~/.ssh",
+	} {
+		if !credstore.IsHostReaching(p) {
+			t.Errorf("%q must be treated as host-reaching by BOTH callers", p)
+		}
+	}
+	for _, p := range []string{
+		"~/.config/gcloud/application_default_credentials.json", "~/.sshfoo/key", "~/notes/.ssh-notes.md",
+	} {
+		if credstore.IsHostReaching(p) {
+			t.Errorf("%q must not be withheld", p)
+		}
 	}
 }

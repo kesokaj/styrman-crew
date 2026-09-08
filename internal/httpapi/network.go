@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kesokaj/styrman-crew/internal/credstore"
 	"github.com/kesokaj/styrman-crew/internal/files"
 	"github.com/kesokaj/styrman-crew/internal/netpolicy"
 	"github.com/kesokaj/styrman-crew/internal/project"
@@ -196,7 +197,18 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 	s.netMu.Lock()
 	defer s.netMu.Unlock()
 	if on {
-		if ok, reason := netpolicy.Availability(s.netpol.Status(now), now); !ok {
+		st := s.netpol.Status(now)
+		if ok, reason := netpolicy.Availability(st, now); !ok {
+			writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("%s", reason))
+			return
+		}
+		// A wrong-but-VALID INGRESS_BRIDGE passes root's shape and existence
+		// checks while leaving the real ingress inside the published-port
+		// allowlist — the opposite of that key's purpose. Root cannot detect
+		// it without the Docker daemon; the server can, and it refuses rather
+		// than merely mentioning it in an admin panel. An advisory nobody has
+		// to read is not a control (security review, 2026-09-08).
+		if reason := s.ingressBridgeMismatch(st); reason != "" {
 			writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("%s", reason))
 			return
 		}
@@ -267,10 +279,10 @@ func (s *Server) pruneHostReachingCreds(user, project string) {
 	}
 	home := s.cfg.ProjectHome(user, project)
 	for _, c := range fcs {
-		rel := strings.TrimPrefix(strings.TrimPrefix(c.Path, "~/"), "$HOME/")
-		if !(rel == ".ssh" || strings.HasPrefix(rel, ".ssh/")) {
+		if !credstore.IsHostReaching(c.Path) {
 			continue
 		}
+		rel := strings.TrimPrefix(strings.TrimPrefix(c.Path, "~/"), "$HOME/")
 		if !files.Exists(home, rel) {
 			continue
 		}
@@ -301,7 +313,12 @@ func (s *Server) LanExposed(user, projectID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if !s.netpol.Enabled() {
+	// Installed(), not Enabled(): the latter tests whether a run dir is
+	// CONFIGURED, and STYRMAN_FIREWALL_DIR's production default makes it
+	// permanently true — so the guard written against it was dead code, and
+	// every deployment without a readable status file withheld the SSH key
+	// from every project (release review, 2026-09-08).
+	if !s.netpol.Installed() {
 		return p.LanAccess, nil
 	}
 	now := time.Now()

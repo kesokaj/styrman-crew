@@ -19,7 +19,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 
 	"github.com/kesokaj/styrman-crew/internal/credstore"
 )
@@ -40,21 +39,15 @@ type LanChecker interface {
 	LanExposed(user, project string) (bool, error)
 }
 
-// isHostReachingFile reports whether a file credential authenticates to other
-// HOSTS, as opposed to a cloud or API endpoint. Today that is the SSH key and
-// anything else under ~/.ssh.
+// isHostReachingFile delegates to credstore so the broker and the API's
+// prune cannot disagree about which credentials are host-reaching — they did,
+// on "./"-spelled paths (security review, 2026-09-08).
 //
-// Withholding it from a LAN-enabled project closes the transitive path
-// ADR-065 follow-up (g) recorded: project → some LAN host that trusts the
-// operator's key → back to this one. It is NOT what keeps a project off this
-// host — this host has no authorized_keys, verified 2026-09-08 — and the ADR
-// says so, so that the reasoning is not mistaken for a control it is not.
-func isHostReachingFile(path string) bool {
-	p := strings.TrimPrefix(path, "~/")
-	p = strings.TrimPrefix(p, "$HOME/")
-	p = strings.TrimPrefix(p, "./")
-	return p == ".ssh" || strings.HasPrefix(p, ".ssh/")
-}
+// Withholding these from a LAN-enabled project closes the transitive path
+// ADR-065 follow-up (g) recorded: project -> a LAN host that trusts the
+// operator's key -> back to this one. It is NOT what keeps a project off this
+// host; this host has no authorized_keys, verified 2026-09-08.
+func isHostReachingFile(path string) bool { return credstore.IsHostReaching(path) }
 
 // Broker serves credentials to projects over their bridge.
 type Broker struct {

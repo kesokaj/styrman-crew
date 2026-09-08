@@ -74,8 +74,35 @@ func New(cfg *config.Config, logger *slog.Logger) *Dir {
 	return d
 }
 
-// Enabled reports whether a firewall run dir is configured at all.
+// Enabled reports whether a firewall run dir is CONFIGURED at all. Note that
+// STYRMAN_FIREWALL_DIR carries a production default, so in practice this is
+// true on every deployment; it is the kill switch for an operator who sets
+// the variable to empty deliberately, not a test for "is the host half
+// present".
 func (d *Dir) Enabled() bool { return d.statusPath != "" }
+
+// Installed reports whether the host firewall half is actually PRESENT — the
+// root-owned run dir exists. Three states get confused easily and mean
+// different things:
+//
+//   - Enabled()  — a dir is configured. Always true in practice (see above).
+//   - Installed() — the run dir exists, so root's half has been installed.
+//   - Status() != nil — a status file is readable RIGHT NOW.
+//
+// The credential broker needs the middle one. "Installed but the status is
+// unreadable" means a rule may be live and a key must be withheld (BUG-014);
+// "not installed at all" means no rule can exist, and treating that as
+// "cannot confirm" would strip every project's SSH key on a local dev run or
+// a host whose firewall half was never installed. The release review of
+// 2026-09-08 caught exactly that: the guard had been written against
+// Enabled(), which can never be false.
+func (d *Dir) Installed() bool {
+	if d.statusPath == "" {
+		return false
+	}
+	fi, err := os.Stat(filepath.Dir(d.statusPath))
+	return err == nil && fi.IsDir()
+}
 
 // checkMarkersDir creates the marker dir if absent and refuses to use one
 // that is not a real directory — the server's own uid is the only writer

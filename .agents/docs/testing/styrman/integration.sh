@@ -22,6 +22,14 @@ ID=""                 # project UUID, captured after create
 CN=""                 # container name styrman-<uuid>
 STATE="$(mktemp -d /tmp/styrman-itest-XXXX)"
 REPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
+# The script version the server will ACCEPT, read from the Go constant rather
+# than written as a literal. Three stale `version=3` literals survived the
+# ADR-066 bump to 4 here, and because Availability() then rejected this
+# script's own crafted status as "outdated" they failed 8 checks and aborted
+# the run on an unguarded curl, losing 5 more checks entirely. A fixture that
+# encodes a constant must READ the constant.
+MINVER="$(sed -n 's/^const MinScriptVersion = \([0-9][0-9]*\).*/\1/p' "${REPO}/internal/netpolicy/netpolicy.go")"
+[ -n "${MINVER}" ] || { echo "FATAL: cannot read netpolicy.MinScriptVersion from internal/netpolicy/netpolicy.go" >&2; exit 1; }
 API="http://127.0.0.1:${PORT}"
 PASS=0; FAIL=0
 ABORTED=1   # cleared by the last line; a set -e abort must never report green
@@ -270,14 +278,14 @@ check "lanAccess key required (400)" \
 # Craft root's status so the server accepts an enable, then verify what the
 # server projects for root: the marker named by the uuid and a spool trigger.
 mkdir -p "${FW}/spool"
-printf 'schema=1\nversion=3\napplied_at=%s\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\nlan=\nspool=0\nrun_ms=1\n' "$(date +%s)" > "${FW}/status"
+printf 'schema=1\nversion=%s\napplied_at=%s\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\nlan=\nspool=0\nrun_ms=1\n' "${MINVER}" "$(date +%s)" > "${FW}/status"
 sleep 2.1   # the server caches the status file for 2 s
 OUT=$(curl -s -X PUT "${NETAPI}" -d '{"lanAccess":true}')
 check "enable accepted with a fresh status → pending, never on" "echo '${OUT}' | grep -q '\"lanState\":\"pending\"'"
 check "marker projected for root (empty file named by the uuid)" "[ -f '${MARKER}' ] && [ ! -s '${MARKER}' ]"
 check "spool trigger dropped" "[ \$(ls -A '${FW}/spool' | wc -l) -ge 1 ]"
 check "project list carries lanState" "curl -fsS ${API}/api/projects | grep -q '\"lanState\":\"pending\"'"
-printf 'schema=1\nversion=3\napplied_at=%s\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\nlan=%s\nspool=0\nrun_ms=1\n' "$(date +%s)" "${ID}" > "${FW}/status"
+printf 'schema=1\nversion=%s\napplied_at=%s\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\nlan=%s\nspool=0\nrun_ms=1\n' "${MINVER}" "$(date +%s)" "${ID}" > "${FW}/status"
 sleep 2.1
 check "root reporting it applied → on" "curl -fsS ${NETAPI} | grep -q '\"lanState\":\"on\"'"
 curl -fsS -X PUT "${NETAPI}" -d '{"lanAccess":false}' -o /dev/null
@@ -417,9 +425,13 @@ check "boot=1 reconnect boots the stopped VM" "echo '${OUT}' | grep -q revived"
 check "VM running again after boot=1" "docker ps --format '{{.Names}}' | grep -q ${CN}"
 # Re-enable LAN access right before the delete so the destroy path's marker
 # removal (ADR-065: after the wipe block, before the record) is observable.
-printf 'schema=1\nversion=3\napplied_at=%s\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\nlan=\nspool=0\nrun_ms=1\n' "$(date +%s)" > "${STATE}/fw/status"
+printf 'schema=1\nversion=%s\napplied_at=%s\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\nlan=\nspool=0\nrun_ms=1\n' "${MINVER}" "$(date +%s)" > "${STATE}/fw/status"
 sleep 2.1
-curl -fsS -X PUT "${API}/api/projects/${ID}/network" -d '{"lanAccess":true}' -o /dev/null
+# Checked, not bare: under `set -euo pipefail` a 503 here aborted the whole
+# suite and five later checks were never run at all — worse than one FAIL,
+# because a lost check looks like a check that passed.
+check "re-enable accepted before the delete" \
+    "curl -fsS -X PUT '${API}/api/projects/${ID}/network' -d '{\"lanAccess\":true}' -o /dev/null"
 check "marker present before the delete" "[ -f '${STATE}/netpolicy/lan/${ID}' ]"
 curl -fsS -X DELETE "${API}/api/projects/${ID}?wipe=true" -o /dev/null
 # Delete is ASYNC since v1.3 (202 + background: destroy container, THEN wipe,

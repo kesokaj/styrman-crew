@@ -59,6 +59,25 @@ type FileCred struct {
 	Data []byte `json:"-"`    // raw bytes; marshaled base64 in dataB64
 }
 
+// IsHostReaching reports whether a file credential authenticates to other
+// HOSTS rather than to a cloud or API endpoint — today, anything under
+// ~/.ssh. ADR-066 withholds these from a LAN-enabled project.
+//
+// It lives here, beside FileCred, because it is a property of a credential's
+// Path and TWO callers need exactly the same answer: the broker deciding what
+// to serve, and the API deciding what to prune from a project home. They were
+// written separately and had already diverged on "./"-spelled paths — one
+// withheld what the other left on disk (security review, 2026-09-08).
+func IsHostReaching(path string) bool {
+	p := strings.TrimPrefix(path, "~/")
+	p = strings.TrimPrefix(p, "$HOME/")
+	for strings.HasPrefix(p, "./") {
+		p = strings.TrimPrefix(p, "./")
+	}
+	p = strings.TrimPrefix(p, "/")
+	return p == ".ssh" || strings.HasPrefix(p, ".ssh/")
+}
+
 // fileCredWire is the on-disk / on-wire shape (base64 data).
 type fileCredWire struct {
 	ID      string `json:"id"`

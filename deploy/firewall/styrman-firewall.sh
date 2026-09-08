@@ -558,8 +558,18 @@ CHAIN=""
 # is malformed and is removed by number, carrying its chain so the re-read
 # confirms the right list.
 scan_current() {
-    local chain n first_drop line tag key uuid
+    local chain n first_drop line tag key uuid dump
     for chain in "${CHAINS[@]}"; do
+        # A failed chain read must NOT read as "the chain is empty". This is
+        # the sole producer of PURGE and MALFORMED, while reconcile's insert
+        # pass iterates DESIRED independently — so `|| true` here revoked
+        # nothing and still installed everything, the same loosen-without-
+        # tighten shape as the chains-helper defect (release review,
+        # 2026-09-08). Return non-zero and let the caller skip the reconcile.
+        if ! dump="$(ipt -S "${chain}" 2>/dev/null)"; then
+            warn "cannot read ${chain} - LAN reconcile skipped this run (no rule added or removed)"
+            return 1
+        fi
         n=0; first_drop=0
         while IFS= read -r line; do
             case "${line}" in "-A ${chain} "*) ;; *) continue ;; esac
@@ -583,17 +593,26 @@ scan_current() {
             elif [ -z "${DESIRED[${key}]:-}" ]; then
                 PURGE["${key}"]=1; log "lan OFF project=${uuid} rule=${key}"
             fi
-        done < <(ipt -S "${chain}" 2>/dev/null || true)
+        done <<<"${dump}"
     done
+    return 0
 }
 
 # delete_malformed: by number, but only after re-reading the chain and
 # confirming the exact line is still at that number — the only way to name a
 # rule whose text we do not trust enough to replay.
 delete_malformed() {
-    local entry chain target line n
+    local entry chain target line n dump
     for entry in "${MALFORMED[@]}"; do
         chain="${entry%% *}"; target="${entry#* }"
+        # A failed re-read means the position cannot be confirmed, and this is
+        # the one delete that names a rule by position. Leave the rule alone
+        # and say so: an unrecognised rule sitting in the chain is a smaller
+        # problem than deleting whichever rule happens to be at that number.
+        if ! dump="$(ipt -S "${chain}" 2>/dev/null)"; then
+            ERRORS+=("all:cannot re-read ${chain} - malformed rule left in place")
+            continue
+        fi
         n=0
         while IFS= read -r line; do
             case "${line}" in "-A ${chain} "*) ;; *) continue ;; esac
@@ -612,7 +631,7 @@ delete_malformed() {
                 fi
                 break
             fi
-        done < <(ipt -S "${chain}" 2>/dev/null || true)
+        done <<<"${dump}"
     done
 }
 
@@ -644,8 +663,12 @@ reconcile() {
 # APPLIED: what the kernel holds after the reconcile — one read; a uuid is
 # reported only when EVERY one of its (uuid, cidr) rules is present.
 count_applied() {
-    local chain line tag uuid
+    local chain line tag uuid dump
     for chain in "${CHAINS[@]}"; do
+        if ! dump="$(ipt -S "${chain}" 2>/dev/null)"; then
+            ERRORS+=("all:cannot read ${chain} when counting applied rules")
+            continue
+        fi
         while IFS= read -r line; do
             for tag in "${FAMILY_TAGS[@]}"; do
                 [ "${FAM_CHAIN[${tag}]}" = "${chain}" ] || continue
@@ -657,7 +680,7 @@ count_applied() {
                 fi
                 break
             done
-        done < <(ipt -S "${chain}" 2>/dev/null || true)
+        done <<<"${dump}"
     done
     for uuid in "${!WANT_COUNT[@]}"; do
         if [ "${WANT_COUNT[${uuid}]}" -gt 0 ] && [ "${APPLIED_COUNT[${uuid}]:-0}" -eq "${WANT_COUNT[${uuid}]}" ]; then
@@ -702,9 +725,15 @@ write_status() {
 
 read_conf
 collect_desired
-scan_current
-reconcile
-count_applied
+# A scan that could not read a chain leaves the kernel untouched: tightening
+# and loosening are skipped together, the status says why, and the 60 s timer
+# retries. Half a reconcile is the one outcome worse than none.
+if scan_current; then
+    reconcile
+    count_applied
+else
+    ERRORS+=("all:chain read failed - no rules added or removed this run")
+fi
 write_status
 
 # A TriggerLimit or StartLimit hit FAILS the path unit and it stops watching;

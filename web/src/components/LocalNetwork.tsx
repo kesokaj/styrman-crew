@@ -184,9 +184,12 @@ export function LocalNetwork({ project }: { project: string }) {
                 before, treat that key as having been exposed to it.
               </p>
               <p className="mt-2">
-                Other projects, the ingress and cloud metadata stay blocked, and
-                LAN hosts still cannot connect in. Turning it off later cuts open
-                connections immediately.
+                Other projects and cloud metadata stay blocked, and LAN hosts
+                still cannot connect in.{" "}
+                {allowHost
+                  ? "This server's web ingress listens on the host itself, so it is reachable too — host access does not stop at sshd."
+                  : "So is this server's own ingress."}{" "}
+                Turning it off later cuts open connections immediately.
               </p>
             </>
           }

@@ -42,14 +42,17 @@ containers disposable always.
   an optional autostart command (start your dev server or a container the
   moment the session opens).
 - **Hard isolation.** 1 project = 1 microVM (own kernel, own dockerd, own
-  network, own home — projects can never reach each other, nor the host;
-  the LAN only when an admin allows it for that one project, ADR-065).
-  Enforced by a host firewall (dedicated iptables chains,
-  insert-if-missing so there's no unprotected window) that a self-healing
-  systemd timer re-applies every 60s (ADR-036; the host-reachability rule
-  itself is ADR-029), with the per-project LAN allowance applied by the same
-  root script within about a second of the switch. Users never see each
-  other's worlds.
+  network, own home — projects can never reach each other; the LAN only
+  when an admin allows it for that one project, ADR-065/066). Enforced by a
+  host firewall (dedicated iptables chains, insert-if-missing so there's no
+  unprotected window) that a self-healing systemd timer re-applies every 60s
+  (ADR-036; the host-reachability rule itself is ADR-029), with the
+  per-project LAN allowance applied by the same root script within about a
+  second of the switch. An allowance is full same-network parity outbound:
+  the host itself and host-published ports are inside it only where the
+  operator's root-owned conf opts in (both default closed), and a
+  LAN-enabled project stops being served the operator's SSH key. Users never
+  see each other's worlds.
 - **Share previews, not access.** A project owner can grant specific Google
   emails access to ONE exposed port's preview — never the terminal, files,
   dashboard, or other ports. Sharing mints a stable **private link** on its
