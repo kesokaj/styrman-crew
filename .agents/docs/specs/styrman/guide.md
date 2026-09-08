@@ -517,7 +517,7 @@ re-import it.
 
 ```bash
 go test ./...                                        # unit (stores, guards, routing)
-bash .agents/docs/testing/styrman/integration.sh     # 60 checks vs real Kata (3 auto-skip on firewall-hardened hosts)
+bash .agents/docs/testing/styrman/integration.sh     # vs real Kata; check counts (and the auto-skip count on firewall-hardened hosts): .agents/docs/testing/styrman/README.md
 bash web/e2e/run.sh                                  # browser e2e (Playwright, self-hosted; check counts: .agents/docs/testing/styrman/README.md)
 cd web && npm run build                              # UI → dist/client (committed)
 ```

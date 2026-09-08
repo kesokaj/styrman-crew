@@ -37,7 +37,7 @@ STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/     # loopback, no auth
 
 ```bash
 go vet ./... && go test ./... && (cd deploy/caddy/ingress && go test ./...)
-bash .agents/docs/testing/styrman/integration.sh              # 60 checks against real Kata
+bash .agents/docs/testing/styrman/integration.sh              # against real Kata; check counts: .agents/docs/testing/styrman/README.md
 bash web/e2e/run.sh                                           # Playwright e2e; counts in .agents/docs/testing/styrman/README.md
 ```
 

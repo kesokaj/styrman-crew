@@ -579,8 +579,10 @@ uses two DEDICATED chains rather than direct rules on `INPUT`/`DOCKER-USER`:
 - `STYRMAN-FWD` (jumped to from `DOCKER-USER` for `-i sdb-+`, which runs
   first in FORWARD and survives Docker restarts) — first a `physdev
   --physdev-is-bridged` `RETURN` exemption, then a `DROP` for each of
-  `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`. The
-  physdev exemption lets a project reach the credential broker and the
+  `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`,
+  `100.64.0.0/10` (CGNAT — where Tailscale puts a tailnet) and
+  `198.18.0.0/15` (the benchmark range some VPNs route real traffic on; both
+  added 2026-09-02, audit finding). The physdev exemption lets a project reach the credential broker and the
   port-preview proxy on its OWN bridge (both are the server's IPs there):
   with `bridge-nf-call-iptables=1`, genuinely same-bridge L2 traffic still
   traverses `DOCKER-USER`, so without this RETURN the broker was silently
