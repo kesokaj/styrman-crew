@@ -68,6 +68,12 @@ done
 log()  { echo "[styrman-update] $*"; }
 fail() { echo "[styrman-update] FATAL: $*" >&2; exit 1; }
 
+# trusted_dir <dir> — the same bar every other root-written path in this
+# script meets: exists, root-owned, not group/world-writable.
+trusted_dir() {
+    [ -d "$1" ] && [ "$(stat -c %u "$1")" = "0" ] && [ -z "$(find "$1" -maxdepth 0 -perm /022 2>/dev/null)" ]
+}
+
 [ "$(id -u)" -eq 0 ] || fail "must run as root"
 # ADR-052: no production-path default outside the systemd unit. Production runs
 # go through `systemctl start styrman-update.service` (the unit pins
@@ -163,6 +169,13 @@ cd "${DEPLOY_DIR}"
 # Assert the clone is root-owned BEFORE disabling git's ownership guard for it:
 # `-c safe.directory` on a tree someone else can write would let them choose the
 # code this script builds as root (security review).
+# The WORKTREE ROOT first, then .git. The comment above names the threat as
+# "a tree someone else can write", and git's ownership guard covers the
+# repository, not the checked-out files that `docker build` subsequently reads
+# as its build context — nor a gitignored plant, which `git clean -d` (no -x)
+# preserves. Asserting only .git left exactly that gap (audit 2026-09-08).
+trusted_dir "${DEPLOY_DIR}" \
+    || fail "${DEPLOY_DIR} is not a root-owned directory without group/world write — refusing to build from a tree another user can write"
 [ "$(stat -c %u "${DEPLOY_DIR}/.git" 2>/dev/null)" = "0" ] \
     || fail "${DEPLOY_DIR}/.git is not root-owned — refusing to build from a tree another user can write"
 # Mode too: HEAD now also decides what is INSTALLED as root (self-install
@@ -364,11 +377,6 @@ log "deployed=${CURRENT} latest-stable=${LATEST}"
 UPDATER_BIN="${STYRMAN_UPDATER_BIN:-}"
 UPDATER_UNIT_DIR="${STYRMAN_UPDATER_UNIT_DIR:-}"
 SELF_HEAD="" # set by self_install: the verified commit its reads are pinned to
-# trusted_dir <dir> — the same bar every other root-written path in this
-# script meets: exists, root-owned, not group/world-writable.
-trusted_dir() {
-    [ -d "$1" ] && [ "$(stat -c %u "$1")" = "0" ] && [ -z "$(find "$1" -maxdepth 0 -perm /022 2>/dev/null)" ]
-}
 # atomic_install <mode> <git-path> <dst> — content comes from the VERIFIED
 # git object at HEAD (`git show`), never from the worktree: the checkout is a
 # mutable directory that a local user could edit between verification and

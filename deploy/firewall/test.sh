@@ -382,7 +382,7 @@ check "a rule whose tag is NOT a family is left alone" \
 check "and it is not counted as one of ours" "[ \$(allow_count) -eq \$(rules | grep -c 'styrman-lan:') ]"
 iptables -D STYRMAN-FWD -i "${IFACE}" -m comment --comment "styrman-lanfoo:someone-elses" -j RETURN
 
-echo "=== 24. no install.sh function is called before it is defined"
+echo "=== 24. no root script calls a function before it is defined"
 # `bash -n` and shellcheck both accept a call placed ABOVE its definition, and
 # that is how a `derive_ingress_bridge: command not found` reached a release
 # candidate. Executing the paths would be stronger, but install.sh refuses a
@@ -394,27 +394,36 @@ echo "=== 24. no install.sh function is called before it is defined"
 # an unchecked function produced no output, so the suite still said PASS. All
 # of bash's spellings are matched now, and the call search is a word-boundary
 # scan of the whole line, so a call inside $(…) or backticks counts too.
+# Covers BOTH root scripts. styrman-update had no automated test of any kind
+# (audit 2026-09-08) and this exact class was introduced into it while fixing
+# an audit finding — trusted_dir called at :171, defined at :376.
 ORDER_BAD=""
-ORDER_BODY="${T}/install.nocomments"
-grep -vE '^[[:space:]]*#' "${HERE}/install.sh" > "${ORDER_BODY}"
+for SCRIPT_UT in "${HERE}/install.sh" "${HERE}/../update/styrman-update"; do
+[ -f "${SCRIPT_UT}" ] || continue
+ORDER_BODY="${T}/order.nocomments"
+grep -vE '^[[:space:]]*#' "${SCRIPT_UT}" > "${ORDER_BODY}"
 ORDER_FNS=$(sed -nE \
     -e 's/^[[:space:]]*(function[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(\).*/\2/p' \
     -e 's/^[[:space:]]*function[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\{.*/\1/p' \
     "${ORDER_BODY}" | sort -u)
 check "the ordering check actually found some functions" "[ -n '${ORDER_FNS}' ]"
 for fn in ${ORDER_FNS}; do
-    def=$(grep -nE "^[[:space:]]*(function[[:space:]]+${fn}|${fn}[[:space:]]*\(\))" "${ORDER_BODY}" | head -1 | cut -d: -f1)
+    # `|| true` on both: under `set -euo pipefail` a grep that matches nothing
+    # fails the assignment and exits the whole suite silently — which is how
+    # this section stopped after its first script and printed no summary.
+    def=$(grep -nE "^[[:space:]]*(function[[:space:]]+${fn}|${fn}[[:space:]]*\(\))" "${ORDER_BODY}" | head -1 | cut -d: -f1 || true)
     # COMMAND POSITION only. A bare word-boundary scan flagged run() against
     # the path /run/styrman-firewall — a short function name matches
     # everywhere. Start of line, after ; & |, inside $( ), or after then/do/
     # else; followed by whitespace, ;, ) or end of line.
     call=$(grep -nE "(^[[:space:]]*|[;&|(][[:space:]]*|[[:space:]](then|do|else)[[:space:]]+)${fn}([[:space:]]|;|\)|\$)" \
-           "${ORDER_BODY}" | grep -v "^${def}:" | head -1 | cut -d: -f1)
+           "${ORDER_BODY}" | grep -v "^${def}:" | head -1 | cut -d: -f1 || true)
     if [ -n "${call}" ] && [ -n "${def}" ] && [ "${call}" -lt "${def}" ]; then
-        ORDER_BAD="${ORDER_BAD} ${fn}(call@${call} def@${def})"
+        ORDER_BAD="${ORDER_BAD} $(basename "${SCRIPT_UT}"):${fn}(call@${call} def@${def})"
     fi
 done
-check "every install.sh function is defined before its first call" "[ -z '${ORDER_BAD}' ]"
+done
+check "every function in install.sh and styrman-update is defined before its first call" "[ -z '${ORDER_BAD}' ]"
 
 echo "=== 25. syntax"
 check "bash -n" "bash -n '${SCRIPT}' && bash -n '${HERE}/install.sh' && bash -n '${HERE}/test.sh'"
