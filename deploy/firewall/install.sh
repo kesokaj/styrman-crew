@@ -29,6 +29,13 @@ INGRESS_BRIDGE=""
 ACCEPT_SSH_PASSWORDS=0
 DRY=0
 
+# Defined BEFORE the argument loop: that loop calls die on a bad flag
+# value, and a helper defined after its first caller is a
+# `command not found` waiting for the one input that reaches it.
+log() { echo "==> $*"; }
+die() { echo "FATAL: $*" >&2; exit 1; }
+run() { if [ "${DRY}" = 1 ]; then echo "+ $*"; else "$@"; fi; }
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --state-dir) STATE_DIR="$2"; shift 2 ;;
@@ -57,10 +64,6 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-log() { echo "==> $*"; }
-die() { echo "FATAL: $*" >&2; exit 1; }
-run() { if [ "${DRY}" = 1 ]; then echo "+ $*"; else "$@"; fi; }
-
 [ "${DRY}" = 1 ] || [ "$(id -u)" = 0 ] || die "run as root (sudo), or pass --dry-run"
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for f in styrman-firewall.sh styrman-firewall.service styrman-firewall.timer styrman-firewall.path; do
@@ -79,20 +82,45 @@ OWNER_GID="$(stat -c %g "${STATE_DIR}")"
 # deploy guide said so and nothing enforced it (security review 2026-09-08) —
 # a precondition no code checks is a wish. This checks it.
 require_sshd_hardened() {
-    local pw
+    local pw sshd_bin cfg probe
     [ "${ACCEPT_SSH_PASSWORDS}" = 1 ] && { log "WARNING: --i-accept-sshd-passwords given; skipping the R12 sshd precondition"; return 0; }
-    command -v sshd >/dev/null 2>&1 || { log "no sshd binary on this host - precondition not applicable"; return 0; }
-    pw="$(sshd -T 2>/dev/null | sed -n 's/^passwordauthentication //p' | head -1)"
-    case "${pw}" in
-        no) log "sshd: passwordauthentication no - R12 precondition met" ;;
-        "") die "cannot read sshd's effective config to check the LAN_ALLOW_HOST precondition (R12). Fix that, or pass --i-accept-sshd-passwords if sshd is not reachable from the LAN." ;;
-        *)  die "REFUSING --lan-allow-host 1: sshd accepts password authentication (passwordauthentication ${pw}).
+    # sshd lives in /usr/sbin, which is not on a non-root PATH — `command -v`
+    # alone made this gate skip itself on exactly the hosts it guards.
+    sshd_bin="$(command -v sshd || true)"
+    [ -n "${sshd_bin}" ] || for c in /usr/sbin/sshd /sbin/sshd /usr/local/sbin/sshd; do
+        [ -x "${c}" ] && { sshd_bin="${c}"; break; }
+    done
+    [ -n "${sshd_bin}" ] || { log "no sshd binary found - precondition not applicable"; return 0; }
+
+    # `sshd -T` alone reports the GLOBAL config and silently ignores Match
+    # blocks, so `PasswordAuthentication no` plus `Match Address <lan> ->
+    # yes` passes a gate meant to forbid exactly that, for exactly the network
+    # being granted (security review, 2026-09-08). Probe with -C as well, from
+    # an address in the range a project bridge uses, and refuse outright when
+    # any Match block exists — this is a deliberate root-exposure opt-in and
+    # there is an explicit override for the cases we cannot evaluate.
+    pw="$("${sshd_bin}" -T 2>/dev/null | sed -n 's/^passwordauthentication //p' | head -1)"
+    probe="$("${sshd_bin}" -T -C addr=172.16.0.2,user=root,host=styrman-probe 2>/dev/null | sed -n 's/^passwordauthentication //p' | head -1)"
+    cfg="$("${sshd_bin}" -T -d 2>/dev/null >/dev/null; grep -rlE '^[[:space:]]*Match[[:space:]]' /etc/ssh/sshd_config /etc/ssh/sshd_config.d 2>/dev/null | head -1 || true)"
+
+    case "${pw}:${probe}" in
+        no:no) ;;
+        :*|*:) die "cannot read sshd's effective config to check the LAN_ALLOW_HOST precondition (R12). Fix that, or pass --i-accept-sshd-passwords if sshd is not reachable from the granted network." ;;
+        *)     die "REFUSING --lan-allow-host 1: sshd accepts password authentication (global=${pw}, from a project address=${probe}).
     R12 forbids that on a host projects can reach: an agent in a LAN-enabled
     project could guess its way to a shell, and a sudo-group login is root.
     Harden first - the five-step sequence, with a second session held open, is
     in .agents/docs/deploy/remote.md - then re-run this. To override
-    deliberately (sshd not exposed to the LAN), pass --i-accept-sshd-passwords." ;;
+    deliberately (sshd not exposed to the granted network), pass
+    --i-accept-sshd-passwords." ;;
     esac
+    if [ -n "${cfg}" ]; then
+        die "REFUSING --lan-allow-host 1: ${cfg} contains a Match block. sshd -T
+    cannot be evaluated for every Match case, and one re-enabling password
+    authentication for the granted network would defeat this check silently.
+    Review it, then pass --i-accept-sshd-passwords if it is safe."
+    fi
+    log "sshd: passwordauthentication no, globally and from a project address, no Match blocks - R12 precondition met"
 }
 
 if [ "${ALLOW_HOST}" = 1 ]; then require_sshd_hardened; fi
@@ -164,8 +192,6 @@ fi
 # construction, and the reconciler already treats an absent marker dir as
 # "no allowances" and says so in its status (BUG-009).
 
-if [ "${ALLOW_PUB}" = 1 ]; then derive_ingress_bridge; fi
-
 # ─── 4. LAN definition — written ONLY IF ABSENT ─────────────────────────────
 # Docker names a bridge `br-` + the first 12 hex of the network id, so the
 # ingress bridge is DERIVED, never typed. Naming the wrong one would leave the
@@ -186,6 +212,8 @@ derive_ingress_bridge() {
         || die "derived ingress bridge ${INGRESS_BRIDGE} does not exist - is the ingress running?"
     log "derived ingress bridge ${INGRESS_BRIDGE} from the styrman-ingress network"
 }
+
+if [ "${ALLOW_PUB}" = 1 ]; then derive_ingress_bridge; fi
 
 
 CONF="${ETC_DIR}/firewall.conf"

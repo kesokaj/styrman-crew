@@ -123,7 +123,7 @@ mount namespace with its own sysfs remounted, so `/sys/class/net` shows only
 the namespace's dummy interfaces and `iptables` starts from an EMPTY ruleset
 — against `mktemp` state/run/conf paths (the script takes every path from
 the environment and has no defaults). `internal/netpolicy/script_test.go`
-runs it under `go test ./...` (120 checks since ADR-066; skips loudly where user namespaces
+runs it under `go test ./...` (121 checks since ADR-066; skips loudly where user namespaces
 are unavailable) and, when `sudo -n` works, asserts the host's
 `STYRMAN-FWD` chain is byte-identical before and after. `test.sh` refuses to
 run in the host's network namespace before it mounts or changes anything.

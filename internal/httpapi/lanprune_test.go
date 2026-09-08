@@ -106,9 +106,12 @@ func TestServerLanExposed(t *testing.T) {
 		return got
 	}
 
-	// No status file at all: root's word is unreadable, which is never "off".
-	if !exposed(t) {
-		t.Error("no status file must read as exposed")
+	// No status file at all means root's half has applied nothing — not
+	// "unreadable". Withholding here would strip every project's key on a dev
+	// box and on any compose host before the first timer tick, because the
+	// run dir is bind-mounted and always exists (security review round 2).
+	if exposed(t) {
+		t.Error("no status file must fall back to the record, not read as exposed")
 	}
 
 	// Root confirms the rule is absent and the record is off.
@@ -226,25 +229,39 @@ func TestLanExposedFallsBackToTheRecordWhenTheHostHalfIsAbsent(t *testing.T) {
 	n := newNetHarness(t)
 	user := identity.DeriveUsername(n.admin)
 
-	// Installed: no status file yet, so "cannot confirm" — withhold.
-	if !n.s.netpol.Installed() {
-		t.Fatal("the harness creates the run dir, so Installed must be true")
+	// A bind-mounted-but-empty run dir is NOT an installed host half: Docker
+	// creates a missing bind source as an empty dir, so the run dir exists on
+	// every compose host. With no status file, the record is all there is.
+	if n.s.netpol.Installed() {
+		t.Fatal("an empty run dir with no status file must not read as installed")
 	}
 	got, err := n.s.LanExposed(user, n.pid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got {
-		t.Error("installed + no readable status must read as exposed")
+	if got {
+		t.Error("no status file at all must fall back to the record, not withhold from everyone")
 	}
 
-	// Remove the run dir entirely: the host half is absent, no rule can
-	// exist, and a project whose record is off must still get its key.
-	if err := os.RemoveAll(n.fw); err != nil {
+	// Once root has written a status, an unreadable/absent-from-cache one
+	// means "cannot confirm" and must withhold.
+	n.writeStatus(t, time.Now(), "")
+	if !n.s.netpol.Installed() {
+		t.Fatal("a status file present means the host half is installed")
+	}
+	if err := os.Truncate(filepath.Join(n.fw, "status"), 0); err != nil {
 		t.Fatal(err)
 	}
-	if n.s.netpol.Installed() {
-		t.Fatal("Installed must be false once the run dir is gone")
+	n.s.netpol.Status(time.Now().Add(time.Hour)) // defeat the 2 s cache
+	got, err = n.s.LanExposed(user, n.pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got {
+		t.Error("installed but unparseable status must read as exposed (BUG-014)")
+	}
+	if err := os.RemoveAll(n.fw); err != nil {
+		t.Fatal(err)
 	}
 	got, err = n.s.LanExposed(user, n.pid)
 	if err != nil {
@@ -279,7 +296,7 @@ func TestEnabledIsNotInstalled(t *testing.T) {
 		t.Error("Enabled asks whether a dir is CONFIGURED — removing it changes nothing")
 	}
 	if n.s.netpol.Installed() {
-		t.Error("Installed asks whether it EXISTS")
+		t.Error("Installed asks whether root has written a STATUS FILE")
 	}
 }
 

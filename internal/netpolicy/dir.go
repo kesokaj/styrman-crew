@@ -100,8 +100,19 @@ func (d *Dir) Installed() bool {
 	if d.statusPath == "" {
 		return false
 	}
-	fi, err := os.Stat(filepath.Dir(d.statusPath))
-	return err == nil && fi.IsDir()
+	// The STATUS FILE, not its directory. deploy/docker-compose.yml bind-mounts
+	// /run/styrman-firewall into the server, and Docker creates a missing bind
+	// source as an empty directory — so "the dir exists" is true on every
+	// compose host whether or not root's half was ever installed, and the
+	// first version of this check therefore fixed nothing in production
+	// (security review round 2, 2026-09-08).
+	//
+	// Only root can write in that dir, so only root can remove the file; and
+	// /run is a tmpfs, so a reboot clears it at the same moment it clears the
+	// iptables rules the file describes. Absent really does mean "root has
+	// applied nothing".
+	fi, err := os.Stat(d.statusPath)
+	return err == nil && fi.Mode().IsRegular()
 }
 
 // checkMarkersDir creates the marker dir if absent and refuses to use one

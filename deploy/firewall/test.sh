@@ -357,7 +357,29 @@ ip link del docker0; ip link del br-0123456789ab
 write_conf enp0 192.0.2.0/24
 run >/dev/null 2>&1
 
-echo "=== 24. syntax"
+echo "=== 24. no install.sh function is called before it is defined"
+# `bash -n` and shellcheck both accept a call placed ABOVE its definition, and
+# that is exactly how a `derive_ingress_bridge: command not found` reached a
+# release candidate (security review round 2, 2026-09-08). Executing the path
+# would be the stronger check, but install.sh refuses a root-owned state dir
+# and this namespace maps only uid 0 — so assert the ordering structurally.
+ORDER_BAD=""
+for fn in $(grep -oE '^[a-z_]+\(\)' "${HERE}/install.sh" | tr -d '()'); do
+    # Compare positions in the SAME comment-stripped view: comments mention
+    # these words in prose ("# run dir, the marker directory" is not a call),
+    # and stripping them renumbers every line.
+    body="${T}/install.nocomments"
+    grep -vE '^[[:space:]]*#' "${HERE}/install.sh" > "${body}"
+    def=$(grep -nE "^${fn}\(\)" "${body}" | head -1 | cut -d: -f1)
+    call=$(grep -nE "(^|[;&|[:space:]])${fn}([[:space:];&|)]|$)" "${body}" \
+           | grep -v "^${def}:" | head -1 | cut -d: -f1)
+    if [ -n "${call}" ] && [ "${call}" -lt "${def}" ]; then
+        ORDER_BAD="${ORDER_BAD} ${fn}(line ${call} before ${def})"
+    fi
+done
+check "every install.sh function is defined before its first call" "[ -z '${ORDER_BAD}' ]"
+
+echo "=== 25. syntax"
 check "bash -n" "bash -n '${SCRIPT}' && bash -n '${HERE}/install.sh' && bash -n '${HERE}/test.sh'"
 if command -v shellcheck >/dev/null 2>&1; then
     check "shellcheck (warning+)" "shellcheck -S warning '${SCRIPT}' '${HERE}/install.sh' '${HERE}/test.sh'"
