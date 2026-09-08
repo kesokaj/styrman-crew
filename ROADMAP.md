@@ -68,8 +68,20 @@ opt-in live LAN block races the production server's 2-minute marker sweep
 production correctly deletes markers it cannot account for) — it passed by
 timing, not by design.
 
-There is no active plan right now — v1.23.0 is shipped and fully verified,
-and `Later / Ideas` is still deliberately empty awaiting operator input.
+**Active plan: `.agents/docs/plans/2026-09-08-lan-full-parity.md`** — LAN
+access grows to full same-network parity (ADR-066, in design): a LAN-enabled
+project reaches the host's own address and host-published Docker ports, and
+in exchange the credential broker stops serving it the operator's SSH key.
+Five phases, scope confirmed with the operator 2026-09-08, awaiting the
+cold-reader check before any code. Two findings already came out of the
+design work: the host's real exposure is `sshd` password auth plus
+`NOPASSWD` sudo rather than the brokered key (so hardening sshd is a
+deployment precondition, and the broker narrowing is justified by the
+transitive LAN path instead), and the rule shape `TODO.md` had recorded for
+published ports is impossible — iptables refuses a second
+`--out-interface`, so the exclusion becomes a positive destination
+allowlist. `Later / Ideas` is still deliberately empty awaiting operator
+input.
 
 **v1.22.0 shipped 2026-09-04** (`.agents/docs/changes/`, six phase entries plus the release entry; gate: `.agents/docs/reviews/2026-09-04-preflight-v1.22.0.md`): `GOPATH=$HOME/.go` in the seeded skel (NEW project homes only — existing homes keep `$HOME/go`), terminal/editor font settings, file-explorer back/forward/up with a readable crumb bar, the Recent strip as a collapsible resizable grid, git diffs in the main pane plus a UUID fast-commit, and six new git verbs (fetch, pull, branches, log, stash). Before it, v1.21.0 (ADR-064, the un-nested project homes).
 

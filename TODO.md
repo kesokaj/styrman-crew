@@ -20,7 +20,7 @@ Add new items below as they arise.
   `PATCH /api/settings/runtime` (~30 lines) if a tenant ever needs to
   self-serve; (b) `LAN_ALLOW_HOST` / `LAN_ALLOW_PUBLISHED_PORTS` conf keys
   (reserved, parsed as 0) each need their own ADR-029 amendment; a published-
-  port rule must carry `! -o sdb-+ ! -o <ingress br>`; (c) per-project LAN
+  port rule was recorded here as needing `! -o sdb-+ ! -o <ingress br>` — **that shape is invalid and cannot be written**: iptables 1.8.11 (nf_tables) refuses a second `--out-interface` (`multiple --out-interface options not allowed`, probed live 2026-09-08). The replacement is a positive destination allowlist, specified in `plans/2026-09-08-lan-full-parity.md`; (c) per-project LAN
   DNS (guest resolvers are pinned to 8.8.8.8/1.1.1.1 — access is by IP);
   (d) pin `default-address-pools` to 172.16.0.0/12 in `daemon.json` so a
   16th project bridge can never land in 192.168/16 (today the conf
