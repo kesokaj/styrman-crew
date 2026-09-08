@@ -32,10 +32,10 @@ Add new items below as they arise.
   live-restore keeps `DOCKER-USER`/`STYRMAN-*` across a daemon restart
   (exposure today: ≤65 s LAN-closed, never open); (f) run the base section
   `Before=docker.service` to close the pre-existing ≤15 s boot window
-  (unverified whether Docker keeps a pre-created `DOCKER-USER`); (g) the
+  (unverified whether Docker keeps a pre-created `DOCKER-USER`); (g) **RESOLVED 2026-09-08 by ADR-066's latch amendment** — the
   transitive path "LAN-enabled project → a LAN host that trusts its key →
-  back to this host" is an accepted, documented risk — consider narrowing
-  what the broker hands a LAN-enabled project.
+  back to this host" is closed for the SSH key: a project that has ever
+  had LAN access is permanently no longer served it.
 
 - [ ] 🟢 Coverage tracing for v1.22.0 is incomplete (release gate, 2026-09-04). The verifier ran every command green but did not finish tracing each changed file to a covering test; the largest untraced surface is `web/src/components/SidePanelGit.tsx` (351 changed lines), plus `deploy/verify-commit.sh`'s new CSS-origin gate step, `image/skel/*`, and `integration.sh`'s own additions. These are UNKNOWN, not established failures — `SidePanelGit.tsx` is exercised by the e2e git checks but not line-for-line. Per AGENTS.md a changed file with no covering test is a FAIL row, so this needs closing out rather than assuming.
 - [x] The six git HTTP handlers added in v1.22.0 have NO Go unit test. **DONE 2026-09-04**: `internal/httpapi` gained a narrow `guestRuntime` interface (`Status` + `Exec`), set from the orchestrator in `New()`, with 15 call sites routed through it and 26 handler tests in `guestexec_test.go`. The argv IS the security decision in these handlers (`add -A` not `commit -a`, `--end-of-options` on the switch path, `-u` on stash push, no `--prune` on fetch) and none of it could be asserted before — a comment claiming an invariant is not a test. **Correction to this item's own claim:** the Exec seam closes this and the `checkFile`/`formatFile` item, but NOT BUG-003's residual, which needs a fake DOCKER client — a different seam entirely. Two of three, not three.
