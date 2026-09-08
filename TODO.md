@@ -10,6 +10,8 @@ Add new items below as they arise.
 
 ## Inbox
 
+- [ ] Converge the eight shared dependencies that still diverge between the root module and `deploy/caddy/ingress` (`go-connections`, `httpsnoop`, `go-logr/logr`, the three OpenTelemetry packages, and two more — `deploy/verify-commit.sh` prints the full list on every run). `docker/docker` was converged on 2026-09-08 and is the one the gate now BLOCKS on; the rest are warnings because turning them all into a release blocker would force an untested eight-package bump. The ingress is the internet-facing component (`network_mode: host`, docker socket mounted), so it is the last place that should sit on older versions. (added 2026-09-08, from the project audit)
+
 - [ ] `web/e2e/run.sh`'s exit code is unreliable: observed `1` twice while the suite itself reported `passed=89 failed=0`, and not reproducible on demand. Ruled out: the EXIT trap (bash preserves the script's status; `cleanup`'s last command returns 0) and `run.mjs` (`process.exit(failed === 0 ? 0 : 1)`). The counters are trustworthy, the exit code is not — which is backwards for anything automated, and would let a genuinely red run look green. Related: cleanup leaves `/tmp/styrman-e2e-*` dirs behind (7 present on 2026-09-08), so it is not completing. (added 2026-09-08)
 
 - [ ] Re-run the firewall's base insert-if-missing pass at the END of the LAN section when that section changed the chain, so a base rule removed by a concurrent root writer is repaired within the same run rather than within 60 s. Suggested by the Phase 1 security review (`reviews/2026-09-08-security-phase1-refactor.md`, finding 2) and deliberately not done there: it is independent of ADR-066 and wants the base block extracted into a function first. (added 2026-09-08)

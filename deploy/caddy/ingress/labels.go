@@ -2,6 +2,7 @@ package ingress
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -124,8 +125,24 @@ func ParseLabels(labels map[string]string, containerName string, exposedPorts []
 	return app, nil
 }
 
+// emailRe is the shape an entry must have to reach the generated Caddyfile.
+// Deliberately strict: no whitespace, no braces, no newlines — the bytes that
+// would end a `transform user` block early and let the rest of the value be
+// read as Caddyfile directives.
+var emailRe = regexp.MustCompile(`^[^@\s{}"'#]+@[^@\s{}"'#]+\.[^@\s{}"'#]+$`)
+
 // parseEmailList splits a comma-separated email string into a deduplicated,
-// trimmed slice. Empty strings are filtered out.
+// trimmed slice. Empty strings are filtered out, and so is anything that is
+// not email-shaped.
+//
+// The validation is the point. These values come from container labels and
+// from SUPERADMINS, and they are written VERBATIM into the generated Caddyfile
+// as `match email <value>`. sanitizeHostname (below) strips
+// Caddyfile-significant bytes from the hostname for exactly this reason and
+// says so — "defense in depth, even though labels are set by the server" — and
+// the email path had no equivalent (audit 2026-09-08). Both sources are
+// operator-controlled today; this is the same defence-in-depth the hostname
+// already gets, in an internet-facing process that holds the docker socket.
 func parseEmailList(s string) []string {
 	if s == "" {
 		return nil
@@ -135,10 +152,11 @@ func parseEmailList(s string) []string {
 	var result []string
 	for _, p := range parts {
 		email := strings.TrimSpace(p)
-		if email != "" && !seen[email] {
-			seen[email] = true
-			result = append(result, email)
+		if email == "" || seen[email] || !emailRe.MatchString(email) {
+			continue
 		}
+		seen[email] = true
+		result = append(result, email)
 	}
 	return result
 }

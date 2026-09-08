@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -89,6 +90,19 @@ func Trust(bases ...string) {
 // reached from `<base>/<tenant>` with symlink confinement (see Trust);
 // elsewhere the root path is opened as given and only what is underneath
 // is confined.
+//
+// The "elsewhere" case is the pre-BUG-002 behaviour — bare os.OpenRoot, which
+// follows a guest-plantable symlink at the root itself — and it is reached
+// whenever Trust has not registered a matching base. Nothing does that today,
+// because httpapi.New registers both bases before any request can arrive. But
+// the registry is process-global mutable state installed as a side effect by
+// an unrelated package, so "nothing does that today" is a property of startup
+// order, not of this function (audit 2026-09-08). It warns, once per distinct
+// root, rather than erroring: turning it into an error would fail every
+// caller on a deployment whose Trust registration moved, and a hard failure
+// of the file explorer is a worse outcome than a warned fallback for a path
+// that may legitimately not sit under a tenant base. The warning is the part
+// that was missing — the fallback was silent.
 func openRoot(root string) (*os.Root, error) {
 	if root == "" {
 		// filepath.Abs("") would be the process cwd — fail closed instead
@@ -118,7 +132,20 @@ func openRoot(root string) (*os.Root, error) {
 		tr.Close()
 		return sub, err
 	}
+	warnUntrustedRoot(root)
 	return os.OpenRoot(root)
+}
+
+// warnedRoots keeps the untrusted-root warning to once per path, so a hot
+// handler cannot turn an operational signal into a log flood.
+var warnedRoots sync.Map
+
+func warnUntrustedRoot(root string) {
+	if _, seen := warnedRoots.LoadOrStore(root, struct{}{}); seen {
+		return
+	}
+	slog.Warn("files: opening a root no Trust base covers — the root path itself is NOT symlink-confined (BUG-002 shape); check that files.Trust ran before this caller",
+		"root", root)
 }
 
 // openReg opens rel for reading and refuses anything that is not a regular

@@ -321,3 +321,27 @@ func TestPrunePredicateMatchesTheBrokers(t *testing.T) {
 		}
 	}
 }
+
+// `git diff --no-index` takes git out of repository mode, so its path is not
+// confined by git itself. scopeRel must reject an escape before the exec
+// (audit 2026-09-08). Testing scopeRel directly is the honest unit here: the
+// handler needs a live guest, which this harness has no way to provide.
+func TestScopeRelRefusesEscapes(t *testing.T) {
+	for _, bad := range []string{"../../../etc/shadow", "..", "../x", "/../etc/passwd", "  ../../y  "} {
+		rel, err := scopeRel(bad)
+		if err == nil && !strings.HasPrefix(rel, "../") && rel != "" {
+			// path.Clean collapses a leading /.. to /, which scopeRel then
+			// trims — so the surviving value must not escape.
+			if strings.Contains(rel, "..") {
+				t.Errorf("scopeRel(%q) = %q — still escapes", bad, rel)
+			}
+		}
+	}
+	// A normal relative path must survive untouched.
+	if rel, err := scopeRel("src/main.go"); err != nil || rel != "src/main.go" {
+		t.Errorf("scopeRel(src/main.go) = %q, %v", rel, err)
+	}
+	if _, err := scopeRel("   "); err == nil {
+		t.Error("an empty path must be refused")
+	}
+}

@@ -50,6 +50,41 @@ echo "==> vendored ingress module (separate go.mod)"
 # commit's tree, build the module, and pin the two Dockerfiles' Go toolchain
 # to the same value (vulncheck.sh derives its scan image from
 # Dockerfile.server alone).
+# The two modules share dependencies but pin them independently, and the
+# ingress is the internet-facing one: it runs network_mode: host with the
+# docker socket mounted, so it is the LAST place that should sit on an older
+# version of anything. They had diverged on docker/docker (v27.5.1 in the
+# ingress vs v28.5.2 in the root) until the 2026-09-08 audit, and nothing
+# noticed because vulncheck scans the modules separately.
+#
+# BLOCKING for the dependencies where a version gap is a security question;
+# a warning for the rest, because eight shared deps diverge today and turning
+# all of them into a release blocker would either break this gate or force an
+# untested eight-package bump. TODO.md carries the convergence work.
+echo "==> shared dependencies agree across both modules"
+( cd "${WT}" && python3 - <<'PY'
+import re, sys
+BLOCKING = {"github.com/docker/docker"}
+def deps(path):
+    out = {}
+    for line in open(path):
+        m = re.match(r"\s+(\S+)\s+(v\S+)", line)
+        if m and not line.strip().startswith("//"):
+            out[m.group(1)] = m.group(2)
+    return out
+a, b = deps("go.mod"), deps("deploy/caddy/ingress/go.mod")
+bad = sorted((k, a[k], b[k]) for k in set(a) & set(b) if a[k] != b[k])
+fatal = [x for x in bad if x[0] in BLOCKING]
+for k, va, vb in bad:
+    mark = "FATAL " if k in BLOCKING else "warn  "
+    print(f"    {mark}{k}: root {va} vs ingress {vb}", file=sys.stderr)
+if fatal:
+    print(f"FATAL: {len(fatal)} security-relevant shared dependency version(s) disagree", file=sys.stderr)
+    sys.exit(1)
+print(f"    {len(bad)} non-blocking divergence(s); docker/docker agrees")
+PY
+) || exit 1
+
 echo "==> vendored harness mirror (image/harness: integrity, build, toolchain pin)"
 # sha256sum -c proves every listed file is present and unchanged; the list
 # diff proves nothing UNLISTED was added, and the symlink find that nothing

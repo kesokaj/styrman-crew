@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os/exec"
 	// `path`, not `path/filepath`: ws is a GUEST-side POSIX path, and its
@@ -445,9 +446,21 @@ func (s *Server) gitDiff(w http.ResponseWriter, r *http.Request) {
 	// would turn every untracked-file diff into an error.
 	var out string
 	if untracked && path != "" {
+		// `--no-index` takes git OUT of repository mode, so the path is no
+		// longer confined to the work tree and `?path=../../../etc/shadow`
+		// would read any guest-readable file back through the API. The
+		// requester owns a root shell in that same microVM, so no privilege
+		// boundary is crossed — it is a confused deputy, and closing it costs
+		// one call (audit 2026-09-08). Every other branch here stays inside
+		// the repo because git itself confines it.
+		rel, rerr := scopeRel(path)
+		if rerr != nil || strings.HasPrefix(rel, "../") {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("path must be workspace-relative"))
+			return
+		}
 		// Untracked files have no diff base; show the whole file as an addition.
 		_, out, _ = s.gitExec(ctx, cid, guest, ws,
-			"diff", "--no-color", "--no-index", "--", "/dev/null", path)
+			"diff", "--no-color", "--no-index", "--", "/dev/null", rel)
 	} else {
 		if path != "" {
 			args = append(args, "--", path)

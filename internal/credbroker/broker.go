@@ -34,8 +34,19 @@ type Resolver interface {
 // no view of Project.LanAccess, while the API server holds both the per-user
 // project stores and root's last word.
 type LanChecker interface {
-	// LanExposed must be pessimistic: see netpolicy.Exposed. It reports the
-	// union of the record, root's applied set, and "cannot confirm".
+	// LanExposed reports whether the project has EVER had local-network
+	// access. It is a LATCH on the project record, and it must not consult
+	// root's firewall status at all.
+	//
+	// This comment used to describe the opposite — a union of the record,
+	// root's applied set and "cannot confirm", citing a netpolicy.Exposed
+	// that no longer exists. That rule was superseded by ADR-066's latch
+	// amendment precisely because the live-state question has no reliable
+	// answer: a failed revocation leaves the rule present while the project
+	// drops out of root's applied set, which handed the key to a project that
+	// still had LAN reach. The stale comment had no runtime effect (the
+	// wrapper below fails closed regardless) but it told the next
+	// implementer to build the version that was removed (audit 2026-09-08).
 	LanExposed(user, project string) (bool, error)
 }
 
