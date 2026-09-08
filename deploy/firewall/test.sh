@@ -357,24 +357,47 @@ ip link del docker0; ip link del br-0123456789ab
 write_conf enp0 192.0.2.0/24
 run >/dev/null 2>&1
 
+echo "=== 23b. a duplicated LAN_CIDRS entry does not pin the project in error"
+# DESIRED collapses a repeated key; WANT_COUNT must collapse with it, or the
+# project wants more rules than can exist and never reports applied.
+: > "${MARK}/${U}"
+printf 'LAN_DEV=enp0\nLAN_CIDRS=192.0.2.0/24 192.0.2.0/24\n' > "${CONF}"; chmod 0644 "${CONF}"
+run >/dev/null 2>&1
+check "a repeated CIDR yields exactly one rule" "[ \$(allow_count) -eq 1 ]"
+check "and the project reports applied, not 1-of-2" "[ \"\$(status lan)\" = '${U}' ]"
+check "no per-project error recorded" "! grep -q '^error=${U}:' '${RUN}/status'"
+rm "${MARK}/${U}"; write_conf enp0 192.0.2.0/24; run >/dev/null 2>&1
+
 echo "=== 24. no install.sh function is called before it is defined"
 # `bash -n` and shellcheck both accept a call placed ABOVE its definition, and
-# that is exactly how a `derive_ingress_bridge: command not found` reached a
-# release candidate (security review round 2, 2026-09-08). Executing the path
-# would be the stronger check, but install.sh refuses a root-owned state dir
-# and this namespace maps only uid 0 — so assert the ordering structurally.
+# that is how a `derive_ingress_bridge: command not found` reached a release
+# candidate. Executing the paths would be stronger, but install.sh refuses a
+# root-owned state dir and this namespace maps only uid 0 — so assert the
+# ordering structurally.
+#
+# The first version of this check only recognised `^name()` and silently
+# skipped `function name {`, `name () {`, indented, or mixed-case definitions;
+# an unchecked function produced no output, so the suite still said PASS. All
+# of bash's spellings are matched now, and the call search is a word-boundary
+# scan of the whole line, so a call inside $(…) or backticks counts too.
 ORDER_BAD=""
-for fn in $(grep -oE '^[a-z_]+\(\)' "${HERE}/install.sh" | tr -d '()'); do
-    # Compare positions in the SAME comment-stripped view: comments mention
-    # these words in prose ("# run dir, the marker directory" is not a call),
-    # and stripping them renumbers every line.
-    body="${T}/install.nocomments"
-    grep -vE '^[[:space:]]*#' "${HERE}/install.sh" > "${body}"
-    def=$(grep -nE "^${fn}\(\)" "${body}" | head -1 | cut -d: -f1)
-    call=$(grep -nE "(^|[;&|[:space:]])${fn}([[:space:];&|)]|$)" "${body}" \
-           | grep -v "^${def}:" | head -1 | cut -d: -f1)
-    if [ -n "${call}" ] && [ "${call}" -lt "${def}" ]; then
-        ORDER_BAD="${ORDER_BAD} ${fn}(line ${call} before ${def})"
+ORDER_BODY="${T}/install.nocomments"
+grep -vE '^[[:space:]]*#' "${HERE}/install.sh" > "${ORDER_BODY}"
+ORDER_FNS=$(sed -nE \
+    -e 's/^[[:space:]]*(function[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(\).*/\2/p' \
+    -e 's/^[[:space:]]*function[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\{.*/\1/p' \
+    "${ORDER_BODY}" | sort -u)
+check "the ordering check actually found some functions" "[ -n '${ORDER_FNS}' ]"
+for fn in ${ORDER_FNS}; do
+    def=$(grep -nE "^[[:space:]]*(function[[:space:]]+${fn}|${fn}[[:space:]]*\(\))" "${ORDER_BODY}" | head -1 | cut -d: -f1)
+    # COMMAND POSITION only. A bare word-boundary scan flagged run() against
+    # the path /run/styrman-firewall — a short function name matches
+    # everywhere. Start of line, after ; & |, inside $( ), or after then/do/
+    # else; followed by whitespace, ;, ) or end of line.
+    call=$(grep -nE "(^[[:space:]]*|[;&|(][[:space:]]*|[[:space:]](then|do|else)[[:space:]]+)${fn}([[:space:]]|;|\)|\$)" \
+           "${ORDER_BODY}" | grep -v "^${def}:" | head -1 | cut -d: -f1)
+    if [ -n "${call}" ] && [ -n "${def}" ] && [ "${call}" -lt "${def}" ]; then
+        ORDER_BAD="${ORDER_BAD} ${fn}(call@${call} def@${def})"
     fi
 done
 check "every install.sh function is defined before its first call" "[ -z '${ORDER_BAD}' ]"

@@ -448,11 +448,23 @@ read_conf() {
 # for one project and bump its want-count. WANT_COUNT is the total across
 # families, so `lan=` keeps its all-or-nothing meaning: a project is reported
 # ON only when every rule it wants, in every family, is present.
+# want <key> <uuid> — record ONE desired rule. DESIRED is an associative array
+# and silently collapses a repeated key; WANT_COUNT must collapse with it, or a
+# duplicated entry in LAN_CIDRS (or two uplink addresses in the same subnet)
+# leaves the project wanting more rules than can exist and pins it at
+# "N of N+1 rules present" forever (release review round 3).
+want() {
+    if [ -n "${DESIRED[$1]:-}" ]; then
+        return 0
+    fi
+    DESIRED["$1"]=1
+    WANT_COUNT["$2"]=$(( ${WANT_COUNT[$2]:-0} + 1 ))
+}
+
 desire_lan() {
     local iface="$1" subnet="$2" uuid="$3" c
     for c in "${LAN_CIDRS[@]}"; do
-        DESIRED["lan ${iface} ${LAN_DEV} ${subnet} ${c} ${uuid}"]=1
-        WANT_COUNT["${uuid}"]=$(( ${WANT_COUNT[${uuid}]:-0} + 1 ))
+        want "lan ${iface} ${LAN_DEV} ${subnet} ${c} ${uuid}" "${uuid}"
     done
 }
 # LAN_HOST_ADDRS is empty unless the conf opted in AND the uplink carries a
@@ -463,8 +475,7 @@ desire_lan() {
 desire_lanhost() {
     local iface="$1" subnet="$2" uuid="$3" a
     for a in "${LAN_HOST_ADDRS[@]}"; do
-        DESIRED["lanhost ${iface} ${subnet} ${a} ${uuid}"]=1
-        WANT_COUNT["${uuid}"]=$(( ${WANT_COUNT[${uuid}]:-0} + 1 ))
+        want "lanhost ${iface} ${subnet} ${a} ${uuid}" "${uuid}"
     done
 }
 # LAN_PUB_SUBNETS is empty unless the conf opted in AND a usable ingress
@@ -473,8 +484,7 @@ desire_lanhost() {
 desire_lanpub() {
     local iface="$1" subnet="$2" uuid="$3" d
     for d in "${LAN_PUB_SUBNETS[@]}"; do
-        DESIRED["lanpub ${iface} ${subnet} ${d} ${uuid}"]=1
-        WANT_COUNT["${uuid}"]=$(( ${WANT_COUNT[${uuid}]:-0} + 1 ))
+        want "lanpub ${iface} ${subnet} ${d} ${uuid}" "${uuid}"
     done
 }
 

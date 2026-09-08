@@ -78,52 +78,99 @@ OWNER_GID="$(stat -c %g "${STATE_DIR}")"
 # R12 states it as a REQUIREMENT: a deployment that lets projects reach the
 # host must not accept password authentication on the uplink. With
 # LAN_ALLOW_HOST=1 an agent inside a project can open connections to this
-# machine's sshd, and a sudo-group login on a NOPASSWD host is root. The
-# deploy guide said so and nothing enforced it (security review 2026-09-08) —
-# a precondition no code checks is a wish. This checks it.
-require_sshd_hardened() {
-    local pw sshd_bin cfg probe
-    [ "${ACCEPT_SSH_PASSWORDS}" = 1 ] && { log "WARNING: --i-accept-sshd-passwords given; skipping the R12 sshd precondition"; return 0; }
-    # sshd lives in /usr/sbin, which is not on a non-root PATH — `command -v`
-    # alone made this gate skip itself on exactly the hosts it guards.
-    sshd_bin="$(command -v sshd || true)"
-    [ -n "${sshd_bin}" ] || for c in /usr/sbin/sshd /sbin/sshd /usr/local/sbin/sshd; do
-        [ -x "${c}" ] && { sshd_bin="${c}"; break; }
-    done
-    [ -n "${sshd_bin}" ] || { log "no sshd binary found - precondition not applicable"; return 0; }
-
-    # `sshd -T` alone reports the GLOBAL config and silently ignores Match
-    # blocks, so `PasswordAuthentication no` plus `Match Address <lan> ->
-    # yes` passes a gate meant to forbid exactly that, for exactly the network
-    # being granted (security review, 2026-09-08). Probe with -C as well, from
-    # an address in the range a project bridge uses, and refuse outright when
-    # any Match block exists — this is a deliberate root-exposure opt-in and
-    # there is an explicit override for the cases we cannot evaluate.
-    pw="$("${sshd_bin}" -T 2>/dev/null | sed -n 's/^passwordauthentication //p' | head -1)"
-    probe="$("${sshd_bin}" -T -C addr=172.16.0.2,user=root,host=styrman-probe 2>/dev/null | sed -n 's/^passwordauthentication //p' | head -1)"
-    cfg="$("${sshd_bin}" -T -d 2>/dev/null >/dev/null; grep -rlE '^[[:space:]]*Match[[:space:]]' /etc/ssh/sshd_config /etc/ssh/sshd_config.d 2>/dev/null | head -1 || true)"
-
-    case "${pw}:${probe}" in
-        no:no) ;;
-        :*|*:) die "cannot read sshd's effective config to check the LAN_ALLOW_HOST precondition (R12). Fix that, or pass --i-accept-sshd-passwords if sshd is not reachable from the granted network." ;;
-        *)     die "REFUSING --lan-allow-host 1: sshd accepts password authentication (global=${pw}, from a project address=${probe}).
-    R12 forbids that on a host projects can reach: an agent in a LAN-enabled
-    project could guess its way to a shell, and a sudo-group login is root.
-    Harden first - the five-step sequence, with a second session held open, is
-    in .agents/docs/deploy/remote.md - then re-run this. To override
-    deliberately (sshd not exposed to the granted network), pass
-    --i-accept-sshd-passwords." ;;
-    esac
-    if [ -n "${cfg}" ]; then
-        die "REFUSING --lan-allow-host 1: ${cfg} contains a Match block. sshd -T
-    cannot be evaluated for every Match case, and one re-enabling password
-    authentication for the granted network would defeat this check silently.
-    Review it, then pass --i-accept-sshd-passwords if it is safe."
-    fi
-    log "sshd: passwordauthentication no, globally and from a project address, no Match blocks - R12 precondition met"
+# machine's sshd, and a sudo-group login on a NOPASSWD host is root.
+#
+# This gate is deliberately DUMB. An earlier version tried to be clever —
+# probing `sshd -T -C` from a synthetic address to evaluate Match blocks — and
+# was wrong three ways at once: the probe address was in no real Docker
+# network, the Match grep was case-sensitive against case-insensitive
+# keywords, and under `set -e` the whole thing aborted the script silently
+# before its own error branch could run. It printed "precondition met" on the
+# exact configuration it forbids.
+#
+# So: no probing. Determine the GLOBAL setting, refuse unless it is a clear
+# "no", and refuse outright if any Match block exists anywhere in the
+# effective config — because a Match block is precisely the thing that can
+# re-enable passwords for the network being granted, and this script cannot
+# evaluate every case. Refusing on "cannot tell" is the whole point; there is
+# an explicit override for deployments where sshd is not reachable from the
+# granted network.
+sshd_config_files() {
+    local inc g
+    printf '%s\n' /etc/ssh/sshd_config
+    # Include takes glob patterns and may name paths outside /etc/ssh.
+    while read -r inc; do
+        # shellcheck disable=SC2086  # deliberate: Include patterns are globs
+        for g in ${inc}; do [ -e "${g}" ] && printf '%s\n' "${g}"; done
+    done < <(grep -hiE '^[[:space:]]*include[[:space:]]+' /etc/ssh/sshd_config 2>/dev/null \
+             | sed -E 's/^[[:space:]]*[Ii][Nn][Cc][Ll][Uu][Dd][Ee][[:space:]]+//' || true)
+    # Anything under /etc/ssh, whether or not it is Include'd from the main
+    # file — a stray Match there is still a signal worth refusing on.
+    find /etc/ssh -type f 2>/dev/null || true
 }
 
-if [ "${ALLOW_HOST}" = 1 ]; then require_sshd_hardened; fi
+require_sshd_hardened() {
+    local pw sshd_bin c matches
+    if [ "${ACCEPT_SSH_PASSWORDS}" = 1 ]; then
+        log "WARNING: --i-accept-sshd-passwords given; skipping the R12 sshd precondition"
+        return 0
+    fi
+    # sshd lives in /usr/sbin, which is not on a non-root PATH. `command -v`
+    # alone made this gate skip itself on exactly the hosts it guards.
+    sshd_bin="$(command -v sshd 2>/dev/null || true)"
+    if [ -z "${sshd_bin}" ]; then
+        for c in /usr/sbin/sshd /sbin/sshd /usr/local/sbin/sshd; do
+            if [ -x "${c}" ]; then sshd_bin="${c}"; break; fi
+        done
+    fi
+    if [ -z "${sshd_bin}" ]; then
+        log "no sshd binary found - R12 precondition not applicable"
+        return 0
+    fi
+
+    # `|| true` on the assignment: `sshd -T` exits non-zero on a config it
+    # dislikes, and under `set -euo pipefail` that killed the script AT THIS
+    # LINE, making the die below unreachable and leaving the operator with a
+    # bare exit 1 and no output.
+    pw="$("${sshd_bin}" -T 2>/dev/null | sed -n 's/^passwordauthentication //p' | head -1 || true)"
+    if [ -z "${pw}" ]; then
+        die "cannot read sshd's effective configuration, so the R12 precondition
+    for LAN_ALLOW_HOST cannot be checked. Fix ${sshd_bin} -T, or pass
+    --i-accept-sshd-passwords if sshd is not reachable from the granted network."
+    fi
+    if [ "${pw}" != "no" ]; then
+        die "REFUSING LAN_ALLOW_HOST=1: sshd accepts password authentication
+    (passwordauthentication ${pw}). R12 forbids that on a host projects can
+    reach: an agent in a LAN-enabled project could guess its way to a shell,
+    and a sudo-group login is root. Harden first - the five-step sequence,
+    with a second session held open, is in .agents/docs/deploy/remote.md -
+    then re-run this. To override deliberately, pass
+    --i-accept-sshd-passwords."
+    fi
+    matches="$(sshd_config_files | sort -u | xargs -r grep -liE '^[[:space:]]*match[[:space:]]' 2>/dev/null | head -3 | tr '\n' ' ' || true)"
+    if [ -n "${matches}" ]; then
+        die "REFUSING LAN_ALLOW_HOST=1: a Match block exists in ${matches}.
+    sshd's global setting is 'no', but a Match block can re-enable password
+    authentication for exactly the network being granted, and this script
+    cannot evaluate every case. Review it, then pass
+    --i-accept-sshd-passwords if it is safe."
+    fi
+    log "sshd: passwordauthentication no, no Match blocks - R12 precondition met"
+}
+
+# The gate runs on the EFFECTIVE resulting state, not on the flag: a
+# hand-edited conf (which the conf's own comments document as the way to
+# change it) and every re-install over an existing LAN_ALLOW_HOST=1 would
+# otherwise walk straight past it.
+effective_allow_host() {
+    if [ -n "${ALLOW_HOST}" ]; then printf '%s' "${ALLOW_HOST}"; return 0; fi
+    if grep -qE '^LAN_ALLOW_HOST=1[[:space:]]*$' "${ETC_DIR}/firewall.conf" 2>/dev/null; then
+        printf '1'
+    else
+        printf '0'
+    fi
+}
+if [ "$(effective_allow_host)" = 1 ]; then require_sshd_hardened; fi
 
 # ─── 1. Script + units ──────────────────────────────────────────────────────
 log "installing ${BIN_DIR}/styrman-firewall.sh (version $(sed -n 's/^STYRMAN_FW_VERSION=\([0-9]*\)$/\1/p' "${SRC}/styrman-firewall.sh"))"
