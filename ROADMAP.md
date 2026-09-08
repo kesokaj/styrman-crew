@@ -12,6 +12,30 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
+**Unreleased security fixes are sitting on `main`.** Production runs v1.24.0
+(`7cbced7`); eight commits since then include the whole-project audit and its
+fixes. The one that matters: a **cross-tenant DoS** — six opens on
+guest-writable trees lacked the `O_NONBLOCK` that `internal/files` sets
+elsewhere for exactly this reason, so any project owner could plant a FIFO in
+their own home and pin a goroutine *and* an OS thread per request, walking the
+runtime into its 10k-thread limit and taking every tenant down with the
+process. Fixed in `271a7e8`, **not deployed**. Also unreleased: the ingress
+Caddyfile email injection, the updater's unasserted worktree root, the
+`docker/docker` convergence, and a path traversal.
+
+None is remotely exploitable — all need an authenticated project owner — but
+they are fixes to live isolation code that production does not have. Cutting
+v1.25.0 is a short job: the tree is clean, `verify-commit.sh` is green on
+`80765ca`, and the release path is the documented one.
+
+**Whole-project audit, 2026-09-08** — `reviews/2026-09-08-audit-project.md`.
+No high findings; no path found that escapes a project to another tenant or
+the host. 11 medium, 11 low. Ten fixed with mutation-checked tests, one
+identified as a false finding, nine recorded as not-now with reasons
+(refactors and design decisions, not fixes). The recurring shape: a guard
+correct where it was written and absent where it was not — the same pattern
+the ADR-066 gate hit sixteen times, found in code that predates it.
+
 **v1.24.0 shipped and is live** — tag on `7cbced7`, SSH-signed, verified
 against the host's allowed-signers file before pushing, and deployed
 unattended by the tag-gated updater. `styrman-server` and `styrman-caddy` on
