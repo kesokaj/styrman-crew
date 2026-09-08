@@ -86,7 +86,8 @@ operator's key → back here), which is real, and not by host root.
 | `internal/netpolicy/dir.go` | no change expected — confirm |
 | `internal/credbroker/broker.go` | `LanChecker`; `files` filters ssh-shaped credentials |
 | `internal/httpapi/network.go` | prune materialized key on enable; expose capability + impact in `lanView` |
-| `internal/httpapi/setup.go` (broker wiring) | pass the checker into `credbroker.New` |
+| `internal/httpapi/server.go` | `LanExposed` method (uses the existing `s.space(user).projects` + `s.netpol`) |
+| `cmd/styrman/main.go:180` | pass the `Server` into `credbroker.New` as the checker — this is where the broker is built, NOT `httpapi/setup.go` |
 | `web/src/lib/api.ts`, `components/LocalNetwork.tsx`, `lib/lan.ts` | new fields, confirmation copy |
 | `.agents/docs/testing/styrman/integration.sh` | live checks |
 | `REQUIREMENTS.md`, `DECISIONS.md`, `specs/styrman/guide.md`, `docs/deploy/remote.md` | R12, ADR-066, guide, sshd precondition |
@@ -129,6 +130,48 @@ names it. If `INGRESS_BRIDGE` is unset or does not resolve, the
 published-port family is **not applied at all** (fail closed) and the status
 file says why.
 
+### Rule-family machinery — GENERALIZE, do not duplicate
+
+`scan_current`, `rule_args`, `reconcile`, `count_applied`, `delete_malformed`
+and `RULE_RE` are today hardwired to chain `STYRMAN-FWD` and the single
+`styrman-lan:` tag (script lines 199, 336-353, 364-370, 380-391, 409). Three
+families cannot be three copies of that: a delete-by-spec or ordering bug
+fixed in one copy and missed in the others is precisely BUG-013 again.
+
+**Decision: one generic implementation parameterized by family.** A family is
+`(tag, chain, regex, args-builder)`:
+
+| tag | chain | fields in the key | wanted per project |
+|---|---|---|---|
+| `lan` | `STYRMAN-FWD` | iface, uplink dev, bridge subnet, lan cidr | one per `LAN_CIDRS` entry |
+| `lanhost` | `STYRMAN-IN` | iface, bridge subnet, host addr | one per host address on `LAN_DEV` |
+| `lanpub` | `STYRMAN-FWD` | iface, bridge subnet, allowed bridge subnet | one per allowed bridge subnet |
+
+- Keys carry the tag as their first field: `"<tag> <iface> <f1> <f2> <uuid>"`.
+  `DESIRED`, `SEEN`, `PURGE`, `MALFORMED` stay single associative arrays.
+- `rule_args` dispatches on the key's tag to `rule_args_<tag>`, which builds
+  `ARGS` and also yields the family's chain — so `reconcile` needs no chain
+  argument, it reads one off the key.
+- `scan_current` runs **once per distinct chain** (two: `STYRMAN-FWD`,
+  `STYRMAN-IN`), matching each line against every family regex bound to that
+  chain. The first-DROP position test stays per-chain.
+- `delete_malformed` takes the chain as a parameter; `MALFORMED` entries
+  carry `(chain, line)` so the re-read-and-confirm-by-number step targets the
+  right chain. This answers the reviewer's question 2: one function, a
+  parameter, not a twin.
+- `WANT_COUNT[uuid]` becomes the **total across all families** and
+  `APPLIED_COUNT[uuid]` likewise, so `lan=` keeps its existing all-or-nothing
+  meaning: a project is reported ON only when every rule it wants, in every
+  family, is present. No status-schema change; `netpolicy` needs no change to
+  read it.
+
+A third source of churn joins the two the plan already named (`LAN_CIDRS`
+edits, DHCP address changes): the allowed-bridge set is re-derived each run,
+so a new Docker network appearing or disappearing adds or removes `lanpub`
+rules on the next tick. That is correct behaviour — parity with a LAN peer —
+but it means a quiet run is no longer the only steady state, and the journal
+line must stay one-per-run (it already gates on added/removed/errors).
+
 ### Conf (`/etc/styrman/firewall.conf`)
 
 ```
@@ -152,25 +195,56 @@ lan_allow_published_ports=1
 lan_host_addrs=192.168.86.58
 ```
 
-Additive; `schema` stays 1. **Task: confirm `ParseStatus` ignores unknown
-keys** before relying on that (a v4 script's status must not break a v3
-server mid-upgrade).
+Additive; `schema` stays 1. **Confirmed 2026-09-08**, so this is settled and
+not a task: `ParseStatus` (`internal/netpolicy/status.go:60`) switches on the
+key with no `default` case, so unknown keys are ignored; only `schema` is
+gated (must be exactly 1). A v4 script's status file therefore parses cleanly
+in a v3 server mid-upgrade.
 
 ### Go
 
 ```go
 // internal/credbroker
 type LanChecker interface {
-    LanEnabled(user, project string) (bool, error)
+    // LanExposed answers "could this project reach the LAN right now?",
+    // NOT "what does its record say". See the semantics below.
+    LanExposed(user, project string) (bool, error)
 }
 func New(store *credstore.Store, resolve Resolver, lan LanChecker, logger *slog.Logger) *Broker
 
-// withheld when LanEnabled is true OR returns an error (fail closed:
-// a transient store error must never be the way a LAN-enabled project
-// gets the key). Costs ssh push in that project; GH_TOKEN over HTTPS
-// still covers github.com.
+// The key is withheld when LanExposed is true OR returns an error (fail
+// closed: a transient store error must never be the way a LAN-enabled
+// project gets the key). Costs ssh push in that project; GH_TOKEN over
+// HTTPS still covers github.com.
 func isHostReachingFile(path string) bool   // "~/.ssh/" prefix, tested
 ```
+
+**Implemented by `*httpapi.Server`**, which is the only type holding both
+halves — per-user project stores (`s.space(user).projects`) and root's last
+word (`s.netpol`). It is built at `cmd/styrman/main.go:104`, well before the
+broker at `main.go:180`, so it is simply passed in; no new package edge and
+no dependency cycle. `internal/orchestrator` — today's `Resolver` — cannot
+do this: it has no `internal/project` dependency and no view of
+`Project.LanAccess`.
+
+**Record-vs-converged, decided:** `LanExposed` returns true when **any** of
+these holds, which is deliberately the union, not the record alone:
+
+1. the project record says `LanAccess` (covers enable, from the instant it
+   is requested — withhold early);
+2. root's status still lists the project in `Applied` (covers disable, until
+   the rule is genuinely gone);
+3. the status is unreadable, stale, or otherwise cannot confirm (2) —
+   "cannot confirm" is never read as "off", which is BUG-014's rule applied
+   to the credential side.
+
+Without (2) a disable would re-serve the key while the firewall rule was
+still live for up to 60 s — a project holding both LAN reach and the key,
+which is the exact combination this whole phase exists to prevent. The
+login shell only re-fetches `/files` on a new session, so the window needs a
+new shell to be hit; that makes it unlikely, not closed, and the check is
+nearly free because `network.go:182` `kickLAN` already does precisely this
+record-plus-`st.Applied` lookup and is the shape to copy.
 
 `lanView` gains `credentialImpact: "ssh-key-withheld"` and
 `hostAccess: bool` / `publishedPortAccess: bool` derived from the status
@@ -185,7 +259,8 @@ opted in".
 | Conf lacks the new keys (upgrade) | Both parse 0. LAN works exactly as v1.23.0. Status says `lan_allow_host=0`; UI shows the switch as on with a "host not included — run install.sh" note. |
 | `INGRESS_BRIDGE` unset with `PUBLISHED_PORTS=1` | Published-port family skipped entirely, `conf_error` recorded, host family unaffected. |
 | Host address changes (DHCP) | Re-derived every run; the stale rule is not in `DESIRED` and is deleted by spec on the next tick (≤60 s). |
-| `LanEnabled` errors | Key withheld, `slog.Error`. Visible as a project that cannot ssh-push. |
+| `LanExposed` errors | Key withheld, `slog.Error`. Visible as a project that cannot ssh-push. |
+| LAN disabled, rule not yet removed | Key stays withheld until root's status drops the project from `Applied` (≤60 s, usually ~0.2 s via the spool kick). A new login shell in that window gets no key; an existing shell is unaffected either way. |
 | Key already materialized before enable | Pruned from `~/.ssh/id_ed25519` on enable; a copy the guest made elsewhere survives. **Documented, not solved** — enabling LAN on an existing project means that key was exposed to it. |
 
 ## Verification
@@ -211,34 +286,44 @@ opted in".
 
 ## Phases
 
-### Phase 1 — Root: host reachability
-- [ ] `styrman-firewall.sh`: parse `LAN_ALLOW_HOST`, discover host addresses on `LAN_DEV`, validate each is inside `LAN_CIDRS` — verify: `test.sh`, AI
-- [ ] `styrman-lanhost:` family — collect/scan/reconcile/count, delete by spec (BUG-013) — verify: `test.sh`, AI
-- [ ] `STYRMAN_FW_VERSION` 4 + `netpolicy.MinScriptVersion` 4 + pin test — verify: `go test ./internal/netpolicy/`, AI
-- [ ] Status keys + `ParseStatus` unknown-key confirmation — verify: unit, AI
+### Phase 1 — Root: generalize the rule-family machinery (NO behaviour change)
+The safety property of this phase is that it changes nothing observable:
+`deploy/firewall/test.sh` must pass **unmodified** at the end of it, and a
+run against the live chains must produce a byte-identical status file.
+- [ ] Introduce the family table and tag-prefixed keys; port the existing `lan` family onto it as the only family — verify: `test.sh` unmodified, AI
+- [ ] `rule_args` dispatches on tag and yields the chain; `scan_current` loops over distinct chains; `delete_malformed` takes a chain parameter — verify: `test.sh` unmodified, AI
+- [ ] `WANT_COUNT`/`APPLIED_COUNT` summed across families (one family today, so identical results) — verify: `test.sh` unmodified, AI
+- [ ] Diff read end to end for delete-by-spec (BUG-013) and `inherit_errexit` (BUG-010) survival — verify: read + `security` agent, AI
+
+### Phase 2 — Root: host reachability
+- [ ] Parse `LAN_ALLOW_HOST`; discover host addresses on `LAN_DEV`; validate each is inside `LAN_CIDRS` — verify: `test.sh`, AI
+- [ ] `lanhost` family registered in the table (chain `STYRMAN-IN`) — verify: `test.sh`, AI
+- [ ] `STYRMAN_FW_VERSION` 4 + `netpolicy.MinScriptVersion` 4 + the existing pin test — verify: `go test ./internal/netpolicy/`, AI
+- [ ] Status keys `lan_allow_host`, `lan_host_addrs` — verify: unit, AI
 - [ ] `install.sh` writes the new keys; `--lan-allow-host` flag — verify: `test.sh` + dry run, AI
 
-### Phase 2 — Root: published ports
-- [ ] `INGRESS_BRIDGE` conf key, validation, fail-closed skip — verify: `test.sh`, AI
+### Phase 3 — Root: published ports
+- [ ] `INGRESS_BRIDGE` conf key, validation, fail-closed skip when unset — verify: `test.sh`, AI
 - [ ] Allowed-bridge-subnet derivation excluding `sdb-*` and the ingress bridge — verify: `test.sh`, AI
-- [ ] `styrman-lanpub:` family with `--ctstate DNAT` — verify: `test.sh`, AI
-- [ ] Live proof with a real published container — verify: `integration.sh`, both
+- [ ] `lanpub` family with `-m conntrack --ctstate DNAT` — verify: `test.sh`, AI
+- [ ] Live proof with a real published container (`docker run -p`) — closes the "reasoned, not observed" gap from the v1.23.0 handoff — verify: `integration.sh`, both
 
-### Phase 3 — Server: broker narrowing
-- [ ] `LanChecker` + `files` filter + fail-closed-on-error — verify: `go test ./internal/credbroker/`, AI
-- [ ] Wire the checker at construction — verify: build + existing tests, AI
-- [ ] Prune materialized `~/.ssh/id_ed25519` on enable, through a confined root (BUG-002/003) — verify: unit with a planted symlink, AI
+### Phase 4 — Server: broker narrowing
+- [ ] `LanExposed` on `*httpapi.Server`: record OR `st.Applied` OR cannot-confirm, modelled on `network.go:182` `kickLAN` — verify: `go test ./internal/httpapi/`, AI
+- [ ] `credbroker.LanChecker` + `files` filter + `isHostReachingFile`, fail closed on error — verify: `go test ./internal/credbroker/`, AI
+- [ ] Wire the `Server` into `credbroker.New` at `cmd/styrman/main.go:180` — verify: build + existing tests, AI
+- [ ] Prune materialized `~/.ssh/id_ed25519` on enable through a confined root (BUG-002/003), with a planted-symlink test — verify: unit, AI
 
-### Phase 4 — API + UI
+### Phase 5 — API + UI
 - [ ] `lanView` capability + impact fields — verify: `go test ./internal/httpapi/`, AI
 - [ ] `LocalNetwork.tsx` confirmation naming both consequences; conf-not-opted-in note — verify: `npm run check && npm test`, AI
 - [ ] Browser walk of the golden path and the edge case — verify: e2e, both
 
-### Phase 5 — Records
+### Phase 6 — Records
 - [ ] ADR-066 amending ADR-065 (5) and D3, carrying the negated-`-o` finding — verify: read, AI
 - [ ] R12 amendment — **operator approval on the exact text first** — verify: user
 - [ ] Guide + `docs/deploy/remote.md` sshd precondition with exact commands — verify: `documentation`, AI
-- [ ] `TODO.md` item (b) corrected: its recorded rule shape is invalid — verify: read, AI
+- [ ] `TODO.md` item (b) corrected — **done 2026-09-08**, its recorded rule shape is invalid — verify: read, AI
 - [ ] Release: `verifier`, `reviewer`, `security`, `/preflight` — verify: gate report, both
 
 ## Proposed R12 amendment (NOT applied — needs approval)
@@ -275,8 +360,11 @@ project too: the host itself (INPUT drop …)"* with:
    published-port traffic is asserted by the Phase 2 live test, not assumed.
 3. **A v4 script with a v3 conf is the normal upgrade state**, not an error.
    The UI must say so rather than look broken.
-4. **Two new rule families double the reconcile surface** the v1.23.0
-   security review examined. Both need `security` on the diff; the
-   delete-by-spec discipline (BUG-013) and `inherit_errexit` (BUG-010) apply
-   unchanged.
+4. **Phase 1 refactors security-critical code that has already passed a
+   security review, before adding anything.** That is the deliberate trade:
+   three near-copies of the reconcile machinery would put the next
+   BUG-013-class bug in whichever copy got missed. The mitigation is that
+   Phase 1 is behaviour-preserving by construction — `test.sh` unmodified is
+   its pass condition — and that `security` reviews the refactor diff on its
+   own, before the new families exist to confuse the reading.
 5. **The prune is best-effort.** See Failure modes.
