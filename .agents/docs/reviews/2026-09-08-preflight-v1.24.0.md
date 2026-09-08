@@ -2,7 +2,7 @@
 owner: main
 date: 2026-09-08
 ---
-# Preflight gate — v2.0.0 (ADR-066, LAN full parity)
+# Preflight gate — v1.24.0 (ADR-066, LAN full parity)
 
 Range reviewed: v1.23.0..dc5bad4
 
@@ -186,3 +186,40 @@ NO-SHIP.
 Suites after the change: `go vet`/`go test ./...` clean,
 `deploy/firewall/test.sh` 121/0, browser e2e 89/0/2-skipped with all five
 ADR-066 checks passing including the new latch assertion, vitest 85.
+
+---
+
+## Version corrected to v1.24.0 (2026-09-08)
+
+Originally opened as v2.0.0. The operator corrected it on the grounds that a
+release which fixes its own unreleased work is not a major: **nothing breaks
+for an existing host.** Both new conf keys default closed, so converging the
+script to version 4 changes no behaviour until a human runs `install.sh` with
+an opt-in flag; the `MinScriptVersion` 3→4 bump only refuses an ENABLE on a
+host whose script has not converged yet, and `host_converge` converges it
+from the tag; and the one user-visible behaviour change — a project that was
+LAN-enabled and then disabled does not get its SSH key back — cannot be a
+regression, because no released version withheld it at all.
+
+The version lives only in the git tag: nothing in the repo tracks one.
+
+## All findings closed (2026-09-08)
+
+Sixteen findings were raised across three rounds. Final disposition: eleven
+fixed, one DELETED by design (the latch amendment removed the question rather
+than answering it), four subsumed by those changes. Commits `3e0bb9c`,
+`dc5bad4`, `4b237a2`, `301d603`.
+
+The last round's five were fixed in `301d603`: `WANT_COUNT` now dedups with
+`DESIRED`; the sshd gate was rewritten rather than patched (its three defects
+all came from trying to evaluate sshd's config cleverly, so the replacement
+does not try — it refuses on "cannot tell"), and now runs on the effective
+resulting state rather than the flag; the ordering check recognises every
+bash spelling and matches command position.
+
+**This does not by itself make the verdict SHIP.** Every fix this round was
+verified by deliberately re-introducing the defect and watching the test
+fail, and the suites are green — but the same was true before each of the
+three rounds. The standing recommendation is unchanged: an independent review
+of the cumulative result before tagging, because the author of these fixes is
+the author of most of the findings.
