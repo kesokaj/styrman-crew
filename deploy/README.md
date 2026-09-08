@@ -17,6 +17,14 @@ credential broker's bridge-only listener). There is no backup layer —
 durability is git: commit and push, and rebuild a lost host from this
 script + the repo.
 
+`firewall/` — the host firewall half (ADR-065): `styrman-firewall.sh` (R12
+isolation + the per-project LAN reconciler), its `.service`/`.timer`/`.path`
+units, `install.sh` (idempotent; discovers the LAN prefix once into
+`/etc/styrman/firewall.conf`) and `test.sh` (the real script under an
+unprivileged namespace, run by `go test`). `host-setup.sh` §5c calls
+`install.sh`; the updater's `host_converge` re-applies the script and units
+from every verified tag.
+
 `update/` — the tag-gated auto-updater (ADR-050/051): `styrman-update` +
 `.service`/`.timer` units, installed by `host-setup.sh` step 8c but shipped
 **DISABLED**. Enabling it is a deliberate, separate operator action — it

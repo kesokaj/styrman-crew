@@ -55,7 +55,7 @@ STYRMAN_VERSION=<x.y.z> docker compose -f deploy/docker-compose.yml up -d --buil
 deploy/verify-commit.sh [commit-ish]   # default HEAD; SKIP_WEB_FRESHNESS=1 skips the npm-dependent steps
 
 # Test suites
-bash .agents/docs/testing/styrman/integration.sh   # 68 checks; counts live in .agents/docs/testing/styrman/README.md vs real Kata
+bash .agents/docs/testing/styrman/integration.sh   # 82 checks; counts live in .agents/docs/testing/styrman/README.md vs real Kata
 bash web/e2e/run.sh                                # browser e2e (Playwright, self-hosted; check counts: .agents/docs/testing/styrman/README.md)
 ```
 
@@ -89,7 +89,13 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
   text = resize, close 4000 = exited, 4001 = replaced.
 - Per-project dockerd: overlay2 on loop-mounted `~/.dockerd/<uuid>.img`.
 - Project networks are isolated from each other (R12); the server joins
-  them in the background for the port-preview proxy (ip_forward=0).
+  them in the background for the port-preview proxy (ip_forward=0). The
+  root-owned host firewall (`deploy/firewall/`, ADR-065) drops all private
+  ranges; an admin may allow ONE project's LAN access per project — the
+  server writes a name-only marker under `StateDir/netpolicy/lan/` and kicks
+  a root spool, root reconciles a head-of-chain RETURN and writes a status
+  file the server derives `off/pending/on/error/unavailable` from. The
+  server never touches iptables.
 - Full rationale: `.agents/docs/architecture/DECISIONS.md` and
   `.agents/docs/plans/2026-08-26-super-devbox-architecture.md`.
 

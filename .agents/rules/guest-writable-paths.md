@@ -37,6 +37,14 @@ and everything the guest writes below any mounted home can still be a link.
   plants the symlink (`internal/files/trust_test.go`,
   `cmd/styrman/prune_test.go`, `internal/orchestrator/realbelow_test.go`).
 
+- **Server-only, root-read (ADR-065):** `StateDir/netpolicy/lan/<uuid>` is
+  written by the server and read by the ROOT firewall script by NAME only. It
+  sits beside `users/` and `projects/`, never under a mounted home, so no
+  guest can plant a link there; the root side still refuses symlinks, asserts
+  the owner, and treats names as the whole grammar (BUG-009: root code below
+  a lower-privileged owner's directory never `mkdir -p`s or chowns through a
+  path it has not just asserted is a real, correctly-owned directory).
+
 The race between a check and the operation was the residual while tenant
 trees sat under a guest-writable directory; ADR-064 (v1.21.0) removed that
 layout, and the guards above remain as a second line.

@@ -10,6 +10,25 @@ Add new items below as they arise.
 
 ## Inbox
 
+- [ ] 🟢 ADR-065 follow-ups (recorded, not built — plan
+  `.agents/docs/plans/2026-09-08-per-project-lan-access.md`): (a) a
+  `lanPolicy = admins|owners|off` operator knob via `operatorOverrides` /
+  `PATCH /api/settings/runtime` (~30 lines) if a tenant ever needs to
+  self-serve; (b) `LAN_ALLOW_HOST` / `LAN_ALLOW_PUBLISHED_PORTS` conf keys
+  (reserved, parsed as 0) each need their own ADR-029 amendment; a published-
+  port rule must carry `! -o sdb-+ ! -o <ingress br>`; (c) per-project LAN
+  DNS (guest resolvers are pinned to 8.8.8.8/1.1.1.1 — access is by IP);
+  (d) pin `default-address-pools` to 172.16.0.0/12 in `daemon.json` so a
+  16th project bridge can never land in 192.168/16 (today the conf
+  validator's overlap refusal fails closed); (e) verify Docker 29.7 +
+  live-restore keeps `DOCKER-USER`/`STYRMAN-*` across a daemon restart
+  (exposure today: ≤65 s LAN-closed, never open); (f) run the base section
+  `Before=docker.service` to close the pre-existing ≤15 s boot window
+  (unverified whether Docker keeps a pre-created `DOCKER-USER`); (g) the
+  transitive path "LAN-enabled project → a LAN host that trusts its key →
+  back to this host" is an accepted, documented risk — consider narrowing
+  what the broker hands a LAN-enabled project.
+
 - [ ] 🟢 Coverage tracing for v1.22.0 is incomplete (release gate, 2026-09-04). The verifier ran every command green but did not finish tracing each changed file to a covering test; the largest untraced surface is `web/src/components/SidePanelGit.tsx` (351 changed lines), plus `deploy/verify-commit.sh`'s new CSS-origin gate step, `image/skel/*`, and `integration.sh`'s own additions. These are UNKNOWN, not established failures — `SidePanelGit.tsx` is exercised by the e2e git checks but not line-for-line. Per AGENTS.md a changed file with no covering test is a FAIL row, so this needs closing out rather than assuming.
 - [x] The six git HTTP handlers added in v1.22.0 have NO Go unit test. **DONE 2026-09-04**: `internal/httpapi` gained a narrow `guestRuntime` interface (`Status` + `Exec`), set from the orchestrator in `New()`, with 15 call sites routed through it and 26 handler tests in `guestexec_test.go`. The argv IS the security decision in these handlers (`add -A` not `commit -a`, `--end-of-options` on the switch path, `-u` on stash push, no `--prune` on fetch) and none of it could be asserted before — a comment claiming an invariant is not a test. **Correction to this item's own claim:** the Exec seam closes this and the `checkFile`/`formatFile` item, but NOT BUG-003's residual, which needs a fake DOCKER client — a different seam entirely. Two of three, not three.
 
@@ -118,7 +137,12 @@ Add new items below as they arise.
   `usernameFromEmail` entirely; auth paths now converge on `identity.DeriveUsername`.
 - [x] 🟡 Project egress deny-list omits `100.64.0.0/10` (Tailscale) and
   `198.18.0.0/15` (`deploy/host-setup.sh:149-206`). **DONE 2026-09-02** — v1.19.0
-  adds both CIDR blocks to the DOCKER-USER filter rules.
+  adds both CIDR blocks to the DOCKER-USER filter rules. **Correction
+  2026-09-08:** the REPO change shipped; production never received it —
+  nothing delivered host-setup changes, and the live host ran the four-DROP
+  script of 2026-08-30 until the ADR-065 work found it. Converged by the
+  operator's `deploy/firewall/install.sh` run; `host_converge` in the updater
+  closes the delivery gap for good.
 - [x] 🟡 `STYRMAN_RUNTIME` unvalidated while escape-capable caps are
   granted (`internal/orchestrator/orchestrator.go:759`). **DONE 2026-09-02** — v1.19.0
   adds `config.Load` (line 211) allowlist for VM runtimes (`mvm, kata, kata-runtime,

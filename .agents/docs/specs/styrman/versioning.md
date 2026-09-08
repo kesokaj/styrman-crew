@@ -129,6 +129,16 @@ that section for why.
    `styrman-server`, and `styrman-caddy` at that version, and brings the
    stack up at `/opt/styrman` — no manual compose step, and nothing manual
    should be run against a host where the timer is enabled.
+> **Host-side files (ADR-065).** The firewall script and its units live
+> outside the container stack. The updater's `host_converge` installs
+> `deploy/firewall/{styrman-firewall.sh,.service,.timer,.path}` from the
+> verified deployed SHA on every tick (report-only under `--check`), so a
+> release that changes them needs no host step — EXCEPT the first one: a
+> host that has never run `sudo bash deploy/firewall/install.sh` has no
+> `/etc/styrman/firewall.conf`, no spool tmpfs and no marker dir, and the UI
+> reports LAN access as unavailable until the operator runs it once from
+> `/opt/styrman` at the deployed tag.
+
 5. Verify: `curl -fsS https://styrman.<domain>/api/health`, confirm the
    Settings page shows `X.Y.Z`, sign out/in once to confirm the Google OAuth
    portal still redirects correctly (caddy-security surviving a version bump

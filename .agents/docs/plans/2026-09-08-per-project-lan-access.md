@@ -479,7 +479,7 @@ rule exists):
 
 | record | status | result |
 |---|---|---|
-| any | file absent or unparseable | lan ? `unavailable` (reason) : `off` — an absent file means no reconciler ever ran on this boot, and iptables rules are not persistent across boots either |
+| any | file absent or unparseable | lan ? `error` "cannot confirm the host firewall's state — no readable status file, and the rule may still be present" : `off`. (Security review of Phase 2: reporting a record-on project as "unavailable" here was fail-OPEN — the bind or dir can vanish while the rule stays live. Also: an empty `STYRMAN_FIREWALL_DIR` now removes every marker at boot so "disabled" is true for existing grants.) A future-dated `applied_at` (clock skew) counts as stale. |
 | any | STALE (present, old) and uuid ∈ `Applied` | `error`: "cannot confirm closed — host firewall not running (rule may still be present); journalctl -u styrman-firewall" |
 | true | uuid ∈ `Applied` (all CIDRs) | `on` |
 | false | uuid ∉ `Applied` | `off` |
@@ -515,7 +515,7 @@ PUT /api/projects/{project}/network   body {"lanAccess": true|false}
   403 {"error":{"message":"admin only"}} — requireAdmin, ENABLE only; DISABLE by the owner always proceeds
   503 — ENABLE only, netpolicy.Availability false, reason verbatim
   500 — SetLanAccess persist failure; or marker write failure after the store saved (record rolled back)
-  200 — the GET body; lanState is "pending" right after a change, never "on" from the request itself; idempotent (re-kicks)
+  200 — the GET body; lanState is "pending" right after a change, never "on" from the request itself; idempotent — a no-op PUT re-kicks THROTTLED (10 s per project; security review: a tenant looping disable must not drive root's reconciler); a non-admin owner gets generic messages (root's texts name the LAN prefix)
   Order, under s.netMu (server-level mutex — critic: two overlapping PUTs could otherwise leave record OFF with the marker PRESENT):
     validate → 404 → authz → availability → SetLanAccess → SetMarker (rollback on error) → Kick → audit → respond
   audit: s.logger.Info("lan access changed", "by", email, "project", id, "projectName", name, "lanAccess", on, "kicked", kicked)
@@ -795,34 +795,34 @@ ones (root-run script, R12 enforcement, authz); Phases 3–5 are routine.
 - [ ] Changelog "host-only, applied live", commit, push — checkpoint
 
 ### Phase 2 — Server half — security-critical (authz, root-read input)
-- [ ] `config`: `NetPolicyDir`, `FirewallRunDir`/`STYRMAN_FIREWALL_DIR`; `main.go` creates `netpolicy/lan` — verify: tier 1, AI
-- [ ] `internal/config/bridgename_test.go` golden vector — verify: tier 1, AI
-- [ ] `internal/netpolicy`: Dir, SetMarker, Sync, Kick (dedupe), Status/ParseStatus, Availability, Derive + tests + `TestMinScriptVersionMatchesScript` — verify: tier 1 `-race`, AI
-- [ ] `project.Store.SetLanAccess` + load-time `LanChangedAt` + `store_lan_test.go` — verify: tier 1, AI
-- [ ] `main.go`: `wantLAN` snapshot func; boot `Sync(wantLAN)` + `Kick("boot")` before the listener; Adopt kick; a dedicated 2-min ticker goroutine calling `Sync(wantLAN)` — verify: tier 1 for Sync incl. a test that a `SetMarker` issued while `Sync` holds the lock is never deleted by that cycle; reread for placement, AI
-- [ ] `httpapi/network.go` GET/PUT under `netMu`, 503 gate, audit; routes; `isolation_test.go` list; `network_test.go` — verify: tier 1, AI
-- [ ] `projectView` `lanState`/`lanMessage` from one cached status; settings `hostFirewall` (admin) — verify: tier 1, AI
-- [ ] `deleteProject` marker removal + kick immediately before `sp.projects.Remove` (after the wipe block's early return); conditional kicks after `EnsureRunning` in `ensureFor`/`createProject`/`startProject` — verify: tier 1 for delete incl. the failed-wipe case keeping the marker; tier 2 live block / manual for the kicks (no orchestrator double exists — stated), AI
-- [ ] Compose volume + env; `api.md` rows; server env table — verify: reread, AI
-- [ ] `integration.sh` block (R12 negative check, scratch-dir checks, opt-in live block) + README Tier 2 counts — verify: `bash integration.sh`, AI, on this host with the live block ON once
+- [x] `config`: `NetPolicyDir`, `FirewallRunDir`/`STYRMAN_FIREWALL_DIR`; `main.go` creates `netpolicy/lan` — verify: tier 1, AI
+- [x] `internal/config/bridgename_test.go` golden vector — verify: tier 1, AI
+- [x] `internal/netpolicy`: Dir, SetMarker, Sync, Kick + KickThrottled, Status/ParseStatus, Availability, Derive + tests (incl. the Sync-vs-SetMarker lock test) + `TestMinScriptVersionMatchesScript` — verify: tier 1 `-race`, AI
+- [x] `project.Store.SetLanAccess` + load-time `LanChangedAt` + `store_lan_test.go` — verify: tier 1, AI
+- [x] `main.go`: `wantLAN` snapshot func; boot `Sync(wantLAN)` + `Kick("boot")` before the listener; Adopt kick; a dedicated 2-min ticker goroutine calling `Sync(wantLAN)` — verify: tier 1 for Sync incl. a test that a `SetMarker` issued while `Sync` holds the lock is never deleted by that cycle; reread for placement, AI
+- [x] `httpapi/network.go` GET/PUT under `netMu`, 503 gate, audit; routes; `isolation_test.go` list; `network_test.go` (5 tests incl. 20 concurrent PUTs and the stale-status "cannot confirm closed" case) — verify: tier 1, AI
+- [x] `projectView` `lanState`/`lanMessage` from one cached status; settings `hostFirewall` (admin) — verify: tier 1, AI
+- [x] `deleteProject` marker removal + kick immediately before `sp.projects.Remove` (after the wipe block's early return); conditional kicks after `EnsureRunning` in `ensureFor`/`createProject`/`startProject` — verify: tier 1 for delete (`TestDeleteProjectRemovesMarker`; the failed-wipe case cannot be driven without a Docker double — stated); tier 2 live block / manual for the kicks, AI
+- [x] Compose volume + env; `api.md` rows; server env table — verify: reread, AI
+- [x] `integration.sh` block (R12 negative check, scratch-dir checks, opt-in live block) + README Tier 2 counts (82; 4 auto-SKIP) — verify: `bash integration.sh` 78 passed / 0 failed / 4 skipped on 2026-09-08 (the R12 negative check PASSED live); the live block runs once the operator has installed the host half
 - [ ] `reviewer` (diff only) + `security` — verify: findings fixed or rebutted
 - [ ] Changelog, commit, push — checkpoint
 
 ### Phase 3 — UI
-- [ ] `api.ts` types (+ `sharedPorts`) and verbs; `lib/lan.ts` + `lan.test.ts` — verify: tier 1 `npm test`, AI
-- [ ] `ui.tsx` `Switch` — verify: tier 1 check/lint; tier 3 keyboard, AI
-- [ ] `SidePanelPorts` "Local network" block: six states, ConfirmDialog danger, Retry, override-until-poll; works on a stopped project — verify: tier 3 + e2e, both
-- [ ] Sidebar + dashboard `LAN` chip — verify: tier 3, both
-- [ ] Settings "Host firewall" section (admin) — verify: tier 3, AI
-- [ ] e2e checks (unavailable branch, 503, no native dialog) + README Tier 1/4 counts; `web/dist` rebuilt — verify: `bash web/e2e/run.sh`, AI
+- [x] `api.ts` types (+ `sharedPorts`) and verbs; `lib/lan.ts` + `lan.test.ts` (11 tests) — verify: tier 1 `npm test` 80/80, AI
+- [x] `ui.tsx` `Switch` — verify: tier 1 check/lint; tier 3 keyboard, AI
+- [x] `components/LocalNetwork.tsx` (rendered at the top of `SidePanelPorts`): six states, ConfirmDialog danger, Retry, override-until-poll; reads `GET /network` every 5 s so it works on a stopped project — verify: tier 3 + e2e, both
+- [x] Sidebar + dashboard `LAN` chip (`components/LanBadge.tsx` over `lib/lan.ts`) — verify: tier 3, both
+- [x] Settings "Host firewall" section (admin) — verify: tier 3, AI
+- [x] e2e checks (unavailable branch with the switch disabled, 503 with nothing persisted, Settings not-installed row) + README Tier 1/4 counts (80 tests / 8 files; 86 checks + gate); `web/dist` rebuilt by the run — verify: `bash web/e2e/run.sh` 84 passed / 0 failed / 2 skipped on 2026-09-08 (the first run caught a real gap: with no status file the record derives "off", so the switch was enabled until `host.available` was wired into the block), AI
 - [ ] Manual end-to-end on production (the Verification list) with measured latency, logged in `testing/` — verify: log file, both
 - [ ] `reviewer` if ≥ 50 lines (it will be) — verify: findings fixed or rebutted
 - [ ] Changelog, commit, push — checkpoint
 
 ### Phase 4 — Delivery + docs
-- [ ] `remote.md` Prerequisites/Procedure/Verify (install.sh step; `sudo iptables -S STYRMAN-FWD | head`, `systemctl status styrman-firewall.path`, `cat /run/styrman-firewall/status`); `versioning.md` boxed host note; `deploy/README.md`; `deploy/.env.example` — verify: reread, AI
-- [ ] `deploy.md` isolation section (the exception, six ranges, "styrman-lan-tagged RETURNs are the ONE class of rule the script deletes on demand", install.sh + host_converge, reserved keys); `guide.md` §2/§4 + troubleshooting row; `README.md` "Hard isolation" bullet; `AGENTS.md` architecture bullet + counts; testing README ADR-052 section (netns test); `guest-writable-paths.md` one line — verify: `documentation` agent, reread, AI
-- [ ] `TODO.md` follow-ups (list under Scope) — verify: reread, AI
+- [x] `remote.md` Prerequisites/Procedure/Verify (install.sh step; `sudo iptables -S STYRMAN-FWD | head`, `systemctl status styrman-firewall.path`, `cat /run/styrman-firewall/status`); `versioning.md` boxed host note; `deploy/README.md`; `deploy/.env.example` — verify: reread, AI
+- [x] `deploy.md` isolation section (the exception, six ranges, "styrman-lan-tagged RETURNs are the ONE class of rule the script deletes on demand", install.sh + host_converge, reserved keys); `guide.md` §2/§4 + troubleshooting row; `README.md` "Hard isolation" bullet; `AGENTS.md` architecture bullet + counts; testing README ADR-052 section (netns test); `guest-writable-paths.md` one line — verify: `documentation` agent (after the Phase 2/3 reviews), reread, AI
+- [x] `TODO.md` follow-ups (list under Scope) + the correction to the 2026-09-02 "DONE" item that production never received — verify: reread, AI
 - [ ] Changelog, commit, push — checkpoint
 
 ### Phase 5 — Verification + release

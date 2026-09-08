@@ -198,6 +198,14 @@ why this rule exists (two concrete 2026-09-01 incidents).
   restart), and `log-driver: json-file` with `log-opts {max-size: 50m,
   max-file: 3}` (bounds container log growth) — a `.bak-styrman` copy of any
   prior `daemon.json` is kept.
+- **Host firewall (ADR-065)**: §5c runs `deploy/firewall/install.sh` after
+  the state dir exists — the isolation + per-project-LAN script into
+  `/usr/local/sbin`, its `.service`/`.timer`/`.path` units, a tmpfiles entry
+  and a bounded tmpfs mount unit for `/run/styrman-firewall/spool`, the
+  server-owned marker dir `netpolicy/lan`, and — only if absent —
+  `/etc/styrman/firewall.conf` with the LAN prefix discovered from the
+  default route (printed). Idempotent; the updater's `host_converge`
+  re-applies the script and units from every verified tag afterwards.
 
 ### Verified without credentials
 
@@ -556,7 +564,7 @@ first-login failure, fixed v1.5.3 / ADR-033).
 `docker compose -f deploy/docker-compose.yml up -d --force-recreate
 styrman` after the scrub satisfies it.
 
-## Project→host/LAN network isolation (R12, ADR-029, chain-based self-heal since 2026-08-30)
+## Project→host/LAN network isolation (R12, ADR-029, chain-based self-heal since 2026-08-30; per-project LAN exception since ADR-065)
 
 Every project's Docker bridge is named `sdb-<projectID>` (`config.NetworkName`),
 but Docker's actual Linux bridge INTERFACE would default to `br-<hash>` unless
@@ -615,11 +623,59 @@ Self-healing: `styrman-firewall.service` (a plain oneshot, NOT
 minute, so a Docker daemon restart, a firewall-manager reload, or a manual
 flush is undone within ~1 min rather than surviving until the next reboot.
 The `sdb-+` wildcard means new project bridges are covered automatically, no
-per-network rule needed. This firewall rework (H5, 2026-08-30) is applied by
-the operator running `host-setup.sh` directly on the host — it needs root and
-rewrites live iptables state, so it is not part of the automated `docker
-compose` deploy; confirm it's live with `iptables -S STYRMAN-FWD` and
-`systemctl status styrman-firewall.timer`.
+per-network rule needed.
+
+**Where it lives and how it ships (ADR-065).** The script is
+`deploy/firewall/styrman-firewall.sh` (it was a heredoc in `host-setup.sh`
+until 2026-09-08), installed by `deploy/firewall/install.sh` — which
+`host-setup.sh` §5c calls — and re-applied, together with its three units,
+by the auto-updater's `host_converge` from every verified release tag. That
+closes the gap that left this host running a 2026-08-30 script with four
+DROPs for six days after the repo had six: nothing used to deliver a
+host-setup change. `install.sh` is idempotent; run it by hand once per host
+(from `/opt/styrman` at the deployed tag) and after that only when you want
+to re-discover the LAN prefix (delete `/etc/styrman/firewall.conf` first —
+the installer writes it ONLY IF ABSENT). Confirm with
+`iptables -S STYRMAN-FWD`, `systemctl status styrman-firewall.timer
+styrman-firewall.path` and `cat /run/styrman-firewall/status`.
+
+**The per-project LAN exception (ADR-065).** An admin may allow individual
+projects, each toggled separately, to reach the operator's local network —
+exactly the prefixes in root-owned `/etc/styrman/firewall.conf`
+(`LAN_DEV=`, `LAN_CIDRS=`; validated on every run: `/16`..`/30`, host bits
+zero, no overlap with 172.16/12, 169.254/16, 100.64/10, 198.18/15, 127/8,
+0/8, 224/3 or any Docker bridge's connected route — an invalid value closes
+EVERY allowance and reports `conf_error=`). The server records intent in
+`projects.json` and projects it as an empty marker file
+`/var/lib/styrman/netpolicy/lan/<uuid>` whose NAME is the whole grammar
+(root reads names only, regex-validated; contents are never parsed), then
+drops a trigger into the root-parented spool `/run/styrman-firewall/spool`
+(a 1 MiB / 1024-inode tmpfs owned by the server's uid). The script's LAN
+section runs after the base rules: per marker and per prefix it keeps one
+rule at the HEAD of `STYRMAN-FWD`,
+`-i sdb-<hash> -o <LAN_DEV> -s <bridge subnet> -d <cidr> -m comment
+--comment "styrman-lan:<uuid>" -j RETURN` — RETURN, not ACCEPT, so Docker's
+own cross-bridge DROP still runs; `-s`/`-o` pinned because `rp_filter` is
+loose and MASQUERADE matches only the bridge subnet. These tagged RETURNs
+are the ONE class of rule the script deletes on demand (marker gone = rule
+gone, tighten before loosen, always by full spec — never by a rule number
+another root writer could shift); the base rules keep the never-delete
+promise. Root writes `/run/styrman-firewall/status` (root 0640, the state
+dir's group) — `version=`, `applied_at=`, `lan_cidrs=`, `lan=<uuids>`,
+`pending=`, `error=`, `conf_error=`, `warn=` — and the server derives each
+project's `off / pending / on / error / unavailable` from it, refusing an
+enable with 503 whenever that file is absent, stale, below
+`netpolicy.MinScriptVersion`, or without a prefix. `styrman-firewall.path`
+(`DirectoryNotEmpty` on the spool) applies a toggle in about 0.2 s; the 60 s
+timer remains the backstop; the path unit carries no `After=docker.service`
+(an ordering cycle) and is revived by the script at most once per ten
+minutes. Still dropped for a LAN-enabled project: the host itself
+(`STYRMAN-IN`), host-published Docker ports (the drop sees the post-DNAT
+container address), every other project and system bridge, the ingress
+bridge, cloud metadata, the tailnet; LAN hosts cannot initiate connections
+in; the setup VM can never be allowed (its network name is not a uuid).
+Reserved conf keys, parsed as 0 until their own ADR: `LAN_ALLOW_HOST`,
+`LAN_ALLOW_PUBLISHED_PORTS`.
 
 ## Caddy ingress upstream selection (multi-homed server)
 
