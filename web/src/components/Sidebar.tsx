@@ -9,6 +9,7 @@ import {
   type ThemePref,
 } from "../lib/hooks";
 import { DeleteProjectDialog } from "./DeleteProjectDialog";
+import { LanBadge } from "./LanBadge";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { NotificationBell } from "./NotificationBell";
 import { SetupBanner } from "./SetupBanner";
@@ -285,6 +286,7 @@ export function Sidebar({
                   repo setup failed
                 </span>
               )}
+              {p.state !== "deleting" && <LanBadge project={p} />}
               <button
                 className="invisible inline-flex h-6 w-6 items-center justify-center rounded-md text-text-dim hover:bg-bg-active hover:text-text group-hover:visible group-focus-within:visible"
                 onClick={(e) => {

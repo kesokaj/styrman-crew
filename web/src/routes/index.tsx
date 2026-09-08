@@ -4,6 +4,7 @@ import { api, tryUI, type Project, type Terminal } from "../lib/api";
 import { usePolled } from "../lib/hooks";
 import { firstTerminalId, useProjects } from "../lib/projects";
 import { CrewMark } from "../components/icons";
+import { LanBadge } from "../components/LanBadge";
 import { Dialog } from "../components/ui";
 
 export const Route = createFileRoute("/")({ component: Home });
@@ -96,6 +97,7 @@ function ProjectCard({ project: p }: { project: Project }) {
         <span className="min-w-0 flex-1 truncate text-sm font-medium">
           {p.name}
         </span>
+        <LanBadge project={p} />
         <span className="shrink-0 text-[11px] text-text-dim">{p.state}</span>
       </button>
       <CardOps project={p.id} running={running} />

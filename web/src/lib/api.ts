@@ -15,6 +15,40 @@ export interface Project {
    * POST /api/projects answers 201 before the clone runs, so this is how the
    * user learns why the project came up as an empty repo. */
   provisionError?: string;
+  /** Per-port preview shares (email lists), owner-managed — see setPortShares. */
+  sharedPorts?: Record<string, string[]>;
+  /** Per-project local-network access (ADR-065). `lanAccess` is the record;
+   * `lanState`/`lanMessage` are root's last word on it, derived server-side
+   * from the host firewall's status file — never from the request that
+   * changed it. Omitted while off with nothing to say. */
+  lanAccess?: boolean;
+  lanChangedAt?: string;
+  lanState?: LanState;
+  lanMessage?: string;
+}
+
+export type LanState = "off" | "pending" | "on" | "error" | "unavailable";
+
+/** The operator's view of the host firewall half (admins only). */
+export interface HostFirewall {
+  available: boolean;
+  reason: string;
+  version: number;
+  requiredVersion: number;
+  appliedAt?: string;
+  lanDev: string;
+  lanCidrs: string[];
+  lanProjects: number;
+  warnings: string[];
+}
+
+/** GET/PUT /api/projects/{id}/network. `host` is present for admins only. */
+export interface ProjectNetwork {
+  lanAccess: boolean;
+  lanState: LanState;
+  lanMessage: string;
+  lanChangedAt?: string;
+  host?: HostFirewall;
 }
 
 /** Live resource snapshot of a project's microVM (terminal status bar). */
@@ -197,6 +231,8 @@ export interface Settings {
   /** True once the user explicitly picked a name (setup won't re-ask). */
   terminalUsernameChosen: boolean;
   setupComplete: boolean;
+  /** Admins only (ADR-065): the host firewall's state and LAN definition. */
+  hostFirewall?: HostFirewall;
 }
 
 /** A stored credential, value-free. `id` is the delete key (host | KEY | file
@@ -432,6 +468,16 @@ export const api = {
     request<void>(`/api/projects/${id}`, {
       method: "PATCH",
       body: JSON.stringify({ name }),
+    }),
+  // Per-project local-network access (ADR-065). The PUT answers with the
+  // derived state — "pending" right after a change, never "on" from the
+  // request itself; root's next reconcile (usually under a second) moves it.
+  projectNetwork: (id: string) =>
+    request<ProjectNetwork>(`/api/projects/${encodeURIComponent(id)}/network`),
+  setProjectLan: (id: string, lanAccess: boolean) =>
+    request<ProjectNetwork>(`/api/projects/${encodeURIComponent(id)}/network`, {
+      method: "PUT",
+      body: JSON.stringify({ lanAccess }),
     }),
   deleteProject: (id: string, wipe: boolean) =>
     request<void>(`/api/projects/${id}${wipe ? "?wipe=true" : ""}`, {

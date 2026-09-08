@@ -265,7 +265,19 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   `STYRMAN-FWD` chains, kept applied by a self-healing `styrman-firewall.timer`
   (re-runs every 60s; INSERT-IF-MISSING, never delete-then-insert, so there is
   no window where isolation is briefly absent) (ADR-029, reworked 2026-08-30
-  — see deploy.md).
+  — see deploy.md). Since ADR-065 the script lives in `deploy/firewall/`
+  and drops six ranges (RFC1918, 169.254/16, and the CGNAT/benchmark ranges
+  100.64/10 and 198.18/15), and there is ONE exception: an admin may allow
+  an individual project to reach the operator's **local network** — exactly
+  the IPv4 prefixes in the root-owned `/etc/styrman/firewall.conf` — by a
+  per-bridge RETURN the same root script inserts ahead of the drops, keyed on
+  that project's bridge interface, its subnet and the uplink device, driven
+  by an intent file the server writes (`netpolicy/lan/<uuid>`, name only)
+  and applied within about a second through a spool the server kicks. The
+  host itself, other projects, the ingress bridge, host-published Docker
+  ports, cloud metadata and the tailnet stay dropped for that project too,
+  LAN hosts still cannot connect in, and the allowance disappears fail-closed
+  whenever the root half is absent or misconfigured (see §4 "Local network").
 - **Credential broker** (ADR-030/032): a credential-only listener (`:8091`,
   bridge-only, never published to the host) hands each project the CURRENT
   credential for a tool, identified by its bridge source IP — so a refresh in
@@ -439,6 +451,23 @@ rotated token, or a tool signed into inside a project instead of at setup).
   checkpoint snapshots were REMOVED in v1.7.0 — see §1 idea 5. There is no
   backup feature to replace them with: durability is git — commit and
   push. See deploy.md's "Durability" section.)
+- **Local network** (ADR-065, per project): the top of the **Ports** tab
+  holds a "Local network" switch. Off is the default and means internet
+  only. An **admin** turns it on (a danger dialog names the blast radius:
+  everything the project runs, holding the owner's brokered credentials,
+  can then reach every device on the operator's LAN by IP); the state under
+  the switch is root's word, not the click's — `pending` until the host
+  firewall applied it (usually under a second, up to a minute), then `on`
+  with the prefix and the time it applied, `error` with root's message and a
+  retry, or `unavailable` with the reason when the host half is not
+  installed, outdated, or has no prefix configured (then an enable is
+  refused with 503). The owner may always turn it off, which cuts open LAN
+  connections immediately. A small `LAN` chip flags the project in the
+  sidebar and on the dashboard while it is on or pending. Works for a
+  stopped project (it applies when the project next starts). Access is by
+  IP only — LAN names and `.local` do not resolve inside the microVM.
+  Admins see the host half under Settings → Host firewall: script version,
+  last applied, the configured prefix and device, how many projects are on.
 - **Terminals**: sidebar, per project; generated friendly names; ⏸ pause /
   ✕ delete / close all; per-terminal autostart command (pencil → dialog;
   set the autostart to `claude --continue` / `agy --continue` and the
@@ -512,6 +541,7 @@ re-import it.
 | Terminal shows "replaced"                             | Same terminal opened in another tab (close 4001) — one attach each, by design.                                                                                                                                                                                                               |
 | First port-preview 307s or drops once                 | The server just joined that project's network; the redirect/retry lands.                                                                                                                                                                                                                     |
 | Project won't start                                   | `docker logs styrman-<uuid>` — the entrypoint logs every step.                                                                                                                                                                                                                               |
+| Local network switch disabled: "Not available on this server" | The root half is not installed, outdated, or has no prefix: on the host, `sudo bash deploy/firewall/install.sh` (from `/opt/styrman` at the deployed tag), then check `cat /run/styrman-firewall/status`, `systemctl status styrman-firewall.timer styrman-firewall.path` and `journalctl -u styrman-firewall`. "Applying…" that turns into an error after 90 s means the reconciler never ran: same three commands. |
 
 ## 6. Development
 

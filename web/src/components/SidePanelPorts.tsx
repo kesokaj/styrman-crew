@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, portUrl, type PortInfo, type PublicLink } from "../lib/api";
 import { usePolled } from "../lib/hooks";
 import { copyToClipboard, toast } from "../lib/toast";
+import { LocalNetwork } from "./LocalNetwork";
 
 export function PortsTab({ project, term }: { project: string; term: string }) {
   const { data, error } = usePolled(() => api.listPorts(project), 7000, [project]);
@@ -14,6 +15,10 @@ export function PortsTab({ project, term }: { project: string; term: string }) {
   const ports = data?.ports ?? [];
   return (
     <div className="h-full overflow-y-auto p-2">
+      {/* The project's network surface starts with what it may REACH (ADR-065),
+          then what it EXPOSES. The block reads its own record, so it renders
+          and works for a stopped project too. */}
+      <LocalNetwork project={project} />
       <p className="px-1 pb-2 text-[11px] text-text-dim">
         Ports listening inside this project's microVM. Links open the app
         through styrman; “share” grants specific Google accounts access to that

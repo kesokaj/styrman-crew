@@ -81,6 +81,47 @@ export function TextInput({
   );
 }
 
+/**
+ * Switch — an on/off control with the switch role, the one family for every
+ * boolean setting (v1.3 rule: one family per control). The track is the
+ * WARN colour when on, because the switches this app ships flip standing
+ * exceptions (local-network access) that deserve to look like exceptions.
+ * Space/Enter toggle through the native button; `aria-checked` carries state.
+ */
+export function Switch({
+  checked,
+  onChange,
+  disabled = false,
+  label,
+  title,
+  className = "",
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  /** Accessible name — required; the visible label lives beside the control. */
+  label: string;
+  title?: string;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      title={title}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-[18px] w-8 shrink-0 items-center rounded-full border border-transparent transition-colors focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-40 ${checked ? "bg-warn" : "bg-border"} ${className}`}
+    >
+      <span
+        className={`h-3.5 w-3.5 rounded-full bg-bg shadow transition-transform ${checked ? "translate-x-[15px]" : "translate-x-[1px]"}`}
+      />
+    </button>
+  );
+}
+
 // Escape must close only the TOPMOST dialog when dialogs stack (e.g. the
 // file viewer's discard confirm on top of the viewer).
 const dialogStack: symbol[] = [];

@@ -5,8 +5,8 @@ No mocks in the orchestrator path.
 
 ## Tiers
 
-1. **Unit** — `go build ./...`, `go vet ./...`, `go test -race ./...` (store, validation; fast, no Docker). The vendored Caddy ingress is a SEPARATE Go module and is not covered by the root `go test ./...` run — test it explicitly: `(cd deploy/caddy/ingress && go test ./...)`. Frontend: `cd web && npm run check` (tsc -b), `npm run lint` (oxlint), and `npm test` (`vitest run` — added 2026-09-02; `web` previously had no unit-test framework at all) — 69 tests across seven files: `web/src/lib/api.test.ts` (`projectNameFromRepoURL`, `cloneURLError`, `projectNameError` — pure, security- or UX-load-bearing string logic that was the frontend's entire test-coverage story before this), `web/src/lib/editorPane.test.ts` (`basename`), `web/src/lib/diffReveal.test.ts` (8 tests, v1.22.0: `DiffView`'s `reveal` makes bidi overrides/isolates, invisible directional marks and C0/C1 controls VISIBLE as `<U+202E>`-style markers instead of passing them through — the diff pane's job is reviewing a change before committing it, and a Trojan-Source line renders differently from how it applies; TAB is deliberately kept), `web/src/lib/recentsPanel.test.ts` (14 tests, v1.22.0: the Recent strip's persisted geometry — height clamped to 48..320 on the way IN and OUT so a hand-edited key cannot collapse the panel to nothing, a stored string parsed since localStorage holds only strings, the collapsed flag REMOVED rather than set to "0" when expanded, and a private window throwing on access), `web/src/lib/explorerHistory.test.ts` (13 tests, v1.22.0: the file explorer's back/forward reducer — the forward tail dropped on a new navigation, object IDENTITY preserved on a redundant push so it cannot re-render or refetch, the 50-entry cap dropping oldest-first while keeping the current entry reachable, and `crumbTrail`'s middle elision keeping each shown crumb's REAL full path rather than an offset into the shortened list), `web/src/lib/appearance.test.ts` (17 tests, v1.22.0: the Settings font store — the two surfaces' differing defaults, per-FIELD fallback so one bad value never discards the others, size clamping to 8..32, a numeric string and a prototype key (`"toString"`) both rejected as font families, corrupt JSON, and a private window whose `localStorage` throws on ACCESS rather than only on write; plus a guard that `FONT_STACKS["google-sans-code"]` is still byte-identical to `terminal.ts`'s historical stack, since a dropped fallback silently changes what renders), and `web/src/lib/api.session.test.ts` (6 tests, BUG-001: `request()`/`uploadFiles` against a stubbed browser facing the ingress's cross-origin session-expiry redirect — re-auth once, the reload cap under partial failure, the deferred counter clear, malformed and corrupt counter records). Deliberately NOT unit-tested: the editor pane store's per-terminal draft behavior (parked on unmount, restored only for the file it belongs to, dropped when that file closes or is evicted) — its state lives in a module-level `Map` that is not exported, so reaching it from a unit test would mean either widening the module's API just for tests or pulling in a React renderer; `editorPane.test.ts`'s own header comment says so explicitly rather than faking coverage with an assertion that would always pass. That behavior is covered by Tier 4 e2e instead. Outside these two files, most TypeScript/React logic is still covered only by type-checking + lint plus, where applicable, Tier 4 e2e — a changed function/component with no unit test and no e2e exercise has no automated coverage at all, note it explicitly when verifying.
-2. **Integration (68 checks; 3 auto-SKIP on firewall-hardened hosts)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
+1. **Unit** — `go build ./...`, `go vet ./...`, `go test -race ./...` (store, validation; fast, no Docker). The vendored Caddy ingress is a SEPARATE Go module and is not covered by the root `go test ./...` run — test it explicitly: `(cd deploy/caddy/ingress && go test ./...)`. Frontend: `cd web && npm run check` (tsc -b), `npm run lint` (oxlint), and `npm test` (`vitest run` — added 2026-09-02; `web` previously had no unit-test framework at all) — 80 tests across eight files: `web/src/lib/lan.test.ts` (11 tests, ADR-065: the pure derivations behind the LAN chip and the Ports-tab line — nothing rendered while off or unavailable, warn colours while on/pending, danger with root's message on error, the two pending directions and the no-bridge case, the unavailability reason relayed verbatim, a generic place name for a non-admin who is not told the operator's prefix), `web/src/lib/api.test.ts` (`projectNameFromRepoURL`, `cloneURLError`, `projectNameError` — pure, security- or UX-load-bearing string logic that was the frontend's entire test-coverage story before this), `web/src/lib/editorPane.test.ts` (`basename`), `web/src/lib/diffReveal.test.ts` (8 tests, v1.22.0: `DiffView`'s `reveal` makes bidi overrides/isolates, invisible directional marks and C0/C1 controls VISIBLE as `<U+202E>`-style markers instead of passing them through — the diff pane's job is reviewing a change before committing it, and a Trojan-Source line renders differently from how it applies; TAB is deliberately kept), `web/src/lib/recentsPanel.test.ts` (14 tests, v1.22.0: the Recent strip's persisted geometry — height clamped to 48..320 on the way IN and OUT so a hand-edited key cannot collapse the panel to nothing, a stored string parsed since localStorage holds only strings, the collapsed flag REMOVED rather than set to "0" when expanded, and a private window throwing on access), `web/src/lib/explorerHistory.test.ts` (13 tests, v1.22.0: the file explorer's back/forward reducer — the forward tail dropped on a new navigation, object IDENTITY preserved on a redundant push so it cannot re-render or refetch, the 50-entry cap dropping oldest-first while keeping the current entry reachable, and `crumbTrail`'s middle elision keeping each shown crumb's REAL full path rather than an offset into the shortened list), `web/src/lib/appearance.test.ts` (17 tests, v1.22.0: the Settings font store — the two surfaces' differing defaults, per-FIELD fallback so one bad value never discards the others, size clamping to 8..32, a numeric string and a prototype key (`"toString"`) both rejected as font families, corrupt JSON, and a private window whose `localStorage` throws on ACCESS rather than only on write; plus a guard that `FONT_STACKS["google-sans-code"]` is still byte-identical to `terminal.ts`'s historical stack, since a dropped fallback silently changes what renders), and `web/src/lib/api.session.test.ts` (6 tests, BUG-001: `request()`/`uploadFiles` against a stubbed browser facing the ingress's cross-origin session-expiry redirect — re-auth once, the reload cap under partial failure, the deferred counter clear, malformed and corrupt counter records). Deliberately NOT unit-tested: the editor pane store's per-terminal draft behavior (parked on unmount, restored only for the file it belongs to, dropped when that file closes or is evicted) — its state lives in a module-level `Map` that is not exported, so reaching it from a unit test would mean either widening the module's API just for tests or pulling in a React renderer; `editorPane.test.ts`'s own header comment says so explicitly rather than faking coverage with an assertion that would always pass. That behavior is covered by Tier 4 e2e instead. Outside these two files, most TypeScript/React logic is still covered only by type-checking + lint plus, where applicable, Tier 4 e2e — a changed function/component with no unit test and no e2e exercise has no automated coverage at all, note it explicitly when verifying.
+2. **Integration (82 checks; 4 auto-SKIP: 3 on firewall-hardened hosts + the opt-in live LAN block)** — `bash .agents/docs/testing/styrman/integration.sh [image]`
    (default `styrman-runtime:test` — see the warning under Prereqs about
    `:dev`). Isolated server (own state dir, port
    18080) through the full lifecycle: legacy-layout migration, async create
@@ -25,7 +25,24 @@ No mocks in the orchestrator path.
    shell (`bash -lic`): `skel/bashrc:7` returns early for a non-interactive
    shell, so a plain `bash -lc` never reaches `.bash_exports` and reports an
    empty `GOPATH` — a real styrman terminal is interactive under tmux.
-   Safe next to a real install. (The old host-side `/diff` +
+   Since ADR-065 (per-project LAN access) the "local network" block: the
+   FIRST scripted R12 negative check (an in-guest `ping` to the host's LAN
+   gateway must be DROPPED — gated on `sudo -n iptables -S STYRMAN-FWD`
+   being readable and the host pinging its gateway, else SKIP), then the
+   server half against a scratch `STYRMAN_FIREWALL_DIR`: enable refused with
+   503 while root's status file is absent (fail closed) and no marker
+   written; disable always 200; `lanAccess` required (400); with a crafted
+   fresh status an enable answers `pending` (never `on`), projects the
+   empty uuid-named marker and a spool trigger, the list carries `lanState`,
+   a status listing the uuid reads `on`, disable removes the marker; and the
+   destroy path removes the marker with the record. The opt-in live block
+   (`STYRMAN_IT_LIVE_LAN=1`, default SKIP) proves reachability through the
+   PRODUCTION reconciler: it writes one marker named by the run's own
+   project into the production marker dir plus a spool trigger, expects the
+   head-of-chain RETURN within 5 s, an in-guest ping to the gateway to
+   SUCCEED while the host itself stays unreachable, and the rule gone within
+   5 s of the marker; the cleanup trap removes the marker by exact name
+   (ADR-052). Safe next to a real install. (The old host-side `/diff` +
    checkpoint checks were replaced with `/git/status` + `/git/diff` checks
    when those routes were removed in the git-RCE fix, ADR-039.)
 3. **Manual / UX** — things scripts can't judge:
@@ -98,6 +115,22 @@ No mocks in the orchestrator path.
   ADR-009 — the daemon.json time-namespaces flag is missing)
 
 ## Privileged (root) test convention — scratch state only (ADR-052)
+
+The firewall script (`deploy/firewall/styrman-firewall.sh`, ADR-065) is the
+model for testing a root script WITHOUT root: `deploy/firewall/test.sh` runs
+the real script under `unshare -Urnm` — an unprivileged user + network +
+mount namespace with its own sysfs remounted, so `/sys/class/net` shows only
+the namespace's dummy interfaces and `iptables` starts from an EMPTY ruleset
+— against `mktemp` state/run/conf paths (the script takes every path from
+the environment and has no defaults). `internal/netpolicy/script_test.go`
+runs it under `go test ./...` (83 checks; skips loudly where user namespaces
+are unavailable) and, when `sudo -n` works, asserts the host's
+`STYRMAN-FWD` chain is byte-identical before and after. `test.sh` refuses to
+run in the host's network namespace before it mounts or changes anything.
+`deploy/firewall/install.sh` is verified by `bash -n`, shellcheck and its
+`--dry-run`; its real run is the operator's install on the host, recorded in
+the changelog — never a test.
+
 
 Any root-run exercise of a host-level script (the auto-updater, the backup
 script, the firewall script, or any future one) MUST point its state/target
@@ -204,7 +237,7 @@ go test ./... && bash .agents/docs/testing/styrman/integration.sh
 Image changes: rebuild the image first; the integration script always creates
 fresh containers so it picks the new image up automatically.
 
-## Tier 4 — Browser e2e (Playwright, 82 checks + a final client-error gate; firewall-hardened hosts run 80 + 2 auto-SKIP. v1.22.0 added six appearance checks, two path-navigation checks, three recents-strip checks, three git-diff/fast-commit checks and six git-verb checks (branch create, branch SWITCH — a different argv shape that runs `checkout --end-of-options`, invalid-name rejection, fetch/pull controls reachable, commit history into the pane, stash push -u / pop). The client-error gate now records the failing URL alongside the browser's message, which otherwise names neither endpoint nor caller; re-measure after any further check additions before citing a pass count as current)
+## Tier 4 — Browser e2e (Playwright, 86 checks + a final client-error gate; firewall-hardened hosts run 84 + 2 auto-SKIP. ADR-065 added three: the Ports tab's "Local network" block reports the host half as unavailable with the switch disabled and reading off, an enable is refused with 503 and nothing persists, and Settings shows the host firewall as not installed — the harness points `STYRMAN_FIREWALL_DIR` at a scratch dir, so the applied-state UI (pending → on, the chip, the danger dialog) is verified by hand on the converged production host and logged in `testing/`. v1.22.0 added six appearance checks, two path-navigation checks, three recents-strip checks, three git-diff/fast-commit checks and six git-verb checks (branch create, branch SWITCH — a different argv shape that runs `checkout --end-of-options`, invalid-name rejection, fetch/pull controls reachable, commit history into the pane, stash push -u / pop). The client-error gate now records the failing URL alongside the browser's message, which otherwise names neither endpoint nor caller; re-measure after any further check additions before citing a pass count as current)
 
 `bash web/e2e/run.sh [image-tag]` — self-hosts: builds the web SPA
 (`cd web && npm run build`) FIRST, then the server, then starts its own

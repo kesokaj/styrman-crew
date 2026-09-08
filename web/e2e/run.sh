@@ -50,7 +50,12 @@ echo "== building server =="
 ( cd "${REPO}" && go build -o "${STATE}/styrman" ./cmd/styrman/ )
 
 echo "== starting host server (state=${STATE}, port=${PORT}) =="
+# STYRMAN_FIREWALL_DIR at a scratch dir (ADR-065): a host-process test
+# server must never read the production reconciler's status or kick its
+# spool; with no status file every project reports "unavailable", which is
+# the branch the e2e checks exercise.
 STYRMAN_STATE_DIR="${STATE}" STYRMAN_IMAGE="${IMAGE}" STYRMAN_ADDR="127.0.0.1:${PORT}" \
+    STYRMAN_FIREWALL_DIR="${STATE}/fw" \
     "${STATE}/styrman" > "${STATE}/server.log" 2>&1 &
 PID=$!
 for i in $(seq 1 30); do

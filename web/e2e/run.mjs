@@ -704,6 +704,27 @@ try {
     await panel().getByText("Ports", { exact: true }).click();
     await page.waitForSelector("aside >> text=:4321", { timeout: 25000 });
   });
+  // ── Local network (ADR-065): the host half is deliberately absent here
+  // (run.sh points STYRMAN_FIREWALL_DIR at a scratch dir), so the block must
+  // say so, the switch must be disabled, and an enable must be refused —
+  // nothing opens. The applied-state UI is verified by hand on the converged
+  // production host (plan Phase 3).
+  await check("local network block reports the host half as unavailable", async () => {
+    await panel().getByText("Local network", { exact: true }).waitFor({ timeout: 10000 });
+    await panel().getByText(/Not available on this server/).waitFor({ timeout: 10000 });
+    const sw = panel().getByRole("switch", { name: "Local network access" });
+    if (!(await sw.isDisabled())) throw new Error("switch must be disabled without the host reconciler");
+    if ((await sw.getAttribute("aria-checked")) !== "false") throw new Error("switch must read off");
+  });
+  await check("enable is refused with 503 while the host half is missing", async () => {
+    const res = await page.request.put(`${BASE}/api/projects/${PID}/network`, {
+      data: { lanAccess: true },
+    });
+    if (res.status() !== 503) throw new Error(`got ${res.status()}`);
+    const list = await (await page.request.get(`${BASE}/api/projects`)).json();
+    const me = list.projects.find((p) => p.id === PID);
+    if (me?.lanAccess) throw new Error("a refused enable must not persist");
+  });
   // The preview proxy needs the TEST server (a host process) to reach the
   // guest bridge IP; the hardened host firewall DROPs that (production's
   // containerized server is exempt). Probe once and SKIP the proxy-path
@@ -1005,6 +1026,11 @@ try {
   });
   await check("settings shows runtime info", () =>
     page.waitForSelector("text=Kata microVM"),
+  );
+  await check("settings shows the host firewall as not installed (admin view)", () =>
+    page.waitForSelector("text=Host firewall").then(() =>
+      page.waitForSelector("text=not installed"),
+    ),
   );
 
   // ── Appearance: fonts (v1.22.0) ─────────────────────────────────────────
