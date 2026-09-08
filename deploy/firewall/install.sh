@@ -23,6 +23,7 @@ ETC_DIR=/etc/styrman
 RUN_DIR=/run/styrman-firewall
 LAN_DEV=""
 LAN_CIDRS=()
+ALLOW_HOST=""
 DRY=0
 
 while [ $# -gt 0 ]; do
@@ -30,6 +31,13 @@ while [ $# -gt 0 ]; do
         --state-dir) STATE_DIR="$2"; shift 2 ;;
         --lan-dev) LAN_DEV="$2"; shift 2 ;;
         --lan-cidr) LAN_CIDRS+=("$2"); shift 2 ;;
+        # ADR-066. Given explicitly it is also applied to an EXISTING conf —
+        # the one thing this installer changes in place, because opting in to
+        # host reachability is meant to be a deliberate human act and the conf
+        # is otherwise never rewritten once present.
+        --lan-allow-host)
+            case "$2" in 0|1) ALLOW_HOST="$2" ;; *) die "--lan-allow-host takes 0 or 1" ;; esac
+            shift 2 ;;
         --bin-dir) BIN_DIR="$2"; shift 2 ;;
         --unit-dir) UNIT_DIR="$2"; shift 2 ;;
         --tmpfiles-dir) TMPFILES_DIR="$2"; shift 2 ;;
@@ -123,9 +131,27 @@ fi
 
 # ─── 4. LAN definition — written ONLY IF ABSENT ─────────────────────────────
 CONF="${ETC_DIR}/firewall.conf"
-if [ -e "${CONF}" ]; then
+if [ -e "${CONF}" ] && [ -n "${ALLOW_HOST}" ]; then
+    # Targeted in-place update of the ONE key, preserving everything else.
+    [ -L "${CONF}" ] && die "${CONF} is a symlink"
+    [ "$(stat -c %u "${CONF}")" = "0" ] || die "${CONF} is not root-owned"
+    log "setting LAN_ALLOW_HOST=${ALLOW_HOST} in ${CONF}"
+    if grep -q '^LAN_ALLOW_HOST=' "${CONF}"; then
+        new_conf="$(sed "s/^LAN_ALLOW_HOST=.*/LAN_ALLOW_HOST=${ALLOW_HOST}/" "${CONF}")"
+    else
+        new_conf="$(cat "${CONF}"; printf 'LAN_ALLOW_HOST=%s\n' "${ALLOW_HOST}")"
+    fi
+    printf '%s\n' "${new_conf}" | sed 's/^/    /'
+    if [ "${DRY}" = 0 ]; then
+        printf '%s\n' "${new_conf}" > "${CONF}.new.$$"
+        chmod 0644 "${CONF}.new.$$"; chown root:root "${CONF}.new.$$"
+        mv -fT "${CONF}.new.$$" "${CONF}"
+    fi
+elif [ -e "${CONF}" ]; then
     log "keeping existing ${CONF}:"
     sed 's/^/    /' "${CONF}"
+    grep -q '^LAN_ALLOW_HOST=1' "${CONF}" \
+        || log "note: the host itself is NOT reachable from projects; opt in with --lan-allow-host 1 (ADR-066)"
 else
     if [ -z "${LAN_DEV}" ]; then
         LAN_DEV="$(ip -4 route show default 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')"
@@ -141,7 +167,7 @@ else
         log "discovered local prefix(es) on ${LAN_DEV}: ${LAN_CIDRS[*]}"
     fi
     log "writing ${CONF}:"
-    body="$(printf '# written by deploy/firewall/install.sh %s - edit, then: sudo systemctl start styrman-firewall.service\n# LAN_DEV: the uplink device; LAN_CIDRS: space-separated IPv4 prefixes (/16../30) a LAN-enabled\n# project may reach. Validated on every run; an invalid value closes every allowance (fail closed).\n# Reserved (parsed as 0): LAN_ALLOW_HOST, LAN_ALLOW_PUBLISHED_PORTS - need their own ADR.\nLAN_DEV=%s\nLAN_CIDRS=%s\n' "$(date +%F)" "${LAN_DEV}" "${LAN_CIDRS[*]}")"
+    body="$(printf '# written by deploy/firewall/install.sh %s - edit, then: sudo systemctl start styrman-firewall.service\n# LAN_DEV: the uplink device; LAN_CIDRS: space-separated IPv4 prefixes (/16../30) a LAN-enabled\n# project may reach. Validated on every run; an invalid value closes every allowance (fail closed).\n# LAN_ALLOW_HOST (ADR-066): 1 lets a LAN-enabled project reach the HOST itself, sshd included -\n#   a deployment that sets it MUST NOT accept password authentication on the uplink. Default 0.\n# Reserved (parsed as 0): LAN_ALLOW_PUBLISHED_PORTS - needs its own ADR.\nLAN_DEV=%s\nLAN_CIDRS=%s\nLAN_ALLOW_HOST=%s\n' "$(date +%F)" "${LAN_DEV}" "${LAN_CIDRS[*]}" "${ALLOW_HOST:-0}")"
     printf '%s\n' "${body}" | sed 's/^/    /'
     if [ "${DRY}" = 0 ]; then
         # Create only when absent; never re-mode an existing directory (the

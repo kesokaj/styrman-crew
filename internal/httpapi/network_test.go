@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/kesokaj/styrman-crew/internal/config"
 	"github.com/kesokaj/styrman-crew/internal/identity"
+	"github.com/kesokaj/styrman-crew/internal/netpolicy"
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 	"github.com/kesokaj/styrman-crew/internal/project"
 	"github.com/kesokaj/styrman-crew/internal/userstore"
@@ -73,7 +75,10 @@ func newNetHarness(t *testing.T) *netHarness {
 
 func (n *netHarness) writeStatus(t *testing.T, appliedAt time.Time, extra string) {
 	t.Helper()
-	text := "schema=1\nversion=3\napplied_at=" + strconv.FormatInt(appliedAt.Unix(), 10) +
+	// Written from MinScriptVersion, not a literal: a version bump is a
+	// deliberate act in one place and must not also mean editing every
+	// fixture that happens to mention the old number.
+	text := "schema=1\nversion=" + strconv.Itoa(netpolicy.MinScriptVersion) + "\napplied_at=" + strconv.FormatInt(appliedAt.Unix(), 10) +
 		"\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\n" + extra + "spool=0\nrun_ms=5\n"
 	if err := os.WriteFile(filepath.Join(n.fw, "status"), []byte(text), 0o644); err != nil {
 		t.Fatal(err)
@@ -157,10 +162,13 @@ func TestNetworkEnableGates(t *testing.T) {
 	// Outdated script: refused with the version pair.
 	n.writeStatus(t, time.Now(), "")
 	text, _ := os.ReadFile(filepath.Join(n.fw, "status"))
-	os.WriteFile(filepath.Join(n.fw, "status"), []byte(strings.Replace(string(text), "version=3", "version=2", 1)), 0o644)
+	stale := netpolicy.MinScriptVersion - 1
+	os.WriteFile(filepath.Join(n.fw, "status"), []byte(strings.Replace(string(text),
+		"version="+strconv.Itoa(netpolicy.MinScriptVersion), "version="+strconv.Itoa(stale), 1)), 0o644)
 	n.s.netpol.Status(time.Now().Add(2 * time.Hour))
 	w = doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":true}`)
-	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "outdated (have 2, need 3)") {
+	wantMsg := fmt.Sprintf("outdated (have %d, need %d)", stale, netpolicy.MinScriptVersion)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), wantMsg) {
 		t.Fatalf("enable with an outdated script: %d %s", w.Code, w.Body.String())
 	}
 

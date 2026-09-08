@@ -79,7 +79,7 @@ operator's key → back here), which is real, and not by host root.
 | Path | Change |
 |---|---|
 | `deploy/firewall/styrman-firewall.sh` | two new rule families, two new conf keys, host-address discovery, allowed-bridge discovery, version 4 |
-| `deploy/firewall/install.sh` | writes `LAN_ALLOW_HOST=1`, `LAN_ALLOW_PUBLISHED_PORTS=1`, `INGRESS_BRIDGE=`; `--ingress-bridge` flag |
+| `deploy/firewall/install.sh` | writes `LAN_ALLOW_HOST` (default **0**) and later `LAN_ALLOW_PUBLISHED_PORTS`, `INGRESS_BRIDGE=`; `--lan-allow-host` and `--ingress-bridge` flags |
 | `deploy/firewall/test.sh` | new cases per Verification |
 | `internal/netpolicy/netpolicy.go` | `MinScriptVersion` 4 |
 | `internal/netpolicy/status.go` | parse `lan_allow_host`, `lan_allow_published_ports`; surface in `Status` |
@@ -355,11 +355,28 @@ error path no test asserts, and the tag is more useful now there are three
 families.
 
 ### Phase 2 — Root: host reachability
-- [ ] Parse `LAN_ALLOW_HOST`; discover host addresses on `LAN_DEV`; validate each is inside `LAN_CIDRS` — verify: `test.sh`, AI
-- [ ] `lanhost` family registered in the table (chain `STYRMAN-IN`) — verify: `test.sh`, AI
-- [ ] `STYRMAN_FW_VERSION` 4 + `netpolicy.MinScriptVersion` 4 + the existing pin test — verify: `go test ./internal/netpolicy/`, AI
-- [ ] Status keys `lan_allow_host`, `lan_host_addrs` — verify: unit, AI
-- [ ] `install.sh` writes the new keys; `--lan-allow-host` flag — verify: `test.sh` + dry run, AI
+- [x] Parse `LAN_ALLOW_HOST`; discover host addresses on `LAN_DEV`; validate each is inside `LAN_CIDRS` — verify: `test.sh`, AI
+- [x] `lanhost` family registered in the table (chain `STYRMAN-IN`) — verify: `test.sh`, AI
+- [x] `STYRMAN_FW_VERSION` 4 + `netpolicy.MinScriptVersion` 4 + the existing pin test — verify: `go test ./internal/netpolicy/`, AI
+- [x] Status keys `lan_allow_host`, `lan_host_addrs` — verify: unit, AI
+- [x] `install.sh` writes the new keys; `--lan-allow-host` flag — verify: `test.sh` + dry run, AI
+- [x] Security findings from the Phase 1 review fixed in the same file — verify: `test.sh`, AI
+
+**Phase 2 result (2026-09-08):** `test.sh` **102 / 0** (was 83 at the Phase 1
+baseline; +19 checks). `go vet`, `go test ./...` and the vendored ingress
+module all clean.
+
+**Correction to this plan's own text.** It said `install.sh` writes
+`LAN_ALLOW_HOST=1`. It writes **0**. Writing 1 on a fresh install would mean
+every new deployment grants host reach by default, which contradicts
+ADR-066 part (2) ("absent still meaning 0, so an existing deployment does not
+silently gain host access... opting in is a human running install.sh") — the
+plan text was inconsistent with the decision it implements. `install.sh` now
+takes `--lan-allow-host 0|1`, defaults to 0 on a fresh conf, and — uniquely
+among its steps — will update that ONE key in an existing conf, because the
+conf is otherwise never rewritten once present and the operator would
+otherwise have to hand-edit it. Without the flag on an existing conf it prints
+a note saying the host is not reachable and how to opt in.
 
 ### Phase 3 — Root: published ports
 - [ ] `INGRESS_BRIDGE` conf key, validation, fail-closed skip when unset OR when the named interface does not exist — verify: `test.sh`, AI

@@ -38,7 +38,7 @@
 #
 # STYRMAN_FW_VERSION is written into the status file; the server refuses to
 # enable LAN access when it is below internal/netpolicy.MinScriptVersion.
-STYRMAN_FW_VERSION=3
+STYRMAN_FW_VERSION=4
 set -eu
 # Command substitutions inherit errexit too: a failure inside $(...) must
 # abort the run like any other (a swallowed mktemp failure hid a broken
@@ -203,26 +203,46 @@ CIDR_RE='^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$'
 # (BUG-013 was a near miss of that kind). Capture order is the order
 # `iptables -S` RENDERS a rule, which is NOT the order the arguments are
 # written in: -s, -d, -i, -o, then the matches.
-FAMILY_TAGS=(lan)
-declare -A FAM_CHAIN=( [lan]=STYRMAN-FWD )
+FAMILY_TAGS=(lan lanhost)
+declare -A FAM_CHAIN=( [lan]=STYRMAN-FWD [lanhost]=STYRMAN-IN )
 declare -A FAM_RE=(
     [lan]='^-A STYRMAN-FWD -s ([0-9./]+) -d ([0-9./]+) -i (sdb-[0-9a-f]{11}) -o ([A-Za-z0-9_.-]{1,15}) -m comment --comment "styrman-lan:([0-9a-f-]{36})" -j RETURN$'
+    [lanhost]='^-A STYRMAN-IN -s ([0-9./]+) -d ([0-9./]+) -i (sdb-[0-9a-f]{11}) -m comment --comment "styrman-lanhost:([0-9a-f-]{36})" -j RETURN$'
 )
 # fam_key_<tag>: called with BASH_REMATCH still set from the family's regex;
 # sets KEY. The key's FIRST field is always the tag and its LAST is always the
 # uuid — the generic code relies on exactly those two positions and on nothing
 # else, so families may differ in arity.
 fam_key_lan() { KEY="lan ${BASH_REMATCH[3]} ${BASH_REMATCH[4]} ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[5]}"; }
+fam_key_lanhost() { KEY="lanhost ${BASH_REMATCH[3]} ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[4]}"; }
 KEY=""
-CHAINS_CACHE=""
-# The distinct chains the table touches, deduplicated and stable-ordered.
-chains() {
-    [ -n "${CHAINS_CACHE}" ] || CHAINS_CACHE="$(printf '%s\n' "${FAM_CHAIN[@]}" | sort -u)"
-    printf '%s\n' "${CHAINS_CACHE}"
-}
+# The distinct chains the table touches, built ONCE into a real array.
+# Deliberately NOT a function called as `for chain in $(chains)`: a command
+# substitution whose command fails yields an EMPTY word list and rc 0 even
+# under `set -e` with `inherit_errexit` (verified 2026-09-08). The scan is the
+# sole producer of PURGE and MALFORMED, while reconcile's insert pass iterates
+# DESIRED independently — so that failure would revoke nothing and still
+# install everything: loosening without tightening, the one shape this script
+# must never have. BUG-010 again, on the construct gating all revocation.
+CHAINS=()
+for __tag in "${FAMILY_TAGS[@]}"; do
+    __c="${FAM_CHAIN[${__tag}]}"
+    __seen=0
+    for __x in ${CHAINS[@]+"${CHAINS[@]}"}; do
+        if [ "${__x}" = "${__c}" ]; then __seen=1; break; fi
+    done
+    [ "${__seen}" = 1 ] || CHAINS+=("${__c}")
+done
+unset __tag __c __seen __x
+if [ ${#CHAINS[@]} -eq 0 ]; then
+    echo "styrman-firewall: FATAL rule-family table is empty - refusing the LAN section" >&2
+    exit 1
+fi
 
 LAN_DEV=""
 LAN_CIDRS=()
+LAN_ALLOW_HOST=0
+LAN_HOST_ADDRS=()
 CONF_ERROR=""
 PENDING=()
 ERRORS=()
@@ -235,7 +255,9 @@ MALFORMED=()               # exact -S lines to delete by (re-checked) number
 added=0; removed=0; ignored=0
 lan_list=""
 
-conf_fail() { CONF_ERROR="$1"; LAN_CIDRS=(); }
+# Fail closed on ANY conf problem: no prefixes, no host exposure. A partially
+# trusted conf is not a thing this script has.
+conf_fail() { CONF_ERROR="$1"; LAN_CIDRS=(); LAN_HOST_ADDRS=(); LAN_ALLOW_HOST=0; }
 is_docker_bridge_name() {
     case "$1" in docker0|sdb-*) return 0 ;; esac
     [[ "$1" =~ ^br-[0-9a-f]{12}$ ]]
@@ -287,8 +309,47 @@ validate_cidrs() {
     return 0
 }
 
+# The host's own global addresses on the uplink, restricted to the configured
+# prefixes. An address outside them is skipped and said so: the allowance is
+# DEFINED by LAN_CIDRS, and a second global address on another subnet is not
+# the local network the operator named.
+discover_host_addrs() {
+    local a ip c c_ip c_pre inside
+    while read -r a; do
+        ip="${a%%/*}"
+        [[ "${ip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || continue
+        inside=0
+        for c in "${LAN_CIDRS[@]}"; do
+            c_ip="$(ip2int "${c%/*}")"; c_pre="${c#*/}"
+            if overlaps "$(ip2int "${ip}")" 32 "${c_ip}" "${c_pre}"; then inside=1; break; fi
+        done
+        if [ "${inside}" = 1 ]; then
+            LAN_HOST_ADDRS+=("${ip}/32")
+        else
+            note "uplink address ${ip} is outside LAN_CIDRS - not exposed"
+        fi
+    done < <(ip -o -4 addr show dev "${LAN_DEV}" scope global 2>/dev/null | awk '{print $4}')
+    if [ ${#LAN_HOST_ADDRS[@]} -eq 0 ]; then
+        note "LAN_ALLOW_HOST=1 but no uplink address inside LAN_CIDRS - host not exposed"
+    fi
+}
+
+# LAN_ALLOW_HOST: absent or 0 keeps the pre-ADR-066 behaviour, where the host
+# itself stays unreachable from every project. ONLY an explicit 1 opts in, so
+# a conf written before ADR-066 gains nothing when the script converges to
+# version 4 — opting in stays a human running install.sh.
+validate_allow_host() {
+    case "${1:-}" in
+        ''|0) LAN_ALLOW_HOST=0; return 0 ;;
+        1)    LAN_ALLOW_HOST=1 ;;
+        *)    conf_fail "LAN_ALLOW_HOST must be 0 or 1"; return 1 ;;
+    esac
+    discover_host_addrs
+    return 0
+}
+
 read_conf() {
-    local line key val dev="" cidrs=""
+    local line key val dev="" cidrs="" allow_host=""
     if [ ! -e "${CONF}" ]; then note "conf ${CONF} missing - no local-network prefix configured (deploy/firewall/install.sh writes it)"; return 0; fi
     if [ -L "${CONF}" ] || [ ! -f "${CONF}" ] || [ "$(stat -c %u "${CONF}")" != "0" ] || [ -n "$(find "${CONF}" -maxdepth 0 -perm /022)" ]; then
         conf_fail "conf ignored: must be a root-owned regular file not writable by group/others"; return 0
@@ -300,15 +361,17 @@ read_conf() {
             case "${key}" in
                 LAN_DEV) dev="${val}" ;;
                 LAN_CIDRS) cidrs="${val}" ;;
-                # Reserved for a later ADR (ADR-065 D3): parsed as 0, never acted on.
+                LAN_ALLOW_HOST) allow_host="${val}" ;;
+                # Reserved for Phase 3 of ADR-066: parsed as 0, never acted on.
                 *) if [ -n "${val}" ] && [ "${val}" != "0" ]; then note "conf: ${key} is reserved and ignored"; fi ;;
             esac
         else
-            conf_fail "conf: unparseable line (only LAN_DEV= and LAN_CIDRS= are accepted)"; return 0
+            conf_fail "conf: unparseable line (only LAN_DEV=, LAN_CIDRS= and LAN_ALLOW_HOST= are accepted)"; return 0
         fi
     done < "${CONF}"
     validate_dev "${dev}" || return 0
     validate_cidrs "${cidrs}" || return 0
+    validate_allow_host "${allow_host}" || return 0
 }
 
 # DESIRED: one rule per (uuid marker, LAN prefix). The interface name is
@@ -327,6 +390,18 @@ desire_lan() {
     local iface="$1" subnet="$2" uuid="$3" c
     for c in "${LAN_CIDRS[@]}"; do
         DESIRED["lan ${iface} ${LAN_DEV} ${subnet} ${c} ${uuid}"]=1
+        WANT_COUNT["${uuid}"]=$(( ${WANT_COUNT[${uuid}]:-0} + 1 ))
+    done
+}
+# LAN_HOST_ADDRS is empty unless the conf opted in AND the uplink carries a
+# global address inside a configured prefix, so an un-opted-in deployment
+# desires nothing here and any rule left from a previous opt-in is purged by
+# the generic scan. The family stays REGISTERED either way — that is what
+# makes turning the key back off remove the rules rather than orphan them.
+desire_lanhost() {
+    local iface="$1" subnet="$2" uuid="$3" a
+    for a in "${LAN_HOST_ADDRS[@]}"; do
+        DESIRED["lanhost ${iface} ${subnet} ${a} ${uuid}"]=1
         WANT_COUNT["${uuid}"]=$(( ${WANT_COUNT[${uuid}]:-0} + 1 ))
     done
 }
@@ -358,7 +433,17 @@ collect_desired() {
 # dispatching on the key's leading tag. Every caller uses CHAIN rather than a
 # literal, which is what lets one reconcile serve every family.
 rule_args() {
-    local tag="${1%% *}" rest="${1#* }"
+    local tag="${1%% *}" rest="${1#* }" known=0 t
+    ARGS=(); CHAIN=""
+    for t in "${FAMILY_TAGS[@]}"; do
+        if [ "${t}" = "${tag}" ]; then known=1; break; fi
+    done
+    # A key is only ever built by fam_key_<tag> or desire_<tag>, so an unknown
+    # tag is a programming error rather than input — but the dispatch below
+    # builds a FUNCTION NAME out of key data, so it is checked against the
+    # table explicitly instead of being left to `set -u` on the FAM_CHAIN
+    # lookup, which would abort the run mid-reconcile with no status written.
+    if [ "${known}" -ne 1 ]; then ERRORS+=("${1##* }:unknown rule family ${tag}"); return 1; fi
     CHAIN="${FAM_CHAIN[${tag}]}"
     "rule_args_${tag}" "${rest}"
 }
@@ -366,6 +451,15 @@ rule_args_lan() {
     local iface dev src dst uuid
     read -r iface dev src dst uuid <<<"$1"
     ARGS=(-i "${iface}" -o "${dev}" -s "${src}" -d "${dst}" -m comment --comment "styrman-lan:${uuid}" -j RETURN)
+}
+# lanhost carries no -o: it lands in STYRMAN-IN, where the packet is destined
+# for the host itself and is never forwarded, so there is no output interface
+# to pin. -s is still pinned to the bridge subnet so a guest with NET_ADMIN
+# cannot spoof its way past the DROP under loose rp_filter.
+rule_args_lanhost() {
+    local iface src dst uuid
+    read -r iface src dst uuid <<<"$1"
+    ARGS=(-i "${iface}" -s "${src}" -d "${dst}" -m comment --comment "styrman-lanhost:${uuid}" -j RETURN)
 }
 CHAIN=""
 
@@ -381,7 +475,7 @@ CHAIN=""
 # confirms the right list.
 scan_current() {
     local chain n first_drop line tag key uuid
-    for chain in $(chains); do
+    for chain in "${CHAINS[@]}"; do
         n=0; first_drop=0
         while IFS= read -r line; do
             case "${line}" in "-A ${chain} "*) ;; *) continue ;; esac
@@ -394,7 +488,7 @@ scan_current() {
                 if [[ "${line}" =~ ${FAM_RE[${tag}]} ]]; then "fam_key_${tag}"; key="${KEY}"; break; fi
             done
             if [ -z "${key}" ]; then
-                MALFORMED+=("${chain} ${line}"); warn "malformed styrman-lan rule removed"; continue
+                MALFORMED+=("${chain} ${line}"); warn "malformed styrman-lan rule removed from ${chain}"; continue
             fi
             uuid="${key##* }"
             SEEN["${key}"]=$(( ${SEEN[${key}]:-0} + 1 ))
@@ -421,7 +515,17 @@ delete_malformed() {
             case "${line}" in "-A ${chain} "*) ;; *) continue ;; esac
             n=$((n + 1))
             if [ "${line}" = "${target}" ]; then
-                if ipt -D "${chain}" "${n}"; then removed=$((removed + 1)); else ERRORS+=("rule ${n}:delete failed"); fi
+                # Never remove a DROP by number. The tagged-comment filter
+                # cannot reach a base rule today (none carries a comment), but
+                # this is the one delete that names a rule by POSITION rather
+                # than by content, and the rules it sits beside are the
+                # isolation itself. Refusing here costs nothing and removes a
+                # whole class of outcome (security review, 2026-09-08).
+                if [[ "${line}" == *" -j DROP" ]]; then
+                    warn "refused to delete a DROP by number in ${chain}: ${line}"
+                elif ipt -D "${chain}" "${n}"; then removed=$((removed + 1))
+                else ERRORS+=("rule ${n}:delete failed in ${chain}")
+                fi
                 break
             fi
         done < <(ipt -S "${chain}" 2>/dev/null || true)
@@ -433,7 +537,7 @@ reconcile() {
     # Delete FIRST (tighten before loosen): every instance of a purged key,
     # by spec — a spec delete can only ever remove a rule that IS the rule.
     for key in "${!PURGE[@]}"; do
-        rule_args "${key}"
+        rule_args "${key}" || continue
         while ipt -C "${CHAIN}" "${ARGS[@]}" 2>/dev/null; do
             if ipt -D "${CHAIN}" "${ARGS[@]}"; then removed=$((removed + 1)); else ERRORS+=("${key##* }:delete failed"); break; fi
         done
@@ -443,7 +547,7 @@ reconcile() {
     # ahead of the physdev RETURN and every DROP. `-C` first: a bare -I duplicates.
     for key in "${!DESIRED[@]}"; do
         if [ -n "${SEEN[${key}]:-}" ] && [ -z "${PURGE[${key}]:-}" ]; then continue; fi
-        rule_args "${key}"
+        rule_args "${key}" || continue
         if ipt -C "${CHAIN}" "${ARGS[@]}" 2>/dev/null; then continue; fi
         if ipt -I "${CHAIN}" 1 "${ARGS[@]}"; then
             added=$((added + 1)); log "lan ON project=${key##* } rule=${key% *}"
@@ -457,7 +561,7 @@ reconcile() {
 # reported only when EVERY one of its (uuid, cidr) rules is present.
 count_applied() {
     local chain line tag uuid
-    for chain in $(chains); do
+    for chain in "${CHAINS[@]}"; do
         while IFS= read -r line; do
             for tag in "${FAMILY_TAGS[@]}"; do
                 [ "${FAM_CHAIN[${tag}]}" = "${chain}" ] || continue
@@ -494,6 +598,8 @@ write_status() {
         echo "applied_at=$(date +%s)"
         echo "lan_dev=${LAN_DEV}"
         echo "lan_cidrs=${LAN_CIDRS[*]:-}"
+        echo "lan_allow_host=${LAN_ALLOW_HOST}"
+        echo "lan_host_addrs=${LAN_HOST_ADDRS[*]:-}"
         echo "lan=${lan_list% }"
         for p in "${PENDING[@]}"; do echo "pending=${p}"; done
         for e in "${ERRORS[@]}"; do echo "error=${e}"; done

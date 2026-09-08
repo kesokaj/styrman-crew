@@ -1,6 +1,7 @@
 package netpolicy
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -10,7 +11,10 @@ import (
 var now = time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
 
 func statusText(appliedAt time.Time, extra string) string {
-	return "schema=1\nversion=3\napplied_at=" + strconv.FormatInt(appliedAt.Unix(), 10) +
+	// From MinScriptVersion, never a literal: bumping the accepted version is
+	// one deliberate edit, not a hunt through every fixture mentioning the
+	// old number.
+	return "schema=1\nversion=" + strconv.Itoa(MinScriptVersion) + "\napplied_at=" + strconv.FormatInt(appliedAt.Unix(), 10) +
 		"\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\n" + extra + "spool=0\nrun_ms=7\n"
 }
 
@@ -25,7 +29,7 @@ func parse(t *testing.T, text string) *Status {
 
 func TestParseStatus(t *testing.T) {
 	st := parse(t, statusText(now, "lan="+u1+" "+u2+"\npending="+u2+":no-bridge\nerror="+u1+":192.0.2.0/24:insert failed\nerror="+u1+":1 of 2 rules present\nerror=rule 3:delete failed\nwarn=LAN_DEV enp0 is a kernel bridge\nfuture_key=whatever\nconf_error=\n"))
-	if st.Schema != 1 || st.Version != 3 || !st.AppliedAt.Equal(now) || st.LanDev != "enp0" || len(st.LanCidrs) != 1 {
+	if st.Schema != 1 || st.Version != MinScriptVersion || !st.AppliedAt.Equal(now) || st.LanDev != "enp0" || len(st.LanCidrs) != 1 {
 		t.Fatalf("header: %+v", st)
 	}
 	if _, ok := st.Applied[u1]; !ok {
@@ -68,7 +72,9 @@ func TestAvailability(t *testing.T) {
 		{"absent", nil, false, "not installed"},
 		{"stale", parse(t, statusText(now.Add(-4*time.Minute), "")), false, "has not run for 4m"},
 		{"future-dated (clock skew)", parse(t, statusText(now.Add(10*time.Minute), "")), false, "future"},
-		{"outdated", parse(t, strings.Replace(statusText(now, ""), "version=3", "version=2", 1)), false, "outdated (have 2, need 3)"},
+		{"outdated", parse(t, strings.Replace(statusText(now, ""),
+			"version="+strconv.Itoa(MinScriptVersion), "version="+strconv.Itoa(MinScriptVersion-1), 1)), false,
+			fmt.Sprintf("outdated (have %d, need %d)", MinScriptVersion-1, MinScriptVersion)},
 		{"conf error", parse(t, statusText(now, "conf_error=LAN_CIDRS: 10.0.0.0/8 prefix must be /16../30\n")), false, "config error: LAN_CIDRS"},
 		{"no prefix", parse(t, strings.Replace(statusText(now, ""), "lan_cidrs=192.0.2.0/24", "lan_cidrs=", 1)), false, "no local-network prefix configured"},
 		{"fresh", parse(t, statusText(now, "")), true, ""},

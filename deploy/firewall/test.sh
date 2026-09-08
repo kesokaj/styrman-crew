@@ -59,6 +59,12 @@ rules() { iptables -S STYRMAN-FWD | grep '^-A'; }
 allow_count() { rules | grep -c 'styrman-lan:' || true; }
 status() { sed -n "s/^$1=//p" "${RUN}/status"; }
 write_conf() { printf 'LAN_DEV=%s\nLAN_CIDRS=%s\n' "$1" "$2" > "${CONF}"; chmod 0644 "${CONF}"; }
+# ADR-066: the same conf plus an explicit LAN_ALLOW_HOST value.
+write_conf_host() { printf 'LAN_DEV=%s\nLAN_CIDRS=%s\nLAN_ALLOW_HOST=%s\n' "$1" "$2" "$3" > "${CONF}"; chmod 0644 "${CONF}"; }
+in_rules() { iptables -S STYRMAN-IN | grep '^-A'; }
+# Only WELL-FORMED host allowances. Section 20 deliberately plants a tagged
+# DROP, which carries the same comment prefix and must not be counted as one.
+host_count() { in_rules | grep 'styrman-lanhost:' | grep -c -- '-j RETURN' || true; }
 # shellcheck disable=SC2034  # referenced inside check() eval strings
 EXPECT_RULE="-A STYRMAN-FWD -s 172.20.0.0/16 -d 192.0.2.0/24 -i ${IFACE} -o enp0 -m comment --comment \"styrman-lan:${U}\" -j RETURN"
 
@@ -74,7 +80,7 @@ echo "=== 2. env set, no conf, no markers: idempotent, status written"
 run >/dev/null 2>&1
 before="$(rules)"; run >/dev/null 2>&1; after="$(rules)"
 if [ "${before}" = "${after}" ]; then ok "second run changes nothing"; else bad "second run changes nothing"; fi
-check "status schema=1 version=3" "[ \"\$(status schema)\" = 1 ] && [ \"\$(status version)\" = 3 ]"
+check "status schema=1 version=4" "[ \"\$(status schema)\" = 1 ] && [ \"\$(status version)\" = 4 ]"
 check "lan_cidrs empty without conf" "[ -z \"\$(status lan_cidrs)\" ]"
 check "run dir root 0755, spool 0700" "[ \"\$(stat -c %a '${RUN}')\" = 755 ] && [ \"\$(stat -c %a '${RUN}/spool')\" = 700 ]"
 
@@ -200,9 +206,11 @@ check "conf missing -> no conf_error, empty lan_cidrs, no allow rules" "! grep -
 write_conf enp0 192.0.2.0/24; run >/dev/null 2>&1
 check "valid conf again -> allow rule back" "[ \$(allow_count) -eq 1 ] && ! grep -q '^conf_error=' '${RUN}/status'"
 
-echo "=== 13. reserved keys are parsed as 0 and ignored"
-printf 'LAN_DEV=enp0\nLAN_CIDRS=192.0.2.0/24\nLAN_ALLOW_HOST=1\n' > "${CONF}"; run >/dev/null 2>&1
-check "LAN_ALLOW_HOST=1 changes nothing, notes it" "[ \$(allow_count) -eq 1 ] && grep -q '^warn=conf: LAN_ALLOW_HOST is reserved' '${RUN}/status' && ! iptables -S INPUT | grep -q styrman-lan"
+echo "=== 13. the still-reserved key is parsed as 0 and ignored"
+# LAN_ALLOW_HOST stopped being reserved in ADR-066 and is exercised in
+# sections 19-21; LAN_ALLOW_PUBLISHED_PORTS is the one still awaiting Phase 3.
+printf 'LAN_DEV=enp0\nLAN_CIDRS=192.0.2.0/24\nLAN_ALLOW_PUBLISHED_PORTS=1\n' > "${CONF}"; run >/dev/null 2>&1
+check "LAN_ALLOW_PUBLISHED_PORTS=1 changes nothing, notes it" "[ \$(allow_count) -eq 1 ] && grep -q '^warn=conf: LAN_ALLOW_PUBLISHED_PORTS is reserved' '${RUN}/status' && ! iptables -S INPUT | grep -q styrman-lan"
 write_conf enp0 192.0.2.0/24
 
 echo "=== 14. kernel-bridge uplink: warning only, rule pinned to it"
@@ -255,7 +263,49 @@ check "base rules applied" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
 check "no allow rules, nothing written under the state dir" "[ \$(allow_count) -eq 0 ] && [ ! -e '${STATE}/run' ]"
 run >/dev/null 2>&1
 
-echo "=== 19. syntax"
+echo "=== 19. LAN_ALLOW_HOST=1: the host itself becomes reachable (ADR-066)"
+write_conf_host enp0 192.0.2.0/24 1
+: > "${MARK}/${U}"
+run >/dev/null 2>&1
+# shellcheck disable=SC2034  # referenced inside check() eval strings
+EXPECT_HOST="-A STYRMAN-IN -s 172.20.0.0/16 -d 192.0.2.1/32 -i ${IFACE} -m comment --comment \"styrman-lanhost:${U}\" -j RETURN"
+check "host rule is at the head of STYRMAN-IN, verbatim" "[ \"\$(in_rules | sed -n 1p)\" = \"\${EXPECT_HOST}\" ]"
+check "the isolation DROP still follows it" "[ \"\$(in_rules | sed -n 2p)\" = '-A STYRMAN-IN -j DROP' ]"
+check "exactly one host rule" "[ \$(host_count) -eq 1 ]"
+check "status lan_allow_host=1" "[ \"\$(status lan_allow_host)\" = 1 ]"
+check "status lan_host_addrs is the uplink address" "[ \"\$(status lan_host_addrs)\" = 192.0.2.1/32 ]"
+check "lan= still lists the uuid (both families applied)" "[ \"\$(status lan)\" = '${U}' ]"
+check "the STYRMAN-FWD rule is unaffected" "[ \$(allow_count) -eq 1 ]"
+before="$(in_rules)"; run >/dev/null 2>&1; after="$(in_rules)"
+if [ "${before}" = "${after}" ]; then ok "host rule idempotent across a no-op run"; else bad "host rule idempotent across a no-op run"; fi
+
+echo "=== 20. a tagged DROP is never deleted by number (security review 2026-09-08)"
+iptables -I STYRMAN-IN 1 -m comment --comment "styrman-lanhost:not-a-uuid" -j DROP
+run >/dev/null 2>&1
+check "the tagged DROP is still there" "in_rules | grep -q -- '--comment \"styrman-lanhost:not-a-uuid\" -j DROP'"
+check "refusal recorded as a warn" "grep -q '^warn=refused to delete a DROP by number' '${RUN}/status'"
+check "the real host rule survived the refusal" "[ \$(host_count) -eq 1 ]"
+iptables -D STYRMAN-IN -m comment --comment "styrman-lanhost:not-a-uuid" -j DROP
+
+echo "=== 21. LAN_ALLOW_HOST off and invalid: fail closed"
+write_conf_host enp0 192.0.2.0/24 0
+run >/dev/null 2>&1
+check "host rule removed when the key goes back to 0" "[ \$(host_count) -eq 0 ]"
+check "STYRMAN-IN is just DROP again" "[ \"\$(in_rules)\" = '-A STYRMAN-IN -j DROP' ]"
+check "the LAN rule is untouched by the host key" "[ \$(allow_count) -eq 1 ]"
+check "status lan_allow_host=0" "[ \"\$(status lan_allow_host)\" = 0 ]"
+write_conf_host enp0 192.0.2.0/24 yes
+run >/dev/null 2>&1
+check "an invalid LAN_ALLOW_HOST closes EVERY allowance" "[ \$(allow_count) -eq 0 ] && [ \$(host_count) -eq 0 ]"
+check "conf_error names the key" "grep -q '^conf_error=LAN_ALLOW_HOST must be 0 or 1' '${RUN}/status'"
+check "base rules survive a conf error" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
+write_conf_host enp0 192.0.2.0/24 1
+run >/dev/null 2>&1
+rm "${MARK}/${U}"
+run >/dev/null 2>&1
+check "removing the marker removes BOTH families" "[ \$(allow_count) -eq 0 ] && [ \$(host_count) -eq 0 ]"
+
+echo "=== 22. syntax"
 check "bash -n" "bash -n '${SCRIPT}' && bash -n '${HERE}/install.sh' && bash -n '${HERE}/test.sh'"
 if command -v shellcheck >/dev/null 2>&1; then
     check "shellcheck (warning+)" "shellcheck -S warning '${SCRIPT}' '${HERE}/install.sh' '${HERE}/test.sh'"

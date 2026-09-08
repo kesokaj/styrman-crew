@@ -13,7 +13,10 @@ package netpolicy
 // MinScriptVersion is the lowest STYRMAN_FW_VERSION of
 // deploy/firewall/styrman-firewall.sh whose status file this server accepts.
 // Version 3 is the first that writes a status file at all; a host running an
-// older script reports "not installed", and a future bump here turns silent
-// drift into "outdated (have N, need M)" in Settings and a 503 on enable.
+// older script reports "not installed", and a bump here turns silent drift
+// into "outdated (have N, need M)" in Settings and a 503 on enable.
+// Version 4 (ADR-066) adds the per-project host-reachability family, so a
+// host still on 3 cannot apply what the server would be promising and must
+// refuse to enable rather than under-apply silently.
 // TestMinScriptVersionMatchesScript keeps this equal to the script's constant.
-const MinScriptVersion = 3
+const MinScriptVersion = 4
