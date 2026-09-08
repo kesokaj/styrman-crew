@@ -19,6 +19,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 
 	"github.com/kesokaj/styrman-crew/internal/credstore"
 )
@@ -28,16 +29,61 @@ type Resolver interface {
 	ResolveProjectByIP(ctx context.Context, ip string) (user, project string, err error)
 }
 
+// LanChecker answers whether a project may currently reach the local network
+// (ADR-066 part 4). It is a separate interface from Resolver because the type
+// that can answer it is not the one that resolves IPs: the orchestrator has
+// no view of Project.LanAccess, while the API server holds both the per-user
+// project stores and root's last word.
+type LanChecker interface {
+	// LanExposed must be pessimistic: see netpolicy.Exposed. It reports the
+	// union of the record, root's applied set, and "cannot confirm".
+	LanExposed(user, project string) (bool, error)
+}
+
+// isHostReachingFile reports whether a file credential authenticates to other
+// HOSTS, as opposed to a cloud or API endpoint. Today that is the SSH key and
+// anything else under ~/.ssh.
+//
+// Withholding it from a LAN-enabled project closes the transitive path
+// ADR-065 follow-up (g) recorded: project → some LAN host that trusts the
+// operator's key → back to this one. It is NOT what keeps a project off this
+// host — this host has no authorized_keys, verified 2026-09-08 — and the ADR
+// says so, so that the reasoning is not mistaken for a control it is not.
+func isHostReachingFile(path string) bool {
+	p := strings.TrimPrefix(path, "~/")
+	p = strings.TrimPrefix(p, "$HOME/")
+	p = strings.TrimPrefix(p, "./")
+	return p == ".ssh" || strings.HasPrefix(p, ".ssh/")
+}
+
 // Broker serves credentials to projects over their bridge.
 type Broker struct {
 	store   *credstore.Store
 	resolve Resolver
+	lan     LanChecker
 	logger  *slog.Logger
 }
 
-// New builds the broker.
-func New(store *credstore.Store, resolve Resolver, logger *slog.Logger) *Broker {
-	return &Broker{store: store, resolve: resolve, logger: logger}
+// New builds the broker. lan may be nil only in tests; a nil checker is
+// treated as "cannot determine" and therefore withholds, so a wiring mistake
+// costs ssh push loudly rather than granting silently.
+func New(store *credstore.Store, resolve Resolver, lan LanChecker, logger *slog.Logger) *Broker {
+	return &Broker{store: store, resolve: resolve, lan: lan, logger: logger}
+}
+
+// lanExposed is the fail-closed wrapper: any inability to answer withholds.
+func (b *Broker) lanExposed(user, project string) bool {
+	if b.lan == nil {
+		b.logger.Error("cred broker: no LAN checker wired — withholding host-reaching credentials", "user", user, "project", project)
+		return true
+	}
+	exposed, err := b.lan.LanExposed(user, project)
+	if err != nil {
+		b.logger.Error("cred broker: cannot determine LAN exposure — withholding host-reaching credentials",
+			"user", user, "project", project, "error", err)
+		return true
+	}
+	return exposed
 }
 
 // Handler returns the broker's HTTP routes.
@@ -142,9 +188,28 @@ func (b *Broker) files(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "store error", http.StatusInternalServerError)
 		return
 	}
-	out := make([]fileOut, 0, len(fcs))
+	// A LAN-enabled project is not served host-reaching credentials (ADR-066).
+	// The check runs once per request rather than per file, and only when
+	// there is something it could withhold.
+	exposed := false
 	for _, c := range fcs {
+		if isHostReachingFile(c.Path) {
+			exposed = b.lanExposed(user, project)
+			break
+		}
+	}
+	out := make([]fileOut, 0, len(fcs))
+	withheld := 0
+	for _, c := range fcs {
+		if exposed && isHostReachingFile(c.Path) {
+			withheld++
+			continue
+		}
 		out = append(out, fileOut{Path: c.Path, Mode: c.Mode, Data: base64.StdEncoding.EncodeToString(c.Data)})
+	}
+	if withheld > 0 {
+		b.logger.Info("cred broker: withheld host-reaching credentials from a LAN-enabled project",
+			"user", user, "project", project, "withheld", withheld)
 	}
 	if len(out) > 0 {
 		b.logger.Info("cred broker: served file credentials", "user", user, "project", project, "count", len(out))

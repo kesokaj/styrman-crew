@@ -22,13 +22,27 @@ func (f fakeResolver) ResolveProjectByIP(_ context.Context, _ string) (string, s
 	return f.user, f.project, f.err
 }
 
+// fakeLan stands in for *httpapi.Server. The zero value is "not exposed",
+// which is what every pre-ADR-066 test expects.
+type fakeLan struct {
+	exposed bool
+	err     error
+}
+
+func (f fakeLan) LanExposed(_, _ string) (bool, error) { return f.exposed, f.err }
+
 func newBroker(t *testing.T, r Resolver) (*Broker, *credstore.Store) {
+	t.Helper()
+	return newBrokerLan(t, r, fakeLan{})
+}
+
+func newBrokerLan(t *testing.T, r Resolver, lan LanChecker) (*Broker, *credstore.Store) {
 	t.Helper()
 	cs, err := credstore.New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(cs, r, slog.New(slog.DiscardHandler)), cs
+	return New(cs, r, lan, slog.New(slog.DiscardHandler)), cs
 }
 
 func TestBrokerGit(t *testing.T) {
@@ -192,5 +206,102 @@ func TestBrokerEnvProjectMerge(t *testing.T) {
 	}
 	if _, leaked := got["OTHER_PROJECT"]; leaked {
 		t.Fatalf("another project's var leaked: %+v", got)
+	}
+}
+
+func TestIsHostReachingFile(t *testing.T) {
+	for _, c := range []struct {
+		path string
+		want bool
+	}{
+		{"~/.ssh/id_ed25519", true},
+		{"~/.ssh/config", true},
+		{"$HOME/.ssh/id_rsa", true},
+		{".ssh/id_ed25519", true},
+		{"~/.ssh", true},
+		{"~/.config/gcloud/application_default_credentials.json", false},
+		{"~/.claude/.credentials.json", false},
+		{"~/.gemini/antigravity-cli/antigravity-oauth-token", false},
+		{"~/.sshfoo/key", false},
+		{"~/notes/.ssh-notes.md", false},
+	} {
+		if got := isHostReachingFile(c.path); got != c.want {
+			t.Errorf("isHostReachingFile(%q) = %v, want %v", c.path, got, c.want)
+		}
+	}
+}
+
+// seedFiles puts one host-reaching and one ordinary credential in the store.
+func seedFiles(t *testing.T, cs *credstore.Store) {
+	t.Helper()
+	if err := cs.PutFile("alice", credstore.FileCred{ID: "ssh-id", Path: "~/.ssh/id_ed25519", Mode: "0600", Data: []byte("KEY")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.PutFile("alice", credstore.FileCred{ID: "adc", Path: "~/.config/gcloud/application_default_credentials.json", Mode: "0600", Data: []byte("ADC")}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func servedPaths(t *testing.T, b *Broker) []string {
+	t.Helper()
+	srv := httptest.NewServer(b.Handler())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out []fileOut
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	paths := make([]string, 0, len(out))
+	for _, f := range out {
+		paths = append(paths, f.Path)
+	}
+	return paths
+}
+
+func hasSSH(paths []string) bool {
+	for _, p := range paths {
+		if isHostReachingFile(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// A LAN-enabled project loses the SSH key and keeps everything else; the
+// decision fails CLOSED, so an error or an unwired checker withholds too
+// (ADR-066 part 4).
+func TestFilesWithheldFromLanEnabledProject(t *testing.T) {
+	r := fakeResolver{user: "alice", project: "p1"}
+
+	b, cs := newBrokerLan(t, r, fakeLan{exposed: false})
+	seedFiles(t, cs)
+	paths := servedPaths(t, b)
+	if len(paths) != 2 || !hasSSH(paths) {
+		t.Fatalf("not LAN-exposed: want both credentials, got %v", paths)
+	}
+
+	b, cs = newBrokerLan(t, r, fakeLan{exposed: true})
+	seedFiles(t, cs)
+	paths = servedPaths(t, b)
+	if len(paths) != 1 || paths[0] != "~/.config/gcloud/application_default_credentials.json" {
+		t.Fatalf("LAN-exposed: want only the non-ssh credential, got %v", paths)
+	}
+
+	b, cs = newBrokerLan(t, r, fakeLan{err: errors.New("store is on fire")})
+	seedFiles(t, cs)
+	paths = servedPaths(t, b)
+	if len(paths) != 1 || isHostReachingFile(paths[0]) {
+		t.Fatalf("checker error must withhold, got %v", paths)
+	}
+
+	b, cs = newBrokerLan(t, r, nil)
+	seedFiles(t, cs)
+	paths = servedPaths(t, b)
+	if len(paths) != 1 || isHostReachingFile(paths[0]) {
+		t.Fatalf("nil checker must withhold, got %v", paths)
 	}
 }

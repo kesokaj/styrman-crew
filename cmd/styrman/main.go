@@ -177,7 +177,9 @@ func main() {
 			logger.Error("credential store unavailable — broker disabled", "error", cerr)
 		} else {
 			api.SetCredStore(cstore) // onboarding endpoints write here
-			broker := credbroker.New(cstore, orch, logger)
+			// api is the LanChecker: it holds the per-user project stores
+			// and root's status, which orch (the Resolver) does not (ADR-066).
+			broker := credbroker.New(cstore, orch, api, logger)
 			brokerSrv := &http.Server{
 				Addr:              cfg.BrokerAddr,
 				Handler:           broker.Handler(),

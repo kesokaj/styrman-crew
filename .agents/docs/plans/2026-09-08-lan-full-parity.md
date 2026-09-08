@@ -397,10 +397,26 @@ correctly excluded. `STYRMAN-FWD` and `STYRMAN-IN` byte-identical before and
 after.
 
 ### Phase 4 — Server: broker narrowing
-- [ ] `LanExposed` on `*httpapi.Server`: record OR `st.Applied` OR cannot-confirm, modelled on `network.go:182` `kickLAN` — verify: `go test ./internal/httpapi/`, AI
-- [ ] `credbroker.LanChecker` + `files` filter + `isHostReachingFile`, fail closed on error — verify: `go test ./internal/credbroker/`, AI
-- [ ] Wire the `Server` into `credbroker.New` at `cmd/styrman/main.go:180` — verify: build + existing tests, AI
-- [ ] Prune materialized `~/.ssh/id_ed25519` on enable through a confined root (BUG-002/003), with a planted-symlink test — verify: unit, AI
+- [x] `LanExposed` on `*httpapi.Server`: record OR `st.Applied` OR cannot-confirm, modelled on `network.go:182` `kickLAN` — verify: `go test ./internal/httpapi/`, AI
+- [x] `credbroker.LanChecker` + `files` filter + `isHostReachingFile`, fail closed on error — verify: `go test ./internal/credbroker/`, AI
+- [x] Wire the `Server` into `credbroker.New` at `cmd/styrman/main.go:180` — verify: build + existing tests, AI
+- [x] Prune materialized `~/.ssh/id_ed25519` on enable through a confined root (BUG-002/003), with a planted-symlink test — verify: unit, AI
+
+**Phase 4 result (2026-09-08):** the union rule lives in
+`netpolicy.Exposed`, beside `Derive`, with 8 table cases; the broker gains
+`LanChecker`, `isHostReachingFile` and a fail-closed wrapper (error OR an
+unwired checker both withhold); `*httpapi.Server` implements it, guarded by
+`netpol.Enabled()` so a local dev run with no firewall half does not read as
+"cannot confirm" and silently strip every project's key. Prune paths come
+from the credential store rather than a hardcoded list, so they cannot drift
+from what the broker withholds. `go vet`, `go test ./...`, the ingress module
+and `test.sh` (120/0, untouched) all clean.
+
+**The symlink test was mutation-checked**, not merely written: swapping
+`files.Remove` for `os.Remove` makes it fail with the victim file outside the
+tenant tree deleted, and restoring the confined call makes it pass. A test
+for a confinement property that has never been shown to fail without the
+confinement is not evidence.
 
 ### Phase 5 — API + UI
 - [ ] `lanView` capability + impact fields — verify: `go test ./internal/httpapi/`, AI

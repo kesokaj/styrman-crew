@@ -158,6 +158,32 @@ func Availability(st *Status, now time.Time) (ok bool, reason string) {
 	return true, ""
 }
 
+// Exposed reports whether a project may currently have LAN reach. It answers
+// the credential broker's question — "may this project talk to the local
+// network right now?" — and is deliberately the UNION of intent and root's
+// word, and deliberately pessimistic:
+//
+//   - the record being ON is enough, from the instant it is requested: the
+//     rule can be in the kernel 0.2 s later, so withholding starts early;
+//   - root still listing the project as applied is enough, which is what
+//     covers a DISABLE — the record flips at once but the rule may live for
+//     up to a minute afterwards, and re-serving the key into that window
+//     would hand one project both LAN reach and the key, the exact pairing
+//     ADR-066 part (4) exists to prevent;
+//   - no readable status, or one too old to act on, reads as EXPOSED. That is
+//     BUG-014's rule — "cannot confirm" is never "off" — applied to the
+//     credential side rather than the UI side.
+//
+// Unlike Derive this returns no reason: nothing renders it, and a caller that
+// needs to explain itself should log the status it read.
+func Exposed(record bool, uuid string, st *Status, now time.Time) bool {
+	if record || st == nil || stale(st, now) {
+		return true
+	}
+	_, applied := st.Applied[uuid]
+	return applied
+}
+
 // Derive turns (record, root's status) into the state the UI renders.
 // Rules, in order: no readable status at all with a record ON is an ERROR
 // ("cannot confirm"), never "unavailable" — the rule may be live and root

@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/kesokaj/styrman-crew/internal/files"
 	"github.com/kesokaj/styrman-crew/internal/netpolicy"
 	"github.com/kesokaj/styrman-crew/internal/project"
 )
@@ -161,6 +163,15 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 	} else {
 		kicked = s.netpol.Kick(p.ID)
 	}
+	// Enabling means the broker stops serving this project host-reaching
+	// credentials — but a copy may already sit in its home from an earlier
+	// login shell, so remove that too. Best-effort and forward-looking: a
+	// guest that copied the key elsewhere still has it, which is why ADR-066
+	// says enabling LAN on an existing project means the key WAS exposed to
+	// it. Never a reason to fail the request.
+	if on {
+		s.pruneHostReachingCreds(u.Username, p.ID)
+	}
 	// Audit: an isolation exception changing hands is worth a durable line.
 	s.logger.Info("lan access changed", "by", u.Email, "project", p.ID, "projectName", p.Name, "lanAccess", on, "kicked", kicked)
 	p, err = sp.projects.Get(p.ID)
@@ -175,10 +186,72 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, v)
 }
 
+// pruneHostReachingCreds deletes from a project's home the credential files
+// the broker will no longer serve it. The paths come from the credential
+// store, so this prunes exactly what the broker withholds rather than a
+// hardcoded guess that could drift from it.
+//
+// Deletion goes through internal/files, which confines the path to the
+// tenant's registered base (BUG-002/003): the project home sits under a tree
+// the guest can write, so a component of ~/.ssh could be a symlink planted to
+// aim this delete somewhere else.
+func (s *Server) pruneHostReachingCreds(user, project string) {
+	if s.creds == nil {
+		return
+	}
+	fcs, err := s.creds.AllFiles(user)
+	if err != nil {
+		s.logger.Warn("lan access: cannot list credentials to prune", "user", user, "project", project, "error", err)
+		return
+	}
+	home := s.cfg.ProjectHome(user, project)
+	for _, c := range fcs {
+		rel := strings.TrimPrefix(strings.TrimPrefix(c.Path, "~/"), "$HOME/")
+		if !(rel == ".ssh" || strings.HasPrefix(rel, ".ssh/")) {
+			continue
+		}
+		if !files.Exists(home, rel) {
+			continue
+		}
+		if err := files.Remove(home, rel); err != nil {
+			s.logger.Warn("lan access: could not prune a materialized credential",
+				"project", project, "path", rel, "error", err)
+			continue
+		}
+		s.logger.Info("lan access: pruned a materialized host-reaching credential", "project", project, "path", rel)
+	}
+}
+
+// LanExposed implements credbroker.LanChecker (ADR-066 part 4): may this
+// project reach the local network right now? The Server is the only type that
+// can answer — it holds both the per-user project stores and root's last word,
+// where the orchestrator that serves as the broker's Resolver has neither.
+//
+// A deployment with no host firewall half has no LAN feature at all, so only
+// the record can matter there. Without that guard every local dev run would
+// read as "cannot confirm" and silently withhold the SSH key from every
+// project.
+func (s *Server) LanExposed(user, projectID string) (bool, error) {
+	sp, err := s.space(user)
+	if err != nil {
+		return false, err
+	}
+	p, err := sp.projects.Get(projectID)
+	if err != nil {
+		return false, err
+	}
+	if !s.netpol.Enabled() {
+		return p.LanAccess, nil
+	}
+	now := time.Now()
+	return netpolicy.Exposed(p.LanAccess, p.ID, s.netpol.Status(now), now), nil
+}
+
 // kickLAN nudges root after a project boots, and only when its record is on
 // and root has not applied it yet — the rule needs the bridge's subnet, which
 // exists only once the network does. Throttled so a reconnect storm never
 // becomes a reconcile storm.
+
 func (s *Server) kickLAN(user, projectID string) {
 	sp, err := s.space(user)
 	if err != nil {
