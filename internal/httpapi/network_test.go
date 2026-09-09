@@ -6,8 +6,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -270,6 +270,7 @@ func TestDeleteProjectRemovesTheRecord(t *testing.T) {
 // be made to fail Stop on demand, which is why this seam exists.
 type fakeMode struct {
 	state       string // what Status reports
+	statusErr   error  // a real inspect failure — NOT "absent", which Status maps to (absent, nil)
 	stopErr     error
 	ensureErr   error
 	stopCalls   int
@@ -277,6 +278,9 @@ type fakeMode struct {
 }
 
 func (f *fakeMode) Status(_ context.Context, _, project string) (orchestrator.Status, error) {
+	if f.statusErr != nil {
+		return orchestrator.Status{}, f.statusErr
+	}
 	return orchestrator.Status{Project: project, State: f.state, ContainerID: "c1"}, nil
 }
 
@@ -348,5 +352,52 @@ func TestNetworkFailedRestartKeepsTheRecord(t *testing.T) {
 	}
 	if !n.lanAccessOf(t, n.admin, n.pid) {
 		t.Fatal("a failed RESTART must keep the new record: the container is stopped, so nothing is in force, and the next start applies it")
+	}
+}
+
+// The sibling of the Stop branch (preflight review, 2026-09-09): a Status
+// ERROR is not "stopped". Status already maps a missing container to
+// ("absent", nil), so a non-nil error is a real inspect failure and the
+// container may be running on the old bridge. The first fix closed the
+// fail-open on Stop and left this one, one line above it, open.
+func TestNetworkStatusErrorOnRevocationRollsBack(t *testing.T) {
+	n := newNetHarness(t)
+	n.s.mode = &fakeMode{state: "running"}
+	if w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":true}`); w.Code != http.StatusOK {
+		t.Fatalf("enable: want 200, got %d", w.Code)
+	}
+	fm := &fakeMode{statusErr: errors.New("docker inspect: connection refused")}
+	n.s.mode = fm
+	w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":false}`)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d (%s)", w.Code, w.Body.String())
+	}
+	if fm.stopCalls != 0 || fm.ensureCalls != 0 {
+		t.Fatalf("nothing may be stopped or rebuilt when the project cannot be inspected; stop=%d ensure=%d", fm.stopCalls, fm.ensureCalls)
+	}
+	if !n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("record says sandbox after an uninspectable revocation — LAN may still be in force and nothing would ever correct it")
+	}
+	if !strings.Contains(w.Body.String(), "NOT changed") {
+		t.Errorf("the error should say the mode was not changed, got %q", w.Body.String())
+	}
+}
+
+// And "absent" must keep its old meaning: no container, the record is the
+// truth, 200, and the next start applies it. Distinguishing an inspect
+// FAILURE from a missing container is the whole point of the fix above.
+func TestNetworkAbsentContainerJustWritesTheRecord(t *testing.T) {
+	n := newNetHarness(t)
+	fm := &fakeMode{state: "absent"}
+	n.s.mode = fm
+	w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if fm.stopCalls != 0 || fm.ensureCalls != 0 {
+		t.Fatal("an absent container is nothing to stop or rebuild")
+	}
+	if !n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("the record must carry the new mode for the next start to apply")
 	}
 }

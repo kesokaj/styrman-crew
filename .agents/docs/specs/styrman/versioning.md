@@ -129,15 +129,20 @@ that section for why.
    `styrman-server`, and `styrman-caddy` at that version, and brings the
    stack up at `/opt/styrman` — no manual compose step, and nothing manual
    should be run against a host where the timer is enabled.
-> **Host-side files (ADR-065).** The firewall script and its units live
+> **Host-side files (ADR-036/067).** The firewall script and its units live
 > outside the container stack. The updater's `host_converge` installs
-> `deploy/firewall/{styrman-firewall.sh,.service,.timer,.path}` from the
-> verified deployed SHA on every tick (report-only under `--check`), so a
-> release that changes them needs no host step — EXCEPT the first one: a
-> host that has never run `sudo bash deploy/firewall/install.sh` has no
-> `/etc/styrman/firewall.conf`, no spool tmpfs and no marker dir, and the UI
-> reports LAN access as unavailable until the operator runs it once from
-> `/opt/styrman` at the deployed tag.
+> `deploy/firewall/{styrman-firewall.sh,.service,.timer}` from the verified
+> deployed SHA on every tick (report-only under `--check`), so a release that
+> changes them needs no host step. Since ADR-067 the per-project network mode
+> is the bridge interface name the server picks, so no host file gates it
+> and nothing reports "unavailable". Two caveats: a host that has never run
+> `sudo bash deploy/firewall/install.sh` has no isolation script at all
+> (sandbox projects would not be isolated — run it once from `/opt/styrman`
+> at the deployed tag); and a host upgrading ACROSS the ADR-067 release keeps
+> the retired `styrman-firewall.path` unit and spool mount enabled, inert,
+> until `install.sh` is run once more — the updater deliberately installs
+> only what the verified tree carries. `deploy/remote.md` "Post-upgrade
+> cleanup" has the step.
 
 5. Verify: `curl -fsS https://styrman.<domain>/api/health`, confirm the
    Settings page shows `X.Y.Z`, sign out/in once to confirm the Google OAuth

@@ -2549,3 +2549,21 @@ containers only, and would never have corrected it.
 
 Source: testing/2026-09-09-lan-mode-live.md; reviews/2026-09-09-security-adr-067.md.
 Verification: `TestNetworkFailedRevocationRollsBackTheRecord` (mutation-checked); the broker test above is OWED, not done.
+
+---
+
+## ADR-067 — correction to the third amendment (2026-09-09, same day)
+
+The amendment above says "a failed revocation now FAILS CLOSED". When it was
+written that was true of the `Stop` branch only; the `/preflight` reviews the
+same evening found the same fail-open on the `Status`-error branch above it
+(BUG-029) and in `bridgeModeMismatch` below it (BUG-031). Both are now
+closed, so the sentence holds for every branch that can leave a container
+running on the wrong bridge. The one it cannot hold for is a failed rollback
+WRITE to the record store — that branch logs at ERROR and needs a human.
+Recorded here rather than edited in place: this file is append-only, and a
+claim that was briefly wrong should stay visible as such.
+
+Source: reviews/2026-09-09-preflight-review-v1.25.0.md, reviews/2026-09-09-preflight-security-v1.25.0.md.
+Verification: TestNetworkStatusErrorOnRevocationRollsBack (mutation-checked); BUG-031 has no unit test — see its record.
+

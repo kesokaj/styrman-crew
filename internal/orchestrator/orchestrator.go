@@ -230,7 +230,11 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 	// handler stops the project first, and a project left in the wrong mode by
 	// a failed toggle is healed on its next start, however it got there.
 	if err == nil && (insp.State == nil || !insp.State.Running) {
-		if o.bridgeModeMismatch(ctx, config.NetworkName(project), opts.Lan) {
+		mismatch, merr := o.bridgeModeMismatch(ctx, config.NetworkName(project), opts.Lan)
+		if merr != nil {
+			return "", fmt.Errorf("network mode: cannot inspect the project network, refusing to start on an unverified bridge: %w", merr)
+		}
+		if mismatch {
 			o.logger.Info("recreating stopped container for a network mode change",
 				"project", project, "lan", opts.Lan)
 			if rerr := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); rerr != nil {
@@ -811,17 +815,31 @@ func (o *Orchestrator) createBridgeNetwork(ctx context.Context, netName string, 
 // whether a mode change is pending and the container must be rebuilt to apply
 // it.
 //
-// It answers false on anything it cannot establish, and that direction is
-// deliberate: a true return force-removes a container. A missing network is
-// NOT a mismatch (recreateMissingNetwork owns that case, and it builds the
-// bridge under the right name anyway), and an inspect error is not a mismatch
-// either, so a Docker hiccup can never destroy a project's container. The cost
-// of a false negative is that the toggle is applied on the next start instead
-// of this one; the cost of a false positive would be a needless rebuild.
-func (o *Orchestrator) bridgeModeMismatch(ctx context.Context, netName string, lan bool) bool {
+// A true return force-removes a container, so it never guesses true — a
+// Docker hiccup can never destroy a project's container. A missing network is
+// NOT a mismatch (recreateMissingNetwork owns that case and builds the bridge
+// under the right name, so the mode is applied on that start anyway). Any
+// OTHER inspect error is RETURNED, and the caller REFUSES to start rather
+// than guess: it once returned false there (BUG-031), which on a revocation
+// restarted the just-stopped container on its old lan- bridge with the record
+// already saying sandbox. Refusing leaves the container down — the safe state
+// — and the next start retries the check.
+func (o *Orchestrator) bridgeModeMismatch(ctx context.Context, netName string, lan bool) (bool, error) {
 	insp, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{})
 	if err != nil {
-		return false
+		if errdefs.IsNotFound(err) {
+			// No network at all: recreateMissingNetwork owns that case and
+			// builds the bridge under the right name anyway. Not a mismatch.
+			return false, nil
+		}
+		// Any OTHER inspect failure is "I cannot tell", and that must not
+		// read as "no mismatch": on a revocation the caller has just stopped
+		// the container, and starting it on an unverified bridge would put
+		// it back on lan- with the record already saying sandbox — a
+		// fail-open nothing would correct (security review, 2026-09-09).
+		// Surface the error; the container stays down, which is the safe
+		// state, and the next start retries the check.
+		return false, err
 	}
 	cur := insp.Options["com.docker.network.bridge.name"]
 	if cur == "" {
@@ -832,9 +850,9 @@ func (o *Orchestrator) bridgeModeMismatch(ctx context.Context, netName string, l
 		// unconfined until it is. Loud, because it costs a container rebuild.
 		o.logger.Warn("project network has no styrman bridge name — it matches no firewall rule; rebuilding",
 			"network", netName)
-		return true
+		return true, nil
 	}
-	return cur != config.BridgeNameFor(netName, lan)
+	return cur != config.BridgeNameFor(netName, lan), nil
 }
 
 // create builds a network and container. Caller holds the relevant lock.
@@ -989,7 +1007,40 @@ func (o *Orchestrator) Stop(ctx context.Context, user, project string) error {
 	// attached terminal exec, and their auto-reconnects must already see the
 	// marker — otherwise the first one boots the VM straight back up.
 	o.stopped.Store(key(user, project), true)
-	return o.stopLocked(ctx, project)
+	if err := o.stopLocked(ctx, project); err != nil {
+		// If the container is still running, "deliberately stopped" is
+		// false: leaving the marker would have every terminal auto-reconnect
+		// refused with close 4002 for a project running exactly as before,
+		// after an error that says nothing changed (BUG-030). Marking first
+		// is still right (see above); it is undone only when the stop
+		// provably did not happen — see unmarkIfStillRunning for why not
+		// unconditionally.
+		o.unmarkIfStillRunning(ctx, user, project)
+		return err
+	}
+	return nil
+}
+
+// unmarkIfStillRunning clears the "deliberately stopped" marker after a stop
+// FAILED — but only when the container is provably still running. A stop can
+// half-succeed (the daemon took the request, the transport returned an error)
+// or race a reaper tick against a user's Stop; in those cases the container
+// IS down, and clearing the marker would let the next terminal auto-reconnect
+// boot it straight back (the exact resurrection the marker exists to stop).
+// An inspect that fails or shows anything but Running keeps the marker: the
+// user can always press Start, whereas a resurrected VM is a surprise.
+func (o *Orchestrator) unmarkIfStillRunning(_ context.Context, user, project string) {
+	// A FRESH budget, not the caller's ctx: the likeliest reason the stop
+	// failed is that ctx expired (2 min from stopProject, 3 from the mode
+	// toggle), and an inspect on a dead ctx fails at once — which would keep
+	// the marker stuck in exactly BUG-030's own scenario, a wedged stop on a
+	// container that is still up. Five seconds is ample for one inspect.
+	ictx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	insp, err := o.docker.ContainerInspect(ictx, config.ContainerName(project))
+	if err == nil && insp.State != nil && insp.State.Running {
+		o.stopped.Delete(key(user, project))
+	}
 }
 
 // Stopped reports whether the project was deliberately stopped (Stop button
@@ -1069,7 +1120,14 @@ func (o *Orchestrator) stopIfIdle(ctx context.Context, user, project string, idl
 	// Same marker as an explicit Stop: an open tab's auto-reconnect used to
 	// boot the VM right back after the reaper stopped it.
 	o.stopped.Store(key(user, project), true)
-	return o.stopLocked(ctx, project)
+	if err := o.stopLocked(ctx, project); err != nil {
+		// Same rule as Stop, same guard: only a container still running gets
+		// its marker back — a reaper tick can race a user's Stop, and then
+		// the project IS down and must stay marked.
+		o.unmarkIfStillRunning(ctx, user, project)
+		return err
+	}
+	return nil
 }
 
 // invalidateSelfAttach drops the self-attach memo for the project owning a

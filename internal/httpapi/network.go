@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
+	"github.com/kesokaj/styrman-crew/internal/project"
 )
 
 // Per-project network mode (ADR-067).
@@ -34,6 +35,36 @@ import (
 // lanRebuildTimeout bounds the synchronous stop+rebuild. startProject gives a
 // plain start 2 minutes and a rebuild is strictly more work.
 const lanRebuildTimeout = 3 * time.Minute
+
+// rollbackMode puts the record back to the mode still in force after an
+// apply failed with the container possibly still running on the old bridge.
+// The point is that every surface reading the record — the switch, the badge,
+// the API — must report what is actually in effect, never what was asked
+// for: a record claiming "sandboxed" over a container still on a lan- bridge
+// is a fail-open nothing would ever correct, since the mismatch heal in
+// EnsureRunning fires for STOPPED containers only.
+func (s *Server) rollbackMode(sp *userSpace, id string, requested bool, cause error, what string) {
+	s.netMu.Lock()
+	rb := sp.projects.SetLanAccess(id, !requested)
+	s.netMu.Unlock()
+	if errors.Is(rb, project.ErrNotFound) {
+		// The project was deleted while its mode was changing. There is no
+		// record left to disagree with anything; the delete path removes the
+		// container too. A race, not an incident — do not page anyone.
+		s.logger.Info("network mode: project deleted during the change; nothing to roll back",
+			"project", id, "cause", cause)
+		return
+	}
+	if rb != nil {
+		// Worse: the record now disagrees with reality and we could not
+		// correct it. ERROR — this one needs a human.
+		s.logger.Error("network mode: rollback failed, record disagrees with the running container",
+			"project", id, "recordSays", requested, "actual", !requested, "cause", cause, "error", rb)
+		return
+	}
+	s.logger.Warn("network mode: apply failed, record rolled back",
+		"project", id, "requested", requested, "stillInForce", !requested, "why", what, "cause", cause)
+}
 
 // lanView is GET /api/projects/{id}/network's body and PUT's reply.
 type lanView struct {
@@ -111,7 +142,19 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), lanRebuildTimeout)
 	defer cancel()
 	st, err := s.mode.Status(ctx, u.Username, p.ID)
-	if err != nil || st.State != "running" {
+	if err != nil {
+		// NOT the same as "stopped". Status maps a missing container to
+		// ("absent", nil); a non-nil error is a real inspect failure, and the
+		// container may well be running on the old bridge. Treating that as
+		// "nothing to do" was the same fail-open as a failed Stop, one line
+		// up: the record would claim the new mode while the old one stayed in
+		// force, with nothing to reconcile them. Same remedy.
+		s.rollbackMode(sp, p.ID, on, err, "could not inspect the project")
+		writeErr(w, http.StatusInternalServerError,
+			fmt.Errorf("the project could not be inspected, so the mode was NOT changed: %w", err))
+		return
+	}
+	if st.State != "running" {
 		// Stopped or absent: the record is the truth and EnsureRunning's
 		// mismatch check applies it on the next start. Nothing to do.
 		writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin})
@@ -129,18 +172,7 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 		// every surface that reads the record — the switch, the badge, the
 		// API — would repeat that claim indefinitely. Put the record back so
 		// what we report is what is actually in force.
-		s.netMu.Lock()
-		rollback := sp.projects.SetLanAccess(p.ID, !on)
-		s.netMu.Unlock()
-		if rollback != nil {
-			// Worse: the record now disagrees with reality and we could not
-			// correct it. Say so at ERROR — this one needs a human.
-			s.logger.Error("network mode: rollback failed, record disagrees with the running container",
-				"project", p.ID, "recordSays", on, "actual", !on, "error", rollback)
-		} else {
-			s.logger.Warn("network mode: apply failed, record rolled back",
-				"project", p.ID, "requested", on, "stillInForce", !on)
-		}
+		s.rollbackMode(sp, p.ID, on, err, "could not stop the project")
 		writeErr(w, http.StatusInternalServerError,
 			fmt.Errorf("the project could not be stopped, so the mode was NOT changed: %w", err))
 		return
