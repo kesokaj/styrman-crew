@@ -17,59 +17,23 @@ export interface Project {
   provisionError?: string;
   /** Per-port preview shares (email lists), owner-managed — see setPortShares. */
   sharedPorts?: Record<string, string[]>;
-  /** Per-project local-network access (ADR-065). `lanAccess` is the record;
-   * `lanState`/`lanMessage` are root's last word on it, derived server-side
-   * from the host firewall's status file — never from the request that
-   * changed it. Omitted while off with nothing to say. */
+  /** The project's network mode (ADR-067): true = LAN (the bridge is
+   * `lan-<hash>`, matched by no firewall rule, so the project reaches
+   * whatever the host reaches), absent/false = SANDBOX (`sdb-<hash>`,
+   * internet only). One boolean — there is no root-side state to derive a
+   * pending or error state from any more. */
   lanAccess?: boolean;
-  lanChangedAt?: string;
-  lanState?: LanState;
-  lanMessage?: string;
 }
 
-export type LanState = "off" | "pending" | "on" | "error" | "unavailable";
-
-/** The operator's view of the host firewall half (admins only). */
-export interface HostFirewall {
-  available: boolean;
-  reason: string;
-  version: number;
-  requiredVersion: number;
-  appliedAt?: string;
-  lanDev: string;
-  lanCidrs: string[];
-  lanProjects: number;
-  warnings: string[];
-  /**
-   * What the host CONF opted into (ADR-066), as root read it. A server whose
-   * script has converged to version 4 still grants nothing until a human
-   * edits `/etc/styrman/firewall.conf`, so these are reported rather than
-   * assumed — the switch must not claim more than the host will do.
-   */
-  allowHost: boolean;
-  allowPublishedPorts: boolean;
-  /** The host's own addresses a LAN-enabled project may reach, when allowHost. */
-  hostAddrs: string[];
-  /** Bridge subnets reachable through a published port, when allowPublishedPorts. */
-  pubSubnets: string[];
-  /** The bridge root excluded from the published-port allowlist. */
-  ingressBridge?: string;
-}
-
-/** GET/PUT /api/projects/{id}/network. `host` is present for admins only. */
+/** GET/PUT /api/projects/{id}/network (ADR-067). */
 export interface ProjectNetwork {
   lanAccess: boolean;
-  lanState: LanState;
-  lanMessage: string;
-  lanChangedAt?: string;
-  /**
-   * What LAN access costs this project. "ssh-key-withheld" means the
-   * credential broker is not serving it the SSH key (ADR-066 part 4). Sent to
-   * owners as well as admins — it describes their own project, not the
-   * operator's network.
-   */
-  credentialImpact?: string;
-  host?: HostFirewall;
+  /** Whether THIS caller may turn LAN mode on — the server's own answer, not
+   *  something inferred from the shape of the reply (BUG-019). */
+  canEnable: boolean;
+  /** Whether the request rebuilt the project. False for a no-op, and for a
+   *  stopped project whose mode applies at its next start. */
+  rebuilt?: boolean;
 }
 
 /** Live resource snapshot of a project's microVM (terminal status bar). */
@@ -252,8 +216,6 @@ export interface Settings {
   /** True once the user explicitly picked a name (setup won't re-ask). */
   terminalUsernameChosen: boolean;
   setupComplete: boolean;
-  /** Admins only (ADR-065): the host firewall's state and LAN definition. */
-  hostFirewall?: HostFirewall;
 }
 
 /** A stored credential, value-free. `id` is the delete key (host | KEY | file
@@ -492,7 +454,6 @@ export const api = {
     }),
   // Per-project local-network access (ADR-065). The PUT answers with the
   // derived state — "pending" right after a change, never "on" from the
-  // request itself; root's next reconcile (usually under a second) moves it.
   projectNetwork: (id: string) =>
     request<ProjectNetwork>(`/api/projects/${encodeURIComponent(id)}/network`),
   setProjectLan: (id: string, lanAccess: boolean) =>

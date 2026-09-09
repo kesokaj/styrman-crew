@@ -440,12 +440,12 @@ it back, watches it restart, and the same ping now times out.
 - [ ] **DEFERRED to Phase 6 (deploy)** — Converge this host and confirm the live chains hold exactly the base rules — verify: `iptables -S` diffed against the pre-change capture, **user + AI**
 
 ### Phase 4 — UI and API surface
-- [ ] `LocalNetwork.tsx` -> a two-state mode switch, a one-line explanation of each mode, and "changing this restarts the project"; delete the unavailable/pending/error/version copy and the permanent-SSH-key warning — verify: `npm run check && npm run lint`, AI
-- [ ] Delete `HostFirewallSection` (`settings.tsx:949`, 62 lines), its call site (`:856-857`) and its `HostFirewall` import — verify: `npm run check`; `grep -rn HostFirewall web/src` returns nothing, AI
-- [ ] Delete `web/src/lib/lan.ts` + `lan.test.ts` and reduce `LanBadge.tsx` to a two-state badge (or delete it and let the row show nothing when sandboxed); update both call sites (`Sidebar.tsx:289`, `index.tsx:100`) — verify: `npm run check && npm test`; `grep -rn 'lanState\|lanMessage' web/src` returns nothing, AI
-- [ ] **This is the one deletion `tsc` cannot catch**: the frontend LAN types are optional, so a stale badge renders on `undefined` rather than failing the build. Assert it in a test, not by reading — verify: a vitest case that a sandbox project row renders no LAN badge and a LAN project row renders exactly one, AI
-- [ ] `web/src/lib/api.ts`: lanView shape; delete `HostFirewall` (`:33`), `host?` (`:72`), `hostFirewall?` (`:256`) — verify: `tsc -b` clean, AI
-- [ ] `npm test` green — verify: counts recorded, AI
+- [x] `LocalNetwork.tsx` -> a two-state mode switch, a one-line explanation of each mode, and "changing this restarts the project"; delete the unavailable/pending/error/version copy and the permanent-SSH-key warning — verify: `npm run check && npm run lint`, AI
+- [x] Delete `HostFirewallSection` (`settings.tsx:949`, 62 lines), its call site (`:856-857`) and its `HostFirewall` import — verify: `npm run check`; `grep -rn HostFirewall web/src` returns nothing, AI
+- [x] Delete `web/src/lib/lan.ts` + `lan.test.ts` and reduce `LanBadge.tsx` to a two-state badge (or delete it and let the row show nothing when sandboxed); update both call sites (`Sidebar.tsx:289`, `index.tsx:100`) — verify: `npm run check && npm test`; `grep -rn 'lanState\|lanMessage' web/src` returns nothing, AI
+- [x] **This is the one deletion `tsc` cannot catch**: the frontend LAN types are optional, so a stale badge renders on `undefined` rather than failing the build. Assert it in a test, not by reading — verify: a vitest case that a sandbox project row renders no LAN badge and a LAN project row renders exactly one, AI
+- [x] `web/src/lib/api.ts`: lanView shape; delete `HostFirewall` (`:33`), `host?` (`:72`), `hostFirewall?` (`:256`) — verify: `tsc -b` clean, AI
+- [x] `npm test` green — verify: counts recorded, AI
 
 ### Phase 5 — Verification on real hardware
 - [ ] Replace the `integration.sh` LAN block with the checks listed under Verification; delete `STYRMAN_IT_LIVE_LAN` and its documented race (TODO.md item, now moot) — verify: `bash .agents/docs/testing/styrman/integration.sh`, AI

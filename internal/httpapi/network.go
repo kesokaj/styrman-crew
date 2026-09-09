@@ -38,18 +38,24 @@ const lanRebuildTimeout = 3 * time.Minute
 // lanView is GET /api/projects/{id}/network's body and PUT's reply.
 type lanView struct {
 	LanAccess bool `json:"lanAccess"`
+	// CanEnable says whether THIS caller may turn LAN mode on. It is its own
+	// field rather than something the UI infers from the presence of another
+	// (BUG-019: "expose a capability the server already knows as its own
+	// field; don't infer it from a state value reachable through more than
+	// one cause"). Disabling never needs it — tightening is never refused.
+	CanEnable bool `json:"canEnable"`
 	// Rebuilt says whether this request rebuilt the project. False for a
 	// no-op and for a stopped project, whose mode applies at its next start.
 	Rebuilt bool `json:"rebuilt"`
 }
 
 func (s *Server) projectNetwork(w http.ResponseWriter, r *http.Request) {
-	_, _, p, err := s.getProjectFor(r)
+	u, _, p, err := s.getProjectFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, lanView{LanAccess: p.LanAccess})
+	writeJSON(w, http.StatusOK, lanView{LanAccess: p.LanAccess, CanEnable: u.Admin})
 }
 
 func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +94,7 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 	s.netMu.Lock()
 	if p.LanAccess == on {
 		s.netMu.Unlock()
-		writeJSON(w, http.StatusOK, lanView{LanAccess: on})
+		writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin})
 		return
 	}
 	if err := sp.projects.SetLanAccess(p.ID, on); err != nil {
@@ -108,7 +114,7 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 	if err != nil || st.State != "running" {
 		// Stopped or absent: the record is the truth and EnsureRunning's
 		// mismatch check applies it on the next start. Nothing to do.
-		writeJSON(w, http.StatusOK, lanView{LanAccess: on})
+		writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin})
 		return
 	}
 	if err := s.orch.Stop(ctx, u.Username, p.ID); err != nil {
@@ -127,5 +133,5 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(time.Second)
 		s.orch.EnsureSelfAttached(u.Username, p.ID)
 	}()
-	writeJSON(w, http.StatusOK, lanView{LanAccess: on, Rebuilt: true})
+	writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin, Rebuilt: true})
 }

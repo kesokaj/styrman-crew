@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { api, tryUI, type CredItem, type HostFirewall } from "../lib/api";
+import { api, tryUI, type CredItem } from "../lib/api";
 import {
   FONT_FAMILY_LABELS,
   FONT_SIZE_MAX,
@@ -853,9 +853,6 @@ function SettingsPage() {
           )}
         </Section>
 
-        {data.isAdmin && data.hostFirewall && (
-          <HostFirewallSection hf={data.hostFirewall} />
-        )}
 
         <Section title="Storage">
           <Row label="State dir">{data.stateDir}</Row>
@@ -946,56 +943,6 @@ function FontRows({
  * and what "local network" means on this host. Admin-only — the payload
  * itself is only sent to admins.
  */
-function HostFirewallSection({ hf }: { hf: HostFirewall }) {
-  const bad = "text-danger";
-  return (
-    <Section title="Host firewall">
-      <Row label="Local-network access">
-        {hf.available ? (
-          <span className="text-ok">available to admins, per project</span>
-        ) : (
-          <span className={bad}>{hf.reason}</span>
-        )}
-      </Row>
-      <Row label="Script version">
-        {hf.version > 0 ? (
-          hf.version >= hf.requiredVersion ? (
-            `${hf.version}`
-          ) : (
-            <span className={bad}>
-              outdated (have {hf.version}, need {hf.requiredVersion}) — run deploy/firewall/install.sh on the server
-            </span>
-          )
-        ) : (
-          <span className={bad}>not installed — run deploy/firewall/install.sh on the server</span>
-        )}
-      </Row>
-      <Row label="Last applied">
-        {hf.appliedAt ? new Date(hf.appliedAt).toLocaleString() : <span className={bad}>never</span>}
-      </Row>
-      <Row label="Local network">
-        {hf.lanCidrs.length > 0 ? (
-          <>
-            {hf.lanCidrs.join(", ")} via {hf.lanDev}
-            <span className="text-text-dim"> — from /etc/styrman/firewall.conf</span>
-          </>
-        ) : (
-          <span className={bad}>no prefix configured (/etc/styrman/firewall.conf)</span>
-        )}
-      </Row>
-      <Row label="Projects with LAN on">{hf.lanProjects}</Row>
-      {hf.warnings.length > 0 && (
-        <Row label="Warnings">
-          <ul className="list-disc pl-4 text-text-dim">
-            {hf.warnings.map((w, i) => (
-              <li key={i}>{w}</li>
-            ))}
-          </ul>
-        </Row>
-      )}
-    </Section>
-  );
-}
 
 function RuntimeEditor({
   dockerDiskGB,

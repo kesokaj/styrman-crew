@@ -1,100 +1,61 @@
 import { describe, expect, it } from "vitest";
-import { formatClock, lanChip, lanLine, preferOverride } from "./lan";
+import { lanChip, lanLine, preferOverride } from "./lan";
 
 describe("lanChip", () => {
-  it("renders nothing while off or unavailable", () => {
-    expect(lanChip({}).text).toBe("");
-    expect(lanChip({ lanState: "off" }).text).toBe("");
-    expect(lanChip({ lanAccess: true, lanState: "unavailable", lanMessage: "not installed" }).text).toBe("");
-  });
-  it("flags on in warn colours with the prefix in the title", () => {
-    const c = lanChip({ lanAccess: true, lanState: "on" }, ["192.168.86.0/24"]);
+  it("flags a LAN project", () => {
+    const c = lanChip({ lanAccess: true });
     expect(c.text).toBe("LAN");
     expect(c.className).toContain("warn");
-    expect(c.title).toContain("192.168.86.0/24");
-    expect(c.pending).toBe(false);
+    expect(c.title).toMatch(/local network/i);
   });
-  it("pulses while pending and says which way it is going", () => {
-    expect(lanChip({ lanAccess: true, lanState: "pending" }).pending).toBe(true);
-    expect(lanChip({ lanAccess: true, lanState: "pending" }).title).toContain("applying");
-    expect(lanChip({ lanAccess: false, lanState: "pending" }).title).toContain("closing");
+
+  // The safe default gets no decoration — and this is the assertion that
+  // matters, because the badge renders from optional fields: a regression
+  // that showed "LAN" on every project would be a lie about isolation, and
+  // tsc cannot catch it.
+  it("renders nothing for a sandboxed project", () => {
+    expect(lanChip({ lanAccess: false }).text).toBe("");
   });
-  it("carries root's message on error", () => {
-    const c = lanChip({ lanAccess: true, lanState: "error", lanMessage: "host firewall reported: insert failed" });
-    expect(c.className).toContain("danger");
-    expect(c.title).toBe("host firewall reported: insert failed");
-  });
-  it("falls back to a generic place when the prefix is unknown (non-admin)", () => {
-    expect(lanChip({ lanAccess: true, lanState: "on" }).title).toContain("your local network");
+
+  it("renders nothing when the field is absent", () => {
+    expect(lanChip({} as { lanAccess?: boolean } as Parameters<typeof lanChip>[0]).text).toBe("");
   });
 });
 
 describe("lanLine", () => {
-  it("names what stays blocked while on", () => {
-    const l = lanLine("on", true, "", ["192.168.86.0/24"], "2026-09-08T10:00:00Z");
-    expect(l).toContain("192.168.86.0/24");
-    expect(l).toContain("Still blocked");
-    expect(l).toContain("Applied ");
+  it("says what LAN mode grants, including its limits", () => {
+    const s = lanLine(true);
+    expect(s).toMatch(/reaches whatever this server reaches/i);
+    expect(s).toMatch(/cannot reach other projects/i);
+    expect(s).toMatch(/open a connection into it/i);
   });
-  it("distinguishes the two pending directions and the no-bridge case", () => {
-    expect(lanLine("pending", true, "applying on the host firewall")).toContain("Applying");
-    expect(lanLine("pending", true, "applies when the project next starts")).toContain("next starts");
-    expect(lanLine("pending", false, "closing on the host firewall")).toContain("drop immediately");
-  });
-  it("relays root's error and the unavailability reason", () => {
-    expect(lanLine("error", true, "cannot confirm closed")).toContain("cannot confirm closed");
-    expect(lanLine("unavailable", true, "host firewall script is outdated (have 2, need 3)")).toContain("have 2, need 3");
-    expect(lanLine("unavailable", true, "")).toContain("not installed");
-  });
-  it("describes the default while off", () => {
-    expect(lanLine(undefined, false, "")).toContain("Internet only");
-    expect(lanLine("off", false, "")).toContain("cannot reach");
-  });
-});
 
-describe("formatClock", () => {
-  it("returns the input unchanged when it is not a date", () => {
-    expect(formatClock("garbage")).toBe("garbage");
-  });
-  it("formats a real stamp as a time", () => {
-    expect(formatClock("2026-09-08T10:00:00Z")).toMatch(/\d/);
+  it("says sandbox is internet-only", () => {
+    const s = lanLine(false);
+    expect(s).toMatch(/internet and nothing else/i);
+    expect(s).toMatch(/not the local network/i);
   });
 });
 
 describe("preferOverride", () => {
-  const at = (s: string) => ({ lanChangedAt: s });
-
-  it("shows the reply until the poll catches up", () => {
-    const o = at("2026-09-08T10:00:00Z");
-    const stalePoll = at("2026-09-08T09:59:00Z");
-    expect(preferOverride(o, stalePoll)).toBe(o);
+  it("returns the poll when there is no override", () => {
+    expect(preferOverride(undefined, { lanAccess: true })).toEqual({ lanAccess: true });
   });
 
-  it("hands over once the poll reports the same change", () => {
-    const o = at("2026-09-08T10:00:00Z");
-    const same = at("2026-09-08T10:00:00Z");
-    expect(preferOverride(o, same)).toBe(same);
+  it("returns the override until the poll agrees", () => {
+    const override = { lanAccess: true };
+    expect(preferOverride(override, { lanAccess: false })).toBe(override);
+    const caughtUp = { lanAccess: true };
+    expect(preferOverride(override, caughtUp)).toBe(caughtUp);
   });
 
-  // The bug: an out-of-band change moves the poll PAST the override, and an
-  // equality test pinned the component to the stale reply forever.
-  it("hands over when the record changed out of band", () => {
-    const o = at("2026-09-08T10:00:00Z");
-    const newer = at("2026-09-08T10:05:00Z");
-    expect(preferOverride(o, newer)).toBe(newer);
-  });
-
-  it("falls back to equality when a timestamp is unusable", () => {
-    const o = { lanChangedAt: undefined };
-    const d = { lanChangedAt: undefined };
-    expect(preferOverride(o, d)).toBe(d);
-    const junk = { lanChangedAt: "not a date" };
-    expect(preferOverride(junk, at("2026-09-08T10:00:00Z"))).toBe(junk);
-  });
-
-  it("copes with either side missing", () => {
-    const d = at("2026-09-08T10:00:00Z");
-    expect(preferOverride(undefined, d)).toBe(d);
-    expect(preferOverride(d, undefined)).toBe(d);
+  // BUG-020: the old version compared a monotonic timestamp, so an
+  // out-of-band change could never displace a local one and the switch
+  // latched on the last PUT forever. With one boolean the override yields the
+  // moment the server agrees, and there is no clock to latch on.
+  it("yields to an out-of-band change once the server agrees", () => {
+    const override = { lanAccess: true };
+    const outOfBand = { lanAccess: true, source: "someone else" };
+    expect(preferOverride(override, outOfBand)).toBe(outOfBand);
   });
 });
