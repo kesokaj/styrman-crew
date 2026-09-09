@@ -407,10 +407,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export type Scope =
   { kind: "project"; project: string } | { kind: "home"; project: string };
 
+/**
+ * u — an API path with every interpolated value percent-encoded.
+ *
+ * The weakness this closes is path RETARGETING, not injection: browsers
+ * resolve `..` and `?` before sending, so an id containing them can point a
+ * clicked action at a DIFFERENT /api/projects/... path of the SAME user.
+ * `csrfGuard` passes it (it is genuinely same-origin) and picks its
+ * body-size class by path suffix. No tenant crossing, but not what the caller
+ * asked for either (security review 2026-09-03, round 2).
+ *
+ * A tag rather than 27 hand-placed encodeURIComponent calls, because the
+ * failure mode of the hand-placed version is a NEW call site that forgets
+ * one — which is exactly how this list grew to 27. QUERY STRINGS must be
+ * appended outside the tag: `u` would encode the `?` and `=`.
+ */
+function u(strings: TemplateStringsArray, ...values: Array<string | number>): string {
+  return strings.reduce(
+    (acc, s, i) => acc + s + (i < values.length ? encodeURIComponent(String(values[i])) : ""),
+    "",
+  );
+}
+
 const scopeBase = (s: Scope) =>
   s.kind === "home"
-    ? `/api/projects/${s.project}/home`
-    : `/api/projects/${s.project}`;
+    ? u`/api/projects/${s.project}/home`
+    : u`/api/projects/${s.project}`;
 
 export const api = {
   listProjects: () => request<{ projects: Project[] }>("/api/projects"),
@@ -429,9 +451,9 @@ export const api = {
         cloneUrl: opts.cloneUrl ?? "",
       }),
     }),
-  getProject: (id: string) => request<Project>(`/api/projects/${id}`),
+  getProject: (id: string) => request<Project>(u`/api/projects/${id}`),
   projectStats: (id: string) =>
-    request<ProjectStats>(`/api/projects/${id}/stats`),
+    request<ProjectStats>(u`/api/projects/${id}/stats`),
   // Sidebar git badges (v1.14.0): branch + dirty count for every RUNNING
   // project in one batched call.
   gitSummary: () =>
@@ -446,43 +468,49 @@ export const api = {
     }>("/api/git/summary"),
   // Ops panel (v1.14.0): the microVM's console log tail (entrypoint, dockerd).
   projectLogs: (id: string, tail = 300) =>
-    request<{ logs: string }>(`/api/projects/${id}/logs?tail=${tail}`),
+    request<{ logs: string }>(u`/api/projects/${id}/logs` + `?tail=${encodeURIComponent(tail)}`),
   renameProject: (id: string, name: string) =>
-    request<void>(`/api/projects/${id}`, {
+    request<void>(u`/api/projects/${id}`, {
       method: "PATCH",
       body: JSON.stringify({ name }),
     }),
   // Per-project local-network access (ADR-065). The PUT answers with the
   // derived state — "pending" right after a change, never "on" from the
   projectNetwork: (id: string) =>
-    request<ProjectNetwork>(`/api/projects/${encodeURIComponent(id)}/network`),
+    request<ProjectNetwork>(u`/api/projects/${id}/network`),
+  // A mode change REBUILDS a running project (ADR-067): stop, swap the bridge,
+  // boot the microVM again. That is a start/stop, so it gets start/stop's
+  // budget — request()'s 20 s default aborted the fetch while the rebuild went
+  // on to succeed server-side, and the UI reported a failure for a change that
+  // had worked.
   setProjectLan: (id: string, lanAccess: boolean) =>
-    request<ProjectNetwork>(`/api/projects/${encodeURIComponent(id)}/network`, {
+    request<ProjectNetwork>(u`/api/projects/${id}/network`, {
       method: "PUT",
       body: JSON.stringify({ lanAccess }),
+      signal: AbortSignal.timeout(150000),
     }),
   deleteProject: (id: string, wipe: boolean) =>
-    request<void>(`/api/projects/${id}${wipe ? "?wipe=true" : ""}`, {
+    request<void>(u`/api/projects/${id}` + (wipe ? "?wipe=true" : ""), {
       method: "DELETE",
     }),
   // Start/stop legitimately take minutes on a slow Kata boot/teardown — the
   // default 20 s abort made the UI report failures for operations that then
   // completed server-side.
   startProject: (id: string) =>
-    request<void>(`/api/projects/${id}/start`, {
+    request<void>(u`/api/projects/${id}/start`, {
       method: "POST",
       signal: AbortSignal.timeout(150000),
     }),
   stopProject: (id: string) =>
-    request<void>(`/api/projects/${id}/stop`, {
+    request<void>(u`/api/projects/${id}/stop`, {
       method: "POST",
       signal: AbortSignal.timeout(150000),
     }),
 
   listTerminals: (project: string) =>
-    request<{ terminals: Terminal[] }>(`/api/projects/${project}/terminals`),
+    request<{ terminals: Terminal[] }>(u`/api/projects/${project}/terminals`),
   createTerminal: (project: string, title?: string) =>
-    request<Terminal>(`/api/projects/${project}/terminals`, {
+    request<Terminal>(u`/api/projects/${project}/terminals`, {
       method: "POST",
       body: JSON.stringify({ title: title ?? "" }),
     }),
@@ -491,18 +519,18 @@ export const api = {
     id: string,
     patch: { title?: string; command?: string },
   ) =>
-    request<void>(`/api/projects/${project}/terminals/${id}`, {
+    request<void>(u`/api/projects/${project}/terminals/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
     }),
   deleteTerminal: (project: string, id: string) =>
-    request<void>(`/api/projects/${project}/terminals/${id}`, {
+    request<void>(u`/api/projects/${project}/terminals/${id}`, {
       method: "DELETE",
     }),
   deleteAllTerminals: (project: string) =>
-    request<void>(`/api/projects/${project}/terminals`, { method: "DELETE" }),
+    request<void>(u`/api/projects/${project}/terminals`, { method: "DELETE" }),
   pauseTerminal: (project: string, id: string) =>
-    request<void>(`/api/projects/${project}/terminals/${id}/pause`, {
+    request<void>(u`/api/projects/${project}/terminals/${id}/pause`, {
       method: "POST",
     }),
 
@@ -510,27 +538,27 @@ export const api = {
     request<{ notifications: AppNotification[] }>("/api/notifications"),
 
   listPorts: (project: string) =>
-    request<{ ports: PortInfo[] }>(`/api/projects/${project}/ports`),
+    request<{ ports: PortInfo[] }>(u`/api/projects/${project}/ports`),
 
   getPortShares: (project: string, port: number) =>
     request<{ emails: string[]; url: string }>(
-      `/api/projects/${project}/ports/${port}/shares`,
+      u`/api/projects/${project}/ports/${port}/shares`,
     ),
   setPortShares: (project: string, port: number, emails: string[]) =>
     request<{ emails: string[]; url: string }>(
-      `/api/projects/${project}/ports/${port}/shares`,
+      u`/api/projects/${project}/ports/${port}/shares`,
       { method: "PUT", body: JSON.stringify({ emails }) },
     ),
 
   listLinks: (project: string) =>
-    request<{ links: PublicLink[] }>(`/api/projects/${project}/links`),
+    request<{ links: PublicLink[] }>(u`/api/projects/${project}/links`),
   createLink: (project: string, port: number, ttl: string) =>
-    request<PublicLink>(`/api/projects/${project}/ports/${port}/links`, {
+    request<PublicLink>(u`/api/projects/${project}/ports/${port}/links`, {
       method: "POST",
       body: JSON.stringify({ ttl }),
     }),
   revokeLink: (project: string, token: string) =>
-    request<void>(`/api/projects/${project}/links/${token}`, {
+    request<void>(u`/api/projects/${project}/links/${token}`, {
       method: "DELETE",
     }),
 
@@ -559,7 +587,7 @@ export const api = {
     ),
   // Format content with the language's real CLI formatter in the project VM.
   formatFile: (project: string, path: string, content: string) =>
-    request<{ content: string }>(`/api/projects/${project}/format`, {
+    request<{ content: string }>(u`/api/projects/${project}/format`, {
       method: "POST",
       body: JSON.stringify({ path, content }),
     }),
@@ -567,7 +595,7 @@ export const api = {
   // VM (gofmt, shellcheck, hadolint, …). `supported:false` means we have no
   // checker for this file type — a normal answer, not an error.
   checkFile: (project: string, path: string, content: string) =>
-    request<CheckResult>(`/api/projects/${project}/check`, {
+    request<CheckResult>(u`/api/projects/${project}/check`, {
       method: "POST",
       body: JSON.stringify({ path, content }),
     }),
@@ -636,18 +664,19 @@ export const api = {
   },
 
   listHistory: (project: string) =>
-    request<{ transcripts: Transcript[] }>(`/api/projects/${project}/history`),
+    request<{ transcripts: Transcript[] }>(u`/api/projects/${project}/history`),
   searchHistory: (project: string, q: string) =>
     request<{ matches: HistoryMatch[] }>(
-      `/api/projects/${project}/history/search?q=${encodeURIComponent(q)}`,
+      u`/api/projects/${project}/history/search` + `?q=${encodeURIComponent(q)}`,
     ),
   readHistory: (project: string, id: string, bytes?: number) =>
     request<{ id: string; text: string }>(
-      `/api/projects/${project}/history/${id}${bytes ? `?bytes=${bytes}` : ""}`,
+      u`/api/projects/${project}/history/${id}` +
+        (bytes ? `?bytes=${encodeURIComponent(bytes)}` : ""),
     ),
   // Git side panel (real git client; runs in the guest VM).
   gitStatus: (project: string) =>
-    request<GitStatus>(`/api/projects/${encodeURIComponent(project)}/git/status`),
+    request<GitStatus>(u`/api/projects/${project}/git/status`),
   gitDiff: (
     project: string,
     opts: {
@@ -665,21 +694,21 @@ export const api = {
     if (opts.commit) q.set("commit", opts.commit);
     const qs = q.toString();
     return request<{ state: string; diff: string }>(
-      `/api/projects/${encodeURIComponent(project)}/git/diff${qs ? `?${qs}` : ""}`,
+      u`/api/projects/${project}/git/diff` + (qs ? `?${qs}` : ""),
     );
   },
   gitStage: (project: string, body: { path?: string; all?: boolean }) =>
-    request<{ output: string }>(`/api/projects/${encodeURIComponent(project)}/git/stage`, {
+    request<{ output: string }>(u`/api/projects/${project}/git/stage`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
   gitUnstage: (project: string, body: { path?: string; all?: boolean }) =>
-    request<{ output: string }>(`/api/projects/${encodeURIComponent(project)}/git/unstage`, {
+    request<{ output: string }>(u`/api/projects/${project}/git/unstage`, {
       method: "POST",
       body: JSON.stringify(body),
     }),
   gitDiscard: (project: string, path: string, untracked: boolean) =>
-    request<{ output: string }>(`/api/projects/${encodeURIComponent(project)}/git/discard`, {
+    request<{ output: string }>(u`/api/projects/${project}/git/discard`, {
       method: "POST",
       body: JSON.stringify({ path, untracked }),
     }),
@@ -689,14 +718,14 @@ export const api = {
     opts: { all?: boolean } = {},
   ) =>
     request<{ output: string }>(
-      `/api/projects/${encodeURIComponent(project)}/git/commit`,
+      u`/api/projects/${project}/git/commit`,
       {
         method: "POST",
         body: JSON.stringify({ message, all: opts.all ?? false }),
       },
     ),
   gitPush: (project: string) =>
-    request<{ output: string }>(`/api/projects/${encodeURIComponent(project)}/git/push`, {
+    request<{ output: string }>(u`/api/projects/${project}/git/push`, {
       method: "POST",
     }),
 
@@ -704,35 +733,35 @@ export const api = {
   // stopped VM is a state, not a failed request); MUTATIONS answer 4xx.
   gitFetch: (project: string) =>
     request<{ output: string }>(
-      `/api/projects/${encodeURIComponent(project)}/git/fetch`,
+      u`/api/projects/${project}/git/fetch`,
       { method: "POST" },
     ),
   gitPull: (project: string) =>
     request<{ output: string }>(
-      `/api/projects/${encodeURIComponent(project)}/git/pull`,
+      u`/api/projects/${project}/git/pull`,
       { method: "POST" },
     ),
   gitBranches: (project: string) =>
     request<GitBranches>(
-      `/api/projects/${encodeURIComponent(project)}/git/branches`,
+      u`/api/projects/${project}/git/branches`,
     ),
   gitCheckout: (project: string, branch: string, create = false) =>
     request<{ output: string }>(
-      `/api/projects/${encodeURIComponent(project)}/git/checkout`,
+      u`/api/projects/${project}/git/checkout`,
       { method: "POST", body: JSON.stringify({ branch, create }) },
     ),
   gitLog: (project: string, limit?: number) =>
     request<GitLog>(
-      `/api/projects/${encodeURIComponent(project)}/git/log${limit ? `?limit=${limit}` : ""}`,
+      u`/api/projects/${project}/git/log` + (limit ? `?limit=${encodeURIComponent(limit)}` : ""),
     ),
   gitStash: (project: string, op: "push" | "pop") =>
     request<{ output: string }>(
-      `/api/projects/${encodeURIComponent(project)}/git/stash`,
+      u`/api/projects/${project}/git/stash`,
       { method: "POST", body: JSON.stringify({ op }) },
     ),
   gitStashList: (project: string) =>
     request<{ entries: GitStashEntry[] }>(
-      `/api/projects/${encodeURIComponent(project)}/git/stash`,
+      u`/api/projects/${project}/git/stash`,
       { method: "POST", body: JSON.stringify({ op: "list" }) },
     ),
 
@@ -770,30 +799,30 @@ export const api = {
     ),
   deleteCredential: (kind: string, name: string) =>
     request<void>(
-      `/api/settings/credentials/${kind}/${encodeURIComponent(name)}`,
+      u`/api/settings/credentials/${kind}/${name}`,
       { method: "DELETE" },
     ),
   credentialContent: (kind: string, id: string) =>
     request<{ content?: string; path?: string; binary?: boolean }>(
-      `/api/settings/credentials/${kind}/${encodeURIComponent(id)}/content`,
+      u`/api/settings/credentials/${kind}/${id}/content`,
     ),
   // Project-scoped env variables (SidePanel Env tab) — delivered only to this
   // project's NEW login shells; a project value wins over a same-named global.
   projectEnv: (project: string) =>
     request<{ brokerEnabled: boolean; keys: string[] }>(
-      `/api/projects/${project}/env`,
+      u`/api/projects/${project}/env`,
     ),
   putProjectEnv: (project: string, key: string, value: string) =>
-    request<void>(`/api/projects/${project}/env`, {
+    request<void>(u`/api/projects/${project}/env`, {
       method: "PUT",
       body: JSON.stringify({ key, value }),
     }),
   projectEnvValue: (project: string, key: string) =>
     request<{ key: string; value: string }>(
-      `/api/projects/${project}/env/${encodeURIComponent(key)}`,
+      u`/api/projects/${project}/env/${key}`,
     ),
   deleteProjectEnv: (project: string, key: string) =>
-    request<void>(`/api/projects/${project}/env/${encodeURIComponent(key)}`, {
+    request<void>(u`/api/projects/${project}/env/${key}`, {
       method: "DELETE",
     }),
   setupStatus: () => request<SetupStatus>("/api/setup/status"),
@@ -834,7 +863,12 @@ export function termSocketUrl(
     return `${proto}://${location.host}/ws/setup?${size}${tool}`;
   }
   const b = boot ? "&boot=1" : "";
-  return `${proto}://${location.host}/ws/term/${target.project}/${target.id}?${size}${b}`;
+  // Encoded through `u` for the same reason the /api paths are: the browser
+  // resolves `..` in a WS path before sending, so an unencoded id could point
+  // the socket at another terminal of the SAME user. The host prefix and the
+  // query string stay outside the tag.
+  return `${proto}://${location.host}` +
+    u`/ws/term/${target.project}/${target.id}` + `?${size}${b}`;
 }
 
 /** Terminal protocol close codes (spec: terminal-protocol.md). */

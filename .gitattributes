@@ -1,0 +1,10 @@
+# TanStack Start's prerenderer emits a NUL inside the router payload of
+# web/dist/client/_shell.html ({i:"__root__\0"}), and git classifies any file
+# with a NUL in its first 8000 bytes as binary. The byte is the framework's,
+# not ours, and stripping it would edit generated router state — but leaving
+# git to call the file binary is the BUG-007 harm: a reviewer sees "Binary
+# files differ" and signs off on a file they cannot read.
+#
+# `diff` forces a textual diff for review. It does NOT change the bytes, so
+# the payload the browser gets is untouched.
+web/dist/client/_shell.html diff

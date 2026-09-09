@@ -71,21 +71,28 @@ describe("request() when the ingress session has expired", () => {
   });
 
   it("bounds the reload loop when one endpoint redirects while another stays healthy", async () => {
-    // A same-origin 3xx that is NOT an expiry (the mux's path-cleaning 301
-    // from a crafted route id) next to a poll that succeeds: the counter must
-    // count reloads, not be reset by the healthy response on every load
-    // (security review 2026-09-03).
-    vi.stubGlobal("fetch", browser((p) => p.includes("//")));
+    // One endpoint answering a same-origin 3xx next to a poll that succeeds:
+    // the counter must count reloads, not be reset by the healthy response on
+    // every load (security review 2026-09-03).
+    //
+    // This case used to craft the 3xx itself, passing the id `x//y` so the
+    // mux's path-cleaning 301 fired. `u` encodes that to `x%2F%2Fy`, which is
+    // exactly what the encoding is for — a client can no longer aim a request
+    // at a path it did not name. The subject here was never the crafted id
+    // though, it was the counter, so the redirecting endpoint is now simply
+    // named: /api/projects/<id> redirects, /api/projects does not.
+    // See api.encoding.test.ts for the encoding itself.
+    vi.stubGlobal("fetch", browser((p) => p.includes("/api/projects/")));
     for (const n of [1, 2]) {
       const { api } = await load();
       await api.listProjects();
-      await expect(api.getProject("x//y")).rejects.toThrow(/session expired/i);
+      await expect(api.getProject("x")).rejects.toThrow(/session expired/i);
       vi.advanceTimersByTime(1200);
       expect(reload).toHaveBeenCalledTimes(n);
     }
     const { api, texts } = await load();
     await api.listProjects();
-    await expect(api.getProject("x//y")).rejects.toThrow(/session expired/i);
+    await expect(api.getProject("x")).rejects.toThrow(/session expired/i);
     expect(texts()).toContain(KEEPS_FAILING);
     vi.advanceTimersByTime(20_000); // past the reload delay AND the deferred clear
     expect(reload).toHaveBeenCalledTimes(2);

@@ -24,7 +24,15 @@ cleanup() {
     # these UUIDs are ours alone).
     for c in $(docker ps -aq --filter "label=styrman.managed=true" \
                2>/dev/null); do
-        env=$(docker inspect "$c" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null)
+        # `|| continue`, and not for tidiness: set -e is in force inside an
+        # EXIT trap too, so a failing command substitution in an ASSIGNMENT
+        # aborts the trap where it stands. A container listed a moment ago by
+        # `docker ps -aq` and already gone by now (this run's own project, the
+        # server deletes it asynchronously) made `docker inspect` fail, which
+        # killed cleanup BEFORE the rm below — leaving /tmp/styrman-e2e-* dirs
+        # behind AND handing the shell an exit status of 1 after a run that
+        # reported failed=0. Both halves of that TODO item are this line.
+        env=$(docker inspect "$c" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null) || continue
         echo "$env" | grep -q "STYRMAN_STATE_DIR=${STATE}" && docker rm -f "$c" >/dev/null 2>&1 || true
     done
     sudo rm -rf "${STATE}" 2>/dev/null || rm -rf "${STATE}" || true
@@ -50,12 +58,7 @@ echo "== building server =="
 ( cd "${REPO}" && go build -o "${STATE}/styrman" ./cmd/styrman/ )
 
 echo "== starting host server (state=${STATE}, port=${PORT}) =="
-# STYRMAN_FIREWALL_DIR at a scratch dir (ADR-065): a host-process test
-# server must never read the production reconciler's status or kick its
-# spool; with no status file every project reports "unavailable", which is
-# the branch the e2e checks exercise.
 STYRMAN_STATE_DIR="${STATE}" STYRMAN_IMAGE="${IMAGE}" STYRMAN_ADDR="127.0.0.1:${PORT}" \
-    STYRMAN_FIREWALL_DIR="${STATE}/fw" \
     "${STATE}/styrman" > "${STATE}/server.log" 2>&1 &
 PID=$!
 for i in $(seq 1 30); do
@@ -65,9 +68,12 @@ done
 curl -fsS "${API}/api/health" >/dev/null 2>&1 || { echo "server failed to start"; cat "${STATE}/server.log"; exit 1; }
 
 echo "== running Playwright checks =="
-# STYRMAN_E2E_FW_DIR lets the browser checks plant a FAKE root status file in
-# the scratch firewall dir, so the ADR-066 UI (host included / not included,
-# the withheld SSH key) can be exercised without a real reconciler and without
-# touching production's. Nothing root-owned is involved: the server only READS
-# this file, and the marker it writes lands in the scratch state dir.
-STYRMAN_E2E_FW_DIR="${STATE}/fw" node "${REPO}/web/e2e/run.mjs" --base "${API}"
+# No firewall fixture since ADR-067: the network mode is the bridge interface
+# name the server picks, so the browser checks exercise the real thing against
+# the real server — there is no root half to fake.
+# Take the suite's own status and exit with it deliberately. Letting the
+# script fall off the end here makes the EXIT trap's last command decide the
+# exit code, which is how a green run came to report failure (see cleanup).
+status=0
+node "${REPO}/web/e2e/run.mjs" --base "${API}" || status=$?
+exit "${status}"

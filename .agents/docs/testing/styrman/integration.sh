@@ -22,14 +22,9 @@ ID=""                 # project UUID, captured after create
 CN=""                 # container name styrman-<uuid>
 STATE="$(mktemp -d /tmp/styrman-itest-XXXX)"
 REPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
-# The script version the server will ACCEPT, read from the Go constant rather
-# than written as a literal. Three stale `version=3` literals survived the
-# ADR-066 bump to 4 here, and because Availability() then rejected this
-# script's own crafted status as "outdated" they failed 8 checks and aborted
-# the run on an unguarded curl, losing 5 more checks entirely. A fixture that
-# encodes a constant must READ the constant.
-MINVER="$(sed -n 's/^const MinScriptVersion = \([0-9][0-9]*\).*/\1/p' "${REPO}/internal/netpolicy/netpolicy.go")"
-[ -n "${MINVER}" ] || { echo "FATAL: cannot read netpolicy.MinScriptVersion from internal/netpolicy/netpolicy.go" >&2; exit 1; }
+# ADR-067's network-mode checks read JSON fields; fail loudly up front rather
+# than letting every one of them compare against an empty string.
+command -v jq >/dev/null 2>&1 || { echo "FATAL: jq is required (network-mode checks)" >&2; exit 1; }
 API="http://127.0.0.1:${PORT}"
 PASS=0; FAIL=0
 ABORTED=1   # cleared by the last line; a set -e abort must never report green
@@ -44,13 +39,6 @@ SKIP=0
 cleanup() {
     say "cleanup"
     kill "${SERVER_PID:-}" 2>/dev/null || true
-    # The opt-in live LAN block writes ONE marker named by this run's project
-    # into production's marker dir; remove it by exact name (ADR-052) — root's
-    # next reconcile then drops the rule.
-    if [ -n "${ID}" ] && [ "${STYRMAN_IT_LIVE_LAN:-0}" = 1 ]; then
-        rm -f "/var/lib/styrman/netpolicy/lan/${ID}" 2>/dev/null || true
-        : > "/run/styrman-firewall/spool/itest.cleanup.$$" 2>/dev/null || true
-    fi
     [ -n "${CN}" ] && docker rm -f "${CN}" 2>/dev/null || true
     [ -n "${PUBCN:-}" ] && docker rm -f "${PUBCN}" 2>/dev/null || true
     [ -n "${ID}" ] && docker network rm "sdb-${ID}" 2>/dev/null || true
@@ -71,11 +59,7 @@ go build -o "${STATE}/wsprobe" ./cmd/wsprobe/
 
 say "start server (state=${STATE}, port=${PORT})"
 mkdir -p "${STATE}/home/projects"   # legacy layout: exercises the migration
-# STYRMAN_FIREWALL_DIR at a scratch dir (ADR-065): the LAN checks below are
-# deterministic on any host and never touch the production reconciler unless
-# STYRMAN_IT_LIVE_LAN=1 opts into the live block.
 STYRMAN_STATE_DIR="${STATE}" STYRMAN_IMAGE="${IMAGE}" STYRMAN_ADDR="127.0.0.1:${PORT}" \
-    STYRMAN_FIREWALL_DIR="${STATE}/fw" \
     "${STATE}/styrman" > "${STATE}/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 20); do
@@ -247,118 +231,65 @@ check "revoke deletes the link" \
 check "revoked link no longer serves" \
     "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/link/${LINK_TOK}/i.html) = 404 ]"
 
-# Per-project local-network access (ADR-065). The self-hosted server points
-# STYRMAN_FIREWALL_DIR at a scratch dir, so these checks are deterministic on
-# any host: the server half (refusal without root's status, marker + spool on
-# an accepted enable, state derived from root's word) is proven here; the root
-# reconciler itself is exercised by deploy/firewall/test.sh under go test, and
-# end to end by the opt-in live block at the end of this section.
-say "local network (ADR-065)"
-FW="${STATE}/fw"
-MARKER="${STATE}/netpolicy/lan/${ID}"
-NETAPI="${API}/api/projects/${ID}/network"
-# R12's first scripted negative check: a project must not reach the host's
-# LAN. Gated on the isolation chain being readable (a hardened host with
-# passwordless sudo) and the host itself reaching its gateway — otherwise
-# there is no signal to invert.
-GW="$(ip -4 route show default 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "via") { print $(i + 1); exit }}')"
-if sudo -n iptables -S STYRMAN-FWD >/dev/null 2>&1 && [ -n "${GW}" ] && ping -c1 -W2 "${GW}" >/dev/null 2>&1; then
-    check "R12: in-guest ping to the LAN gateway ${GW} is dropped" \
-        "! docker exec ${CN} ping -c1 -W2 ${GW} >/dev/null 2>&1"
-else
-    skip "R12 negative check (STYRMAN-FWD not readable via sudo -n, or the host cannot ping its gateway)"
-fi
-check "enable refused without the root reconciler (503, fail closed)" \
-    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X PUT ${NETAPI} -d '{\"lanAccess\":true}') = 503 ]"
-check "no marker written by the refused enable" "[ ! -e '${MARKER}' ]"
-check "disable is always accepted (200)" \
-    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X PUT ${NETAPI} -d '{\"lanAccess\":false}') = 200 ]"
-check "lanAccess key required (400)" \
-    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X PUT ${NETAPI} -d '{}') = 400 ]"
-# Craft root's status so the server accepts an enable, then verify what the
-# server projects for root: the marker named by the uuid and a spool trigger.
-mkdir -p "${FW}/spool"
-printf 'schema=1\nversion=%s\napplied_at=%s\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\nlan=\nspool=0\nrun_ms=1\n' "${MINVER}" "$(date +%s)" > "${FW}/status"
-sleep 2.1   # the server caches the status file for 2 s
-OUT=$(curl -s -X PUT "${NETAPI}" -d '{"lanAccess":true}')
-check "enable accepted with a fresh status → pending, never on" "echo '${OUT}' | grep -q '\"lanState\":\"pending\"'"
-check "marker projected for root (empty file named by the uuid)" "[ -f '${MARKER}' ] && [ ! -s '${MARKER}' ]"
-check "spool trigger dropped" "[ \$(ls -A '${FW}/spool' | wc -l) -ge 1 ]"
-check "project list carries lanState" "curl -fsS ${API}/api/projects | grep -q '\"lanState\":\"pending\"'"
-printf 'schema=1\nversion=%s\napplied_at=%s\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\nlan=%s\nspool=0\nrun_ms=1\n' "${MINVER}" "$(date +%s)" "${ID}" > "${FW}/status"
-sleep 2.1
-check "root reporting it applied → on" "curl -fsS ${NETAPI} | grep -q '\"lanState\":\"on\"'"
-curl -fsS -X PUT "${NETAPI}" -d '{"lanAccess":false}' -o /dev/null
-check "disable removes the marker" "[ ! -e '${MARKER}' ]"
-# Opt-in: prove reachability through the PRODUCTION reconciler. Writes one
-# marker named by this run's own project uuid into the production marker dir
-# (owned by this uid) plus a spool trigger, and removes both by exact name.
-if [ "${STYRMAN_IT_LIVE_LAN:-0}" = 1 ]; then
-    LIVE_FW=/run/styrman-firewall
-    LIVE_MARK="/var/lib/styrman/netpolicy/lan/${ID}"
-    LIVE_VER="$(sed -n 's/^version=//p' "${LIVE_FW}/status" 2>/dev/null || true)"
-    # ADR-066: what the host conf actually opted into. The assertions below
-    # follow root's own report rather than assuming a deployment's choice —
-    # a host that has not opted in must still prove the host stays closed.
-    LIVE_ALLOW_HOST="$(sed -n 's/^lan_allow_host=//p' "${LIVE_FW}/status" 2>/dev/null || true)"
-    LIVE_ALLOW_PUB="$(sed -n 's/^lan_allow_published_ports=//p' "${LIVE_FW}/status" 2>/dev/null || true)"
-    HOSTIP="$(ip -4 -o addr show "$(ip -4 route show default | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit }}')" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)"
-    if [ -z "${LIVE_VER}" ] || [ "${LIVE_VER}" -lt 3 ] || [ ! -d "$(dirname "${LIVE_MARK}")" ] || [ -z "${GW}" ] || [ -z "${HOSTIP}" ] \
-        || ! ping -c1 -W2 "${GW}" >/dev/null 2>&1 || ! sudo -n iptables -S STYRMAN-FWD >/dev/null 2>&1; then
-        bad "live LAN block requested but the production reconciler (version>=3, marker dir, sudo -n iptables) or the gateway is unavailable"
-    else
-        IFACE="sdb-$(printf 'sdb-%s' "${ID}" | sha1sum | cut -c1-11)"
-        : > "${LIVE_MARK}"
-        : > "${LIVE_FW}/spool/itest.$$"
-        for _ in $(seq 1 25); do sudo -n iptables -S STYRMAN-FWD | grep -q -- "styrman-lan:${ID}" && break; sleep 0.2; done
-        check "live: allow rule at the head of STYRMAN-FWD within 5 s" \
-            "sudo -n iptables -S STYRMAN-FWD | sed -n 2p | grep -q -- '-s .* -i ${IFACE} -o .*styrman-lan:${ID}'"
-        check "live: in-guest ping to the gateway ${GW} now succeeds" "docker exec ${CN} ping -c1 -W2 ${GW} >/dev/null 2>&1"
-        if [ "${LIVE_ALLOW_HOST:-0}" = 1 ]; then
-            check "live: host allowance at the head of STYRMAN-IN (ADR-066)" \
-                "sudo -n iptables -S STYRMAN-IN | sed -n 1p | grep -q -- 'styrman-lanhost:${ID}'"
-            check "live: the host (${HOSTIP}) IS reachable with LAN_ALLOW_HOST=1" \
-                "docker exec ${CN} ping -c1 -W2 ${HOSTIP} >/dev/null 2>&1"
-        else
-            check "live: the host itself (${HOSTIP}) stays unreachable (conf has not opted in)" \
-                "! docker exec ${CN} ping -c1 -W2 ${HOSTIP} >/dev/null 2>&1"
-            check "live: and no host allowance exists for it" \
-                "! sudo -n iptables -S STYRMAN-IN | grep -q -- 'styrman-lanhost:${ID}'"
-        fi
+# Per-project network mode (ADR-067). The mode IS the bridge interface name
+# the server picks at `docker network create`, so everything below is checked
+# against Docker itself rather than against a root status file: there is no
+# root half to stub, and no scratch firewall dir to point anywhere.
+say "network mode (ADR-067)"
+NET="sdb-${ID}"
+bridge_of() { docker network inspect "$1" --format '{{index .Options "com.docker.network.bridge.name"}}' 2>/dev/null; }
 
-        # Published ports, proven against a REAL published container rather
-        # than reasoned about — the gap the v1.23.0 handoff recorded as
-        # "the published-port DNAT shape is reasoned, not observed".
-        if [ "${LIVE_ALLOW_PUB:-0}" = 1 ]; then
-            PUBPORT=18099
-            PUBCN="styrman-it-pub-$$"
-            if docker run -d --rm --name "${PUBCN}" -p "${PUBPORT}:8000" \
-                --entrypoint python3 "${IMAGE}" -m http.server 8000 >/dev/null 2>&1; then
-                for _ in $(seq 1 25); do curl -fsS -m2 "http://${HOSTIP}:${PUBPORT}/" >/dev/null 2>&1 && break; sleep 0.2; done
-                : > "${LIVE_FW}/spool/itest.$$.pub"
-                for _ in $(seq 1 25); do sudo -n iptables -S STYRMAN-FWD | grep -q -- "styrman-lanpub:${ID}" && break; sleep 0.2; done
-                check "live: published-port allowance exists for the project" \
-                    "sudo -n iptables -S STYRMAN-FWD | grep -q -- 'styrman-lanpub:${ID}'"
-                check "live: it never names the ingress bridge's subnet" \
-                    "! sudo -n iptables -S STYRMAN-FWD | grep 'styrman-lanpub:${ID}' | grep -q -- '-d 172.18.'"
-                check "live: the guest reaches the published port on ${HOSTIP}:${PUBPORT}" \
-                    "docker exec ${CN} sh -c 'curl -fsS -m3 http://${HOSTIP}:${PUBPORT}/ >/dev/null'"
-                docker rm -f "${PUBCN}" >/dev/null 2>&1 || true; PUBCN=""
-            else
-                skip "live: could not start the published-port container from ${IMAGE}"
-            fi
-        else
-            skip "live: published-port reachability (LAN_ALLOW_PUBLISHED_PORTS not opted in on this host)"
-        fi
-        rm -f "${LIVE_MARK}"
-        : > "${LIVE_FW}/spool/itest.$$.off"
-        for _ in $(seq 1 25); do sudo -n iptables -S STYRMAN-FWD | grep -q -- "styrman-lan:${ID}" || break; sleep 0.2; done
-        check "live: rule gone within 5 s of the marker" "! sudo -n iptables -S STYRMAN-FWD | grep -q -- 'styrman-lan:${ID}'"
-        check "live: in-guest ping to the gateway dropped again" "! docker exec ${CN} ping -c1 -W2 ${GW} >/dev/null 2>&1"
-    fi
+check "a new project defaults to sandbox" \
+    "[ \$(curl -s ${API}/api/projects/${ID}/network | jq -r .lanAccess) = false ]"
+check "its bridge carries the sdb- prefix (matched by the firewall drops)" \
+    "bridge_of ${NET} | grep -q '^sdb-'"
+check "the running container is on that bridge" \
+    "[ -e /sys/class/net/\$(bridge_of ${NET}) ]"
+check "admin may enable" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' -d '{\"lanAccess\":true}' ${API}/api/projects/${ID}/network) = 200 ]"
+check "the record now says LAN" \
+    "[ \$(curl -s ${API}/api/projects/${ID}/network | jq -r .lanAccess) = true ]"
+# The PUT rebuilds the project synchronously, so by the time it returns the
+# bridge must already have the other prefix. This is the whole feature.
+check "the bridge was rebuilt with the lan- prefix" \
+    "bridge_of ${NET} | grep -q '^lan-'"
+# config.BridgeNameFor hashes the NETWORK NAME alone and prepends the prefix
+# afterwards; the first draft of this check hashed "sdb-${NET}" and so compared
+# against a name the server never computes.
+check "the suffix is unchanged (same project, same identity in ip link)" \
+    "[ \"\$(bridge_of ${NET} | cut -c5-)\" = \"\$(printf '%s' ${NET} | sha1sum | cut -c1-11)\" ]"
+# DOCKER's OWN rules name every bridge in full — DOCKER, DOCKER-BRIDGE,
+# DOCKER-CT, DOCKER-FORWARD — and one of them
+# (`-A DOCKER ! -i <br> -o <br> -j DROP`) IS the cross-project isolation this
+# design leans on. So "no rule names it" is false by construction and the
+# first draft of this check asserted it anyway. The real claim is narrower and
+# is the whole feature: no rule that jumps into a STYRMAN-* chain matches a
+# lan- interface. Styrman's jumps key on the `sdb-+` wildcard; a lan- bridge is
+# outside it.
+if sudo -n iptables -S >/dev/null 2>&1; then
+    check "no styrman jump matches the lan- bridge" \
+        "! sudo -n iptables -S | grep STYRMAN | grep -q -- '-i lan-'"
+    check "docker still isolates the lan- bridge from other bridges" \
+        "sudo -n iptables -S DOCKER | grep -q -- \"! -i \$(bridge_of ${NET}) -o \$(bridge_of ${NET}) -j DROP\""
 else
-    skip "live LAN reachability through the production reconciler (set STYRMAN_IT_LIVE_LAN=1)"
+    skip "styrman-jump and docker-isolation rule checks (iptables not readable via sudo -n)"
+    skip "docker isolation rule check"
 fi
+check "the project still runs after the rebuild" \
+    "[ \$(curl -s ${API}/api/projects/${ID} | jq -r .state) = running ]"
+check "its home survived the rebuild" \
+    "docker exec ${CN} test -d /home/\$(curl -s ${API}/api/settings | jq -r .terminalUsername)/projects"
+
+check "disable returns 200" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' -d '{\"lanAccess\":false}' ${API}/api/projects/${ID}/network) = 200 ]"
+check "the bridge is back to sdb-" "bridge_of ${NET} | grep -q '^sdb-'"
+check "a no-op PUT reports rebuilt=false" \
+    "[ \$(curl -s -X PUT -H 'content-type: application/json' -d '{\"lanAccess\":false}' ${API}/api/projects/${ID}/network | jq -r .rebuilt) = false ]"
+check "malformed body is 400" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' -d '{}' ${API}/api/projects/${ID}/network) = 400 ]"
+check "unknown project is 404" \
+    "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/api/projects/00000000-0000-4000-8000-000000000000/network) = 404 ]"
+
 
 # Git side panel is a real in-guest client now (the host-side /diff route and the
 # checkpoint machinery were removed as a guest→server RCE vector — ADR-039).
@@ -423,16 +354,15 @@ OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/${TID}?cols=
     -send "echo revived\r" -wait 8s || true)
 check "boot=1 reconnect boots the stopped VM" "echo '${OUT}' | grep -q revived"
 check "VM running again after boot=1" "docker ps --format '{{.Names}}' | grep -q ${CN}"
-# Re-enable LAN access right before the delete so the destroy path's marker
-# removal (ADR-065: after the wipe block, before the record) is observable.
-printf 'schema=1\nversion=%s\napplied_at=%s\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\nlan=\nspool=0\nrun_ms=1\n' "${MINVER}" "$(date +%s)" > "${STATE}/fw/status"
-sleep 2.1
+# Re-enable LAN mode right before the delete so the destroy path is
+# exercised on a LAN project, not only a sandboxed one.
 # Checked, not bare: under `set -euo pipefail` a 503 here aborted the whole
 # suite and five later checks were never run at all — worse than one FAIL,
 # because a lost check looks like a check that passed.
 check "re-enable accepted before the delete" \
     "curl -fsS -X PUT '${API}/api/projects/${ID}/network' -d '{\"lanAccess\":true}' -o /dev/null"
-check "marker present before the delete" "[ -f '${STATE}/netpolicy/lan/${ID}' ]"
+check "the record says LAN before the delete" \
+    "[ \$(curl -s ${API}/api/projects/${ID}/network | jq -r .lanAccess) = true ]"
 curl -fsS -X DELETE "${API}/api/projects/${ID}?wipe=true" -o /dev/null
 # Delete is ASYNC since v1.3 (202 + background: destroy container, THEN wipe,
 # THEN remove the record). Wait for the LAST step — the record leaving the
@@ -441,7 +371,9 @@ for _ in $(seq 1 60); do
     curl -fsS "${API}/api/projects" | grep -q "${ID}" || break
     sleep 2
 done
-check "delete removed the LAN marker with the record" "[ ! -e '${STATE}/netpolicy/lan/${ID}' ]"
+# ADR-067 leaves nothing beside the record to leak: no marker, no rule, and
+# the bridge goes with the network Destroy removes.
+check "delete left no netpolicy tree behind" "[ ! -e '${STATE}/netpolicy' ]"
 check "container gone (async delete)" "! docker ps -a --format '{{.Names}}' | grep -q ${CN}"
 check "workspace wiped" "[ ! -d '${STATE}/projects/${ME}/${ID}' ]"
 check "project gone from API" "! curl -fsS ${API}/api/projects | grep -q ${ID}"

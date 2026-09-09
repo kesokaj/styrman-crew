@@ -72,10 +72,24 @@ func (o *Orchestrator) ListeningPorts(ctx context.Context, user, project string)
 	code, out, err := o.Exec(ctx, st.ContainerID, ExecSpec{
 		Cmd: []string{"sh", "-c", portScanScript},
 	})
-	if err != nil {
-		return nil, err
-	}
-	if code != 0 {
+	// Status and Exec are two calls, and the container can go away between
+	// them. That used to be a rare race (a stop landing on a poll); an ADR-067
+	// mode toggle makes it routine, because the toggle REPLACES the container
+	// while the UI is polling this endpoint. A vanished container shows up
+	// EITHER way — as a transport error, or as a non-zero exit code from the
+	// exec itself (128, observed) — so both are re-asked the same question. If
+	// the project is no longer the running container we scanned, there are no
+	// ports to report, and that is an answer rather than an internal error:
+	// the same shape the git endpoints use for a guest that is not there.
+	// A failure against the container we are STILL looking at is a real one.
+	if err != nil || code != 0 {
+		if now, err2 := o.Status(ctx, user, project); err2 == nil &&
+			(now.State != "running" || now.ContainerID != st.ContainerID) {
+			return []Port{}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("port scan exited %d", code)
 	}
 

@@ -6,8 +6,6 @@
 //
 // Usage: node web/e2e/run.mjs [--base http://127.0.0.1:8080] [--shots /tmp/shots]
 import { chromium } from "playwright";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 
 const arg = (name, def) => {
   const i = process.argv.indexOf(name);
@@ -706,124 +704,40 @@ try {
     await panel().getByText("Ports", { exact: true }).click();
     await page.waitForSelector("aside >> text=:4321", { timeout: 25000 });
   });
-  // ── Local network (ADR-065): the host half is deliberately absent here
-  // (run.sh points STYRMAN_FIREWALL_DIR at a scratch dir), so the block must
-  // say so, the switch must be disabled, and an enable must be refused —
-  // nothing opens. The applied-state UI is verified by hand on the converged
-  // production host (plan Phase 3).
-  await check("local network block reports the host half as unavailable", async () => {
-    await panel().getByText("Local network", { exact: true }).waitFor({ timeout: 10000 });
-    await panel().getByText(/Not available on this server/).waitFor({ timeout: 10000 });
+  // ── Network mode (ADR-067). Two states, no host half: the mode is the
+  // bridge interface name the server picks, so there is nothing to stub and
+  // nothing that can be "unavailable". The switch is admin-only to turn ON;
+  // this e2e user is an admin.
+  await check("network block shows the sandbox default", async () => {
+    await panel().getByText("Network", { exact: true }).waitFor({ timeout: 10000 });
+    await panel().getByText("Sandboxed.", { exact: false }).waitFor({ timeout: 5000 });
     const sw = panel().getByRole("switch", { name: "Local network access" });
-    if (!(await sw.isDisabled())) throw new Error("switch must be disabled without the host reconciler");
-    if ((await sw.getAttribute("aria-checked")) !== "false") throw new Error("switch must read off");
+    if (await sw.isChecked()) throw new Error("a new project must default to sandbox");
+    if (await sw.isDisabled()) throw new Error("an admin must be able to enable it");
   });
-  await check("enable is refused with 503 while the host half is missing", async () => {
-    const res = await page.request.put(`${BASE}/api/projects/${PID}/network`, {
-      data: { lanAccess: true },
-    });
-    if (res.status() !== 503) throw new Error(`got ${res.status()}`);
-    const list = await (await page.request.get(`${BASE}/api/projects`)).json();
-    const me = list.projects.find((p) => p.id === PID);
-    if (me?.lanAccess) throw new Error("a refused enable must not persist");
+
+  await check("the API reports sandbox and says the caller may enable", async () => {
+    const res = await page.request.get(`${BASE}/api/projects/${PID}/network`);
+    const net = await res.json();
+    if (net.lanAccess !== false) throw new Error(`want lanAccess:false, got ${JSON.stringify(net)}`);
+    if (net.canEnable !== true) throw new Error(`an admin must get canEnable:true, got ${JSON.stringify(net)}`);
   });
-  // ── ADR-066: with a plausible root status planted, the switch becomes
-  // usable and the confirmation must state BOTH consequences — whether the
-  // host itself is inside the allowance, and that the SSH key is withheld.
-  // The status file is a fake in the scratch dir; no reconciler exists, so a
-  // successful enable settles at "pending", which is the honest outcome.
-  const FW = process.env.STYRMAN_E2E_FW_DIR;
-  if (FW) {
-    const plantStatus = (allowHost) => {
-      mkdirSync(FW, { recursive: true });
-      writeFileSync(
-        join(FW, "status"),
-        [
-          "schema=1",
-          "version=4",
-          `applied_at=${Math.floor(Date.now() / 1000)}`,
-          "lan_dev=e2e0",
-          "lan_cidrs=192.0.2.0/24",
-          `lan_allow_host=${allowHost ? 1 : 0}`,
-          "lan_allow_published_ports=0",
-          allowHost ? "lan_host_addrs=192.0.2.1/32" : "lan_host_addrs=",
-          "spool=0",
-          "run_ms=1",
-          "",
-        ].join("\n"),
-      );
-    };
-    const lanSwitch = () => panel().getByRole("switch", { name: "Local network access" });
 
-    await check("host conf NOT including the host: the dialog says so", async () => {
-      plantStatus(false);
-      // 2 s status cache + 5 s UI poll; poll rather than race it.
-      for (let i = 0; i < 40; i++) {
-        if (!(await lanSwitch().isDisabled())) break;
-        await page.waitForTimeout(500);
-      }
-      if (await lanSwitch().isDisabled()) throw new Error("switch still disabled with a usable status file");
-      await lanSwitch().click();
-      await page.getByText(/This server itself stays blocked/).waitFor({ timeout: 10000 });
-      await page.getByText(/stops being given your SSH key/).waitFor({ timeout: 5000 });
-      // The permanence is the point of the ADR-066 amendment; assert it is
-      // stated, not merely that some credential sentence exists.
-      await page.getByText(/not serve it again even if you turn local network access back off/).waitFor({ timeout: 5000 });
-      await page.getByRole("button", { name: /cancel/i }).click();
-    });
+  // The badge must NOT appear while sandboxed. This is the assertion tsc
+  // cannot make: LanBadge renders from an optional field, so a regression
+  // would show "LAN" on every project — a false claim about isolation.
+  await check("no LAN badge on a sandboxed project", async () => {
+    if (await page.locator('[data-lan="on"]').count() !== 0) {
+      throw new Error("a sandboxed project must carry no LAN badge");
+    }
+  });
 
-    await check("host conf including the host: the dialog names it as danger", async () => {
-      plantStatus(true);
-      await page.waitForTimeout(8000);
-      await lanSwitch().click();
-      await page.getByText(/This server itself \(192\.0\.2\.1\/32\) is inside that allowance/).waitFor({ timeout: 10000 });
-      await page.getByText(/attempt to log in to the machine it runs on/).waitFor({ timeout: 5000 });
-    });
+  // The two checks that TOGGLE the mode live at the end of the run, not here:
+  // a toggle rebuilds the project container (ADR-067, the operator's "restart
+  // is fine"), which destroys everything a later check needs inside the guest
+  // — the :4321 fixture app started just above, the tmux sessions, the git
+  // working state. Search "Network mode: the toggle" below.
 
-    await check("confirming enables, and the withheld-key note appears", async () => {
-      await page.getByRole("button", { name: "Allow LAN access" }).click();
-      await panel().getByText(/SSH key is withheld from this project/).waitFor({ timeout: 15000 });
-      const list = await (await page.request.get(`${BASE}/api/projects`)).json();
-      const me = list.projects.find((p) => p.id === PID);
-      if (!me?.lanAccess) throw new Error("the enable did not persist");
-    });
-
-    // No reconciler exists here, so the enable settles at "pending" — and a
-    // pending record must NOT be flippable from the UI, which is the whole
-    // point of deriving state from root's word rather than the request's.
-    // (An earlier draft of this check tried to click it off and timed out;
-    // the component was right and the check was wrong.)
-    await check("a pending record cannot be flipped from the switch", async () => {
-      if (!(await lanSwitch().isDisabled())) {
-        throw new Error("the switch must be disabled while root has not applied the change");
-      }
-    });
-
-    // Disabling is always accepted — tightening is never refused, pending or
-    // not — so it goes through the API, which is the path a real owner's
-    // click takes once root has settled.
-    // The withholding LATCHES (ADR-066 amendment): turning LAN access off
-    // does not hand the key back, because it cannot un-expose a key the
-    // project already held. The note must therefore CHANGE, not disappear.
-    await check("disable is accepted while pending, and the key stays withheld", async () => {
-      const res = await page.request.put(`${BASE}/api/projects/${PID}/network`, {
-        data: { lanAccess: false },
-      });
-      if (!res.ok()) throw new Error(`disable returned ${res.status()}`);
-      await panel().getByText(/SSH key stays withheld/).waitFor({ timeout: 15000 });
-      const net = await (await page.request.get(`${BASE}/api/projects/${PID}/network`)).json();
-      if (net.lanAccess) throw new Error("still on after disable");
-      if (net.credentialImpact !== "ssh-key-withheld") {
-        throw new Error(`the latch must survive disable, got ${net.credentialImpact}`);
-      }
-    });
-
-    // Put the world back: later checks (the settings page's host-firewall
-    // card) assert the NOT-installed branch, and a planted status file would
-    // make them fail for a reason that has nothing to do with them.
-    rmSync(join(FW, "status"), { force: true });
-    await page.waitForTimeout(8000);
-  }
   // The preview proxy needs the TEST server (a host process) to reach the
   // guest bridge IP; the hardened host firewall DROPs that (production's
   // containerized server is exempt). Probe once and SKIP the proxy-path
@@ -1126,11 +1040,6 @@ try {
   await check("settings shows runtime info", () =>
     page.waitForSelector("text=Kata microVM"),
   );
-  await check("settings shows the host firewall as not installed (admin view)", () =>
-    page.waitForSelector("text=Host firewall").then(() =>
-      page.waitForSelector("text=not installed"),
-    ),
-  );
 
   // ── Appearance: fonts (v1.22.0) ─────────────────────────────────────────
   // NOTE ON SCOPE: /settings is a different route, so opening it UNMOUNTS the
@@ -1259,6 +1168,52 @@ try {
   });
   await shot("09-light-theme");
   await page.click('aside button[aria-label="Dark theme"]');
+
+  // ── Network mode: the toggle (ADR-067) ─────────────────────────────────
+  // LAST, deliberately. A mode change rebuilds the project container, so every
+  // check that depends on guest state — the ports fixture, terminals, the git
+  // client, history — has to have run already. The first draft of this section
+  // sat next to the read-only checks up in the Ports block and took 17 checks
+  // down with it: the rebuild killed the :4321 server, the firewall probe then
+  // read connection-refused as "NOT the firewall", and the git panel lost the
+  // session it was driving.
+  await page.goto(`${BASE}/p/${PID}/1`);
+  // The Network block lives INSIDE the Ports tab, so the tab has to be opened
+  // before anything in it can be waited for — up in the Ports block that had
+  // already happened, and moving the checks down here lost it.
+  await panel().getByText("Ports", { exact: true }).click();
+  await panel().getByText("Network", { exact: true }).waitFor({ timeout: 20000 });
+
+  await check("enabling rebuilds the project and flags it", async () => {
+    // 150 s, matching what the SPA gives start/stop: this PUT boots a microVM,
+    // and Playwright's 30 s default cut it off mid-rebuild.
+    const res = await page.request.put(`${BASE}/api/projects/${PID}/network`, {
+      data: { lanAccess: true },
+      headers: { "content-type": "application/json" },
+      timeout: 150000,
+    });
+    if (!res.ok()) throw new Error(`enable failed: ${res.status()} ${await res.text()}`);
+    const net = await res.json();
+    if (!net.lanAccess) throw new Error("the enable did not persist");
+    // The project was running, so the PUT rebuilt it synchronously.
+    if (!net.rebuilt) throw new Error("a running project must be rebuilt by the PUT");
+    await page.reload();
+    await page.locator('[data-lan="on"]').first().waitFor({ timeout: 20000 });
+  });
+
+  await check("disabling returns it to sandbox", async () => {
+    const res = await page.request.put(`${BASE}/api/projects/${PID}/network`, {
+      data: { lanAccess: false },
+      headers: { "content-type": "application/json" },
+      timeout: 150000,
+    });
+    if (!res.ok()) throw new Error(`disable failed: ${res.status()}`);
+    const net = await res.json();
+    if (net.lanAccess) throw new Error("still on after disable");
+    await page.reload();
+    await panel().getByText("Ports", { exact: true }).click();
+    await panel().getByText("Sandboxed.", { exact: false }).waitFor({ timeout: 20000 });
+  });
 
   // ── Cleanup: delete terminal + project via UI ───────────────────────────
   await page.goto(`${BASE}/p/${PID}/2`);
@@ -1438,7 +1393,10 @@ try {
   if (pageErrors.length) {
     failed++;
     console.log(`FAIL no uncaught client errors — saw ${pageErrors.length}:`);
-    for (const e of pageErrors.slice(0, 5)) console.log(`  ${e.slice(0, 160)}`);
+    // 160 chars cut the URL mid-UUID, which is the one part of the message
+    // that makes a recurrence diagnosable — the whole reason the URL is
+    // recorded here at all. These entries are one-liners; 400 fits them.
+    for (const e of pageErrors.slice(0, 5)) console.log(`  ${e.slice(0, 400)}`);
   } else {
     passed++;
     console.log("PASS no uncaught client errors");
