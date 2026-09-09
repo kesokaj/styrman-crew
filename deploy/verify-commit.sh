@@ -143,10 +143,10 @@ if [ -z "${SKIP_WEB_FRESHNESS:-}" ] && command -v npm >/dev/null 2>&1; then
     echo "    built CSS references no external origin"
 fi
 
-# Host-side shell + units (ADR-065): the firewall script runs as root from
+# Host-side shell + units (ADR-036/067): the firewall script runs as root from
 # the verified tag via the updater's host_converge, so a syntax error or a
-# unit that systemd rejects must fail here, not on the host. The netns
-# behavioural test of the script runs under go test (internal/netpolicy).
+# unit that systemd rejects must fail here, not on the host. Its behavioural
+# test is deploy/firewall/test.sh, which needs root and runs out of band.
 echo "==> host scripts: bash -n, shellcheck, systemd-analyze verify"
 ( cd "${WT}" && bash -n deploy/host-setup.sh deploy/firewall/styrman-firewall.sh deploy/firewall/install.sh deploy/firewall/test.sh deploy/update/styrman-update )
 if command -v shellcheck >/dev/null 2>&1; then
@@ -159,7 +159,7 @@ if command -v systemd-analyze >/dev/null 2>&1; then
     # Verifying files outside /etc/systemd/system: the referenced service and
     # the not-yet-installed ExecStart path are expected complaints; anything
     # else is a real unit error.
-    unit_err="$(cd "${WT}/deploy/firewall" && systemd-analyze verify ./styrman-firewall.service ./styrman-firewall.timer ./styrman-firewall.path 2>&1 \
+    unit_err="$(cd "${WT}/deploy/firewall" && systemd-analyze verify ./styrman-firewall.service ./styrman-firewall.timer 2>&1 \
         | grep -v -E 'Unit .* not found|is not executable|Failed to prepare filename' || true)"
     if [ -n "${unit_err}" ]; then
         echo "FAIL: systemd-analyze verify rejects a firewall unit:" >&2

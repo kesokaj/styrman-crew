@@ -5,11 +5,11 @@
 #
 #   unshare -Urnm bash deploy/firewall/test.sh
 #
-# internal/netpolicy/script_test.go does exactly that under `go test ./...`
-# (and skips, loudly, where user namespaces are unavailable). The namespace
-# starts with an EMPTY ruleset; /sys is remounted so /sys/class/net shows only
-# this namespace's interfaces; every path the script writes is under a
-# mktemp dir. No sudo, no systemd, no production path.
+# internal/config/firewall_script_test.go does exactly that under
+# `go test ./...` (and skips, loudly, where user namespaces are unavailable).
+# The namespace starts with an EMPTY ruleset; /sys is remounted so
+# /sys/class/net shows only this namespace's interfaces. No sudo, no systemd,
+# no production path.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,409 +27,104 @@ check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 if [ "$(readlink /proc/self/ns/net 2>/dev/null)" = "$(readlink /proc/1/ns/net 2>/dev/null)" ]; then
     echo "REFUSING: this is the host's network namespace — run under: unshare -Urnm bash $0" >&2; exit 2
 fi
-# A user namespace that owns the netns may mount its own sysfs; without this
-# /sys/class/net would still show the HOST's interfaces.
 mount -t sysfs sysfs /sys
 if [ "$(ls /sys/class/net | tr '\n' ' ')" != "lo " ]; then
     echo "expected an empty namespace (/sys/class/net = lo), got: $(ls /sys/class/net | tr '\n' ' ')" >&2; exit 2
 fi
 
-T="$(mktemp -d "${TMPDIR:-/tmp}/styrman-fwtest-XXXXXX")"
-trap 'rm -rf "${T}"' EXIT
-STATE="${T}/state"; RUN="${T}/run"; CONF="${T}/etc/firewall.conf"
-MARK="${STATE}/netpolicy/lan"
-mkdir -p "${MARK}" "${T}/etc"
-
 # The golden vector shared with internal/config/bridgename_test.go and the
-# live host: BridgeNameFor(NetworkName(U)) for this uuid is sdb-e660d58459e.
+# live host: BridgeNameFor(NetworkName(U), false) is sdb-e660d58459e, and with
+# lan=true it is lan-e660d58459e — same suffix, different prefix (ADR-067).
 # printf, never echo: echo's trailing newline changes the hash.
 U=3e6a772c-b177-4cfc-b209-b14db514bac2
-IFACE="sdb-$(printf 'sdb-%s' "${U}" | sha1sum | cut -c1-11)"
-check "golden bridge name" "[ '${IFACE}' = sdb-e660d58459e ]"
+SUFFIX="$(printf 'sdb-%s' "${U}" | sha1sum | cut -c1-11)"
+IFACE="sdb-${SUFFIX}"
+LANIF="lan-${SUFFIX}"
+check "golden sandbox bridge name" "[ '${IFACE}' = sdb-e660d58459e ]"
+check "golden lan bridge name" "[ '${LANIF}' = lan-e660d58459e ]"
 
-# Scratch topology: an uplink on TEST-NET-1, the project bridge with Docker's
-# usual /16, and the DOCKER-USER chain Docker would have created.
+# Scratch topology: an uplink on TEST-NET-1, a SANDBOX project bridge and a
+# LAN project bridge with Docker's usual /16s, and the DOCKER-USER chain
+# Docker would have created.
 ip link add enp0 type dummy; ip addr add 192.0.2.1/24 dev enp0; ip link set enp0 up
 ip link add "${IFACE}" type dummy; ip addr add 172.20.0.1/16 dev "${IFACE}"; ip link set "${IFACE}" up
+ip link add "${LANIF}" type dummy; ip addr add 172.21.0.1/16 dev "${LANIF}"; ip link set "${LANIF}" up
 ip link set lo up
 iptables -N DOCKER-USER
 
-run() { STYRMAN_FW_STATE_DIR="${STATE}" STYRMAN_FW_RUN_DIR="${RUN}" STYRMAN_FW_CONF="${CONF}" bash "${SCRIPT}"; }
+run() { bash "${SCRIPT}"; }
 rules() { iptables -S STYRMAN-FWD | grep '^-A'; }
-allow_count() { rules | grep -c 'styrman-lan:' || true; }
-status() { sed -n "s/^$1=//p" "${RUN}/status"; }
-write_conf() { printf 'LAN_DEV=%s\nLAN_CIDRS=%s\n' "$1" "$2" > "${CONF}"; chmod 0644 "${CONF}"; }
-# ADR-066: the same conf plus an explicit LAN_ALLOW_HOST value.
-write_conf_host() { printf 'LAN_DEV=%s\nLAN_CIDRS=%s\nLAN_ALLOW_HOST=%s\n' "$1" "$2" "$3" > "${CONF}"; chmod 0644 "${CONF}"; }
 in_rules() { iptables -S STYRMAN-IN | grep '^-A'; }
-# Published-port allowances, well-formed ones only (same reason as host_count).
-pub_count() { rules | grep 'styrman-lanpub:' | grep -c -- '-j RETURN' || true; }
-write_conf_pub() {
-    printf 'LAN_DEV=enp0\nLAN_CIDRS=192.0.2.0/24\nLAN_ALLOW_PUBLISHED_PORTS=%s\n%s' "$1" "${2:+INGRESS_BRIDGE=$2$'\n'}" > "${CONF}"
-    chmod 0644 "${CONF}"
-}
-# Only WELL-FORMED host allowances. Section 20 deliberately plants a tagged
-# DROP, which carries the same comment prefix and must not be counted as one.
-host_count() { in_rules | grep 'styrman-lanhost:' | grep -c -- '-j RETURN' || true; }
-# shellcheck disable=SC2034  # referenced inside check() eval strings
-EXPECT_RULE="-A STYRMAN-FWD -s 172.20.0.0/16 -d 192.0.2.0/24 -i ${IFACE} -o enp0 -m comment --comment \"styrman-lan:${U}\" -j RETURN"
+tagged_count() { { rules; in_rules; } | grep -c 'styrman-lan' || true; }
 
-echo "=== 1. env unset: base rules only, no status"
-bash "${SCRIPT}" >/dev/null 2>&1
+echo "=== 1. base rules"
+run >/dev/null 2>&1
 check "physdev RETURN present" "rules | grep -q -- '--physdev-is-bridged -j RETURN'"
 check "six private-range DROPs" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
+check "STYRMAN-IN is a bare DROP" "[ \"\$(in_rules)\" = '-A STYRMAN-IN -j DROP' ]"
 check "INPUT jump to STYRMAN-IN" "iptables -S INPUT | grep -qF -- '-i sdb-+ -j STYRMAN-IN'"
 check "DOCKER-USER jump to STYRMAN-FWD" "iptables -S DOCKER-USER | grep -qF -- '-i sdb-+ -j STYRMAN-FWD'"
-check "no status file without env" "[ ! -e '${RUN}/status' ]"
 
-echo "=== 2. env set, no conf, no markers: idempotent, status written"
-run >/dev/null 2>&1
+echo "=== 2. ADR-067: the jumps match the sandbox prefix and NOT the lan prefix"
+# This is the whole feature expressed as a rule-level assertion. The jumps are
+# wildcard `sdb-+`, so a lan-<hash> interface is reached by nothing here — and
+# a sandbox one must always be.
+check "no rule anywhere names the lan- interface" \
+    "! iptables -S | grep -q -- '${LANIF}'"
+check "the sdb- wildcard covers the sandbox iface" \
+    "[ \"\$(iptables -S INPUT | grep -c -- '-i sdb-+')\" = 1 ]"
+check "no rule names a lan- wildcard" "! iptables -S | grep -q -- 'lan-+'"
+
+echo "=== 3. idempotence and self-heal"
 before="$(rules)"; run >/dev/null 2>&1; after="$(rules)"
 if [ "${before}" = "${after}" ]; then ok "second run changes nothing"; else bad "second run changes nothing"; fi
-check "status schema=1 version=4" "[ \"\$(status schema)\" = 1 ] && [ \"\$(status version)\" = 4 ]"
-check "lan_cidrs empty without conf" "[ -z \"\$(status lan_cidrs)\" ]"
-check "run dir root 0755, spool 0700" "[ \"\$(stat -c %a '${RUN}')\" = 755 ] && [ \"\$(stat -c %a '${RUN}/spool')\" = 700 ]"
-
-echo "=== 3. marker + conf: the exact rule at the head"
-write_conf enp0 192.0.2.0/24
-: > "${MARK}/${U}"
-run >/dev/null 2>&1
-check "line 1 is the allow rule, verbatim" "[ \"\$(rules | sed -n 1p)\" = \"\${EXPECT_RULE}\" ]"
-check "line 2 is the physdev RETURN" "rules | sed -n 2p | grep -q -- '--physdev-is-bridged -j RETURN'"
-check "DROPs follow" "[ \$(rules | sed -n '3,\$p' | grep -c -- '-j DROP') -eq 6 ]"
-check "status lan= lists the uuid" "[ \"\$(status lan)\" = '${U}' ]"
-check "status lan_dev/lan_cidrs" "[ \"\$(status lan_dev)\" = enp0 ] && [ \"\$(status lan_cidrs)\" = 192.0.2.0/24 ]"
-
-echo "=== 4. no-op run: zero changes"
-before="$(rules)"; run >/dev/null 2>&1; after="$(rules)"
-if [ "${before}" = "${after}" ]; then ok "rules identical across a no-op run"; else bad "rules identical across a no-op run"; fi
-check "exactly one allow rule" "[ \$(allow_count) -eq 1 ]"
-
-echo "=== 5. duplicates and malformed tagged rules are purged"
-iptables -I STYRMAN-FWD 1 -i "${IFACE}" -o enp0 -s 172.20.0.0/16 -d 192.0.2.0/24 -m comment --comment "styrman-lan:${U}" -j RETURN
-iptables -I STYRMAN-FWD 1 -i sdb-deadbeef000 -m comment --comment "styrman-lan:not-a-uuid" -j RETURN
-check "setup: three tagged rules" "[ \$(allow_count) -eq 3 ]"
-run >/dev/null 2>&1
-check "one allow rule remains" "[ \$(allow_count) -eq 1 ]"
-check "it is the verbatim rule at the head" "[ \"\$(rules | sed -n 1p)\" = \"\${EXPECT_RULE}\" ]"
-check "warn= recorded for the malformed rule" "grep -q '^warn=malformed' '${RUN}/status'"
-check "the six DROPs beside the purged rules are intact" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
-
-echo "=== 6. marker removed: rule gone (tighten)"
-rm "${MARK}/${U}"
-run >/dev/null 2>&1
-check "no allow rule" "[ \$(allow_count) -eq 0 ]"
-check "lan= empty" "[ -z \"\$(status lan)\" ]"
-check "base rules intact" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
-
-echo "=== 7. hostile marker names are ignored"
-: > "${MARK}/${U}"
-ln -s /etc/passwd "${MARK}/11111111-2222-4333-8444-555555555555"
-: > "${MARK}/sys-setup-alice"
-mkdir "${MARK}/22222222-2222-4222-8222-222222222222"
-: > "${MARK}/3e6a772c-b177-4cfc-b209-b14db514bac2x"
-run >/dev/null 2>&1
-check "exactly one allow rule (the real marker)" "[ \$(allow_count) -eq 1 ]"
-check "warn= counts four ignored entries" "grep -q '^warn=4 marker entries ignored' '${RUN}/status'"
-rm -rf "${MARK}/11111111-2222-4333-8444-555555555555" "${MARK}/sys-setup-alice" "${MARK}/22222222-2222-4222-8222-222222222222" "${MARK}/3e6a772c-b177-4cfc-b209-b14db514bac2x"
-
-echo "=== 8. spool is consumed, symlink targets untouched"
-mkdir -p "${T}/victim"; : > "${T}/victim/keep"
-ln -s "${T}/victim" "${RUN}/spool/link"
-mkdir -p "${RUN}/spool/nested/deeper"; : > "${RUN}/spool/nested/deeper/x"
-: > "${RUN}/spool/${U}.123"
-run >/dev/null 2>&1
-check "spool empty after the run" "[ -z \"\$(ls -A '${RUN}/spool')\" ]"
-check "symlink target untouched" "[ -e '${T}/victim/keep' ]"
-check "status spool=3" "[ \"\$(status spool)\" = 3 ]"
-
-echo "=== 9. spool drained on a FAILED run (no re-trigger loop)"
-# (a) A failure AFTER the lock — in the LAN section — must drain the spool on
-# exit so DirectoryNotEmpty cannot re-trigger the unit over the same failure.
-# The entry is planted by the failing mktemp itself, i.e. after the script's
-# drain-first step, so only the EXIT trap can be what empties the spool
-# (review: an entry written before the run would be caught by drain-first).
-mkdir -p "${T}/fakebin"
-printf '#!/bin/sh\n: > "%s/spool/%s.456"\nexit 1\n' "${RUN}" "${U}" > "${T}/fakebin/mktemp"; chmod +x "${T}/fakebin/mktemp"
-if PATH="${T}/fakebin:${PATH}" STYRMAN_FW_STATE_DIR="${STATE}" STYRMAN_FW_RUN_DIR="${RUN}" STYRMAN_FW_CONF="${CONF}" bash "${SCRIPT}" >/dev/null 2>&1; then
-    bad "run with a failing mktemp should exit non-zero"
-else
-    ok "run with a failing mktemp exits non-zero"
-fi
-check "spool entry planted mid-run was drained by the EXIT trap" "[ -z \"\$(ls -A '${RUN}/spool')\" ]"
-rm -f "${T}/fakebin/mktemp"
-# (b) A failure BEFORE the lock — in the base section — touches nothing the
-# spool owner controls: the entry stays, and the path unit's bounded retry
-# (TriggerLimitBurst / StartLimitBurst, then a ten-minute revive backoff) is
-# what stops a loop. Deliberate: the base section runs before anything a
-# lower-privileged uid can influence (security review).
-: > "${RUN}/spool/${U}.789"
-printf '#!/bin/sh\nexit 1\n' > "${T}/fakebin/iptables"; chmod +x "${T}/fakebin/iptables"
-if PATH="${T}/fakebin:${PATH}" STYRMAN_FW_STATE_DIR="${STATE}" STYRMAN_FW_RUN_DIR="${RUN}" STYRMAN_FW_CONF="${CONF}" bash "${SCRIPT}" >/dev/null 2>&1; then
-    bad "run with a failing iptables should exit non-zero"
-else
-    ok "run with a failing iptables exits non-zero"
-fi
-check "a base-section failure leaves the spool (retry is the path unit's, bounded)" "[ -e '${RUN}/spool/${U}.789' ]"
-rm -f "${T}/fakebin/iptables"
-run >/dev/null 2>&1   # heal (consumes the entry)
-check "the next healthy run consumed it" "[ -z \"\$(ls -A '${RUN}/spool')\" ]"
-
-echo "=== 10. flush then rerun restores base + allow in order"
 iptables -F STYRMAN-FWD
 run >/dev/null 2>&1
-check "head is the allow rule" "[ \"\$(rules | sed -n 1p)\" = \"\${EXPECT_RULE}\" ]"
-check "six DROPs restored" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
+check "flushed chain is rebuilt" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
+check "physdev RETURN restored" "rules | grep -q -- '--physdev-is-bridged -j RETURN'"
+iptables -D INPUT -i sdb-+ -j STYRMAN-IN
+run >/dev/null 2>&1
+check "deleted INPUT jump is reinserted" "iptables -S INPUT | grep -qF -- '-i sdb-+ -j STYRMAN-IN'"
 
-echo "=== 11. order guard: an allow after the DROPs moves to the head"
-iptables -D STYRMAN-FWD 1
-iptables -A STYRMAN-FWD -i "${IFACE}" -o enp0 -s 172.20.0.0/16 -d 192.0.2.0/24 -m comment --comment "styrman-lan:${U}" -j RETURN
-check "setup: allow rule is last" "rules | tail -1 | grep -q styrman-lan"
+echo "=== 4. ADR-065/066 leftovers are cleaned up"
+# A host upgrading from v1.23/v1.24 carries these. All three families, in both
+# chains, plus one in the middle of the chain rather than at the head.
+iptables -I STYRMAN-FWD 1 -s 172.20.0.0/16 -d 192.0.2.0/24 -i "${IFACE}" -o enp0 \
+    -m comment --comment "styrman-lan:${U}" -j RETURN
+iptables -A STYRMAN-FWD -s 172.20.0.0/16 -d 192.0.2.0/24 -i "${IFACE}" \
+    -m comment --comment "styrman-lanpub:${U}" -j RETURN
+iptables -I STYRMAN-IN 1 -s 172.20.0.0/16 -d 192.0.2.1/32 -i "${IFACE}" \
+    -m comment --comment "styrman-lanhost:${U}" -j RETURN
+check "setup: three tagged rules planted" "[ \$(tagged_count) -eq 3 ]"
 run >/dev/null 2>&1
-check "allow rule back at the head" "[ \"\$(rules | sed -n 1p)\" = \"\${EXPECT_RULE}\" ]"
-check "exactly one copy" "[ \$(allow_count) -eq 1 ]"
+check "all three are removed" "[ \$(tagged_count) -eq 0 ]"
+check "the six DROPs are intact" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
+check "STYRMAN-IN is a bare DROP again" "[ \"\$(in_rules)\" = '-A STYRMAN-IN -j DROP' ]"
+check "cleanup is idempotent" "run >/dev/null 2>&1 && [ \$(tagged_count) -eq 0 ]"
 
-echo "=== 12. conf validation fails closed"
-conf_case() { # name dev cidrs expect-substring
-    write_conf "$2" "$3"; run >/dev/null 2>&1
-    check "conf '$1' -> conf_error and no allow rules" "grep -q \"^conf_error=$4\" '${RUN}/status' && [ \$(allow_count) -eq 0 ] && [ -z \"\$(status lan_cidrs)\" ]"
-}
-conf_case "host bits set"        enp0 192.0.2.7/24        "LAN_CIDRS: 192.0.2.7/24 has host bits set"
-conf_case "project bridge route" enp0 172.20.0.0/16       "LAN_CIDRS: 172.20.0.0/16 overlaps"
-conf_case "inside 172.16/12"     enp0 172.31.0.0/16       "LAN_CIDRS: 172.31.0.0/16 overlaps 172.16.0.0/12"
-conf_case "link-local"           enp0 169.254.0.0/16      "LAN_CIDRS: 169.254.0.0/16 overlaps 169.254.0.0/16"
-conf_case "tailnet"              enp0 100.64.0.0/16       "LAN_CIDRS: 100.64.0.0/16 overlaps 100.64.0.0/10"
-conf_case "prefix too wide"      enp0 10.0.0.0/8          "LAN_CIDRS: 10.0.0.0/8 prefix must be"
-conf_case "not a cidr"           enp0 "192.0.2.0"         "LAN_CIDRS: 192.0.2.0 is not"
-conf_case "uplink is a Docker bridge" "${IFACE}" 192.0.2.0/24 "LAN_DEV ${IFACE} is a Docker bridge"
-conf_case "uplink missing"       enp9 192.0.2.0/24        "LAN_DEV enp9 does not exist"
-printf 'LAN_DEV=enp0\nLAN_CIDRS=192.0.2.0/24\nEVIL=$(reboot)\n' > "${CONF}"; run >/dev/null 2>&1
-check "conf 'unknown key' -> conf_error, no allow rules" "grep -q '^conf_error=conf: unparseable' '${RUN}/status' && [ \$(allow_count) -eq 0 ]"
-write_conf enp0 192.0.2.0/24; chmod 0666 "${CONF}"; run >/dev/null 2>&1
-check "conf 'group/world-writable' -> ignored with conf_error" "grep -q '^conf_error=conf ignored' '${RUN}/status' && [ \$(allow_count) -eq 0 ]"
-rm -f "${CONF}"; run >/dev/null 2>&1
-check "conf missing -> no conf_error, empty lan_cidrs, no allow rules" "! grep -q '^conf_error=' '${RUN}/status' && [ -z \"\$(status lan_cidrs)\" ] && [ \$(allow_count) -eq 0 ]"
-write_conf enp0 192.0.2.0/24; run >/dev/null 2>&1
-check "valid conf again -> allow rule back" "[ \$(allow_count) -eq 1 ] && ! grep -q '^conf_error=' '${RUN}/status'"
+echo "=== 5. the cleanup refuses to delete a DROP"
+# A tagged DROP would mean something has gone badly wrong; deleting rules by
+# content must still never remove one (BUG-013's neighbouring hazard).
+iptables -I STYRMAN-FWD 1 -d 10.0.0.0/8 -m comment --comment "styrman-lan:${U}" -j DROP
+run >/dev/null 2>&1 || true
+check "the tagged DROP survives" \
+    "rules | grep -q -- '--comment \"styrman-lan:${U}\" -j DROP'"
+# `{ ...; } || true` before the pipe: the script deliberately exits 1 when it
+# has warnings, and `set -o pipefail` would otherwise fail this check even
+# though grep matched.
+check "and the run reports a warning" "{ run 2>&1 || true; } | grep -q 'refusing to delete a tagged DROP'"
+iptables -D STYRMAN-FWD -d 10.0.0.0/8 -m comment --comment "styrman-lan:${U}" -j DROP
 
-echo "=== 13. an unknown conf key is a grammar error, not a silent ignore"
-# ADR-066 turned both formerly-reserved keys real, so nothing is "reserved"
-# any more; what must still hold is that a key outside the grammar closes
-# every allowance rather than being skipped.
-printf 'LAN_DEV=enp0\nLAN_CIDRS=192.0.2.0/24\nSOMETHING_ELSE=1\n' > "${CONF}"; run >/dev/null 2>&1
-check "unknown key -> conf_error and no allowances" "[ \$(allow_count) -eq 0 ] && grep -q '^conf_error=conf: unparseable line' '${RUN}/status'"
-check "base rules survive an unknown key" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
-write_conf enp0 192.0.2.0/24
-
-echo "=== 14. kernel-bridge uplink: warning only, rule pinned to it"
-ip link add br0 type bridge; ip addr add 198.51.100.1/24 dev br0; ip link set br0 up
-write_conf br0 198.51.100.0/24; run >/dev/null 2>&1
-check "allow rule with -o br0" "rules | sed -n 1p | grep -q -- '-o br0 .*styrman-lan'"
-check "kernel-bridge note recorded, no conf_error" "grep -q '^warn=LAN_DEV br0 is a kernel bridge' '${RUN}/status' && ! grep -q '^conf_error=' '${RUN}/status'"
-write_conf enp0 192.0.2.0/24; run >/dev/null 2>&1
-
-echo "=== 15. two prefixes: two rules, lan= only when both present"
-write_conf enp0 "192.0.2.0/24 198.51.100.0/24"; run >/dev/null 2>&1
-check "two allow rules" "[ \$(allow_count) -eq 2 ]"
-check "lan= lists the uuid" "[ \"\$(status lan)\" = '${U}' ]"
-iptables -D STYRMAN-FWD -i "${IFACE}" -o enp0 -s 172.20.0.0/16 -d 198.51.100.0/24 -m comment --comment "styrman-lan:${U}" -j RETURN
-run >/dev/null 2>&1
-check "missing rule re-inserted" "[ \$(allow_count) -eq 2 ]"
-write_conf enp0 192.0.2.0/24; run >/dev/null 2>&1
-check "dropped prefix -> its rule removed" "[ \$(allow_count) -eq 1 ]"
-
-echo "=== 16. bridge lifecycle: no-bridge pending, appears, subnet change"
-U2=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee
-IFACE2="sdb-$(printf 'sdb-%s' "${U2}" | sha1sum | cut -c1-11)"
-: > "${MARK}/${U2}"; run >/dev/null 2>&1
-check "pending=<uuid>:no-bridge" "grep -q '^pending=${U2}:no-bridge' '${RUN}/status'"
-check "still one allow rule" "[ \$(allow_count) -eq 1 ]"
-ip link add "${IFACE2}" type dummy; ip addr add 172.21.0.1/16 dev "${IFACE2}"; ip link set "${IFACE2}" up
-run >/dev/null 2>&1
-check "bridge appeared -> rule with its subnet" "rules | grep -q -- '-s 172.21.0.0/16 -d 192.0.2.0/24 -i ${IFACE2} -o enp0 .*styrman-lan:${U2}'"
-check "lan= lists both" "[ \"\$(status lan | tr ' ' '\n' | sort | tr '\n' ' ')\" = '${U} ${U2} ' ]"
-ip addr flush dev "${IFACE2}"; ip addr add 172.22.0.1/16 dev "${IFACE2}"
-run >/dev/null 2>&1
-check "subnet change -> old rule replaced" "rules | grep -q -- '-s 172.22.0.0/16 .*styrman-lan:${U2}' && ! rules | grep -q -- '-s 172.21.0.0/16'"
-check "exactly two allow rules" "[ \$(allow_count) -eq 2 ]"
-rm "${MARK}/${U2}"; run >/dev/null 2>&1
-check "marker gone -> back to one" "[ \$(allow_count) -eq 1 ]"
-
-echo "=== 17. status grammar and STYRMAN-IN untouched"
-for k in schema version applied_at lan_dev lan_cidrs lan spool run_ms; do
-    check "status has ${k}=" "grep -q '^${k}=' '${RUN}/status'"
-done
-check "applied_at is recent" "[ \$(( \$(date +%s) - \$(status applied_at) )) -lt 60 ]"
-check "status is a regular 0640 file" "[ -f '${RUN}/status' ] && [ \"\$(stat -c %a '${RUN}/status')\" = 640 ]"
-check "STYRMAN-IN is still just DROP" "[ \"\$(iptables -S STYRMAN-IN | grep '^-A')\" = '-A STYRMAN-IN -j DROP' ]"
-check "nothing tagged in INPUT or DOCKER-USER" "! iptables -S INPUT | grep -q styrman-lan && ! iptables -S DOCKER-USER | grep -q styrman-lan"
-
-echo "=== 18. guard: run dir inside the state dir is refused, base still applied"
-iptables -F STYRMAN-FWD
-STYRMAN_FW_STATE_DIR="${STATE}" STYRMAN_FW_RUN_DIR="${STATE}/run" STYRMAN_FW_CONF="${CONF}" bash "${SCRIPT}" >/dev/null 2>&1
-check "base rules applied" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
-check "no allow rules, nothing written under the state dir" "[ \$(allow_count) -eq 0 ] && [ ! -e '${STATE}/run' ]"
-run >/dev/null 2>&1
-
-echo "=== 19. LAN_ALLOW_HOST=1: the host itself becomes reachable (ADR-066)"
-write_conf_host enp0 192.0.2.0/24 1
-: > "${MARK}/${U}"
-run >/dev/null 2>&1
-# shellcheck disable=SC2034  # referenced inside check() eval strings
-EXPECT_HOST="-A STYRMAN-IN -s 172.20.0.0/16 -d 192.0.2.1/32 -i ${IFACE} -m comment --comment \"styrman-lanhost:${U}\" -j RETURN"
-check "host rule is at the head of STYRMAN-IN, verbatim" "[ \"\$(in_rules | sed -n 1p)\" = \"\${EXPECT_HOST}\" ]"
-check "the isolation DROP still follows it" "[ \"\$(in_rules | sed -n 2p)\" = '-A STYRMAN-IN -j DROP' ]"
-check "exactly one host rule" "[ \$(host_count) -eq 1 ]"
-check "status lan_allow_host=1" "[ \"\$(status lan_allow_host)\" = 1 ]"
-check "status lan_host_addrs is the uplink address" "[ \"\$(status lan_host_addrs)\" = 192.0.2.1/32 ]"
-check "lan= still lists the uuid (both families applied)" "[ \"\$(status lan)\" = '${U}' ]"
-check "the STYRMAN-FWD rule is unaffected" "[ \$(allow_count) -eq 1 ]"
-before="$(in_rules)"; run >/dev/null 2>&1; after="$(in_rules)"
-if [ "${before}" = "${after}" ]; then ok "host rule idempotent across a no-op run"; else bad "host rule idempotent across a no-op run"; fi
-
-echo "=== 20. a tagged DROP is never deleted by number (security review 2026-09-08)"
-iptables -I STYRMAN-IN 1 -m comment --comment "styrman-lanhost:not-a-uuid" -j DROP
-run >/dev/null 2>&1
-check "the tagged DROP is still there" "in_rules | grep -q -- '--comment \"styrman-lanhost:not-a-uuid\" -j DROP'"
-check "refusal recorded as a warn" "grep -q '^warn=refused to delete a DROP by number' '${RUN}/status'"
-check "the real host rule survived the refusal" "[ \$(host_count) -eq 1 ]"
-iptables -D STYRMAN-IN -m comment --comment "styrman-lanhost:not-a-uuid" -j DROP
-
-echo "=== 21. LAN_ALLOW_HOST off and invalid: fail closed"
-write_conf_host enp0 192.0.2.0/24 0
-run >/dev/null 2>&1
-check "host rule removed when the key goes back to 0" "[ \$(host_count) -eq 0 ]"
-check "STYRMAN-IN is just DROP again" "[ \"\$(in_rules)\" = '-A STYRMAN-IN -j DROP' ]"
-check "the LAN rule is untouched by the host key" "[ \$(allow_count) -eq 1 ]"
-check "status lan_allow_host=0" "[ \"\$(status lan_allow_host)\" = 0 ]"
-write_conf_host enp0 192.0.2.0/24 yes
-run >/dev/null 2>&1
-check "an invalid LAN_ALLOW_HOST closes EVERY allowance" "[ \$(allow_count) -eq 0 ] && [ \$(host_count) -eq 0 ]"
-check "conf_error names the key" "grep -q '^conf_error=LAN_ALLOW_HOST must be 0 or 1' '${RUN}/status'"
-check "base rules survive a conf error" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
-write_conf_host enp0 192.0.2.0/24 1
-run >/dev/null 2>&1
-rm "${MARK}/${U}"
-run >/dev/null 2>&1
-check "removing the marker removes BOTH families" "[ \$(allow_count) -eq 0 ] && [ \$(host_count) -eq 0 ]"
-
-echo "=== 22. published ports: the ingress bridge is excluded by allowlist (ADR-066)"
-# A stand-in Docker topology: docker0 is where a published container lands,
-# and br-0123456789ab plays the ingress. The allowance must reach the first
-# and never the second.
-ip link add docker0 type dummy; ip addr add 172.17.0.1/16 dev docker0; ip link set docker0 up
-ip link add br-0123456789ab type dummy; ip addr add 172.18.0.1/16 dev br-0123456789ab; ip link set br-0123456789ab up
-: > "${MARK}/${U}"
-write_conf_pub 1 br-0123456789ab
-run >/dev/null 2>&1
-# shellcheck disable=SC2034  # referenced inside check() eval strings
-EXPECT_PUB="-A STYRMAN-FWD -s 172.20.0.0/16 -d 172.17.0.0/16 -i ${IFACE} -m conntrack --ctstate DNAT -m comment --comment \"styrman-lanpub:${U}\" -j RETURN"
-check "the docker0 allowance exists, verbatim" "rules | grep -qF -- \"\${EXPECT_PUB}\""
-check "exactly one published-port rule" "[ \$(pub_count) -eq 1 ]"
-check "the INGRESS bridge subnet is NOT reachable" "! rules | grep 'styrman-lanpub:' | grep -q -- '-d 172.18.0.0/16'"
-check "no project bridge subnet is reachable either" "! rules | grep 'styrman-lanpub:' | grep -q -- '-d 172.20.0.0/16'"
-check "status names the bridge root actually used" "[ \"\$(status ingress_bridge)\" = br-0123456789ab ]"
-check "status lan_allow_published_ports=1" "[ \"\$(status lan_allow_published_ports)\" = 1 ]"
-check "status lan_pub_subnets lists only docker0" "[ \"\$(status lan_pub_subnets)\" = 172.17.0.0/16 ]"
-check "it sits ahead of the DROPs" "[ \$(rules | sed -n '1,2p' | grep -c 'styrman-lanpub:') -eq 1 ]"
-before="$(rules)"; run >/dev/null 2>&1; after="$(rules)"
-if [ "${before}" = "${after}" ]; then ok "published-port rule idempotent"; else bad "published-port rule idempotent"; fi
-
-echo "=== 23. published ports fail closed without a usable ingress bridge"
-write_conf_pub 1 ""
-run >/dev/null 2>&1
-check "no INGRESS_BRIDGE -> no published-port rules" "[ \$(pub_count) -eq 0 ]"
-check "and it says why" "grep -q '^warn=LAN_ALLOW_PUBLISHED_PORTS=1 needs INGRESS_BRIDGE' '${RUN}/status'"
-write_conf_pub 1 br-ffffffffffff
-run >/dev/null 2>&1
-check "a stale INGRESS_BRIDGE -> no published-port rules" "[ \$(pub_count) -eq 0 ]"
-check "and it names the stale bridge" "grep -q '^warn=INGRESS_BRIDGE br-ffffffffffff does not exist' '${RUN}/status'"
-write_conf_pub notanumber br-0123456789ab
-run >/dev/null 2>&1
-check "an invalid value closes EVERY allowance" "[ \$(pub_count) -eq 0 ] && [ \$(allow_count) -eq 0 ]"
-check "conf_error names the key" "grep -q '^conf_error=LAN_ALLOW_PUBLISHED_PORTS must be 0 or 1' '${RUN}/status'"
-write_conf_pub 0 br-0123456789ab
-run >/dev/null 2>&1
-check "turning the key off removes the rules" "[ \$(pub_count) -eq 0 ]"
-check "status lan_allow_published_ports=0" "[ \"\$(status lan_allow_published_ports)\" = 0 ]"
-rm "${MARK}/${U}"
-ip link del docker0; ip link del br-0123456789ab
-write_conf enp0 192.0.2.0/24
-run >/dev/null 2>&1
-
-echo "=== 23b. a duplicated LAN_CIDRS entry does not pin the project in error"
-# DESIRED collapses a repeated key; WANT_COUNT must collapse with it, or the
-# project wants more rules than can exist and never reports applied.
-: > "${MARK}/${U}"
-printf 'LAN_DEV=enp0\nLAN_CIDRS=192.0.2.0/24 192.0.2.0/24\n' > "${CONF}"; chmod 0644 "${CONF}"
-run >/dev/null 2>&1
-check "a repeated CIDR yields exactly one rule" "[ \$(allow_count) -eq 1 ]"
-check "and the project reports applied, not 1-of-2" "[ \"\$(status lan)\" = '${U}' ]"
-check "no per-project error recorded" "! grep -q '^error=${U}:' '${RUN}/status'"
-rm "${MARK}/${U}"; write_conf enp0 192.0.2.0/24; run >/dev/null 2>&1
-
-echo "=== 23c. the scan's family prefilter is a whitelist, not a prefix match"
-# The prefilter used to be the literal `--comment "styrman-lan`, which covered
-# the three tags only because they share that prefix. Two consequences: a
-# FOURTH family named otherwise would never be revoked (loosen-without-tighten,
-# untestable from outside), and a foreign rule that merely SHARES the prefix
-# was treated as ours and deleted. The second is testable, and it is the same
-# `is_ours` derivation either way.
-iptables -I STYRMAN-FWD 1 -i "${IFACE}" -m comment --comment "styrman-lanfoo:someone-elses" -j RETURN
-run >/dev/null 2>&1
-check "a rule whose tag is NOT a family is left alone" \
-    "rules | grep -q -- '--comment \"styrman-lanfoo:someone-elses\"'"
-check "and it is not counted as one of ours" "[ \$(allow_count) -eq \$(rules | grep -c 'styrman-lan:') ]"
-iptables -D STYRMAN-FWD -i "${IFACE}" -m comment --comment "styrman-lanfoo:someone-elses" -j RETURN
-
-echo "=== 24. no root script calls a function before it is defined"
-# `bash -n` and shellcheck both accept a call placed ABOVE its definition, and
-# that is how a `derive_ingress_bridge: command not found` reached a release
-# candidate. Executing the paths would be stronger, but install.sh refuses a
-# root-owned state dir and this namespace maps only uid 0 — so assert the
-# ordering structurally.
-#
-# The first version of this check only recognised `^name()` and silently
-# skipped `function name {`, `name () {`, indented, or mixed-case definitions;
-# an unchecked function produced no output, so the suite still said PASS. All
-# of bash's spellings are matched now, and the call search is a word-boundary
-# scan of the whole line, so a call inside $(…) or backticks counts too.
-# Covers BOTH root scripts. styrman-update had no automated test of any kind
-# (audit 2026-09-08) and this exact class was introduced into it while fixing
-# an audit finding — trusted_dir called at :171, defined at :376.
-ORDER_BAD=""
-for SCRIPT_UT in "${HERE}/install.sh" "${HERE}/../update/styrman-update"; do
-[ -f "${SCRIPT_UT}" ] || continue
-ORDER_BODY="${T}/order.nocomments"
-grep -vE '^[[:space:]]*#' "${SCRIPT_UT}" > "${ORDER_BODY}"
-ORDER_FNS=$(sed -nE \
-    -e 's/^[[:space:]]*(function[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(\).*/\2/p' \
-    -e 's/^[[:space:]]*function[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\{.*/\1/p' \
-    "${ORDER_BODY}" | sort -u)
-check "the ordering check actually found some functions" "[ -n '${ORDER_FNS}' ]"
-for fn in ${ORDER_FNS}; do
-    # `|| true` on both: under `set -euo pipefail` a grep that matches nothing
-    # fails the assignment and exits the whole suite silently — which is how
-    # this section stopped after its first script and printed no summary.
-    def=$(grep -nE "^[[:space:]]*(function[[:space:]]+${fn}|${fn}[[:space:]]*\(\))" "${ORDER_BODY}" | head -1 | cut -d: -f1 || true)
-    # COMMAND POSITION only. A bare word-boundary scan flagged run() against
-    # the path /run/styrman-firewall — a short function name matches
-    # everywhere. Start of line, after ; & |, inside $( ), or after then/do/
-    # else; followed by whitespace, ;, ) or end of line.
-    call=$(grep -nE "(^[[:space:]]*|[;&|(][[:space:]]*|[[:space:]](then|do|else)[[:space:]]+)${fn}([[:space:]]|;|\)|\$)" \
-           "${ORDER_BODY}" | grep -v "^${def}:" | head -1 | cut -d: -f1 || true)
-    if [ -n "${call}" ] && [ -n "${def}" ] && [ "${call}" -lt "${def}" ]; then
-        ORDER_BAD="${ORDER_BAD} $(basename "${SCRIPT_UT}"):${fn}(call@${call} def@${def})"
-    fi
-done
-done
-check "every function in install.sh and styrman-update is defined before its first call" "[ -z '${ORDER_BAD}' ]"
-
-echo "=== 25. syntax"
-check "bash -n" "bash -n '${SCRIPT}' && bash -n '${HERE}/install.sh' && bash -n '${HERE}/test.sh'"
-if command -v shellcheck >/dev/null 2>&1; then
-    check "shellcheck (warning+)" "shellcheck -S warning '${SCRIPT}' '${HERE}/install.sh' '${HERE}/test.sh'"
+echo "=== 6. IPv6 mirror"
+if command -v ip6tables >/dev/null 2>&1; then
+    run >/dev/null 2>&1
+    check "STYRMAN-IN6 drops" "ip6tables -S STYRMAN-IN6 2>/dev/null | grep -q -- '-j DROP'"
+    check "INPUT6 jump on the sdb- wildcard" "ip6tables -S INPUT 2>/dev/null | grep -qF -- '-i sdb-+ -j STYRMAN-IN6'"
+    check "no ip6 rule names the lan- interface" "! ip6tables -S 2>/dev/null | grep -q -- '${LANIF}'"
+else
+    echo "SKIP ip6tables unavailable"
 fi
 
-echo "passed=${PASS} failed=${FAIL}"
+echo
+echo "PASS=${PASS} FAIL=${FAIL}"
 [ "${FAIL}" -eq 0 ]

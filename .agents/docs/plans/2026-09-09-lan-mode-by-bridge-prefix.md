@@ -432,12 +432,12 @@ it back, watches it restart, and the same ping now times out.
 - [x] `go test ./... -race` green; test count compared — verify: counts recorded, AI
 
 ### Phase 3 — Shrink the root firewall to base rules
-- [ ] `styrman-firewall.sh`: delete the family/reconcile machinery, conf `LAN_*` parsing and validation, the spool drain, the status write; keep the base section, the one-time pre-chain migration, the IPv6 loop, `-w` — verify: `bash -n` and `shellcheck`, AI
-- [ ] Add a one-shot cleanup: delete every rule tagged `styrman-lan:`, `styrman-lanhost:` or `styrman-lanpub:` by full content match (BUG-013), never by number; refuse to delete a DROP — verify: a `test.sh` case that plants all three tags and asserts they are gone and the base rules intact, AI
-- [ ] Delete `styrman-firewall.path`; drop its `Wants`/`Also` from the unit and installer; **drop `./styrman-firewall.path` from `deploy/verify-commit.sh:162`'s `systemd-analyze verify` list and refresh its `:146-154` comment** — the release gate fails on a missing unit file otherwise — verify: `bash deploy/verify-commit.sh`, AI
-- [ ] `install.sh`: strip LAN CIDR discovery/validation, `--lan-allow-host`, `--lan-allow-published-ports`, the sshd precondition, the spool dir; keep the BUG-009 non-symlink+owner assertions on every path it still touches — verify: `bash -n`, `shellcheck`, and `test.sh`, AI
-- [ ] `test.sh`: strip the family cases, keep base + the new cleanup case — verify: `sudo bash deploy/firewall/test.sh` passes, AI
-- [ ] Converge this host and confirm the live chains hold exactly the base rules — verify: `iptables -S` diffed against the pre-change capture, **user + AI**
+- [x] `styrman-firewall.sh`: delete the family/reconcile machinery, conf `LAN_*` parsing and validation, the spool drain, the status write; keep the base section, the one-time pre-chain migration, the IPv6 loop, `-w` — verify: `bash -n` and `shellcheck`, AI
+- [x] Add a one-shot cleanup: delete every rule tagged `styrman-lan:`, `styrman-lanhost:` or `styrman-lanpub:` by full content match (BUG-013), never by number; refuse to delete a DROP — verify: a `test.sh` case that plants all three tags and asserts they are gone and the base rules intact, AI
+- [x] Delete `styrman-firewall.path`; drop its `Wants`/`Also` from the unit and installer; **drop `./styrman-firewall.path` from `deploy/verify-commit.sh:162`'s `systemd-analyze verify` list and refresh its `:146-154` comment** — the release gate fails on a missing unit file otherwise — verify: `bash deploy/verify-commit.sh`, AI
+- [x] `install.sh`: strip LAN CIDR discovery/validation, `--lan-allow-host`, `--lan-allow-published-ports`, the sshd precondition, the spool dir; keep the BUG-009 non-symlink+owner assertions on every path it still touches — verify: `bash -n`, `shellcheck`, and `test.sh`, AI
+- [x] `test.sh`: strip the family cases, keep base + the new cleanup case — verify: `sudo bash deploy/firewall/test.sh` passes, AI
+- [ ] **DEFERRED to Phase 6 (deploy)** — Converge this host and confirm the live chains hold exactly the base rules — verify: `iptables -S` diffed against the pre-change capture, **user + AI**
 
 ### Phase 4 — UI and API surface
 - [ ] `LocalNetwork.tsx` -> a two-state mode switch, a one-line explanation of each mode, and "changing this restarts the project"; delete the unavailable/pending/error/version copy and the permanent-SSH-key warning — verify: `npm run check && npm run lint`, AI

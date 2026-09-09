@@ -198,22 +198,21 @@ if [[ ! -f "${SCRIPT_DIR}/.env" && -f "${SCRIPT_DIR}/.env.example" ]]; then
     log "created deploy/.env with computed identity — fill in the secrets section"
 fi
 
-# ─── 5c. Project→host + project→LAN isolation (R12, ADR-029/036/065) ────────
-# A project microVM must reach the INTERNET but nothing private: not the host,
-# not the LAN, not other projects, not cloud metadata — except the LAN, for a
-# project an admin toggles on (ADR-065). Both halves are root-owned host
-# state outside the container stack: /usr/local/sbin/styrman-firewall.sh (base
-# isolation + per-project reconcile), styrman-firewall.timer (60 s self-heal),
-# styrman-firewall.path (applies a toggle within a second), the run dir
-# /run/styrman-firewall, the server-written marker dir under the state dir,
-# and — written only if absent — /etc/styrman/firewall.conf, the operator's
-# definition of "local network", discovered from the default route and
-# printed. deploy/firewall/install.sh is idempotent and narrow; the
-# auto-updater's host_converge re-applies the script and units from every
-# verified release tag, so this is the last time a firewall change needs a
-# hand-run of host-setup.sh (the 2026-08-30 → 2026-09-02 drift, ADR-065).
+# ─── 5c. Project→host + project→LAN isolation (R12, ADR-029/036/067) ────────
+# A SANDBOX project microVM must reach the INTERNET but nothing private: not
+# the host, not the LAN, not other projects, not cloud metadata. That is two
+# root-owned files outside the container stack:
+# /usr/local/sbin/styrman-firewall.sh and styrman-firewall.timer (60 s
+# self-heal). A LAN project is not mentioned by any of it — since ADR-067 the
+# mode is the bridge INTERFACE NAME the server picks, so a LAN project's
+# bridge simply does not match the script's `-i sdb-+` jumps.
+# deploy/firewall/install.sh is idempotent and narrow, and also removes what
+# ADR-065/066 installed (the .path unit, the spool tmpfs, its tmpfiles entry,
+# the run dir). The auto-updater's host_converge re-applies the script and
+# units from every verified release tag, so this is the last time a firewall
+# change needs a hand-run of host-setup.sh.
 if STYRMAN_STATE_DIR="${STATE_DIR}" bash "${SCRIPT_DIR}/firewall/install.sh"; then
-    log "project isolation active + self-healing (styrman-firewall.timer 60 s, styrman-firewall.path on change)"
+    log "project isolation active + self-healing (styrman-firewall.timer, 60 s)"
 else
     log "WARN: deploy/firewall/install.sh failed — projects stay isolated only if a previous script is installed; run: sudo bash ${SCRIPT_DIR}/firewall/install.sh"
 fi

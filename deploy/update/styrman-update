@@ -499,33 +499,38 @@ host_converge() {
     fi
     SELF_HEAD="${head}"
     src="deploy/firewall"
-    for f in styrman-firewall.sh styrman-firewall.service styrman-firewall.timer styrman-firewall.path; do
+    for f in styrman-firewall.sh styrman-firewall.service styrman-firewall.timer; do
         git cat-file -e "${SELF_HEAD}:${src}/${f}" 2>/dev/null || { log "host-converge: ${src}/${f} not in the deployed tree (pre-ADR-065 release) — skipped"; return 0; }
     done
+    # ADR-067 deleted styrman-firewall.path. A host upgrading across that
+    # release still has the unit installed; removing it is install.sh's job
+    # (host-setup.sh), not the updater's — the updater only ever installs the
+    # files the verified tree carries. A leftover .path unit watching a
+    # directory nothing writes is inert.
     # --check promises to change nothing (usage text above): report drift,
     # install nothing (review finding — the very drift this exists to fix is
     # when a preview run would otherwise silently apply it).
     if [ "${CHECK_ONLY}" = true ]; then
         local n=0
         differs "${src}/styrman-firewall.sh" "${bin}" && n=$((n + 1))
-        for f in styrman-firewall.service styrman-firewall.timer styrman-firewall.path; do
+        for f in styrman-firewall.service styrman-firewall.timer; do
             differs "${src}/${f}" "${unitdir}/${f}" && n=$((n + 1))
         done
         if [ "${n}" -gt 0 ]; then log "host-converge: ${n} firewall file(s) differ from the verified tree — a real run would install them (--check changes nothing)"; fi
         return 0
     fi
-    rm -f "${bin}.new."* "${unitdir}/styrman-firewall.service.new."* "${unitdir}/styrman-firewall.timer.new."* "${unitdir}/styrman-firewall.path.new."* 2>/dev/null || true
+    rm -f "${bin}.new."* "${unitdir}/styrman-firewall.service.new."* "${unitdir}/styrman-firewall.timer.new."* 2>/dev/null || true
     if differs "${src}/styrman-firewall.sh" "${bin}"; then
         if atomic_install 755 "${src}/styrman-firewall.sh" "${bin}"; then changed=1; else failed=1; log "WARN: could not install ${bin}"; fi
     fi
-    for f in styrman-firewall.service styrman-firewall.timer styrman-firewall.path; do
+    for f in styrman-firewall.service styrman-firewall.timer; do
         if differs "${src}/${f}" "${unitdir}/${f}"; then
             if atomic_install 644 "${src}/${f}" "${unitdir}/${f}"; then changed=1; else failed=1; log "WARN: could not install ${unitdir}/${f}"; fi
         fi
     done
     if [ "${changed}" = "1" ]; then
         if ! out="$(systemctl daemon-reload 2>&1)"; then log "WARN: daemon-reload after host-converge: ${out}"; fi
-        if ! out="$(systemctl enable --now styrman-firewall.timer styrman-firewall.path 2>&1)"; then log "WARN: enabling the firewall units: ${out}"; fi
+        if ! out="$(systemctl enable --now styrman-firewall.timer 2>&1)"; then log "WARN: enabling the firewall units: ${out}"; fi
         if ! out="$(systemctl start styrman-firewall.service 2>&1)"; then log "WARN: starting styrman-firewall.service: ${out}"; fi
         log "host-converge: firewall script + units installed from ${SELF_HEAD:0:12} (see journalctl -u styrman-firewall)"
     fi
