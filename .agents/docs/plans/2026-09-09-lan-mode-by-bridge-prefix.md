@@ -450,7 +450,7 @@ it back, watches it restart, and the same ping now times out.
 ### Phase 5 — Verification on real hardware
 - [x] Replace the `integration.sh` LAN block with the checks listed under Verification; delete `STYRMAN_IT_LIVE_LAN` and its documented race (TODO.md item, now moot) — verify: `bash .agents/docs/testing/styrman/integration.sh`, AI
 - [x] Replace the two e2e LAN blocks — verify: `bash web/e2e/run.sh`, AI
-- [ ] **The live adversarial run**, all five steps, written to `.agents/docs/testing/2026-09-09-lan-mode-live.md` — verify: real Kata, this host, **user + AI**
+- [x] **The live adversarial run**, all five steps, written to `.agents/docs/testing/2026-09-09-lan-mode-live.md` — verify: real Kata, this host, **user + AI**
 - [ ] The browser E2E criteria walked by hand — verify: **user**
 
 ### Phase 6 — Definition of Done and release

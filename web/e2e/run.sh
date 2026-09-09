@@ -14,6 +14,10 @@ set -euo pipefail
 IMAGE="${1:-styrman-runtime:test}"
 PORT="${STYRMAN_E2E_PORT:-18090}"
 STATE="$(mktemp -d /tmp/styrman-e2e-XXXX)"
+# Epoch seconds at start. cleanup() removes only networks created AFTER this,
+# which is what keeps it away from production's (created long ago) without
+# needing a label the orchestrator does not set.
+RUN_START="$(date -u +%s)"
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 API="http://127.0.0.1:${PORT}"
 PID=""
@@ -24,6 +28,22 @@ cleanup() {
     # these UUIDs are ours alone).
     for c in $(docker ps -aq --filter "label=styrman.managed=true" \
                2>/dev/null); do
+        # Match on the container's MOUNT SOURCES, not its env. This loop used
+        # to keep a container only if its env carried
+        # `STYRMAN_STATE_DIR=${STATE}` — a variable the orchestrator never
+        # sets on a project container (its env is STYRMAN_USER, _UID, _GID,
+        # _CRED_BROKER, _PROJECT, _PROJECT_DIR, _DOCKER_DISK_GB and nothing
+        # else). So the filter never matched, and this safety net had never
+        # once removed anything: a run that ABORTED before the UI cleanup
+        # section leaked its microVM, silently, because a green run is tidied
+        # by the server instead when the suite deletes the project.
+        #
+        # Every project container binds its home and workspace from under its
+        # server's StateDir, so a source under "${STATE}/" is exactly the
+        # property "belongs to THIS run's isolated server" — which is what the
+        # env check was reaching for. Production's containers mount from
+        # /var/lib/styrman and can never match a mktemp'd ${STATE}.
+        #
         # `|| continue`, and not for tidiness: set -e is in force inside an
         # EXIT trap too, so a failing command substitution in an ASSIGNMENT
         # aborts the trap where it stands. A container listed a moment ago by
@@ -31,9 +51,43 @@ cleanup() {
         # server deletes it asynchronously) made `docker inspect` fail, which
         # killed cleanup BEFORE the rm below — leaving /tmp/styrman-e2e-* dirs
         # behind AND handing the shell an exit status of 1 after a run that
-        # reported failed=0. Both halves of that TODO item are this line.
-        env=$(docker inspect "$c" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null) || continue
-        echo "$env" | grep -q "STYRMAN_STATE_DIR=${STATE}" && docker rm -f "$c" >/dev/null 2>&1 || true
+        # reported failed=0 (BUG-024).
+        srcs=$(docker inspect "$c" --format '{{range .Mounts}}{{.Source}}
+{{end}}' 2>/dev/null) || continue
+        echo "$srcs" | grep -q "^${STATE}/" && docker rm -f "$c" >/dev/null 2>&1 || true
+    done
+    # Networks outlive their containers here. The suite creates several
+    # projects (the main one, a deliberately-failing clone, a succeeding
+    # clone) and does not delete all of them, and a project whose clone failed
+    # can leave a network with no container ever attached. Each one holds a
+    # /16 out of Docker's default pool, and TODO.md already carries the risk
+    # that a 16th bridge lands in 192.168/16 — so leaking these per run is not
+    # cosmetic.
+    #
+    # RETRIED, because the server deletes projects ASYNCHRONOUSLY: at trap
+    # time a network can still have its container attached, and a single pass
+    # skipped exactly those and leaked them once the container went away a
+    # moment later. Bounded at ~12 s so cleanup cannot hang.
+    #
+    # The guard that protects production is the TIMESTAMP — its network
+    # predates this run. `docker network rm` refuses a network that is still
+    # in use, so an early attempt is harmless and simply retries.
+    #
+    # `.Created.Unix`, not `.Created`: Go renders the bare field as
+    # "2026-09-09 16:48:14.959530866 +0200 CEST", which GNU date refuses (an
+    # offset AND a zone abbreviation), so parsing it in the shell silently
+    # `continue`d on every network and the sweep did nothing at all.
+    for _ in 1 2 3 4 5 6; do
+        left=0
+        for n in $(docker network ls --format '{{.Name}}' 2>/dev/null \
+                   | grep -E '^(sdb|lan)-' || true); do
+            created=$(docker network inspect "$n" \
+                      --format '{{.Created.Unix}}' 2>/dev/null) || continue
+            [ "${created}" -ge "${RUN_START}" ] || continue
+            docker network rm "$n" >/dev/null 2>&1 || left=1
+        done
+        [ "${left}" = 0 ] && break
+        sleep 2
     done
     sudo rm -rf "${STATE}" 2>/dev/null || rm -rf "${STATE}" || true
 }
