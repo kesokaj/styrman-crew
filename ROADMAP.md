@@ -12,7 +12,7 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**ADR-067 built and verified; release pending.** The per-project LAN switch is
+**v1.25.0 shipped 2026-09-09 — ADR-067 is live.** (The paragraphs below were written while it was pending and are kept as the record of how it got there; the handoff `handoffs/2026-09-09-v1.25.0-shipped.md` is current.) The per-project LAN switch is
 now the bridge interface prefix, and ADR-065/066's root-mediated machinery is
 deleted. Plan: `.agents/docs/plans/2026-09-09-lan-mode-by-bridge-prefix.md`
 (its unticked boxes are the remaining work).
