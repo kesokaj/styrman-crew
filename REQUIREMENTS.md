@@ -71,46 +71,48 @@
     project microVMs MUST NOT be able to reach one another over the network.
     Each project gets its own bridge (`sdb-<uuid>`) shared with nothing but
     the styrman server; the server originates connections for the port-preview
-    proxy but has `ip_forward=0` so it can never route between projects. Host
-    networking is for the Caddy ingress ONLY, never for projects. Verified
-    adversarially (a project with NET_ADMIN adding a manual route through the
-    server stays blocked). Enforced by naming the bridge interface `sdb-<hash>` (the Docker NETWORK is `sdb-<uuid>`; its kernel INTERFACE is `sdb-` + an 11-hex hash of the uuid — the 15-char iface limit — and the firewall matches the shared `sdb-` prefix)
-    (so the firewall matches), DOCKER-USER egress drops to RFC1918, the
-    CGNAT/benchmark ranges 100.64/10 and 198.18/15, and metadata 169.254/16
-    (was "RFC1918 + metadata"; the script has dropped six ranges since
-    2026-09-02), and a self-healing firewall timer (ADR-036). See ADR-015.
-    Local-network exception (ADR-065, operator approval 2026-09-08; was: the
-    private-range egress drop applied unconditionally to every project): an
-    admin may allow individual projects, each toggled separately, running or
-    stopped, to reach the host's local network — exactly the IPv4 prefixes the
-    operator configured in the root-owned `/etc/styrman/firewall.conf` (this
-    deployment: 192.168.86.0/24 via enp114s0), never wider than a /16 and
-    never overlapping 172.16/12, 169.254/16, 100.64/10, 198.18/15 or any
-    Docker bridge. The allowance is a per-bridge RETURN inserted ahead of the
-    drops by the same root-owned, self-healing firewall service, keyed on that
-    project's exact bridge interface, its bridge subnet and the uplink device,
-    driven by an intent file the server writes and root validates by name
-    only; it is off by default, visible in the UI while on, revocable at
-    runtime, removed with the project, and disappears fail-closed whenever
-    that service is absent. Full same-network parity (ADR-066, operator
-    approval 2026-09-08): a LAN-enabled project reaches the configured
-    prefixes with the same reach a peer on that network has — the host's own
-    address on the uplink included, and host-published Docker ports included,
-    both only when the root-owned conf opts in (`LAN_ALLOW_HOST`,
-    `LAN_ALLOW_PUBLISHED_PORTS`; absent means no). The host's sshd is inside
-    that allowance, so a deployment enabling it MUST NOT accept password
-    authentication on the uplink. Still dropped for that project: every other
-    project and system bridge, the ingress bridge, cloud metadata, the
-    tailnet and every private range outside the configured prefixes; LAN
-    hosts still cannot initiate connections into any project, which remains
-    NAT-only outbound. A LAN-enabled project is not served the operator's SSH
-    key by the credential broker. (Was, before ADR-066: the host, its
-    published ports and the SSH key were all inside the allowance's
-    exclusions — "the host itself (INPUT drop — it runs sshd and Caddy and
-    the project holds its owner's credentials), host-published Docker ports
-    (the drop sees the post-DNAT container address)".) The cross-project
-    guarantee in the first sentence, `ip_forward=0` and the host-networking
-    clause are unconditional.
+    proxy but has `ip_forward=0` so it can never route between projects.
+    Enforced in two independent layers. (a) Cross-project isolation is
+    Docker's own, unconditional for every project whatever its mode: Docker 29
+    writes `-A DOCKER ! -i <br> -o <br> -j DROP` per bridge, dropping any new
+    flow entering a bridge from anywhere but that bridge; `ip_forward=0` on
+    the server keeps it from routing between them. (b) The sandbox is
+    styrman's: a sandboxed project's bridge INTERFACE is named `sdb-<hash>`
+    (the Docker NETWORK stays `sdb-<uuid>`; the interface is `sdb-` plus an
+    11-hex hash of the network name — the 15-char iface limit), which the
+    root-owned self-healing firewall (ADR-036) matches on the shared `sdb-`
+    prefix to drop everything from that bridge to the host (`INPUT`) and to
+    RFC1918, the CGNAT/benchmark ranges 100.64/10 and 198.18/15, and metadata
+    169.254/16 (`DOCKER-USER`). Verified adversarially (a project with
+    NET_ADMIN adding a manual route through the server stays blocked). See
+    ADR-015, ADR-067.
+    Per-project mode (ADR-067, operator approval 2026-09-09; supersedes
+    ADR-065/066's design, kept as history in those entries): each project is
+    SANDBOX (default) or LAN, toggled by an admin at any time; the toggle
+    rebuilds the project's Docker network and container. A LAN project's
+    bridge interface is named `lan-<hash>`, which no styrman rule matches, so
+    it is exactly a normal Docker container on this host: it NATs out as the
+    host and reaches whatever the host reaches — the local network, the
+    host's own addresses (sshd included), and host-published Docker ports. It
+    gains no reach into other projects, because layer (a) is not styrman's to
+    weaken. There is no allowlist, no per-prefix configuration and no
+    root-side per-project state: the switch is the interface name, chosen by
+    the server at network create. A deployment using LAN mode SHOULD NOT
+    accept password authentication on the uplink — advice in
+    `docs/deploy/remote.md`, not an enforced precondition. LAN hosts still
+    cannot initiate connections into any project (NAT-only outbound). Host
+    networking is for the Caddy ingress ONLY, never for projects. The setup VM
+    is always sandboxed.
+    (Was, ADR-065/066: an admin-toggled allowance of exactly the IPv4 prefixes
+    in root-owned `/etc/styrman/firewall.conf`, applied as per-bridge RETURNs
+    by the root firewall service from an intent file the server wrote and root
+    validated by name, with `LAN_ALLOW_HOST` and `LAN_ALLOW_PUBLISHED_PORTS`
+    conf opt-ins, an sshd password-auth prohibition enforced by `install.sh`,
+    and the credential broker permanently withholding the operator's SSH key
+    from any project that had ever been LAN-enabled. Before ADR-065 the
+    private-range egress drop applied unconditionally to every project.)
+    The cross-project guarantee in the first sentence, `ip_forward=0` and the
+    host-networking clause remain unconditional.
 
 13. **R13 — Git is the substrate** (operator directive 2026-08-27): every
     project workspace IS a git repository, without exception — initialized
