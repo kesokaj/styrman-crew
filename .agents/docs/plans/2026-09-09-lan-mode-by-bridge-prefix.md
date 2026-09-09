@@ -410,13 +410,13 @@ it back, watches it restart, and the same ping now times out.
 - [x] Commit Phase 0 alone, before any source edit — verify: `git show --stat`, AI
 
 ### Phase 1 — The switch (Go, additive; tree stays green)
-- [ ] `config.BridgeNameFor(netName string, lan bool)` + the comment above — verify: `go build ./...`, AI
-- [ ] Golden vectors in `internal/config/bridgename_test.go` (append; the file exists — writing-files rule) — verify: `go test ./internal/config/ -race -run BridgeName`, AI
-- [ ] `RunOpts.Lan`, `createSpec.lan`, one network-create helper, `recreateMissingNetwork(.., lan bool)` — verify: `go build ./... && go vet ./...`, AI
-- [ ] `Orchestrator.bridgeModeMismatch` + the third force-recreate condition in `EnsureRunning`, beside the image-upgrade one (`orchestrator.go:206-216`); stopped containers only — verify: `go build ./...`, AI
-- [ ] The network rebuild in `create()` (self-disconnect, remove, recreate under the wanted name) — verify: `go build ./...`, AI
-- [ ] Three `EnsureRunning` call sites in `internal/httpapi/server.go` pass `Lan: p.LanAccess` — verify: `grep -rn 'EnsureRunning('` shows no call site without `Lan`, AI
-- [ ] `go test ./... -race` green, test count compared before/after (BUG-005) — verify: counts recorded in the phase entry, AI
+- [x] `config.BridgeNameFor(netName string, lan bool)` + the comment above — verify: `go build ./...`, AI
+- [x] Golden vectors in `internal/config/bridgename_test.go` (append; the file exists — writing-files rule) — verify: `go test ./internal/config/ -race -run BridgeName`, AI
+- [x] `RunOpts.Lan`, `createSpec.lan`, one network-create helper, `recreateMissingNetwork(.., lan bool)` — verify: `go build ./... && go vet ./...`, AI
+- [x] `Orchestrator.bridgeModeMismatch` + the third force-recreate condition in `EnsureRunning`, beside the image-upgrade one (`orchestrator.go:206-216`); stopped containers only — verify: `go build ./...`, AI
+- [x] The network rebuild in `create()` (self-disconnect, remove, recreate under the wanted name) — verify: `go build ./...`, AI
+- [x] Three `EnsureRunning` call sites in `internal/httpapi/server.go` pass `Lan: p.LanAccess` — verify: `grep -rn 'EnsureRunning('` shows no call site without `Lan`, AI
+- [x] `go test ./... -race` green, test count compared before/after (BUG-005) — verify: counts recorded in the phase entry, AI
 
 ### Phase 2 — Delete the server-side machinery
 - [ ] Rewrite `internal/httpapi/network.go` to the small GET/PUT above — verify: `go build ./...`, AI

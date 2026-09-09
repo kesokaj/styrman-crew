@@ -485,14 +485,36 @@ func ProjectFromNetworkName(netName string) string {
 	return rest
 }
 
-// BridgeNameFor is the Linux bridge INTERFACE name for a styrman network. Docker
-// would otherwise auto-name it br-<hash> — which the project→host/LAN isolation
-// firewall (matching `-i sdb-+`) cannot target — and interface names are capped
-// at 15 chars, so the full NetworkName is too long. A short sha1-derived
-// `sdb-<11hex>` (15 chars) keeps both the firewall match and uniqueness.
-func BridgeNameFor(netName string) string {
+// BridgeNameFor is the Linux bridge INTERFACE name for a styrman network, and
+// the PREFIX is the project's network mode (ADR-067). Docker would otherwise
+// auto-name the bridge br-<hash>, which no firewall rule can target, and
+// interface names are capped at 15 chars, so the full NetworkName is too long;
+// a sha1-derived <prefix><11hex> is 15 chars exactly.
+//
+//	sdb-  SANDBOX. The root firewall's `-i sdb-+` jumps in INPUT and
+//	      DOCKER-USER match it, dropping everything to the host and to the
+//	      private ranges. Internet and nothing else.
+//	lan-  LAN. No styrman rule matches it, so it behaves exactly like any
+//	      other Docker container on this host: it NATs out as the host and
+//	      reaches whatever the host reaches.
+//
+// Cross-project isolation does not depend on either prefix. Docker writes
+// `-A DOCKER ! -i <br> -o <br> -j DROP` per bridge, which drops any new flow
+// entering a bridge from anywhere but that bridge — that is what enforces
+// R12's cross-project guarantee, for both modes (verified adversarially,
+// testing/2026-09-09-lan-prefix-probe.md).
+//
+// The 11-hex suffix hashes the NETWORK name only, never the mode, so a project
+// keeps one identity in `ip link` across a toggle and — the reason it must
+// stay that way — no EXISTING project's bridge is renamed by ADR-067. The
+// golden vector in bridgename_test.go pins that.
+func BridgeNameFor(netName string, lan bool) string {
 	sum := sha1.Sum([]byte(netName))
-	return "sdb-" + hex.EncodeToString(sum[:])[:11]
+	prefix := "sdb-"
+	if lan {
+		prefix = "lan-"
+	}
+	return prefix + hex.EncodeToString(sum[:])[:11]
 }
 
 func envOr(key, def string) string {

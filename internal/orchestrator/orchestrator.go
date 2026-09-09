@@ -164,6 +164,12 @@ type RunOpts struct {
 	Name      string // friendly name (label + hostname)
 	Dir       string // workspace dir under ~/projects
 	GuestUser string // in-guest username (per-user setting)
+	// Lan is the project's network mode (ADR-067): false = SANDBOX (bridge
+	// sdb-<hash>, matched by the root firewall's drops, internet only),
+	// true = LAN (bridge lan-<hash>, matched by no styrman rule, so the
+	// project reaches whatever the host reaches). It is the caller's copy of
+	// Project.LanAccess and it is the ONLY input to the bridge name.
+	Lan bool
 }
 
 // EnsureRunning makes sure the project's microVM exists and is running, and
@@ -215,6 +221,24 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 			err = errdefs.NotFound(fmt.Errorf("recreated"))
 		}
 	}
+	// Network mode (ADR-067): the mode IS the bridge interface prefix and it
+	// is fixed at `docker network create`, so a container sitting on a bridge
+	// whose name disagrees with the project's current mode has to be rebuilt —
+	// there is no way to rename a live bridge under it. Same shape as the two
+	// recreates above, and STOPPED containers only for the same reason:
+	// rebuilding a running one would kill live terminal sessions. The toggle
+	// handler stops the project first, and a project left in the wrong mode by
+	// a failed toggle is healed on its next start, however it got there.
+	if err == nil && (insp.State == nil || !insp.State.Running) {
+		if o.bridgeModeMismatch(ctx, config.NetworkName(project), opts.Lan) {
+			o.logger.Info("recreating stopped container for a network mode change",
+				"project", project, "lan", opts.Lan)
+			if rerr := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); rerr != nil {
+				return "", fmt.Errorf("recreate for network mode: %w", rerr)
+			}
+			err = errdefs.NotFound(fmt.Errorf("recreated"))
+		}
+	}
 	// Every path below hands the project home to Docker as a bind SOURCE:
 	// create passes it in Binds, and START re-resolves the stored, unresolved
 	// source on every start (verified on Engine 29.7.2) — so a symlink the
@@ -235,7 +259,7 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 				// Defense in depth: if the project's network went missing
 				// (e.g. an older buggy sweep removed it), recreate it and
 				// reconnect the container rather than leaving it unstartable.
-				if o.recreateMissingNetwork(ctx, id, config.NetworkName(project)) {
+				if o.recreateMissingNetwork(ctx, id, config.NetworkName(project), opts.Lan) {
 					if err2 := o.docker.ContainerStart(ctx, id, container.StartOptions{}); err2 != nil {
 						return "", fmt.Errorf("start %s after network recreate: %w", name, err2)
 					}
@@ -298,6 +322,7 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 		id, err = o.create(ctx, createSpec{
 			name:          name,
 			netName:       config.NetworkName(project),
+			lan:           opts.Lan,
 			hostname:      guestHostname(opts.Name),
 			guestUser:     opts.GuestUser,
 			homePath:      phome,
@@ -789,17 +814,81 @@ type createSpec struct {
 	extraEnv      []string
 	labels        map[string]string
 	noRestart     bool // ephemeral (setup VM): don't auto-restart after reboot
+	lan           bool // ADR-067 network mode; always false for system VMs
+}
+
+// createBridgeNetwork is the ONLY place a styrman bridge network is created.
+// Both call sites (create, recreateMissingNetwork) go through it so a future
+// third one cannot forget the mode and silently build a project an unnamed —
+// and therefore unconfined — bridge (ADR-067).
+func (o *Orchestrator) createBridgeNetwork(ctx context.Context, netName string, lan bool) error {
+	_, err := o.docker.NetworkCreate(ctx, netName, network.CreateOptions{
+		Driver:  "bridge",
+		Options: map[string]string{"com.docker.network.bridge.name": config.BridgeNameFor(netName, lan)},
+	})
+	return err
+}
+
+// bridgeModeMismatch reports whether the project's existing network carries a
+// bridge interface name that disagrees with the wanted mode (ADR-067) — i.e.
+// whether a mode change is pending and the container must be rebuilt to apply
+// it.
+//
+// It answers false on anything it cannot establish, and that direction is
+// deliberate: a true return force-removes a container. A missing network is
+// NOT a mismatch (recreateMissingNetwork owns that case, and it builds the
+// bridge under the right name anyway), and an inspect error is not a mismatch
+// either, so a Docker hiccup can never destroy a project's container. The cost
+// of a false negative is that the toggle is applied on the next start instead
+// of this one; the cost of a false positive would be a needless rebuild.
+func (o *Orchestrator) bridgeModeMismatch(ctx context.Context, netName string, lan bool) bool {
+	insp, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{})
+	if err != nil {
+		return false
+	}
+	cur := insp.Options["com.docker.network.bridge.name"]
+	if cur == "" {
+		// A network Docker auto-named (br-<hash>). No styrman code path
+		// creates one — create() and recreateMissingNetwork both set the
+		// option — so this means manual intervention. Rebuild it: an unnamed
+		// bridge matches no firewall rule, so the project is silently
+		// unconfined until it is. Loud, because it costs a container rebuild.
+		o.logger.Warn("project network has no styrman bridge name — it matches no firewall rule; rebuilding",
+			"network", netName)
+		return true
+	}
+	return cur != config.BridgeNameFor(netName, lan)
 }
 
 // create builds a network and container. Caller holds the relevant lock.
 func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, error) {
 	netName := spec.netName
+	wantBridge := config.BridgeNameFor(netName, spec.lan)
 	createdNetwork := false
-	if _, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{}); err != nil {
+	insp, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{})
+	if err == nil && insp.Options["com.docker.network.bridge.name"] != wantBridge {
+		// ADR-067 mode change: the bridge name is immutable, so the network is
+		// rebuilt. By now the project's own container is gone (EnsureRunning's
+		// mode branch removed it, or it never existed), so the only endpoint
+		// left is our own port-preview/broker attach — NetworkRemove refuses
+		// while ANY endpoint remains, running or stopped. Same two calls, and
+		// the same SelfContainer guard, that Destroy uses.
+		o.logger.Info("rebuilding project network for a mode change",
+			"network", netName, "from", insp.Options["com.docker.network.bridge.name"], "to", wantBridge)
+		if o.cfg.SelfContainer != "" {
+			_ = o.docker.NetworkDisconnect(ctx, netName, o.cfg.SelfContainer, true)
+		}
+		if rerr := o.docker.NetworkRemove(ctx, netName); rerr != nil && !errdefs.IsNotFound(rerr) {
+			return "", fmt.Errorf("rebuild network %s for mode change: %w", netName, rerr)
+		}
+		o.invalidateSelfAttach(netName)
+		err = errdefs.NotFound(fmt.Errorf("rebuilt for mode change"))
+	}
+	if err != nil {
 		if !errdefs.IsNotFound(err) {
 			return "", fmt.Errorf("inspect network %s: %w", netName, err)
 		}
-		if _, err := o.docker.NetworkCreate(ctx, netName, network.CreateOptions{Driver: "bridge", Options: map[string]string{"com.docker.network.bridge.name": config.BridgeNameFor(netName)}}); err != nil {
+		if err := o.createBridgeNetwork(ctx, netName, spec.lan); err != nil {
 			return "", fmt.Errorf("create network %s: %w", netName, err)
 		}
 		createdNetwork = true
@@ -1209,12 +1298,12 @@ func (o *Orchestrator) RunIdleReaper(ctx context.Context) {
 // recreateMissingNetwork recreates a project's bridge network if it is absent
 // and reconnects the container to it. Returns true if it recreated (so the
 // caller should retry the start). Best effort — false on any failure.
-func (o *Orchestrator) recreateMissingNetwork(ctx context.Context, containerID, netName string) bool {
+func (o *Orchestrator) recreateMissingNetwork(ctx context.Context, containerID, netName string, lan bool) bool {
 	if _, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{}); err == nil {
 		return false // network exists; the start failure was something else
 	}
-	o.logger.Warn("project network missing — recreating", "network", netName)
-	if _, err := o.docker.NetworkCreate(ctx, netName, network.CreateOptions{Driver: "bridge", Options: map[string]string{"com.docker.network.bridge.name": config.BridgeNameFor(netName)}}); err != nil {
+	o.logger.Warn("project network missing — recreating", "network", netName, "lan", lan)
+	if err := o.createBridgeNetwork(ctx, netName, lan); err != nil {
 		o.logger.Error("network recreate failed", "network", netName, "error", err)
 		return false
 	}

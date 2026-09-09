@@ -226,7 +226,7 @@ func (s *Server) ensureFor(ctx context.Context, user, projectID string) (contain
 		return "", "", "", err
 	}
 	guest := sp.profile.GuestUser()
-	id, err := s.orch.EnsureRunning(ctx, user, p.ID, orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest})
+	id, err := s.orch.EnsureRunning(ctx, user, p.ID, orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest, Lan: p.LanAccess})
 	if err == nil {
 		s.kickLAN(user, p.ID)
 	}
@@ -870,7 +870,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			attach:   func() bool { return s.orch.EnsureSelfAttached(u.Username, p.ID) },
 		}
 		containerID, err := s.orch.EnsureRunning(ctx, u.Username, p.ID,
-			orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest})
+			orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest, Lan: p.LanAccess})
 		if err != nil {
 			s.logger.Error("background project boot failed", "project", p.Name, "error", err)
 			s.bootFailed(ctx, spec)
@@ -1080,7 +1080,7 @@ func (s *Server) startProject(w http.ResponseWriter, r *http.Request) {
 	// Reuse sp from getProjectFor (N23: the old sp2, _ := s.space(...) ignored
 	// the error and could nil-deref).
 	if _, err := s.orch.EnsureRunning(ctx, u.Username, p.ID,
-		orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: sp.profile.GuestUser()}); err != nil {
+		orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: sp.profile.GuestUser(), Lan: p.LanAccess}); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
