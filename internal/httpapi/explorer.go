@@ -452,12 +452,6 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		"terminalUsernameChosen": s.usernameChosen(u.Username),
 		"setupComplete":          s.userSetupStatus(r.Context(), u.Username).Done,
 	}
-	// The host firewall's state (ADR-065) is the operator's business: it
-	// names the LAN prefix and every LAN-enabled project, so admins only.
-	if u.Admin {
-		now := time.Now()
-		resp["hostFirewall"] = s.hostFirewall(s.netpol.Status(now), now)
-	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

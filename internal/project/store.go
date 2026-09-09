@@ -31,27 +31,12 @@ type Project struct {
 	// dashboard). Per-port so a share is least-privilege; an empty/absent entry
 	// is owner-only. Emails are authenticated by the Google OAuth ingress.
 	SharedPorts map[int][]string `json:"sharedPorts,omitempty"`
-	// LanAccess is the operator-approved local-network exception (ADR-065):
-	// while true the root firewall lets THIS project's microVM reach the
-	// configured LAN prefixes. This record is the intent; the server projects
-	// it as a marker file the root script reconciles, and reports the applied
-	// state from the script's status, never from this field alone.
-	// LanChangedAt is when LanAccess last flipped, so a change that root has
-	// not applied can be reported as pending, then as an error.
-	LanAccess    bool      `json:"lanAccess,omitempty"`
-	LanChangedAt time.Time `json:"lanChangedAt,omitzero"`
-	// LanEverEnabled LATCHES the first time LanAccess is turned on and is
-	// never cleared (ADR-066 amendment). It is the whole of the credential
-	// decision: a project that has ever been LAN-enabled is never served the
-	// operator's SSH key again.
-	//
-	// Latching rather than tracking the live state is the point. Re-serving a
-	// key after LAN access is turned off does not un-expose it — the project
-	// had it — so the only thing the live state bought was a window in which
-	// the answer could be WRONG: root's rule can outlive the record by up to
-	// a minute, and a failed revocation drops the project out of the applied
-	// set while its rule is still present. This field cannot be wrong.
-	LanEverEnabled bool `json:"lanEverEnabled,omitempty"`
+	// LanAccess is the project's network mode (ADR-067): true = LAN, false =
+	// SANDBOX. It is the ONLY input to the bridge interface name the server
+	// gives this project's Docker network, and therefore the whole of the
+	// policy — there is no root-side state to reconcile it against, so no
+	// timestamp and no derived state.
+	LanAccess bool `json:"lanAccess,omitempty"`
 }
 
 // nameRe accepts short kebab-case slugs. First char a letter so names are
@@ -122,11 +107,6 @@ func NewStore(path string) (*Store, error) {
 			slog.Error("quarantining project with invalid id/dir (preserved in .rejected)", "name", p.Name)
 			rejected = append(rejected, p)
 			continue
-		}
-		// A hand-edited lanAccess:true without a timestamp: date it now so the
-		// pending→error clock is defined (not persisted until the next save).
-		if p.LanAccess && p.LanChangedAt.IsZero() {
-			p.LanChangedAt = time.Now().UTC()
 		}
 		s.projects[p.ID] = p
 	}
@@ -235,11 +215,12 @@ func (s *Store) SetPortShares(id string, port int, emails []string) error {
 	return nil
 }
 
-// SetLanAccess records the local-network intent (ADR-065). LanChangedAt
-// moves only when the value actually changes, so a repeated PUT does not
-// reset the pending clock. Copy-on-write with rollback on a failed save, the
-// SetPortShares shape.
-func (s *Store) SetLanAccess(id string, on bool, now time.Time) error {
+// SetLanAccess records the project's network mode (ADR-067). Copy-on-write
+// with rollback on a failed save, the SetPortShares shape.
+//
+// No rollback helper accompanies it any more: the handler used to need one
+// because the record and a marker file could diverge, and there is no marker.
+func (s *Store) SetLanAccess(id string, on bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	prev, ok := s.projects[id]
@@ -249,39 +230,8 @@ func (s *Store) SetLanAccess(id string, on bool, now time.Time) error {
 	if prev.LanAccess == on {
 		return nil
 	}
-	return s.setLanLocked(id, prev, on, now.UTC())
-}
-
-// RestoreLanAccess puts back an EXACT earlier (value, timestamp) pair — the
-// handler's rollback when the marker write fails after the record saved.
-// Unlike SetLanAccess it never stamps "now": a rollback is not a change the
-// user made, and stamping it would move the pending→error clock (review).
-func (s *Store) RestoreLanAccess(id string, on bool, changedAt time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	prev, ok := s.projects[id]
-	if !ok {
-		return ErrNotFound
-	}
-	if prev.LanAccess == on && prev.LanChangedAt.Equal(changedAt) {
-		return nil
-	}
-	return s.setLanLocked(id, prev, on, changedAt)
-}
-
-// setLanLocked must be called with s.mu held.
-func (s *Store) setLanLocked(id string, prev Project, on bool, changedAt time.Time) error {
 	p := prev
 	p.LanAccess = on
-	p.LanChangedAt = changedAt
-	// One-way. Set on the way ON and never cleared — including by
-	// RestoreLanAccess, whose rollback means the MARKER write failed after the
-	// record saved: the intent was recorded, the broker may already have
-	// stopped serving, and un-latching would be the one direction that can
-	// hand a key back by accident.
-	if on {
-		p.LanEverEnabled = true
-	}
 	s.projects[id] = p
 	if err := s.save(); err != nil {
 		s.projects[id] = prev // roll back (M20)

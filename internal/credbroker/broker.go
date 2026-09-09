@@ -28,66 +28,21 @@ type Resolver interface {
 	ResolveProjectByIP(ctx context.Context, ip string) (user, project string, err error)
 }
 
-// LanChecker answers whether a project may currently reach the local network
-// (ADR-066 part 4). It is a separate interface from Resolver because the type
-// that can answer it is not the one that resolves IPs: the orchestrator has
-// no view of Project.LanAccess, while the API server holds both the per-user
-// project stores and root's last word.
-type LanChecker interface {
-	// LanExposed reports whether the project has EVER had local-network
-	// access. It is a LATCH on the project record, and it must not consult
-	// root's firewall status at all.
-	//
-	// This comment used to describe the opposite — a union of the record,
-	// root's applied set and "cannot confirm", citing a netpolicy.Exposed
-	// that no longer exists. That rule was superseded by ADR-066's latch
-	// amendment precisely because the live-state question has no reliable
-	// answer: a failed revocation leaves the rule present while the project
-	// drops out of root's applied set, which handed the key to a project that
-	// still had LAN reach. The stale comment had no runtime effect (the
-	// wrapper below fails closed regardless) but it told the next
-	// implementer to build the version that was removed (audit 2026-09-08).
-	LanExposed(user, project string) (bool, error)
-}
-
-// isHostReachingFile delegates to credstore so the broker and the API's
-// prune cannot disagree about which credentials are host-reaching — they did,
-// on "./"-spelled paths (security review, 2026-09-08).
-//
-// Withholding these from a LAN-enabled project closes the transitive path
-// ADR-065 follow-up (g) recorded: project -> a LAN host that trusts the
-// operator's key -> back to this one. It is NOT what keeps a project off this
-// host; this host has no authorized_keys, verified 2026-09-08.
-func isHostReachingFile(path string) bool { return credstore.IsHostReaching(path) }
-
 // Broker serves credentials to projects over their bridge.
+//
+// It serves every credential to every project of the owning user. ADR-066
+// withheld ~/.ssh/-shaped files from a LAN-enabled project; ADR-067 removed
+// that, on the operator's decision — a LAN project is a normal Docker
+// container and is credentialed like any other.
 type Broker struct {
 	store   *credstore.Store
 	resolve Resolver
-	lan     LanChecker
 	logger  *slog.Logger
 }
 
-// New builds the broker. lan may be nil only in tests; a nil checker is
-// treated as "cannot determine" and therefore withholds, so a wiring mistake
-// costs ssh push loudly rather than granting silently.
-func New(store *credstore.Store, resolve Resolver, lan LanChecker, logger *slog.Logger) *Broker {
-	return &Broker{store: store, resolve: resolve, lan: lan, logger: logger}
-}
-
-// lanExposed is the fail-closed wrapper: any inability to answer withholds.
-func (b *Broker) lanExposed(user, project string) bool {
-	if b.lan == nil {
-		b.logger.Error("cred broker: no LAN checker wired — withholding host-reaching credentials", "user", user, "project", project)
-		return true
-	}
-	exposed, err := b.lan.LanExposed(user, project)
-	if err != nil {
-		b.logger.Error("cred broker: cannot determine LAN exposure — withholding host-reaching credentials",
-			"user", user, "project", project, "error", err)
-		return true
-	}
-	return exposed
+// New builds the broker.
+func New(store *credstore.Store, resolve Resolver, logger *slog.Logger) *Broker {
+	return &Broker{store: store, resolve: resolve, logger: logger}
 }
 
 // Handler returns the broker's HTTP routes.
@@ -192,28 +147,9 @@ func (b *Broker) files(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "store error", http.StatusInternalServerError)
 		return
 	}
-	// A LAN-enabled project is not served host-reaching credentials (ADR-066).
-	// The check runs once per request rather than per file, and only when
-	// there is something it could withhold.
-	exposed := false
-	for _, c := range fcs {
-		if isHostReachingFile(c.Path) {
-			exposed = b.lanExposed(user, project)
-			break
-		}
-	}
 	out := make([]fileOut, 0, len(fcs))
-	withheld := 0
 	for _, c := range fcs {
-		if exposed && isHostReachingFile(c.Path) {
-			withheld++
-			continue
-		}
 		out = append(out, fileOut{Path: c.Path, Mode: c.Mode, Data: base64.StdEncoding.EncodeToString(c.Data)})
-	}
-	if withheld > 0 {
-		b.logger.Info("cred broker: withheld host-reaching credentials from a LAN-enabled project",
-			"user", user, "project", project, "withheld", withheld)
 	}
 	if len(out) > 0 {
 		b.logger.Info("cred broker: served file credentials", "user", user, "project", project, "count", len(out))

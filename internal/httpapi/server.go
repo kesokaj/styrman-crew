@@ -33,7 +33,6 @@ import (
 	"github.com/kesokaj/styrman-crew/internal/gitrepo"
 	"github.com/kesokaj/styrman-crew/internal/identity"
 	"github.com/kesokaj/styrman-crew/internal/links"
-	"github.com/kesokaj/styrman-crew/internal/netpolicy"
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 	"github.com/kesokaj/styrman-crew/internal/project"
 	"github.com/kesokaj/styrman-crew/internal/terminal"
@@ -104,17 +103,11 @@ type Server struct {
 	// reverse). Consistency only — authz re-checks the list on every request.
 	sharesMu sync.Mutex
 
-	// netpol projects each project's LAN-access intent as a marker file and
-	// reads root's status back (ADR-065); netMu serializes
-	// setProjectNetwork's store-write + marker + kick against other PUTs (the
-	// periodic Sync is covered by the marker dir's own lock).
-	netpol *netpolicy.Dir
-	// ingressBr caches the bridge name of cfg.IngressNetwork for the ADR-066
-	// cross-check; a NetworkInspect per project per listing would be absurd.
-	ingressBrMu sync.Mutex
-	ingressBr   string
-	ingressBrAt time.Time
-	netMu       sync.Mutex
+	// netMu serializes setProjectNetwork's record write against
+	// deleteProject's record removal, so a mode change and a deletion of the
+	// same project cannot interleave (ADR-067; the marker/spool this used to
+	// also guard are gone). Never held across a rebuild — see network.go.
+	netMu sync.Mutex
 
 	// creds is the credential broker's store (ADR-030); nil disables the
 	// onboarding endpoints. Set by main after construction.
@@ -175,7 +168,6 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		tmux:          conversation.NewManager(orch, cfg),
 		users:         users,
 		logger:        logger,
-		netpol:        netpolicy.New(cfg, logger),
 		spaces:        map[string]*userSpace{},
 		deleting:      map[string]bool{},
 		deleteErrs:    map[string]string{},
@@ -207,7 +199,6 @@ func (s *Server) SetCredStore(cs *credstore.Store) { s.creds = cs }
 
 // NetPolicy exposes the marker dir so main can run the boot-time and periodic
 // Sync against every user's records (ADR-065).
-func (s *Server) NetPolicy() *netpolicy.Dir { return s.netpol }
 
 // ensureFor lets the WS bridge boot a project it only knows by user+UUID.
 func (s *Server) ensureFor(ctx context.Context, user, projectID string) (containerID, guestUser, dir string, err error) {
@@ -228,7 +219,6 @@ func (s *Server) ensureFor(ctx context.Context, user, projectID string) (contain
 	guest := sp.profile.GuestUser()
 	id, err := s.orch.EnsureRunning(ctx, user, p.ID, orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest, Lan: p.LanAccess})
 	if err == nil {
-		s.kickLAN(user, p.ID)
 	}
 	return id, guest, p.Dir, err
 }
@@ -618,21 +608,10 @@ type projectView struct {
 	// whose clone failed still exists as an empty repo (R13) — the message is
 	// what tells them why it is empty.
 	ProvisionError string `json:"provisionError,omitempty"`
-	// LanState/LanMessage: the per-project local-network exception as root
-	// last reported it (ADR-065) — derived from the record AND the host
-	// firewall's status file, never from the request that changed it;
-	// omitted while off with nothing applied and nothing to say.
-	LanState   string `json:"lanState,omitempty"`
-	LanMessage string `json:"lanMessage,omitempty"`
-}
-
-// lanFields fills the two projectView LAN fields from one status read.
-func (s *Server) lanFields(p project.Project, st *netpolicy.Status, now time.Time, admin bool) (string, string) {
-	state, msg := s.lanFor(p, st, now, admin)
-	if state == netpolicy.StateOff && msg == "" {
-		return "", ""
-	}
-	return string(state), msg
+	// LanAccess is the project's network mode (ADR-067): true = LAN, false =
+	// SANDBOX. One boolean off the record, because there is no root-side
+	// state to reconcile it against and therefore no derived state to report.
+	LanAccess bool `json:"lanAccess,omitempty"`
 }
 
 // guestErrMaxBytes caps how much guest-controlled text reaches the API.
@@ -679,8 +658,6 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := []projectView{}
-	now := time.Now()
-	fw := s.netpol.Status(now) // one cached read for the whole list
 	for _, p := range sp.projects.List() {
 		state := "absent"
 		if st, ok := statuses[u.Username+"/"+p.ID]; ok {
@@ -690,9 +667,8 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 		if inFlight {
 			state = "deleting"
 		}
-		lanState, lanMsg := s.lanFields(p, fw, now, u.Admin)
 		out = append(out, projectView{Project: p, State: state, DeleteError: delErr,
-			ProvisionError: s.provisionError(u.Username, p.ID), LanState: lanState, LanMessage: lanMsg})
+			ProvisionError: s.provisionError(u.Username, p.ID), LanAccess: p.LanAccess})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": out})
 }
@@ -876,7 +852,6 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			s.bootFailed(ctx, spec)
 			return
 		}
-		s.kickLAN(u.Username, p.ID)
 		// Repo provisioning runs in-guest as the user so their gitconfig,
 		// ssh key, and gh login apply. The bare `git init` case needs none
 		// of that and already happened server-side before the 201.
@@ -912,10 +887,8 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 	if inFlight {
 		state = "deleting"
 	}
-	now := time.Now()
-	lanState, lanMsg := s.lanFields(p, s.netpol.Status(now), now, u.Admin)
 	writeJSON(w, http.StatusOK, projectView{Project: p, State: state, DeleteError: delErr,
-		ProvisionError: s.provisionError(u.Username, p.ID), LanState: lanState, LanMessage: lanMsg})
+		ProvisionError: s.provisionError(u.Username, p.ID), LanAccess: p.LanAccess})
 }
 
 // deleteProject responds 202 and destroys in the background: a Kata VM
@@ -1016,18 +989,10 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		// The LAN marker goes with the record (ADR-065) — HERE, after the wipe
-		// block's early return above, so a project a failed wipe kept alive
-		// for a retry keeps its access. Under netMu so a concurrent PUT cannot
-		// re-create the marker between its removal and the record's (security
-		// review). Best effort: a leftover is GC'd by the next Sync, and its
-		// rule keys on an interface Destroy already removed.
+		// Under netMu so a concurrent mode change cannot write this project's
+		// record between the check and its removal (ADR-067; the marker this
+		// used to remove alongside is gone, but the record race is not).
 		s.netMu.Lock()
-		if err := s.netpol.SetMarker(p.ID, false); err != nil {
-			s.logger.Warn("lan marker removal failed", "project", p.Name, "error", err)
-		} else {
-			s.netpol.Kick(p.ID)
-		}
 		err = sp.projects.Remove(p.ID)
 		s.netMu.Unlock()
 		if err != nil {
@@ -1084,7 +1049,6 @@ func (s *Server) startProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	s.kickLAN(u.Username, p.ID)
 	go func() { // background pre-attach (see createProject)
 		time.Sleep(time.Second) // let this response flush first
 		s.orch.EnsureSelfAttached(u.Username, p.ID)

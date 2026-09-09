@@ -129,27 +129,6 @@ type Config struct {
 	// ask the daemon whether it named the right one, so the server — which
 	// can — compares and surfaces a mismatch.
 	IngressNetwork string
-	// FirewallRunDir: the root-owned run dir of the host firewall script
-	// (ADR-065) — its spool/ (server-writable, root-consumed trigger files)
-	// and status (root-written, server-read). STYRMAN_FIREWALL_DIR, default
-	// /run/styrman-firewall, bind-mounted into the server container by
-	// compose. Empty disables the per-project LAN feature: every marker is
-	// removed at boot (root then closes every allowance), enables answer 503,
-	// and a record still on reports "cannot confirm".
-	//
-	// The production path IS the default here, deliberately — unlike the
-	// root-run script and the updater, which take every path from their unit
-	// with no in-code default (ADR-052). The asymmetry is the point: those
-	// are root, and a bare invocation of them must never alias production,
-	// whereas for THIS field an operator whose compose env lost the key would
-	// otherwise tear down every live allowance at the next boot. That is a
-	// silent availability loss for a feature meant to be off by default, not
-	// off by accident. The cost is that a host-process dev run on the
-	// production machine reads root's status file and can drop a trigger in
-	// its spool (an idempotent reconcile, nothing more);
-	// .agents/docs/deploy/local.md tells a developer to point this at a
-	// scratch dir. Weighed at the v1.23.0 release review, 2026-09-08.
-	FirewallRunDir string
 }
 
 // Load resolves configuration from the environment with sensible defaults.
@@ -177,7 +156,6 @@ func Load() (*Config, error) {
 		DevAddr:        os.Getenv("STYRMAN_DEV_ADDR"),
 		SelfContainer:  os.Getenv("STYRMAN_SELF_CONTAINER"),
 		IngressToken:   os.Getenv("STYRMAN_INGRESS_TOKEN"),
-		FirewallRunDir: envOr("STYRMAN_FIREWALL_DIR", "/run/styrman-firewall"),
 		IngressNetwork: envOr("STYRMAN_INGRESS_NETWORK", "styrman-ingress"),
 	}
 	for _, e := range strings.Split(os.Getenv("STYRMAN_ALLOWED_EMAILS"), ",") {
@@ -423,15 +401,6 @@ func (c *Config) ProjectWorkspace(user, projectID string) string {
 // UserStateDir returns where a user's metadata stores live.
 func (c *Config) UserStateDir(user string) string {
 	return filepath.Join(c.StateDir, "users", user)
-}
-
-// NetPolicyDir is the server-only tree the per-project LAN markers live in
-// (ADR-065): NetPolicyDir()/lan/<uuid>, an empty file whose NAME is the whole
-// grammar the root firewall script reads. Never a bind source — it sits
-// beside users/ and projects/, never under a mounted home — so no guest can
-// plant a symlink in it (.agents/rules/guest-writable-paths.md).
-func (c *Config) NetPolicyDir() string {
-	return filepath.Join(c.StateDir, "netpolicy")
 }
 
 // DefaultUser is the identity used when auth is off (dev door / local dev):

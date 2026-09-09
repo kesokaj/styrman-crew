@@ -2,50 +2,43 @@ package httpapi
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/kesokaj/styrman-crew/internal/config"
 	"github.com/kesokaj/styrman-crew/internal/identity"
-	"github.com/kesokaj/styrman-crew/internal/netpolicy"
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 	"github.com/kesokaj/styrman-crew/internal/project"
 	"github.com/kesokaj/styrman-crew/internal/userstore"
 )
 
-// netHarness builds a header-mode server (so admin vs non-admin is real)
-// with a scratch firewall run dir and one project owned by the admin.
+// Network-mode handler tests (ADR-067). There is no Docker in this harness, so
+// s.orch.Status errors and the handler takes its "not running" path: the
+// record is written and the rebuild is left to the next start. That is the
+// behaviour under test here — the rebuild itself is covered by the
+// orchestrator's bridge-name logic and by the live checks in
+// testing/styrman/integration.sh.
+
 type netHarness struct {
-	h       http.Handler
-	s       *Server
-	state   string
-	fw      string
-	admin   string
-	member  string
-	pid     string
-	markers string
+	h      http.Handler
+	s      *Server
+	state  string
+	admin  string
+	member string
+	pid    string
 }
 
 func newNetHarness(t *testing.T) *netHarness {
 	t.Helper()
 	dir := t.TempDir()
-	fw := filepath.Join(dir, "fw")
-	if err := os.MkdirAll(filepath.Join(fw, "spool"), 0o700); err != nil {
-		t.Fatal(err)
-	}
 	admin, member := "admin@gmail.com", "member@gmail.com"
 	cfg := &config.Config{
 		StateDir: dir, HomesDir: filepath.Join(dir, "homes"), Username: "tester",
 		AuthMode: "header", IngressToken: "test-ingress-token", AllowedEmails: []string{admin},
-		FirewallRunDir: fw,
 	}
 	logger := slog.New(slog.DiscardHandler)
 	users, err := userstore.New(filepath.Join(dir, "users.json"), cfg.AllowedEmails)
@@ -60,7 +53,6 @@ func newNetHarness(t *testing.T) *netHarness {
 		t.Fatal(err)
 	}
 	s := New(cfg, users, orch, logger)
-	h := s.Routes()
 	sp, err := s.space(identity.DeriveUsername(admin))
 	if err != nil {
 		t.Fatal(err)
@@ -69,36 +61,7 @@ func newNetHarness(t *testing.T) *netHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &netHarness{h: h, s: s, state: dir, fw: fw, admin: admin, member: member, pid: p.ID,
-		markers: filepath.Join(dir, "netpolicy", "lan")}
-}
-
-func (n *netHarness) writeStatus(t *testing.T, appliedAt time.Time, extra string) {
-	t.Helper()
-	// Written from MinScriptVersion, not a literal: a version bump is a
-	// deliberate act in one place and must not also mean editing every
-	// fixture that happens to mention the old number.
-	text := "schema=1\nversion=" + strconv.Itoa(netpolicy.MinScriptVersion) + "\napplied_at=" + strconv.FormatInt(appliedAt.Unix(), 10) +
-		"\nlan_dev=enp0\nlan_cidrs=192.0.2.0/24\n" + extra + "spool=0\nrun_ms=5\n"
-	if err := os.WriteFile(filepath.Join(n.fw, "status"), []byte(text), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// Defeat the 2 s status cache between steps.
-	n.s.netpol.Status(time.Now().Add(time.Hour))
-}
-
-func (n *netHarness) marker() bool {
-	_, err := os.Lstat(filepath.Join(n.markers, n.pid))
-	return err == nil
-}
-
-func (n *netHarness) spoolEntries(t *testing.T) int {
-	t.Helper()
-	des, err := os.ReadDir(filepath.Join(n.fw, "spool"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return len(des)
+	return &netHarness{h: s.Routes(), s: s, state: dir, admin: admin, member: member, pid: p.ID}
 }
 
 func decodeLan(t *testing.T, body string) map[string]any {
@@ -108,6 +71,21 @@ func decodeLan(t *testing.T, body string) map[string]any {
 		t.Fatalf("bad JSON %q: %v", body, err)
 	}
 	return m
+}
+
+// lanAccessOf reads the persisted record, which is the single source of truth
+// for the mode — never the reply, which is what the request wanted.
+func (n *netHarness) lanAccessOf(t *testing.T, email, id string) bool {
+	t.Helper()
+	sp, err := n.s.space(identity.DeriveUsername(email))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := sp.projects.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p.LanAccess
 }
 
 func TestNetworkValidationAndIsolation(t *testing.T) {
@@ -125,112 +103,23 @@ func TestNetworkValidationAndIsolation(t *testing.T) {
 	if w := doAs(t, n.h, n.admin, http.MethodPut, unknown, `{"lanAccess":true}`); w.Code != http.StatusNotFound {
 		t.Errorf("PUT unknown: %d", w.Code)
 	}
-	// Another authorized user must see 404 on both verbs and leave no marker —
-	// the 404 comes before any authorization signal.
+	// Another authorized user must see 404 on both verbs — the 404 comes
+	// before any authorization signal, so another user's project is
+	// indistinguishable from one that does not exist.
 	if w := doAs(t, n.h, n.member, http.MethodGet, path, ""); w.Code != http.StatusNotFound {
 		t.Errorf("member GET: %d, want 404", w.Code)
 	}
 	if w := doAs(t, n.h, n.member, http.MethodPut, path, `{"lanAccess":true}`); w.Code != http.StatusNotFound {
 		t.Errorf("member PUT: %d, want 404", w.Code)
 	}
-	if n.marker() {
-		t.Fatal("cross-user PUT created a marker")
+	if n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("a cross-user PUT changed the owner's record")
 	}
 }
 
-func TestNetworkEnableGates(t *testing.T) {
-	n := newNetHarness(t)
-	path := "/api/projects/" + n.pid + "/network"
-
-	// No status file: unavailable, enable refused, nothing written.
-	w := doAs(t, n.h, n.admin, http.MethodGet, path, "")
-	if w.Code != http.StatusOK || decodeLan(t, w.Body.String())["lanState"] != "off" {
-		t.Fatalf("GET before enable: %d %s", w.Code, w.Body.String())
-	}
-	w = doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":true}`)
-	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "not installed") {
-		t.Fatalf("enable without host support: %d %s", w.Code, w.Body.String())
-	}
-	if n.marker() || n.spoolEntries(t) != 0 {
-		t.Fatal("refused enable must write nothing")
-	}
-	// Disable is always accepted, even without host support.
-	if w = doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":false}`); w.Code != http.StatusOK {
-		t.Fatalf("disable: %d %s", w.Code, w.Body.String())
-	}
-
-	// Outdated script: refused with the version pair.
-	n.writeStatus(t, time.Now(), "")
-	text, _ := os.ReadFile(filepath.Join(n.fw, "status"))
-	stale := netpolicy.MinScriptVersion - 1
-	os.WriteFile(filepath.Join(n.fw, "status"), []byte(strings.Replace(string(text),
-		"version="+strconv.Itoa(netpolicy.MinScriptVersion), "version="+strconv.Itoa(stale), 1)), 0o644)
-	n.s.netpol.Status(time.Now().Add(2 * time.Hour))
-	w = doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":true}`)
-	wantMsg := fmt.Sprintf("outdated (have %d, need %d)", stale, netpolicy.MinScriptVersion)
-	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), wantMsg) {
-		t.Fatalf("enable with an outdated script: %d %s", w.Code, w.Body.String())
-	}
-
-	// Fresh status: a non-admin owner cannot enable; the admin can.
-	n.writeStatus(t, time.Now(), "")
-	n.s.netpol.Status(time.Now().Add(3 * time.Hour))
-	if w = doAs(t, n.h, n.member, http.MethodPut, path, `{"lanAccess":true}`); w.Code != http.StatusNotFound {
-		t.Fatalf("member (not the owner) enable: %d", w.Code) // still 404: not their project
-	}
-	spoolBefore := n.spoolEntries(t) // the accepted disable above kicked once already
-	w = doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":true}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("enable: %d %s", w.Code, w.Body.String())
-	}
-	m := decodeLan(t, w.Body.String())
-	if m["lanAccess"] != true || m["lanState"] != "pending" {
-		t.Fatalf("enable reply must be pending, never on: %v", m)
-	}
-	if _, ok := m["host"]; !ok {
-		t.Fatal("admin reply carries the host view")
-	}
-	if !n.marker() || n.spoolEntries(t) != spoolBefore+1 {
-		t.Fatalf("enable must create the marker and exactly one spool entry (marker=%v spool=%d before=%d)", n.marker(), n.spoolEntries(t), spoolBefore)
-	}
-	// The list carries the state through the existing poll.
-	w = doAs(t, n.h, n.admin, http.MethodGet, "/api/projects", "")
-	if !strings.Contains(w.Body.String(), `"lanState":"pending"`) {
-		t.Fatalf("list lacks lanState: %s", w.Body.String())
-	}
-
-	// Root reports it applied → on.
-	n.writeStatus(t, time.Now(), "lan="+n.pid+"\n")
-	n.s.netpol.Status(time.Now().Add(4 * time.Hour))
-	w = doAs(t, n.h, n.admin, http.MethodGet, path, "")
-	if decodeLan(t, w.Body.String())["lanState"] != "on" {
-		t.Fatalf("applied → on: %s", w.Body.String())
-	}
-	// Root reports an error → error with the text.
-	n.writeStatus(t, time.Now(), "error="+n.pid+":192.0.2.0/24:insert failed\n")
-	n.s.netpol.Status(time.Now().Add(5 * time.Hour))
-	w = doAs(t, n.h, n.admin, http.MethodGet, path, "")
-	m = decodeLan(t, w.Body.String())
-	if m["lanState"] != "error" || !strings.Contains(m["lanMessage"].(string), "insert failed") {
-		t.Fatalf("error line → error: %v", m)
-	}
-	// Stale status while root last said applied: never "off".
-	n.writeStatus(t, time.Now().Add(-10*time.Minute), "lan="+n.pid+"\n")
-	n.s.netpol.Status(time.Now().Add(6 * time.Hour))
-	doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":false}`)
-	w = doAs(t, n.h, n.admin, http.MethodGet, path, "")
-	m = decodeLan(t, w.Body.String())
-	if m["lanState"] != "error" || !strings.Contains(m["lanMessage"].(string), "cannot confirm closed") {
-		t.Fatalf("stale+applied after disable must not read off: %v", m)
-	}
-	if n.marker() {
-		t.Fatal("disable must remove the marker")
-	}
-}
-
-// A non-admin OWNER sees the state but never root's texts, which name the
-// operator's LAN prefix (security review).
-func TestNetworkTenantMessagesAreGeneric(t *testing.T) {
+// Enabling is admin-only; disabling is always allowed to the owner, because
+// tightening must never be refused.
+func TestNetworkEnableIsAdminOnlyDisableIsNot(t *testing.T) {
 	n := newNetHarness(t)
 	sp, err := n.s.space(identity.DeriveUsername(n.member))
 	if err != nil {
@@ -240,121 +129,133 @@ func TestNetworkTenantMessagesAreGeneric(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sp.projects.SetLanAccess(p.ID, true, time.Now().Add(-time.Hour)); err != nil {
+	path := "/api/projects/" + p.ID + "/network"
+
+	// The non-admin owner cannot enable.
+	if w := doAs(t, n.h, n.member, http.MethodPut, path, `{"lanAccess":true}`); w.Code != http.StatusForbidden {
+		t.Fatalf("member enable: %d %s, want 403", w.Code, w.Body.String())
+	}
+	if n.lanAccessOf(t, n.member, p.ID) {
+		t.Fatal("a refused enable must not persist")
+	}
+	// An admin enables it for them...
+	if w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":true}`); w.Code != http.StatusNotFound {
+		t.Fatalf("admin acting on another user's project must 404, got %d", w.Code)
+	}
+	// ...but there is no admin path into another user's store, so set it
+	// directly and prove the OWNER can turn it back off.
+	if err := sp.projects.SetLanAccess(p.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	n.writeStatus(t, time.Now(), "conf_error=LAN_CIDRS: 192.0.2.7/24 has host bits set\nerror="+p.ID+":192.0.2.0/24:insert failed\n")
-	n.s.netpol.Status(time.Now().Add(time.Hour))
-	w := doAs(t, n.h, n.member, http.MethodGet, "/api/projects/"+p.ID+"/network", "")
-	if w.Code != http.StatusOK {
-		t.Fatalf("owner GET: %d %s", w.Code, w.Body.String())
+	if w := doAs(t, n.h, n.member, http.MethodPut, path, `{"lanAccess":false}`); w.Code != http.StatusOK {
+		t.Fatalf("member disable: %d %s, want 200", w.Code, w.Body.String())
 	}
-	body := w.Body.String()
-	if strings.Contains(body, "192.0.2") || strings.Contains(body, "insert failed") || strings.Contains(body, `"host"`) {
-		t.Fatalf("tenant reply leaks root's text or the host view: %s", body)
-	}
-	m := decodeLan(t, body)
-	if m["lanState"] != "error" || !strings.Contains(m["lanMessage"].(string), "ask the operator") {
-		t.Fatalf("tenant should see a generic error: %v", m)
-	}
-	w = doAs(t, n.h, n.member, http.MethodGet, "/api/projects", "")
-	if strings.Contains(w.Body.String(), "192.0.2") {
-		t.Fatalf("tenant list leaks the prefix: %s", w.Body.String())
-	}
-	// The admin sees root's words for their own project.
-	n.writeStatus(t, time.Now(), "error="+n.pid+":192.0.2.0/24:insert failed\n")
-	n.s.netpol.Status(time.Now().Add(2 * time.Hour))
-	doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":false}`)
-	w = doAs(t, n.h, n.admin, http.MethodGet, "/api/projects/"+n.pid+"/network", "")
-	if !strings.Contains(w.Body.String(), "insert failed") {
-		t.Fatalf("admin should see root's text: %s", w.Body.String())
+	if n.lanAccessOf(t, n.member, p.ID) {
+		t.Fatal("owner disable did not persist")
 	}
 }
 
-// A PUT that changes nothing must not kick root on every call (a tenant can
-// loop disable) — it is throttled; a real change kicks at once.
-func TestNetworkNoOpPutIsThrottled(t *testing.T) {
+// A PUT that changes nothing is a 200 that did not rebuild anything.
+func TestNetworkNoOpPutDoesNotRebuild(t *testing.T) {
 	n := newNetHarness(t)
-	n.writeStatus(t, time.Now(), "")
 	path := "/api/projects/" + n.pid + "/network"
-	for i := 0; i < 5; i++ {
-		if w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":false}`); w.Code != http.StatusOK {
-			t.Fatalf("disable %d: %d", i, w.Code)
+	for i := 0; i < 3; i++ {
+		w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":false}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("no-op disable %d: %d", i, w.Code)
+		}
+		if m := decodeLan(t, w.Body.String()); m["rebuilt"] != false || m["lanAccess"] != false {
+			t.Fatalf("no-op reply should be {lanAccess:false, rebuilt:false}, got %v", m)
 		}
 	}
-	if got := n.spoolEntries(t); got != 1 {
-		t.Fatalf("five no-op disables should kick once, got %d spool entries", got)
+}
+
+// The mode round-trips through the record and both project views.
+func TestNetworkModeRoundTrips(t *testing.T) {
+	n := newNetHarness(t)
+	path := "/api/projects/" + n.pid + "/network"
+
+	if m := decodeLan(t, doAs(t, n.h, n.admin, http.MethodGet, path, "").Body.String()); m["lanAccess"] != false {
+		t.Fatalf("a new project must default to sandbox, got %v", m)
 	}
 	if w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":true}`); w.Code != http.StatusOK {
 		t.Fatalf("enable: %d %s", w.Code, w.Body.String())
 	}
-	if got := n.spoolEntries(t); got != 2 {
-		t.Fatalf("a real change must kick at once, got %d", got)
+	if !n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("enable did not persist to the record")
+	}
+	if m := decodeLan(t, doAs(t, n.h, n.admin, http.MethodGet, path, "").Body.String()); m["lanAccess"] != true {
+		t.Fatalf("GET after enable: %v", m)
+	}
+	// Both the single-project view and the list carry it, so the UI never has
+	// to ask a second endpoint to render a badge.
+	one := decodeLan(t, doAs(t, n.h, n.admin, http.MethodGet, "/api/projects/"+n.pid, "").Body.String())
+	if one["lanAccess"] != true {
+		t.Fatalf("project view is missing lanAccess: %v", one)
+	}
+	list := decodeLan(t, doAs(t, n.h, n.admin, http.MethodGet, "/api/projects", "").Body.String())
+	ps, _ := list["projects"].([]any)
+	if len(ps) != 1 {
+		t.Fatalf("want 1 project, got %v", list)
+	}
+	if ps[0].(map[string]any)["lanAccess"] != true {
+		t.Fatalf("list view is missing lanAccess: %v", ps[0])
+	}
+	// And back off again.
+	if w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":false}`); w.Code != http.StatusOK {
+		t.Fatalf("disable: %d", w.Code)
+	}
+	if n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("disable did not persist")
 	}
 }
 
-func TestNetworkHostViewIsAdminOnly(t *testing.T) {
-	n := newNetHarness(t)
-	n.writeStatus(t, time.Now(), "")
-	// The member owns nothing here, so use the settings endpoint, which every
-	// user can read: hostFirewall must be present for the admin only.
-	w := doAs(t, n.h, n.admin, http.MethodGet, "/api/settings", "")
-	if !strings.Contains(w.Body.String(), `"hostFirewall"`) || !strings.Contains(w.Body.String(), "192.0.2.0/24") {
-		t.Fatalf("admin settings lack hostFirewall: %s", w.Body.String())
-	}
-	w = doAs(t, n.h, n.member, http.MethodGet, "/api/settings", "")
-	if strings.Contains(w.Body.String(), "hostFirewall") || strings.Contains(w.Body.String(), "192.0.2.0/24") {
-		t.Fatalf("member settings leak the host view: %s", w.Body.String())
-	}
-}
-
-// Two overlapping PUTs end consistent: the record and the marker agree.
+// Concurrent PUTs must leave the record at one of the requested values, never
+// torn — netMu plus the store's own lock.
 func TestNetworkConcurrentPutsStayConsistent(t *testing.T) {
 	n := newNetHarness(t)
-	n.writeStatus(t, time.Now(), "")
 	path := "/api/projects/" + n.pid + "/network"
 	var wg sync.WaitGroup
-	for i := 0; i < 20; i++ {
+	for i := 0; i < 16; i++ {
 		wg.Add(1)
-		go func(on bool) {
+		go func(i int) {
 			defer wg.Done()
 			body := `{"lanAccess":false}`
-			if on {
+			if i%2 == 0 {
 				body = `{"lanAccess":true}`
 			}
 			if w := doAs(t, n.h, n.admin, http.MethodPut, path, body); w.Code != http.StatusOK {
-				t.Errorf("PUT %v: %d %s", on, w.Code, w.Body.String())
+				t.Errorf("concurrent PUT %d: %d %s", i, w.Code, w.Body.String())
 			}
-		}(i%2 == 0)
+		}(i)
 	}
 	wg.Wait()
-	sp, _ := n.s.space(identity.DeriveUsername(n.admin))
-	p, _ := sp.projects.Get(n.pid)
-	if p.LanAccess != n.marker() {
-		t.Fatalf("record %v but marker %v", p.LanAccess, n.marker())
+	// Whatever won, the record must be readable and the GET must agree with it.
+	rec := n.lanAccessOf(t, n.admin, n.pid)
+	if m := decodeLan(t, doAs(t, n.h, n.admin, http.MethodGet, path, "").Body.String()); m["lanAccess"] != rec {
+		t.Fatalf("GET %v disagrees with the record %v after concurrent PUTs", m["lanAccess"], rec)
 	}
 }
 
-func TestDeleteProjectRemovesMarker(t *testing.T) {
+// A LAN-enabled project's record goes away with the project — there is no
+// separate marker to leak, which is the point of ADR-067, but the record
+// itself must still be removed under netMu.
+func TestDeleteProjectRemovesTheRecord(t *testing.T) {
 	n := newNetHarness(t)
-	n.writeStatus(t, time.Now(), "")
-	path := "/api/projects/" + n.pid + "/network"
-	if w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":true}`); w.Code != http.StatusOK {
-		t.Fatalf("enable: %d %s", w.Code, w.Body.String())
+	sp, err := n.s.space(identity.DeriveUsername(n.admin))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !n.marker() {
-		t.Fatal("marker missing after enable")
+	if err := sp.projects.SetLanAccess(n.pid, true); err != nil {
+		t.Fatal(err)
 	}
-	// Image is empty, so no container was ever created; Destroy finds nothing
-	// and the record path runs to completion in the background.
-	if w := doAs(t, n.h, n.admin, http.MethodDelete, "/api/projects/"+n.pid, ""); w.Code != http.StatusAccepted {
-		t.Fatalf("delete: %d %s", w.Code, w.Body.String())
+	if _, err := sp.projects.Get(n.pid); err != nil {
+		t.Fatalf("precondition: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for n.marker() && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+	if err := sp.projects.Remove(n.pid); err != nil {
+		t.Fatal(err)
 	}
-	if n.marker() {
-		t.Fatal("marker survived the project's deletion")
+	if _, err := sp.projects.Get(n.pid); err == nil {
+		t.Fatal("record survived removal")
 	}
 }

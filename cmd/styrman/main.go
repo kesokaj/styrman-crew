@@ -42,12 +42,6 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	// The LAN marker dir names every LAN-enabled project: owner-writable,
-	// group-readable for root's script, nothing for other local uids (ADR-065).
-	if err := os.MkdirAll(filepath.Join(cfg.NetPolicyDir(), "lan"), 0o750); err != nil {
-		logger.Error("netpolicy dir unavailable", "dir", cfg.NetPolicyDir(), "error", err)
-		os.Exit(1)
-	}
 
 	migrateLegacy(cfg, logger)
 
@@ -103,50 +97,6 @@ func main() {
 
 	api := httpapi.New(cfg, users, orch, logger)
 
-	// Per-project LAN markers mirror the records BEFORE any request can open
-	// a store (ADR-065): missing markers are added, markers with no enabled
-	// record removed — fail-closed and loud. wantLAN is called INSIDE the
-	// marker dir's lock (see netpolicy.Dir.Sync); it reads fresh Store
-	// instances from disk, a consistent snapshot because every save is
-	// tmp+rename.
-	wantLAN := func() (map[string]bool, error) {
-		want := map[string]bool{}
-		forEachProject(cfg, logger, func(_ string, p project.Project) { want[p.ID] = p.LanAccess })
-		return want, nil
-	}
-	if !api.NetPolicy().Enabled() {
-		// "Empty STYRMAN_FIREWALL_DIR disables the feature" has to be true for
-		// EXISTING grants too: root would keep applying whatever markers are
-		// left, while the UI could no longer see it (security review). With
-		// the feature off, every marker is removed — records keep their intent
-		// and report "cannot confirm" until the operator re-enables it.
-		logger.Warn("per-project LAN access disabled (STYRMAN_FIREWALL_DIR empty): removing every marker; enables are refused")
-		wantLAN = func() (map[string]bool, error) { return map[string]bool{}, nil }
-	}
-	if added, removed, err := api.NetPolicy().Sync(wantLAN); err != nil {
-		logger.Error("lan marker sync failed", "error", err)
-	} else if added+removed > 0 {
-		logger.Info("lan markers synced", "added", added, "removed", removed)
-	}
-	api.NetPolicy().Kick("boot")
-	// A dedicated ticker — NOT the orchestrator's idle reaper, which knows
-	// nothing of stores or markers — so record and marker converge without a
-	// restart (a crash between store save and marker write, or a store edited
-	// by hand).
-	go func() {
-		t := time.NewTicker(2 * time.Minute)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				if _, _, err := api.NetPolicy().Sync(wantLAN); err != nil {
-					logger.Warn("lan marker re-sync failed", "error", err)
-				}
-			}
-		}
-	}()
 	go func() {
 		bctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
@@ -161,10 +111,6 @@ func main() {
 				orch.EnsureSelfAttached(st.User, st.Project)
 			}
 		}
-		// VMs dockerd auto-restarted never pass through EnsureRunning, so
-		// their bridges (and the subnet a LAN rule pins) appear without a
-		// kick from the request paths — nudge root once now (ADR-065).
-		api.NetPolicy().Kick("adopt")
 	}()
 
 	// Credential broker (ADR-030): a bridge-only, credential-only listener,
@@ -177,9 +123,7 @@ func main() {
 			logger.Error("credential store unavailable — broker disabled", "error", cerr)
 		} else {
 			api.SetCredStore(cstore) // onboarding endpoints write here
-			// api is the LanChecker: it holds the per-user project stores
-			// and root's status, which orch (the Resolver) does not (ADR-066).
-			broker := credbroker.New(cstore, orch, api, logger)
+			broker := credbroker.New(cstore, orch, logger)
 			brokerSrv := &http.Server{
 				Addr:              cfg.BrokerAddr,
 				Handler:           broker.Handler(),

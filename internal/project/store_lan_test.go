@@ -9,9 +9,8 @@ import (
 	"time"
 )
 
-// The LAN-access intent (ADR-065): round-trips through a fresh Store, is
-// absent from the bytes while off, stamps LanChangedAt only on a real change,
-// and rolls back when the save fails.
+// The network mode (ADR-067): round-trips through a fresh Store, is absent
+// from the bytes while off, and rolls back when the save fails.
 func TestSetLanAccessRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "projects.json")
 	s, err := NewStore(path)
@@ -23,94 +22,34 @@ func TestSetLanAccessRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
-	if strings.Contains(string(raw), "lanAccess") || strings.Contains(string(raw), "lanChangedAt") {
-		t.Fatalf("off is the default and must not be serialised: %s", raw)
+	if strings.Contains(string(raw), "lanAccess") {
+		t.Fatalf("sandbox is the default and must not be serialised: %s", raw)
 	}
 
-	t1 := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
-	if err := s.SetLanAccess(p.ID, true, t1); err != nil {
+	if err := s.SetLanAccess(p.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	got, _ := s.Get(p.ID)
-	if !got.LanAccess || !got.LanChangedAt.Equal(t1) {
+	if got, _ := s.Get(p.ID); !got.LanAccess {
 		t.Fatalf("after enable: %+v", got)
 	}
-	// Idempotent re-enable must not move the clock (a repeated PUT re-kicks
-	// the reconciler but does not restart the pending window).
-	if err := s.SetLanAccess(p.ID, true, t1.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ = s.Get(p.ID); !got.LanChangedAt.Equal(t1) {
-		t.Fatalf("repeated enable moved LanChangedAt: %v", got.LanChangedAt)
-	}
-
+	// Survives a reopen — the record is the only source of truth for the mode,
+	// so a restart must not silently sandbox a LAN project.
 	s2, err := NewStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ = s2.Get(p.ID); !got.LanAccess || !got.LanChangedAt.Equal(t1) {
-		t.Fatalf("reloaded: %+v", got)
+	if got, _ := s2.Get(p.ID); !got.LanAccess {
+		t.Fatalf("mode did not survive a reopen: %+v", got)
 	}
-	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
-		t.Error("tmp file left behind")
-	}
-
-	t2 := t1.Add(2 * time.Hour)
-	if err := s2.SetLanAccess(p.ID, false, t2); err != nil {
+	if err := s.SetLanAccess(p.ID, false); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ = s2.Get(p.ID); got.LanAccess || !got.LanChangedAt.Equal(t2) {
+	if got, _ := s.Get(p.ID); got.LanAccess {
 		t.Fatalf("after disable: %+v", got)
 	}
 	raw, _ = os.ReadFile(path)
-	if strings.Contains(string(raw), `"lanAccess"`) {
-		t.Fatalf("lanAccess false must be omitted: %s", raw)
-	}
-	if !strings.Contains(string(raw), "lanChangedAt") {
-		t.Fatalf("lanChangedAt must persist after a disable so the closing state can be dated: %s", raw)
-	}
-	if err := s2.SetLanAccess("00000000-0000-4000-8000-000000000000", true, t2); err != ErrNotFound {
-		t.Fatalf("unknown id: %v, want ErrNotFound", err)
-	}
-}
-
-// RestoreLanAccess puts back an exact (value, timestamp) pair — the
-// handler's rollback must not stamp "now" (review, 2026-09-08).
-func TestRestoreLanAccessKeepsTheOldClock(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "projects.json")
-	s, err := NewStore(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, err := s.Add(Project{Name: "alpha", CreatedAt: time.Now().UTC()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t1 := time.Date(2026, 9, 8, 12, 0, 0, 0, time.UTC)
-	if err := s.SetLanAccess(p.ID, true, t1); err != nil {
-		t.Fatal(err)
-	}
-	// A later change, then a rollback to the earlier pair.
-	if err := s.SetLanAccess(p.ID, false, t1.Add(time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.RestoreLanAccess(p.ID, true, t1); err != nil {
-		t.Fatal(err)
-	}
-	got, _ := s.Get(p.ID)
-	if !got.LanAccess || !got.LanChangedAt.Equal(t1) {
-		t.Fatalf("restore must reinstate the exact pair: %+v", got)
-	}
-	// Idempotent and persisted.
-	if err := s.RestoreLanAccess(p.ID, true, t1); err != nil {
-		t.Fatal(err)
-	}
-	s2, _ := NewStore(path)
-	if got, _ = s2.Get(p.ID); !got.LanAccess || !got.LanChangedAt.Equal(t1) {
-		t.Fatalf("restore not persisted: %+v", got)
-	}
-	if err := s2.RestoreLanAccess("00000000-0000-4000-8000-000000000000", false, t1); err != ErrNotFound {
-		t.Fatalf("unknown id: %v", err)
+	if strings.Contains(string(raw), "lanAccess") {
+		t.Fatalf("disable must drop the field again: %s", raw)
 	}
 }
 
@@ -132,32 +71,51 @@ func TestSetLanAccessRollsBackOnSaveFailure(t *testing.T) {
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetLanAccess(p.ID, true, time.Now()); err == nil {
+	if err := s.SetLanAccess(p.ID, true); err == nil {
 		t.Fatal("save should have failed")
 	}
-	if got, _ := s.Get(p.ID); got.LanAccess || !got.LanChangedAt.IsZero() {
+	if got, _ := s.Get(p.ID); got.LanAccess {
 		t.Fatalf("memory must match disk after a failed save: %+v", got)
 	}
 }
 
-// A hand-edited store with lanAccess:true and no timestamp gets a clock at
-// load time, so pending→error can still be derived.
-func TestLoadDatesUndatedLanAccess(t *testing.T) {
+// A record written by v1.23/v1.24 carries lanChangedAt and lanEverEnabled,
+// which ADR-067 deleted. Loading one must keep the mode, ignore the two dead
+// fields, and drop them from the file on the next write — an upgrade must not
+// lose a project's LAN setting, and must not carry the latch forward either
+// (the latch is what permanently withheld the SSH key).
+func TestLoadDropsPreADR067Fields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "projects.json")
-	f := storeFile{Projects: []Project{{
-		ID: "3e6a772c-b177-4cfc-b209-b14db514bac2", Name: "alpha", Dir: "alpha",
-		CreatedAt: time.Now().UTC(), LanAccess: true,
-	}}}
-	data, _ := json.Marshal(f)
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	const id = "3e6a772c-b177-4cfc-b209-b14db514bac2"
+	legacy := `{"projects":[{"id":"` + id + `","name":"alpha","dir":"alpha",` +
+		`"createdAt":"2026-09-08T12:00:00Z","lanAccess":true,` +
+		`"lanChangedAt":"2026-09-08T12:00:00Z","lanEverEnabled":true}]}`
+	if err := os.WriteFile(path, []byte(legacy), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	s, err := NewStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, _ := s.Get("3e6a772c-b177-4cfc-b209-b14db514bac2")
-	if !got.LanAccess || got.LanChangedAt.IsZero() {
-		t.Fatalf("undated lanAccess should be dated at load: %+v", got)
+	got, err := s.Get(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.LanAccess {
+		t.Fatalf("upgrade lost the project's LAN mode: %+v", got)
+	}
+	// Force a rewrite and confirm both dead fields are gone from the bytes.
+	if err := s.SetLanAccess(id, false); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	for _, dead := range []string{"lanChangedAt", "lanEverEnabled"} {
+		if strings.Contains(string(raw), dead) {
+			t.Fatalf("%s survived the rewrite: %s", dead, raw)
+		}
+	}
+	var f storeFile
+	if err := json.Unmarshal(raw, &f); err != nil {
+		t.Fatalf("rewritten store is not valid JSON: %v", err)
 	}
 }
