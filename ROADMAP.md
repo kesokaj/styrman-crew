@@ -12,7 +12,34 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**v1.25.0 shipped 2026-09-09 — ADR-067 is live.** (The paragraphs below were written while it was pending and are kept as the record of how it got there; the handoff `handoffs/2026-09-09-v1.25.0-shipped.md` is current.) The per-project LAN switch is
+**v1.25.0 shipped 2026-09-09; ADR-067 is live in production.** The
+per-project network mode is the bridge interface prefix (`sdb-` sandbox,
+`lan-` LAN), chosen by the server; ADR-065/066's root-mediated machinery is
+deleted. Tag `v1.25.0` on `6e73b43`, deployed by the auto-updater at 18:11,
+firewall converged on the following tick, `iptables -S` unchanged. Gate:
+`.agents/docs/reviews/2026-09-09-preflight-v1.25.0.md`. Plan
+`.agents/docs/plans/2026-09-09-lan-mode-by-bridge-prefix.md` is 43 of 44.
+
+**Open, all the operator's:** the browser walk-through (the plan's one
+unticked box); whether to disable sshd password auth before the first LAN
+project (this host accepts passwords, and a LAN project reaches it); one run
+of `sudo bash deploy/firewall/install.sh` from `/opt/styrman` at `v1.25.0`
+to remove the retired, inert `.path` unit and spool mount.
+
+**Next code task on this area** — top of `TODO.md`: replace the network-mode
+PUT's record-first-then-rollback with persist-after-apply on tightening,
+and compare against the live bridge name so a re-PUT is itself the
+recovery. Three fail-opens (BUG-028/029/031) were found on that mechanism
+in one day; AGENTS.md's rule after a third round is to delete it, not
+defend it. Separate from that, and owed: the credential-broker reachability
+test from a LAN project on the compose deployment
+(`.agents/docs/reviews/2026-09-09-security-adr-067.md`) — a test, no code.
+
+<details>
+<summary>How it got there (written while ADR-067 was pending; kept as record)</summary>
+
+
+**ADR-067 built and verified; release pending.** The per-project LAN switch is
 now the bridge interface prefix, and ADR-065/066's root-mediated machinery is
 deleted. Plan: `.agents/docs/plans/2026-09-09-lan-mode-by-bridge-prefix.md`
 (its unticked boxes are the remaining work).
@@ -73,6 +100,8 @@ Carried forward, unstarted: the operator's picks from `TODO.md` — the legacy
 `migrateWorkspaces` path, the `git.go:73` confined read, the upstream
 `sh-agent` items, the ingress lows, and the incomplete v1.22.0 coverage tracing
 (largest untraced surface is `SidePanelGit.tsx`).
+
+</details>
 
 ## Next
 
