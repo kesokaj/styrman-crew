@@ -89,21 +89,26 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
   text = resize, close 4000 = exited, 4001 = replaced.
 - Per-project dockerd: overlay2 on loop-mounted `~/.dockerd/<uuid>.img`.
 - Project networks are isolated from each other (R12); the server joins
-  them in the background for the port-preview proxy (ip_forward=0). The
-  root-owned host firewall (`deploy/firewall/`, ADR-065/066) drops all private
-  ranges; an admin may allow ONE project's LAN access per project — the
-  server writes a name-only marker under `StateDir/netpolicy/lan/` and kicks
-  a root spool, root reconciles head-of-chain RETURNs and writes a status
-  file the server derives `off/pending/on/error/unavailable` from. The
-  server never touches iptables. ADR-066 makes an allowance full
-  same-network parity OUTBOUND — the host itself (`STYRMAN-IN`) and
-  host-published Docker ports included, each behind its own
-  `/etc/styrman/firewall.conf` opt-in (`LAN_ALLOW_HOST`,
-  `LAN_ALLOW_PUBLISHED_PORTS`; absent means no, so converging the script
-  grants nothing). Three rule families share one generic reconcile keyed by
-  `(tag, chain, regex)`. In exchange the credential broker withholds the
-  SSH key from a LAN-enabled project. A deployment setting `LAN_ALLOW_HOST`
-  must first disable sshd password auth — see `.agents/docs/deploy/remote.md`.
+  them in the background for the port-preview proxy (ip_forward=0).
+  Cross-project isolation is Docker's own, unconditional per-bridge `DROP`
+  rule, unaffected by anything below. A project's MODE is its Docker bridge
+  INTERFACE name, chosen by the server at `docker network create` — nothing
+  else changes and the server never touches iptables. Sandbox (default):
+  `sdb-<hash>`, matched by the root-owned host firewall's (`deploy/firewall/`,
+  ADR-036/067) drops of all private ranges plus the host itself, internet
+  only. LAN: `lan-<hash>`, matched by no styrman rule at all, so the project
+  is exactly a normal Docker container — it reaches whatever the host
+  reaches (the LAN, the host itself including its sshd, host-published
+  Docker ports), still NAT-only outbound. An admin toggles a project's mode
+  at any time; the toggle rebuilds that project's Docker network and
+  container (home and workspace, both bind mounts, survive; anything
+  living only in the container filesystem does not). There is no
+  allowlist, no marker/spool, no root-side per-project state, and the
+  credential broker no longer withholds anything from a LAN project — see
+  ADR-065/066 (superseded) and ADR-067 in `.agents/docs/architecture/DECISIONS.md`
+  for why the root-mediated design was deleted rather than kept. Hardening
+  sshd before using LAN mode is advice, not an enforced precondition — see
+  `.agents/docs/deploy/remote.md`.
 - Full rationale: `.agents/docs/architecture/DECISIONS.md` and
   `.agents/docs/plans/2026-08-26-super-devbox-architecture.md`.
 

@@ -31,11 +31,33 @@ bypassing the SPA's api client and hitting Playwright's own 30s default
 instead.
 
 ## Fix
-`setProjectLan` now passes `signal: AbortSignal.timeout(150000)`
-(`web/src/lib/api.ts:490`), matching start/stop, with a comment saying why.
-The two e2e checks pass `timeout: 150000`.
+**Second attempt, and the first one was wrong in the same way as the bug.**
+
+The first fix gave `setProjectLan` `AbortSignal.timeout(150000)` by copying
+`startProject`/`stopProject`. The code review caught that 150 s is LESS than
+the server's own bound for this request — `lanRebuildTimeout = 3 * time.Minute`
+(`internal/httpapi/network.go:36`) — so a rebuild taking 150-180 s would abort
+in the client while succeeding on the server: BUG-022's exact failure, merely
+in a narrower window.
+
+150 s is correct for start/stop because the SERVER bounds a plain start at 2
+minutes; it was never a general "slow operation" constant. Copying a sibling's
+number instead of reading the server budget for THIS request is what went
+wrong twice.
+
+Now `AbortSignal.timeout(210000)` — the server's 3 minutes plus the same 30 s
+slack start/stop carries over its own 2 — with a comment pairing it to the Go
+constant by name. The two e2e checks were raised to 210 s for the same reason.
 
 ## Prevention
+A client-side timeout must be derived from the SERVER's bound for the same
+request, and must exceed it. Read that constant; do not copy the number a
+neighbouring endpoint uses, because its value encodes ITS server's budget, not
+a general notion of "slow". Where the two live in different languages, name the
+server constant in a comment beside the client value so the pairing is
+greppable — nothing else links them.
+
+Original rule, still true:
 When a new endpoint performs an operation an existing endpoint already
 performs (here: a container stop+start), it inherits that operation's
 TIMEOUT BUDGET too — grep for how the existing caller of the same

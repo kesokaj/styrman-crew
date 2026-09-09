@@ -1,9 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -257,5 +260,93 @@ func TestDeleteProjectRemovesTheRecord(t *testing.T) {
 	}
 	if _, err := sp.projects.Get(n.pid); err == nil {
 		t.Fatal("record survived removal")
+	}
+}
+
+// ─── Fail-closed on a failed apply (security review 2026-09-09, finding 1) ───
+
+// fakeMode drives the three orchestrator calls a mode change makes, so the
+// FAILURE paths are reachable without Docker. The concrete orchestrator cannot
+// be made to fail Stop on demand, which is why this seam exists.
+type fakeMode struct {
+	state       string // what Status reports
+	stopErr     error
+	ensureErr   error
+	stopCalls   int
+	ensureCalls int
+}
+
+func (f *fakeMode) Status(_ context.Context, _, project string) (orchestrator.Status, error) {
+	return orchestrator.Status{Project: project, State: f.state, ContainerID: "c1"}, nil
+}
+
+func (f *fakeMode) Stop(_ context.Context, _, _ string) error {
+	f.stopCalls++
+	return f.stopErr
+}
+
+func (f *fakeMode) EnsureRunning(_ context.Context, _, _ string, _ orchestrator.RunOpts) (string, error) {
+	f.ensureCalls++
+	return "c1", f.ensureErr
+}
+
+// A revocation whose apply fails must not leave the record claiming sandbox
+// while the container keeps running on the lan- bridge. Nothing reconciles
+// that: EnsureRunning's mismatch heal fires for STOPPED containers only, so a
+// container left running on the wrong bridge stays there indefinitely, with
+// the switch, the badge and the API all reporting the mode it does NOT have.
+func TestNetworkFailedRevocationRollsBackTheRecord(t *testing.T) {
+	n := newNetHarness(t)
+	// Get it into LAN mode first, with a runtime that applies cleanly.
+	n.s.mode = &fakeMode{state: "running"}
+	if w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":true}`); w.Code != http.StatusOK {
+		t.Fatalf("enable: want 200, got %d", w.Code)
+	}
+	if !n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("precondition: the project should be in LAN mode")
+	}
+
+	// Now revoke, with a Stop that fails: the container stays up, on lan-.
+	fm := &fakeMode{state: "running", stopErr: errors.New("docker stop: timeout")}
+	n.s.mode = fm
+	w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":false}`)
+	code, body := w.Code, w.Body.String()
+	if code != http.StatusInternalServerError {
+		t.Fatalf("failed revocation: want 500, got %d (%s)", code, body)
+	}
+	if fm.stopCalls != 1 {
+		t.Fatalf("Stop should have been attempted exactly once, got %d", fm.stopCalls)
+	}
+	if fm.ensureCalls != 0 {
+		t.Fatal("EnsureRunning must not run after Stop failed")
+	}
+	// THE ASSERTION: the record must still say LAN, because LAN is still what
+	// is in force. A false "sandboxed" here is the fail-open.
+	if !n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("record says sandbox after a FAILED revocation — the project still has LAN access and every surface now under-reports it")
+	}
+	// And the caller must be told the mode did not change, not that it did.
+	if !strings.Contains(body, "NOT changed") {
+		t.Errorf("the error should say the mode was not changed, got %q", body)
+	}
+}
+
+// The other failure branch is different and must NOT roll back: if Stop
+// SUCCEEDED and only the restart failed, the container is down, so it has no
+// access at all and the record's new value is what the next start should
+// apply. Rolling back there would silently discard the operator's change.
+func TestNetworkFailedRestartKeepsTheRecord(t *testing.T) {
+	n := newNetHarness(t)
+	fm := &fakeMode{state: "running", ensureErr: errors.New("kata: boot failed")}
+	n.s.mode = fm
+	w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":true}`)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d", w.Code)
+	}
+	if fm.stopCalls != 1 || fm.ensureCalls != 1 {
+		t.Fatalf("want stop=1 ensure=1, got stop=%d ensure=%d", fm.stopCalls, fm.ensureCalls)
+	}
+	if !n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("a failed RESTART must keep the new record: the container is stopped, so nothing is in force, and the next start applies it")
 	}
 }

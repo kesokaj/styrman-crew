@@ -2494,3 +2494,58 @@ Verification: the cold-reader reports reviews/2026-09-09-cold-reader-lan-mode-pl
 
 Source: REQUIREMENTS.md R12, ROADMAP.md "Now".
 Verification: .agents/docs/plans/2026-09-09-lan-mode-by-bridge-prefix.md Appendix A; this session's Phase 0 changelog entry.
+
+---
+
+## ADR-067 — amendment (2026-09-09): what the LAN mode widens, stated rather than implied
+
+**Context:** The live adversarial run (`testing/2026-09-09-lan-mode-live.md`)
+and the security review (`reviews/2026-09-09-security-adr-067.md`) each found
+the same thing from different directions. ADR-067 says a LAN project reaches
+"this server including its SSH service". Measured: it reaches the host at
+*every* address the host holds — including the host's gateway address on
+OTHER projects' bridge interfaces (`172.21.0.1` from a project on `lan-…`),
+because the `-i sdb-+` wildcard that fed `STYRMAN-IN` simply no longer
+matches. The other project's *container* stays unreachable; R12's
+cross-project clause holds, and it held under the `cap_net_admin` manual-route
+attack R12 names. Two consequences follow that the ADR did not write down:
+
+1. **The credential broker's "bridge-only" binding now rests on one layer, not
+   two.** Before, a project could not reach any broker address but its own
+   bridge's, because the host firewall dropped guest→host on every `sdb-+`
+   interface. Now a LAN project can reach the broker on any bridge address.
+   What keeps that harmless is the broker's caller check — source IP resolved
+   to (user, project) through `containerHoldsIP`, which requires the address
+   to be one the resolved container actually holds — plus the fact that the
+   broker serves per-USER credentials, so a project reaching a "wrong" address
+   is still served its own user's secrets. Cross-tenant would need a forged
+   source address whose TCP handshake also completes, and the SYN-ACK routes
+   out the victim's bridge. **Not measured**: the broker only starts when the
+   server is containerized and the live run used a host process. The test
+   that settles it is specified in the security review (compose deploy, two
+   users, four probes) and is owed before this is called closed.
+
+2. **The host's sshd is reachable from a LAN project with whatever
+   authentication the host allows.** ADR-066 enforced password-auth-off as a
+   precondition; ADR-067 deleted the precondition (operator decision). On the
+   production host at the time of writing: `passwordauthentication yes`,
+   listening on `0.0.0.0:22`. That is a real exposure the moment any project
+   is put in LAN mode, and it is the operator's to close — `deploy/remote.md`
+   now says so as advice rather than as a gate.
+
+**Decision:** Record both as the cost of the design rather than reopen it.
+The broker question gets its test against the compose deployment before the
+next release that touches `internal/credbroker`. sshd hardening stays advice,
+stated loudly, because ADR-067's whole point was that root-mediated gates cost
+more than they protected; the operator chose that trade with the sshd case in
+front of them.
+
+**Consequences:** A reviewer reading ADR-067 alone no longer has to discover
+either point by measurement. And a failed revocation now FAILS CLOSED
+(`internal/httpapi/network.go`, security review finding 1): the record is
+rolled back when `Stop` fails, so no surface reports "sandboxed" while a
+container still runs on a `lan-` bridge — the mismatch heal fires for stopped
+containers only, and would never have corrected it.
+
+Source: testing/2026-09-09-lan-mode-live.md; reviews/2026-09-09-security-adr-067.md.
+Verification: `TestNetworkFailedRevocationRollsBackTheRecord` (mutation-checked); the broker test above is OWED, not done.

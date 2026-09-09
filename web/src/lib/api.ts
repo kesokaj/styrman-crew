@@ -474,20 +474,28 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ name }),
     }),
-  // Per-project local-network access (ADR-065). The PUT answers with the
-  // derived state — "pending" right after a change, never "on" from the
+  // Per-project network mode (ADR-067): two states, sandbox or LAN. The reply
+  // carries `canEnable` as its own field rather than leaving the client to
+  // infer the viewer's rights from the shape of the payload (BUG-019).
   projectNetwork: (id: string) =>
     request<ProjectNetwork>(u`/api/projects/${id}/network`),
   // A mode change REBUILDS a running project (ADR-067): stop, swap the bridge,
-  // boot the microVM again. That is a start/stop, so it gets start/stop's
-  // budget — request()'s 20 s default aborted the fetch while the rebuild went
-  // on to succeed server-side, and the UI reported a failure for a change that
-  // had worked.
+  // boot the microVM again. request()'s 20 s default aborted the fetch while
+  // the rebuild went on to succeed server-side, and the UI reported a failure
+  // for a change that had worked.
+  //
+  // 210 s because the SERVER bounds this at `lanRebuildTimeout = 3 * time.Minute`
+  // (internal/httpapi/network.go). The client has to outlast the server or it
+  // recreates the very bug it is fixing, just in a narrower window — and that
+  // is not hypothetical: the first fix here copied start/stop's 150 s, which
+  // works for THEM because a plain start is bounded at 2 minutes server-side,
+  // and is 30 s SHORT of a rebuild's. Pair this number with that constant, not
+  // with its neighbours.
   setProjectLan: (id: string, lanAccess: boolean) =>
     request<ProjectNetwork>(u`/api/projects/${id}/network`, {
       method: "PUT",
       body: JSON.stringify({ lanAccess }),
-      signal: AbortSignal.timeout(150000),
+      signal: AbortSignal.timeout(210000),
     }),
   deleteProject: (id: string, wipe: boolean) =>
     request<void>(u`/api/projects/${id}` + (wipe ? "?wipe=true" : ""), {

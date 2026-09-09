@@ -110,19 +110,42 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), lanRebuildTimeout)
 	defer cancel()
-	st, err := s.orch.Status(ctx, u.Username, p.ID)
+	st, err := s.mode.Status(ctx, u.Username, p.ID)
 	if err != nil || st.State != "running" {
 		// Stopped or absent: the record is the truth and EnsureRunning's
 		// mismatch check applies it on the next start. Nothing to do.
 		writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin})
 		return
 	}
-	if err := s.orch.Stop(ctx, u.Username, p.ID); err != nil {
+	if err := s.mode.Stop(ctx, u.Username, p.ID); err != nil {
+		// FAIL CLOSED on the reported state. The container is still running on
+		// the OLD bridge, so the mode did not change — but the record already
+		// says it did, and nothing would ever reconcile the two: the
+		// mismatch heal in EnsureRunning fires for STOPPED containers only, so
+		// a container left running on the wrong bridge stays there.
+		//
+		// Revoking (LAN -> sandbox) is the dangerous direction: the record
+		// would claim "sandboxed" while the project still had LAN access, and
+		// every surface that reads the record — the switch, the badge, the
+		// API — would repeat that claim indefinitely. Put the record back so
+		// what we report is what is actually in force.
+		s.netMu.Lock()
+		rollback := sp.projects.SetLanAccess(p.ID, !on)
+		s.netMu.Unlock()
+		if rollback != nil {
+			// Worse: the record now disagrees with reality and we could not
+			// correct it. Say so at ERROR — this one needs a human.
+			s.logger.Error("network mode: rollback failed, record disagrees with the running container",
+				"project", p.ID, "recordSays", on, "actual", !on, "error", rollback)
+		} else {
+			s.logger.Warn("network mode: apply failed, record rolled back",
+				"project", p.ID, "requested", on, "stillInForce", !on)
+		}
 		writeErr(w, http.StatusInternalServerError,
-			fmt.Errorf("saved, but the project could not be stopped to apply it: %w", err))
+			fmt.Errorf("the project could not be stopped, so the mode was NOT changed: %w", err))
 		return
 	}
-	if _, err := s.orch.EnsureRunning(ctx, u.Username, p.ID, orchestrator.RunOpts{
+	if _, err := s.mode.EnsureRunning(ctx, u.Username, p.ID, orchestrator.RunOpts{
 		Name: p.Name, Dir: p.Dir, GuestUser: sp.profile.GuestUser(), Lan: on,
 	}); err != nil {
 		writeErr(w, http.StatusInternalServerError,

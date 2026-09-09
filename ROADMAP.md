@@ -2,7 +2,7 @@
 
 <!-- Division of labor: ROADMAP.md = where the project is going; TODO.md = small deferred items; .agents/docs/plans/ = how. -->
 
-Last reviewed: 2026-09-08
+Last reviewed: 2026-09-09
 
 Empty by design past "Now" (operator directive 2026-08-30: "I want nothing
 in todo and roadmap — start fresh with new things"). See `TODO.md` for the
@@ -12,11 +12,31 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**ADR-067 in flight — the per-project LAN switch is being rebuilt as the bridge
-interface prefix, and ADR-065/066's root-mediated machinery deleted.** Plan:
-`.agents/docs/plans/2026-09-09-lan-mode-by-bridge-prefix.md` (its unticked
-boxes are the remaining work). Phase 0 (R12 amendment + ADR-067) is committed;
-Phases 1-6 are code, deletion, firewall shrink, UI, live verification, release.
+**ADR-067 built and verified; release pending.** The per-project LAN switch is
+now the bridge interface prefix, and ADR-065/066's root-mediated machinery is
+deleted. Plan: `.agents/docs/plans/2026-09-09-lan-mode-by-bridge-prefix.md`
+(its unticked boxes are the remaining work).
+
+Phases 0-4 are committed. **Phase 5 is 3 of 4**: both suites were rewritten and
+run green (integration 84/0/3, browser e2e 86/0/2), and the live adversarial
+run passed all five steps on real hardware — `testing/2026-09-09-lan-mode-live.md`.
+That run is the thing ADR-065 and ADR-066 never had: neither was ever once
+applied on a real host. Its one open box is the operator's own browser
+walk-through, which Playwright cannot stand in for because its host has no real
+LAN to prove reachability against.
+
+**Phase 6 is in progress.** Reviewed (approve-with-nits; all three findings
+fixed), docs updated, version decided as **v1.25.0** (MINOR — an upgrading host
+needs no action for the feature to work, since the mode is entirely
+server-side). Still open: the security review's verdict, a final verification
+pass over the fixed tree, the release changelog entry, and `/preflight`.
+**Nothing is tagged or deployed yet** — production remains on v1.24.1.
+
+Carried out of the live run and NOT resolved: a LAN-mode project reaches the
+host at its address on OTHER projects' bridge interfaces. The other project's
+container stays unreachable, so R12's cross-project clause holds, but the
+surface is wider than ADR-067's wording, and the credential broker identifies
+callers by source IP. It is the security review's primary question.
 
 The operator's correction on 2026-09-09: *"I just wanted you to give the option
 to enable local lan access as normal docker container have. Not copying a lot

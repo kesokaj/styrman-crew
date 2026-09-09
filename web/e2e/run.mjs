@@ -1185,12 +1185,13 @@ try {
   await panel().getByText("Network", { exact: true }).waitFor({ timeout: 20000 });
 
   await check("enabling rebuilds the project and flags it", async () => {
-    // 150 s, matching what the SPA gives start/stop: this PUT boots a microVM,
-    // and Playwright's 30 s default cut it off mid-rebuild.
+    // 210 s, pairing with the SERVER's lanRebuildTimeout (3 min), not with
+    // start/stop's client budget: Playwright's 30 s default cut the rebuild
+    // off, and 150 s would still be 30 s short of what the server allows.
     const res = await page.request.put(`${BASE}/api/projects/${PID}/network`, {
       data: { lanAccess: true },
       headers: { "content-type": "application/json" },
-      timeout: 150000,
+      timeout: 210000,
     });
     if (!res.ok()) throw new Error(`enable failed: ${res.status()} ${await res.text()}`);
     const net = await res.json();
@@ -1205,7 +1206,7 @@ try {
     const res = await page.request.put(`${BASE}/api/projects/${PID}/network`, {
       data: { lanAccess: false },
       headers: { "content-type": "application/json" },
-      timeout: 150000,
+      timeout: 210000,
     });
     if (!res.ok()) throw new Error(`disable failed: ${res.status()}`);
     const net = await res.json();

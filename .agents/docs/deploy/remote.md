@@ -1,6 +1,6 @@
 ---
 owner: documentation
-date: 2026-09-08
+date: 2026-09-09
 target: remote
 ---
 # Deploy — remote machine (production host)
@@ -19,44 +19,45 @@ Production is one self-hosted Debian 13 host (baremetal on the operator's networ
 
 `sudo bash deploy/host-setup.sh --user $USER` (Docker, Kata `mvm`, tuning, state dirs, runtime image, `.env` scaffold — idempotent). Bring-up and production mode: `.agents/docs/specs/styrman/deploy.md` "Production mode" and "Bring-up".
 
-**Host firewall half (ADR-065, once per host):** `sudo bash deploy/firewall/install.sh` — run from the deploy clone (`/opt/styrman`) at the deployed tag, never from a working tree. Installs the isolation + per-project-LAN reconciler script, its timer and path units, the bounded spool tmpfs, the marker dir, and — only if absent — `/etc/styrman/firewall.conf` with the LAN prefix discovered from the default route (printed; edit and `sudo systemctl start styrman-firewall.service` to change it). From then on the auto-updater's `host_converge` re-applies the script and units from every verified release tag; `firewall.conf` is never touched automatically. A `styrman-server` container that was already running when the spool tmpfs first appeared keeps seeing the plain directory under it until it is recreated (the next release deploy does that).
+**Host firewall half (ADR-036/067, once per host):** `sudo bash deploy/firewall/install.sh` — run from the deploy clone (`/opt/styrman`) at the deployed tag, never from a working tree. Installs the isolation script and its timer unit only. Since ADR-067 the per-project LAN switch is not a firewall rule at all — see "Per-project network mode" below — so this script has one job: keep every `sdb-*` (sandbox) bridge isolated from the host, the LAN, other projects, cloud metadata and the tailnet, while leaving the internet and the same-bridge broker/port-preview proxy reachable. On a host upgrading from v1.23/v1.24, `install.sh` also REMOVES the ADR-065/066 machinery it left behind — the `.path` unit, the spool tmpfs mount and its tmpfiles entry, the run dir, the service drop-in — because a leftover `.path` unit pointing at a deleted spool fails on every boot; `/etc/styrman/firewall.conf` is left in place untouched (its keys are no longer read by anything, and this script does not edit an operator-owned file). From then on the auto-updater's `host_converge` re-applies the script and unit from every verified release tag.
 
-### Opting in to full same-network parity (ADR-066, optional, per host)
+### Post-upgrade cleanup for hosts crossing the ADR-067 release
 
-Since ADR-066 the per-project LAN switch can also include **the host itself
-and host-published Docker ports**. Both are off unless the conf says so, so
-converging the script to version 4 grants nothing on its own:
+This is cleanup, not a requirement: a host that skips it keeps working — LAN
+mode is purely server-side since ADR-067, so nothing is blocked by leaving
+old units in place. The auto-updater deliberately does not do this step: it
+only ever installs the files the verified tree carries, and removing a unit
+the tree no longer has is `deploy/firewall/install.sh`'s job, not
+`deploy/update/styrman-update`'s (see that script around line 506). So a host
+that only auto-updates is left with two enabled-but-inert systemd units from
+the deleted ADR-065/066 machinery: `styrman-firewall.path` (watching a spool
+directory nothing writes to any more) and the escaped spool tmpfs mount unit
+(`run-styrman\x2dfirewall-spool.mount`). Neither ever triggers, but they are
+still enabled clutter.
+
+Run once, after the first ADR-067-or-later deploy, to remove them:
 
 ```bash
-# from /opt/styrman at the deployed tag; updates ONLY the named keys
-sudo bash deploy/firewall/install.sh --lan-allow-host 1
-sudo bash deploy/firewall/install.sh --lan-allow-published-ports 1   # derives INGRESS_BRIDGE
-cat /run/styrman-firewall/status   # lan_allow_host=1, ingress_bridge=br-<12 hex>
+sudo bash deploy/firewall/install.sh   # from /opt/styrman at the deployed tag
 ```
 
-`--lan-allow-published-ports 1` derives `INGRESS_BRIDGE` from the
-`styrman-ingress` network and refuses to proceed if it cannot; that value is
-a safety exclusion, so it is never typed by hand unless `--ingress-bridge` is
-passed deliberately. A stale value (the network was recreated) names an
-interface that no longer exists and the published-port family is skipped
-fail-closed. The server cross-checks it and warns in Settings → Host firewall
-if the conf disagrees with the live ingress network.
+This disables and deletes the `.path` unit, the spool mount unit, its
+tmpfiles entry, the service drop-in, and the (by-then-empty) run dir. It
+leaves `/etc/styrman/firewall.conf` in place on purpose: **nothing reads that
+file any more** (the `LAN_*` keys it may still carry are inert), and
+`install.sh` does not edit an operator-owned file — an operator who
+rediscovers it later should not be misled into thinking it still configures
+anything.
 
-**A LAN-enabled project stops being served the SSH key** while this is on
-(the credential broker withholds it, and any materialized copy is removed
-from the project home). SSH push from that project will fail; HTTPS with the
-GitHub token still works.
+### Per-project network mode (ADR-067)
 
-### PRECONDITION for `LAN_ALLOW_HOST=1`: harden sshd first
+A project's network mode is not a firewall rule the host applies — it is which Docker bridge INTERFACE name the server chose when it created the project's network: `sdb-<hash>` (sandbox, the default) or `lan-<hash>` (LAN), same sha1 suffix of the same network name either way. The `sdb-*` jumps in `styrman-firewall.sh` match the sandbox prefix; a `lan-*` bridge is matched by no styrman rule at all, so it is exactly a normal Docker container on this host: it NATs out as the host and reaches whatever the host reaches (the local network, the host's own addresses including `sshd`, and host-published Docker ports). It gains no reach into other projects — that guarantee is Docker's own, unconditional per-bridge `DROP` rule, not something this script grants or withholds.
 
-R12 states it as a requirement, not a suggestion: **a deployment that lets
-projects reach the host MUST NOT accept password authentication on the
-uplink.** With `LAN_ALLOW_HOST=1` an AI agent running inside a project can
-open connections to this machine's `sshd`, and `%sudo NOPASSWD:ALL` means a
-successful login is root.
+There is no allowlist, no conf opt-in and no root-side per-project state to install or verify here. Toggling a project's mode (Settings → the project, admin only) rebuilds that project's Docker network and container — the home and workspace are bind mounts and survive, anything living only in the container filesystem does not. The credential broker no longer withholds the SSH key from LAN projects; a LAN project is served credentials like any other.
 
-Do this **before** setting the key, and never in one step — a mistake here
-locks you out of your own machine:
+### Advice, not a precondition: harden sshd before using LAN mode
+
+Unlike the deleted ADR-065/066 design, nothing in the code gates LAN mode on this. But the LAN switch means the whole LAN, sshd included, and `%sudo NOPASSWD:ALL` means a successful password guess against this host's `sshd` from inside a LAN project is root. **Hardening sshd is still strongly advised before enabling LAN mode on any project** — do it, but nothing will stop you if you skip it:
 
 ```bash
 # 1. Open a SECOND ssh session to the host and leave it open. Do not close it
@@ -81,10 +82,12 @@ sudo sshd -t && sudo systemctl reload ssh
 sudo sshd -T | grep -E '^(passwordauthentication|permitrootlogin)'
 ```
 
-Only when `passwordauthentication no` is reported should
-`--lan-allow-host 1` be set. As of 2026-09-08 this host has **not** been
-hardened and has **not** opted in: `passwordauthentication yes`, no
-`authorized_keys` for either account.
+Once `passwordauthentication no` is reported, LAN mode on any project no
+longer risks a password-guessed root login through this host's `sshd`. As of
+2026-09-08 this host has **not** been hardened:
+`passwordauthentication yes`, no `authorized_keys` for either account —
+worth fixing before turning LAN mode on for any project, even though nothing
+in the code requires it.
 
 ## Procedure
 
@@ -101,11 +104,10 @@ The tag-gated auto-updater (`deploy/update/`, ADR-050/051) ships disabled; enabl
 Health through the ingress and a real Google sign-in in a browser (the one step an agent cannot do); `versioning.md` "Release procedure" lists the checks. Firewall half:
 
 ```bash
-sudo iptables -S STYRMAN-FWD | head          # six DROPs; a LAN-enabled project shows a RETURN at the head
-systemctl status styrman-firewall.timer styrman-firewall.path
-sudo iptables -S STYRMAN-IN                   # just DROP, unless LAN_ALLOW_HOST=1 and a project is on
-cat /run/styrman-firewall/status             # version=4, applied_at recent, lan_cidrs=<your prefix>,
-                                             # lan_allow_host / lan_allow_published_ports / ingress_bridge
+sudo iptables -S STYRMAN-FWD | head          # six DROPs; no per-project RETURN — the mode is the bridge name now
+systemctl status styrman-firewall.timer
+sudo iptables -S STYRMAN-IN                   # just DROP, unconditionally
+ip -o link show | grep -E ' (sdb|lan)-'      # each project's live mode
 journalctl -u styrman-firewall -n 20         # one line per change; quiet runs log nothing
 ```
 

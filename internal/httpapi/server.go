@@ -78,6 +78,17 @@ type guestRuntime interface {
 	Exec(ctx context.Context, containerID string, spec orchestrator.ExecSpec) (int, string, error)
 }
 
+// modeRuntime is the network-mode handler's view of the orchestrator: the
+// three calls a mode change makes. Same reason guestRuntime exists — the
+// interesting behaviour here is what happens when one of them FAILS (the
+// record must not keep claiming a mode that is not in force), and that is
+// unreachable through the concrete orchestrator, which needs a real Docker.
+type modeRuntime interface {
+	Status(ctx context.Context, user, project string) (orchestrator.Status, error)
+	Stop(ctx context.Context, user, project string) error
+	EnsureRunning(ctx context.Context, user, project string, opts orchestrator.RunOpts) (string, error)
+}
+
 type Server struct {
 	cfg *config.Config
 	// orch is the real orchestrator; guest is the same object behind the
@@ -85,6 +96,7 @@ type Server struct {
 	// same instance in production — see New.
 	orch   *orchestrator.Orchestrator
 	guest  guestRuntime
+	mode   modeRuntime
 	tmux   *conversation.Manager
 	bridge *terminal.Bridge
 	users  *userstore.Store
@@ -165,6 +177,7 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		cfg:           cfg,
 		orch:          orch,
 		guest:         orch,
+		mode:          orch,
 		tmux:          conversation.NewManager(orch, cfg),
 		users:         users,
 		logger:        logger,
@@ -218,8 +231,6 @@ func (s *Server) ensureFor(ctx context.Context, user, projectID string) (contain
 	}
 	guest := sp.profile.GuestUser()
 	id, err := s.orch.EnsureRunning(ctx, user, p.ID, orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest, Lan: p.LanAccess})
-	if err == nil {
-	}
 	return id, guest, p.Dir, err
 }
 

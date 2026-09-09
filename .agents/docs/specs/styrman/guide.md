@@ -265,36 +265,27 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   `STYRMAN-FWD` chains, kept applied by a self-healing `styrman-firewall.timer`
   (re-runs every 60s; INSERT-IF-MISSING, never delete-then-insert, so there is
   no window where isolation is briefly absent) (ADR-029, reworked 2026-08-30
-  — see deploy.md). Since ADR-065 the script lives in `deploy/firewall/`
-  and drops six ranges (RFC1918, 169.254/16, and the CGNAT/benchmark ranges
-  100.64/10 and 198.18/15), and there is ONE exception: an admin may allow
-  an individual project to reach the operator's **local network** — exactly
-  the IPv4 prefixes in the root-owned `/etc/styrman/firewall.conf` — by a
-  per-bridge RETURN the same root script inserts ahead of the drops, keyed on
-  that project's bridge interface, its subnet and the uplink device, driven
-  by an intent file the server writes (`netpolicy/lan/<uuid>`, name only)
-  and applied within about a second through a spool the server kicks. Since
-  ADR-066 this is FULL SAME-NETWORK PARITY, outbound: a LAN-enabled project
-  reaches everything a peer on those prefixes reaches, including the host
-  itself and host-published Docker ports — but each of those two reaches is
-  its own root-owned conf key (`LAN_ALLOW_HOST`, `LAN_ALLOW_PUBLISHED_PORTS`)
-  that defaults, and stays, closed unless a human runs `install.sh` with the
-  opt-in flag; absent or `0` means the same "no" as before ADR-066, so an
-  existing host does not silently gain either reach when the script
-  converges. `LAN_ALLOW_PUBLISHED_PORTS` also needs `INGRESS_BRIDGE`
-  (derived by `install.sh` from the `styrman-ingress` network); if it is
-  missing or names an interface that no longer exists, the published-port
-  allowance is skipped entirely (fail closed) with a warning, and the basic
-  LAN allowance is unaffected. It remains NAT-only outbound — LAN hosts
-  still cannot initiate connections into a project. Still dropped for a
-  LAN-enabled project too: every other project and system bridge, the
-  ingress bridge, cloud metadata, the tailnet, and every private range
-  outside the configured prefixes; the allowance disappears fail-closed
-  whenever the root half is absent or misconfigured (see §4 "Local
-  network"). The script is version 4 (`netpolicy.MinScriptVersion`); a host
-  still running version 3 refuses to enable ("outdated (have 3, need 4)")
-  until it is updated. A LAN-enabled project is also no longer served the
-  operator's SSH key by the credential broker (see §4).
+  — see deploy.md). The script (`deploy/firewall/`) drops six ranges
+  (RFC1918, 169.254/16, and the CGNAT/benchmark ranges 100.64/10 and
+  198.18/15) from every bridge whose interface name starts `sdb-`.
+  Since ADR-067, per-project LAN access is not a firewall rule at all: it
+  is which prefix the server gave that project's bridge interface at
+  `docker network create` — `sdb-<hash>` (sandboxed, matched by the rules
+  above) or `lan-<hash>` (matched by none of them, so it behaves exactly
+  like a normal Docker container on this host — NAT'd out to the LAN, the
+  host itself, and the host's published ports). Cross-project isolation
+  does not depend on this script at all: Docker writes its own
+  unconditional `-A DOCKER ! -i <br> -o <br> -j DROP` per bridge, which is
+  what blocks a LAN project from reaching another project whatever either
+  one's prefix is. Toggling a project's mode (§4 "Network") rebuilds its
+  Docker network and container — the home and workspace are bind mounts and
+  survive, packages are replayed from the ADR-028 apt manifest, and anything
+  living only in the container's own filesystem is lost. There is no
+  allowlist, no conf, no root-side per-project state, no spool and no
+  version handshake to keep current: root parses nothing the server writes.
+  A LAN project is served credentials exactly like any other — the
+  ADR-065/066 SSH-key withholding latch is deleted, not merely unused (see
+  §4).
 - **Credential broker** (ADR-030/032): a credential-only listener (`:8091`,
   bridge-only, never published to the host) hands each project the CURRENT
   credential for a tool, identified by its bridge source IP — so a refresh in
@@ -468,53 +459,33 @@ rotated token, or a tool signed into inside a project instead of at setup).
   checkpoint snapshots were REMOVED in v1.7.0 — see §1 idea 5. There is no
   backup feature to replace them with: durability is git — commit and
   push. See deploy.md's "Durability" section.)
-- **Local network** (ADR-065/066, per project): the top of the **Ports**
-  tab holds a "Local network" switch. Off is the default and means internet
-  only. On means FULL SAME-NETWORK PARITY, outbound: the project reaches
-  everything a peer on the operator's LAN reaches, by IP — which, since
-  ADR-066, includes the host itself and host-published Docker ports when
-  the root conf has opted into each (`LAN_ALLOW_HOST`,
-  `LAN_ALLOW_PUBLISHED_PORTS`; absent or unset means that particular reach
-  stays closed even with the switch on). It remains NAT-only outbound: LAN
-  hosts cannot connect into the project. An **admin** turns it on; the
-  confirmation dialog names BOTH consequences — the blast radius (the
-  project can now reach every device on the operator's LAN by IP, the host
-  and its published ports included wherever the conf allows) and the
-  credential cost (the project stops being served the operator's SSH key by
-  the broker; any copy already materialized in its home is removed on
-  enable — HTTPS with the GH token still works, but `git push` over ssh
-  does not) — and says explicitly when the host conf has NOT opted into the
-  host or published-port reach, so the switch is never silently doing less
-  than "full parity" implies. A project that has run before must be treated
-  as having had that key exposed to it, even though enabling stops any
-  further exposure going forward.
-  The state under the switch is root's word, not the click's — `pending`
-  until the host firewall applied it (usually under a second, up to a
-  minute), then `on` with the prefix and the time it applied, `error` with
-  root's message and a retry, or `unavailable` with the reason when the
-  host half is not installed, outdated (script version below 4 — see
-  below), or has no prefix configured (then an enable is refused with
-  503). The owner may always turn it off, which cuts open LAN connections
-  immediately and re-serves the SSH key once root's status confirms the
-  rule is genuinely gone — never sooner, since a disable must not re-serve
-  the key while the firewall rule may still be live. A small `LAN` chip
-  flags the project in the sidebar and on the dashboard while it is on or
-  pending. Works for a stopped project (it applies when the project next
-  starts). Access is by IP only — LAN names and `.local` do not resolve
-  inside the microVM. The traffic is NAT'd, so it reaches the LAN as the
-  styrman host's own address: any device whose access list trusts this host
-  by IP trusts a LAN-enabled project too, which is the sharpest edge of the
-  feature and why enabling it is admin-only.
-  Admins see the host half under Settings → Host firewall: script version
-  (must be ≥4 — a host still on 3 refuses to enable, "outdated (have 3,
-  need 4)"), last applied, the configured prefix and device, how many
-  projects are on, plus the two opt-ins (`LAN_ALLOW_HOST`,
-  `LAN_ALLOW_PUBLISHED_PORTS`), the host's own addresses on the LAN device,
-  the published-port subnets root has allowed, the configured ingress
-  bridge, and a warning if that configured bridge disagrees with the
-  server's own ingress network's actual bridge — a wrong-but-valid conf
-  value root cannot detect on its own, which the server catches because it
-  knows its own ingress network.
+- **Network mode** (ADR-067, per project): the top of the **Ports** tab
+  holds a "Network" switch (Sandbox / LAN). Sandbox is the default and means
+  internet only. LAN means the project becomes an ordinary machine on the
+  operator's network, outbound: it reaches everything the styrman host
+  itself reaches — other devices on the LAN, the host itself including its
+  SSH service, and the host's published Docker ports — exactly like a normal
+  Docker container, because that is now literally what the mode is: the
+  server names the project's Docker bridge interface `lan-<hash>` instead of
+  `sdb-<hash>`, and no styrman firewall rule matches that prefix. It remains
+  NAT-only outbound: nothing on the network can open a connection INTO the
+  project, and it still cannot reach any other project (Docker's own
+  unconditional per-bridge DROP, unaffected by either prefix). An **admin**
+  turns it on; the owner may always turn it off. The confirmation dialog
+  names both consequences: the blast radius (everything above), and that
+  **applying the switch rebuilds the project's container** — the home
+  directory and workspace are untouched (bind mounts) and installed packages
+  are replayed from the ADR-028 apt manifest, but anything living only in
+  the container's own filesystem is lost. A running project's toggle applies
+  by rebuilding immediately; a stopped project's applies the next time it
+  starts. There is no intermediate state — no `pending`/`error`/
+  `unavailable`, no host firewall to be outdated or misconfigured, because
+  the switch is the interface name the server itself picks at network
+  create, not a request to anything root-owned. A small `LAN` chip flags the
+  project in the sidebar and on the dashboard while the mode is LAN. The
+  credential broker no longer withholds the SSH key from LAN projects —
+  see "Credential broker" above — so unlike ADR-065/066 there is nothing to
+  show under Settings for this feature; that panel is gone.
 - **Terminals**: sidebar, per project; generated friendly names; ⏸ pause /
   ✕ delete / close all; per-terminal autostart command (pencil → dialog;
   set the autostart to `claude --continue` / `agy --continue` and the
@@ -589,8 +560,8 @@ re-import it.
 | First port-preview 307s or drops once                 | The server just joined that project's network; the redirect/retry lands.                                                                                                                                                                                                                     |
 | Project won't start                                   | `docker logs styrman-<uuid>` — the entrypoint logs every step.                                                                                                                                                                                                                               |
 | Local network switch disabled: "Not available on this server" | The root half is not installed, outdated (script below version 4 — see ADR-066), or has no prefix: on the host, `sudo bash deploy/firewall/install.sh` (from `/opt/styrman` at the deployed tag), then check `cat /run/styrman-firewall/status`, `systemctl status styrman-firewall.timer styrman-firewall.path` and `journalctl -u styrman-firewall`. "Applying…" that turns into an error after 90 s means the reconciler never ran: same three commands. |
-| `git push` over ssh fails after enabling Local network | Expected (ADR-066): a LAN-enabled project is no longer served the operator's SSH key by the credential broker, and any copy already materialized in the project's home is removed on enable. Push over HTTPS with the GH token still works; disabling the switch re-serves the key once root confirms the firewall rule is gone. |
-| Local network on but the host/its published ports are still unreachable | Expected unless the host conf opted in: `LAN_ALLOW_HOST` and `LAN_ALLOW_PUBLISHED_PORTS` in `/etc/styrman/firewall.conf` default to closed even with the switch on (ADR-066) — re-run `install.sh` with the opt-in flag(s); Settings → Host firewall shows which are set. |
+| A project in LAN mode can't reach the host or its published ports | Not expected since ADR-067: LAN mode is full same-network parity by design, no opt-in required. Check the project's actual bridge — `ip -o link show \| grep lan-` — and that Docker's own inter-bridge DROP isn't the thing being hit by mistake; `sudo iptables -S STYRMAN-FWD`/`STYRMAN-IN` should show no rule matching a `lan-*` interface at all. |
+| Toggling a project's network mode restarted it / lost something | Expected (ADR-067): applying the switch rebuilds the project's container — home and workspace (bind mounts) survive, packages replay from the apt manifest, but anything living only in the container's own filesystem is gone. |
 
 ## 6. Development
 
