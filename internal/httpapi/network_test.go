@@ -686,8 +686,11 @@ func TestNetworkProjectDeletedMidPutIs404(t *testing.T) {
 	}
 	n.s.mode = fm
 	w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":false}`)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("deleted after the stop: want 404, got %d (%s)", w.Code, w.Body.String())
+	// writeErr already turns project.ErrNotFound into a 404; what the `gone`
+	// branch adds is the MESSAGE — "not found", not a sentence about a state
+	// the project no longer has — so that is what discriminates here.
+	if w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "could not be saved") {
+		t.Fatalf("deleted after the stop: want a plain 404, got %d (%s)", w.Code, w.Body.String())
 	}
 	if fm.ensureCalls != 0 {
 		t.Fatal("nothing may be started for a project that no longer exists")
@@ -709,8 +712,8 @@ func TestNetworkProjectDeletedMidPutIs404(t *testing.T) {
 		}
 	}}
 	w2 := doAs(t, n2.h, n2.admin, http.MethodPut, "/api/projects/"+n2.pid+"/network", `{"lanAccess":true}`)
-	if w2.Code != http.StatusNotFound {
-		t.Fatalf("deleted before the record-only persist: want 404, got %d (%s)", w2.Code, w2.Body.String())
+	if w2.Code != http.StatusNotFound || strings.Contains(w2.Body.String(), "could not be saved") {
+		t.Fatalf("deleted before the record-only persist: want a plain 404, got %d (%s)", w2.Code, w2.Body.String())
 	}
 }
 
