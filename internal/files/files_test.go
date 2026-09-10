@@ -272,3 +272,37 @@ func TestListReportsScopeRelativePaths(t *testing.T) {
 		t.Fatalf("entry path = %q, want root-relative projects/p/sub/deep.txt", got)
 	}
 }
+
+// A .pub that is a symlink — even to a file INSIDE the root, such as the
+// private key beside it — must not be read: ReadRaw follows confined links by
+// design, so the UI's echo of the public key needs the no-follow read.
+func TestReadRawNoFollowRefusesASymlinkedFinalComponent(t *testing.T) {
+	root, _ := setup(t)
+	dir := filepath.Join(root, "projects", "p", ".ssh")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	priv := filepath.Join(dir, "id_ed25519")
+	if err := os.WriteFile(priv, []byte("-----BEGIN OPENSSH PRIVATE KEY-----\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "real.pub"), []byte("ssh-ed25519 AAAA me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("id_ed25519", filepath.Join(dir, "id_ed25519.pub")); err != nil {
+		t.Fatal(err)
+	}
+	// The confined read follows it: this is the behaviour the UI must not use.
+	if b, err := ReadRaw(root, "projects/p/.ssh/id_ed25519.pub", 0); err != nil || !strings.Contains(string(b), "PRIVATE") {
+		t.Fatalf("precondition: ReadRaw follows a confined symlink; got %v / %q", err, b)
+	}
+	if _, err := ReadRawNoFollow(root, "projects/p/.ssh/id_ed25519.pub", 0); err == nil {
+		t.Fatal("ReadRawNoFollow read through a symlinked .pub — the private key would reach the UI")
+	}
+	if b, err := ReadRawNoFollow(root, "projects/p/.ssh/real.pub", 0); err != nil || string(b) != "ssh-ed25519 AAAA me\n" {
+		t.Fatalf("a real .pub must still read: %v / %q", err, b)
+	}
+	if _, err := ReadRawNoFollow(root, "projects/p/.ssh/missing.pub", 0); err == nil {
+		t.Fatal("a missing file is an error, not empty content")
+	}
+}

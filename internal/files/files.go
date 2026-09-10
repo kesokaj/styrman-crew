@@ -432,6 +432,55 @@ func ReadRaw(root, rel string, max int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, max))
 }
 
+// ReadRawNoFollow is ReadRaw for a file whose LAST path component must be
+// the file itself, never a symlink: a user's `.ssh/id_ed25519.pub` that the
+// UI will echo and offer to copy. IsRegular and ReadRaw follow a symlink
+// confined to the root — correct for reads that only need confinement, but
+// here the concern is a .pub pointed at the PRIVATE key beside it, which is
+// inside the root and would be read and displayed (security review
+// 2026-09-10). O_NOFOLLOW fails the open with ELOOP instead, atomically,
+// with no check-then-open window.
+func ReadRawNoFollow(root, rel string, max int64) ([]byte, error) {
+	rt, err := openRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer rt.Close()
+	// os.Root resolves every component itself and follows in-root symlinks
+	// on purpose, so O_NOFOLLOW handed to Root.OpenFile does not reach the
+	// final component (measured: the symlinked .pub still opened). Open the
+	// PARENT through the root — confined — and openat the final name with
+	// O_NOFOLLOW ourselves.
+	dirRel, base := path.Split(cleanRel(rel))
+	dirRel = path.Clean(dirRel)
+	if base == "" || base == "." || base == ".." {
+		return nil, fmt.Errorf("not a file name: %q", rel)
+	}
+	d, err := rt.Open(dirRel)
+	if err != nil {
+		return nil, err
+	}
+	defer d.Close()
+	fd, err := syscall.Openat(int(d.Fd()), base,
+		syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: rel, Err: err}
+	}
+	f := os.NewFile(uintptr(fd), rel)
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file")
+	}
+	if max <= 0 || max > MaxReadBytes {
+		max = MaxReadBytes
+	}
+	return io.ReadAll(io.LimitReader(f, max))
+}
+
 // ListNames returns the entry names in a directory (confined), or nil if it
 // does not exist. For enumerating skills/subagents/commands dirs.
 // maxListNames bounds ListNames; a roster is a few dozen entries.

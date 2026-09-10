@@ -10,8 +10,18 @@
 
 import type { ToolInfo } from "./api";
 
-/** Public-key line shapes OpenSSH writes: `<type> <base64> [comment]`. */
-const PUBLIC_KEY = /^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-\S+|sk-\S+)\s+[A-Za-z0-9+/=]+(\s+\S.*)?$/;
+/**
+ * Public-key line shapes OpenSSH writes: `<type> <base64> [comment]`, on ONE
+ * line. Spaces and tabs only between the fields — `\s` would admit a newline,
+ * and a second line hidden after a comment-less key would ride along onto
+ * the clipboard and into an authorized_keys file (security review
+ * 2026-09-10). The comment may not contain a line break either.
+ */
+const PUBLIC_KEY =
+  /^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-[^\s]+|sk-[^\s]+)[ \t]+[A-Za-z0-9+/=]+([ \t]+[^\r\n]*[^\s])?$/;
+
+/** Longer than any real key line (a 16 kbit RSA key is under 3000). */
+const MAX_KEY_LEN = 4096;
 
 /**
  * sshPublicKey — the user's public key, or "" when the server has not
@@ -23,6 +33,7 @@ export function sshPublicKey(tools: ToolInfo[] | undefined): string {
   const ssh = tools?.find((t) => t.name === "ssh");
   for (const d of ssh?.details ?? []) {
     const line = d.trim();
+    if (line.length > MAX_KEY_LEN || /[\r\n]/.test(line)) continue;
     if (PUBLIC_KEY.test(line)) return line;
   }
   return "";

