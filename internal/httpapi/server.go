@@ -78,15 +78,26 @@ type guestRuntime interface {
 	Exec(ctx context.Context, containerID string, spec orchestrator.ExecSpec) (int, string, error)
 }
 
-// modeRuntime is the network-mode handler's view of the orchestrator: the
-// three calls a mode change makes. Same reason guestRuntime exists — the
-// interesting behaviour here is what happens when one of them FAILS (the
+// modeRuntime is the network-mode handler's view of the orchestrator: one
+// project under its lock. Same reason guestRuntime exists — the interesting
+// behaviour here is what happens when one of the locked calls FAILS (the
 // record must not keep claiming a mode that is not in force), and that is
 // unreachable through the concrete orchestrator, which needs a real Docker.
 type modeRuntime interface {
-	Status(ctx context.Context, user, project string) (orchestrator.Status, error)
-	Stop(ctx context.Context, user, project string) error
-	EnsureRunning(ctx context.Context, user, project string, opts orchestrator.RunOpts) (string, error)
+	WithProject(user, project string, fn func(orchestrator.Project))
+}
+
+// lanOf is the RunOpts.Lan read for a project: the record's mode as of the
+// moment the orchestrator decides the bridge name, under the project's
+// lock, never a snapshot taken when the request began.
+func lanOf(sp *userSpace, id string) func() (bool, error) {
+	return func() (bool, error) {
+		p, err := sp.projects.Get(id)
+		if err != nil {
+			return false, err
+		}
+		return p.LanAccess, nil
+	}
 }
 
 type Server struct {
@@ -230,7 +241,7 @@ func (s *Server) ensureFor(ctx context.Context, user, projectID string) (contain
 		return "", "", "", err
 	}
 	guest := sp.profile.GuestUser()
-	id, err := s.orch.EnsureRunning(ctx, user, p.ID, orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest, Lan: p.LanAccess})
+	id, err := s.orch.EnsureRunning(ctx, user, p.ID, orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest, Lan: lanOf(sp, p.ID)})
 	return id, guest, p.Dir, err
 }
 
@@ -857,7 +868,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			attach:   func() bool { return s.orch.EnsureSelfAttached(u.Username, p.ID) },
 		}
 		containerID, err := s.orch.EnsureRunning(ctx, u.Username, p.ID,
-			orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest, Lan: p.LanAccess})
+			orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest, Lan: lanOf(sp, p.ID)})
 		if err != nil {
 			s.logger.Error("background project boot failed", "project", p.Name, "error", err)
 			s.bootFailed(ctx, spec)
@@ -1056,7 +1067,7 @@ func (s *Server) startProject(w http.ResponseWriter, r *http.Request) {
 	// Reuse sp from getProjectFor (N23: the old sp2, _ := s.space(...) ignored
 	// the error and could nil-deref).
 	if _, err := s.orch.EnsureRunning(ctx, u.Username, p.ID,
-		orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: sp.profile.GuestUser(), Lan: p.LanAccess}); err != nil {
+		orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: sp.profile.GuestUser(), Lan: lanOf(sp, p.ID)}); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

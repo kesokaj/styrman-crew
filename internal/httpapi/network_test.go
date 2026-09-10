@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -19,12 +20,13 @@ import (
 	"github.com/kesokaj/styrman-crew/internal/userstore"
 )
 
-// Network-mode handler tests (ADR-067). There is no Docker in this harness, so
-// s.orch.Status errors and the handler takes its "not running" path: the
-// record is written and the rebuild is left to the next start. That is the
-// behaviour under test here — the rebuild itself is covered by the
-// orchestrator's bridge-name logic and by the live checks in
-// testing/styrman/integration.sh.
+// Network-mode handler tests (ADR-067). The tests above the fakeMode section
+// run against the real orchestrator with no container behind the project, so
+// Status reports "absent" and the handler takes its "nothing in force" path:
+// the record is written and the rebuild is left to the next start. The
+// fakeMode section below drives the stop/persist/rebuild order and its
+// failure branches; the rebuild itself is covered by the orchestrator's
+// bridge-name logic and by the live checks in testing/styrman/integration.sh.
 
 type netHarness struct {
 	h      http.Handler
@@ -263,82 +265,117 @@ func TestDeleteProjectRemovesTheRecord(t *testing.T) {
 	}
 }
 
-// ─── Fail-closed on a failed apply (security review 2026-09-09, finding 1) ───
+// ─── Fail-closed on a failed apply (security review 2026-09-09, findings 1–3) ───
 
-// fakeMode drives the three orchestrator calls a mode change makes, so the
-// FAILURE paths are reachable without Docker. The concrete orchestrator cannot
-// be made to fail Stop on demand, which is why this seam exists.
+// fakeMode drives the locked calls a mode change makes, so the FAILURE paths
+// are reachable without Docker. It models the one fact the handler decides
+// on: which bridge the container is on (bridgeLan), which only a successful
+// start changes — and the start reads its mode through RunOpts.Lan, exactly
+// as the orchestrator does, so a stale snapshot would show up here too.
 type fakeMode struct {
-	state       string // what Status reports
-	statusErr   error  // a real inspect failure — NOT "absent", which Status maps to (absent, nil)
-	stopErr     error
-	ensureErr   error
-	stopCalls   int
-	ensureCalls int
+	state         string // what Status reports
+	bridgeLan     bool   // the LIVE bridge: true = lan-, false = sdb-
+	statusErr     error  // a real inspect failure — NOT "absent", which Status maps to (absent, nil)
+	mismatchErr   error  // a network-inspect failure (BUG-031's shape)
+	stopErr       error
+	ensureErr     error
+	stopCalls     int
+	ensureCalls   int
+	mismatchCalls int
+	ensureLan     []bool // the mode each start read through RunOpts.Lan
+	onLock        func() // runs when the lock is taken, before the handler's decision
 }
 
-func (f *fakeMode) Status(_ context.Context, _, project string) (orchestrator.Status, error) {
+func (f *fakeMode) WithProject(_, _ string, fn func(orchestrator.Project)) {
+	if f.onLock != nil {
+		f.onLock()
+	}
+	fn(f)
+}
+
+func (f *fakeMode) Status(_ context.Context) (orchestrator.Status, error) {
 	if f.statusErr != nil {
 		return orchestrator.Status{}, f.statusErr
 	}
-	return orchestrator.Status{Project: project, State: f.state, ContainerID: "c1"}, nil
+	return orchestrator.Status{State: f.state, ContainerID: "c1"}, nil
 }
 
-func (f *fakeMode) Stop(_ context.Context, _, _ string) error {
+func (f *fakeMode) ModeMismatch(_ context.Context, lan bool) (bool, error) {
+	f.mismatchCalls++
+	if f.mismatchErr != nil {
+		return false, f.mismatchErr
+	}
+	return f.bridgeLan != lan, nil
+}
+
+func (f *fakeMode) Stop(_ context.Context) error {
 	f.stopCalls++
-	return f.stopErr
+	if f.stopErr != nil {
+		return f.stopErr
+	}
+	f.state = "stopped"
+	return nil
 }
 
-func (f *fakeMode) EnsureRunning(_ context.Context, _, _ string, _ orchestrator.RunOpts) (string, error) {
+func (f *fakeMode) EnsureRunning(_ context.Context, opts orchestrator.RunOpts) (string, error) {
 	f.ensureCalls++
-	return "c1", f.ensureErr
+	lan, err := opts.Lan()
+	if err != nil {
+		return "", err
+	}
+	f.ensureLan = append(f.ensureLan, lan)
+	if f.ensureErr != nil {
+		return "", f.ensureErr
+	}
+	f.state, f.bridgeLan = "running", lan
+	return "c1", nil
 }
 
-// A revocation whose apply fails must not leave the record claiming sandbox
-// while the container keeps running on the lan- bridge. Nothing reconciles
-// that: EnsureRunning's mismatch heal fires for STOPPED containers only, so a
-// container left running on the wrong bridge stays there indefinitely, with
-// the switch, the badge and the API all reporting the mode it does NOT have.
-func TestNetworkFailedRevocationRollsBackTheRecord(t *testing.T) {
+// lanRunning is a project already running in LAN mode with a record that
+// agrees — the starting point of every revocation case.
+func lanRunning(t *testing.T) (*netHarness, string) {
+	t.Helper()
 	n := newNetHarness(t)
-	// Get it into LAN mode first, with a runtime that applies cleanly.
 	n.s.mode = &fakeMode{state: "running"}
-	if w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":true}`); w.Code != http.StatusOK {
-		t.Fatalf("enable: want 200, got %d", w.Code)
+	path := "/api/projects/" + n.pid + "/network"
+	if w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":true}`); w.Code != http.StatusOK {
+		t.Fatalf("enable: want 200, got %d %s", w.Code, w.Body.String())
 	}
 	if !n.lanAccessOf(t, n.admin, n.pid) {
 		t.Fatal("precondition: the project should be in LAN mode")
 	}
+	return n, path
+}
 
-	// Now revoke, with a Stop that fails: the container stays up, on lan-.
-	fm := &fakeMode{state: "running", stopErr: errors.New("docker stop: timeout")}
+// A revocation whose Stop fails must leave the record saying LAN, because LAN
+// is still what is in force: the container never left its lan- bridge.
+// Nothing reconciles a record that says otherwise — EnsureRunning's mismatch
+// heal fires for STOPPED containers only — so the record is now written only
+// AFTER the stop, and there is nothing to roll back (BUG-028).
+func TestNetworkFailedRevocationChangesNothing(t *testing.T) {
+	n, path := lanRunning(t)
+	fm := &fakeMode{state: "running", bridgeLan: true, stopErr: errors.New("docker stop: timeout")}
 	n.s.mode = fm
-	w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":false}`)
-	code, body := w.Code, w.Body.String()
-	if code != http.StatusInternalServerError {
-		t.Fatalf("failed revocation: want 500, got %d (%s)", code, body)
+	w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":false}`)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("failed revocation: want 500, got %d (%s)", w.Code, w.Body.String())
 	}
-	if fm.stopCalls != 1 {
-		t.Fatalf("Stop should have been attempted exactly once, got %d", fm.stopCalls)
+	if fm.stopCalls != 1 || fm.ensureCalls != 0 {
+		t.Fatalf("want stop=1 ensure=0, got stop=%d ensure=%d", fm.stopCalls, fm.ensureCalls)
 	}
-	if fm.ensureCalls != 0 {
-		t.Fatal("EnsureRunning must not run after Stop failed")
-	}
-	// THE ASSERTION: the record must still say LAN, because LAN is still what
-	// is in force. A false "sandboxed" here is the fail-open.
+	// THE ASSERTION: the record must still say LAN. A false "sandboxed" here
+	// is the fail-open.
 	if !n.lanAccessOf(t, n.admin, n.pid) {
 		t.Fatal("record says sandbox after a FAILED revocation — the project still has LAN access and every surface now under-reports it")
 	}
-	// And the caller must be told the mode did not change, not that it did.
-	if !strings.Contains(body, "NOT changed") {
-		t.Errorf("the error should say the mode was not changed, got %q", body)
+	if !strings.Contains(w.Body.String(), "NOT changed") {
+		t.Errorf("the error should say the mode was not changed, got %q", w.Body.String())
 	}
 }
 
-// The other failure branch is different and must NOT roll back: if Stop
+// The other failure branch is different and must NOT lose the change: if Stop
 // SUCCEEDED and only the restart failed, the container is down, so it has no
-// access at all and the record's new value is what the next start should
-// apply. Rolling back there would silently discard the operator's change.
+// access at all, and the record's new value is what the next start applies.
 func TestNetworkFailedRestartKeepsTheRecord(t *testing.T) {
 	n := newNetHarness(t)
 	fm := &fakeMode{state: "running", ensureErr: errors.New("kata: boot failed")}
@@ -355,20 +392,14 @@ func TestNetworkFailedRestartKeepsTheRecord(t *testing.T) {
 	}
 }
 
-// The sibling of the Stop branch (preflight review, 2026-09-09): a Status
-// ERROR is not "stopped". Status already maps a missing container to
-// ("absent", nil), so a non-nil error is a real inspect failure and the
-// container may be running on the old bridge. The first fix closed the
-// fail-open on Stop and left this one, one line above it, open.
-func TestNetworkStatusErrorOnRevocationRollsBack(t *testing.T) {
-	n := newNetHarness(t)
-	n.s.mode = &fakeMode{state: "running"}
-	if w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":true}`); w.Code != http.StatusOK {
-		t.Fatalf("enable: want 200, got %d", w.Code)
-	}
+// A Status ERROR is not "stopped" (BUG-029): Status maps a missing container
+// to ("absent", nil), so a non-nil error is a real inspect failure and the
+// container may be running on the old bridge. Nothing may be written.
+func TestNetworkStatusErrorChangesNothing(t *testing.T) {
+	n, path := lanRunning(t)
 	fm := &fakeMode{statusErr: errors.New("docker inspect: connection refused")}
 	n.s.mode = fm
-	w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":false}`)
+	w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":false}`)
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("want 500, got %d (%s)", w.Code, w.Body.String())
 	}
@@ -383,9 +414,31 @@ func TestNetworkStatusErrorOnRevocationRollsBack(t *testing.T) {
 	}
 }
 
-// And "absent" must keep its old meaning: no container, the record is the
-// truth, 200, and the next start applies it. Distinguishing an inspect
-// FAILURE from a missing container is the whole point of the fix above.
+// The same rule one layer down (BUG-031): when the NETWORK cannot be
+// inspected, "I cannot tell whether the bridge is wrong" must not read as
+// "nothing to do" — and must not stop a container it may not need to stop.
+func TestNetworkMismatchErrorChangesNothing(t *testing.T) {
+	n, path := lanRunning(t)
+	fm := &fakeMode{state: "running", bridgeLan: true, mismatchErr: errors.New("network inspect: EOF")}
+	n.s.mode = fm
+	w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":false}`)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d (%s)", w.Code, w.Body.String())
+	}
+	if fm.mismatchCalls != 1 || fm.stopCalls != 0 || fm.ensureCalls != 0 {
+		t.Fatalf("want mismatch=1 stop=0 ensure=0, got %d/%d/%d", fm.mismatchCalls, fm.stopCalls, fm.ensureCalls)
+	}
+	if !n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("the record changed although the bridge could not be verified")
+	}
+	if !strings.Contains(w.Body.String(), "NOT changed") {
+		t.Errorf("the error should say the mode was not changed, got %q", w.Body.String())
+	}
+}
+
+// "absent" keeps its meaning: no container, the record is the truth, 200, and
+// the next start applies it. Nothing is stopped and the bridge is not even
+// asked about — nothing is in force.
 func TestNetworkAbsentContainerJustWritesTheRecord(t *testing.T) {
 	n := newNetHarness(t)
 	fm := &fakeMode{state: "absent"}
@@ -394,10 +447,216 @@ func TestNetworkAbsentContainerJustWritesTheRecord(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d (%s)", w.Code, w.Body.String())
 	}
-	if fm.stopCalls != 0 || fm.ensureCalls != 0 {
-		t.Fatal("an absent container is nothing to stop or rebuild")
+	if fm.mismatchCalls != 0 || fm.stopCalls != 0 || fm.ensureCalls != 0 {
+		t.Fatal("an absent container is nothing to inspect, stop or rebuild")
 	}
 	if !n.lanAccessOf(t, n.admin, n.pid) {
 		t.Fatal("the record must carry the new mode for the next start to apply")
+	}
+	if m := decodeLan(t, w.Body.String()); m["rebuilt"] != false {
+		t.Fatalf("nothing was rebuilt, got %v", m)
+	}
+}
+
+// The security review's round-3 finding: the old no-op short-circuit trusted
+// the record, so once the record and the bridge had drifted apart (a persist
+// failure, a start racing a toggle) re-issuing the PUT answered 200 and
+// touched nothing; the only recovery was Stop, then Start. The no-op decision
+// now compares against the LIVE bridge, so the re-PUT IS the recovery.
+func TestNetworkRePutRepairsADriftedRecord(t *testing.T) {
+	n := newNetHarness(t)
+	// The fail-open state itself: record says sandbox (the default), the
+	// container is running on lan-.
+	fm := &fakeMode{state: "running", bridgeLan: true}
+	n.s.mode = fm
+	w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":false}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if fm.stopCalls != 1 || fm.ensureCalls != 1 {
+		t.Fatalf("a re-PUT against a drifted record must rebuild: want stop=1 ensure=1, got %d/%d", fm.stopCalls, fm.ensureCalls)
+	}
+	if len(fm.ensureLan) != 1 || fm.ensureLan[0] {
+		t.Fatalf("the rebuild must be asked for SANDBOX, got %v", fm.ensureLan)
+	}
+	if fm.bridgeLan {
+		t.Fatal("the container is still on lan- after the repair")
+	}
+	if m := decodeLan(t, w.Body.String()); m["rebuilt"] != true || m["lanAccess"] != false {
+		t.Fatalf("reply should be {lanAccess:false, rebuilt:true}, got %v", m)
+	}
+	if n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("record should say sandbox")
+	}
+}
+
+// The converse drift — record behind a bridge that is already right — needs
+// no rebuild at all: the record is corrected and the running container is
+// left alone.
+func TestNetworkRecordBehindTheBridgeOnlyWritesTheRecord(t *testing.T) {
+	n := newNetHarness(t)
+	fm := &fakeMode{state: "running", bridgeLan: true} // record: sandbox
+	n.s.mode = fm
+	w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if fm.stopCalls != 0 || fm.ensureCalls != 0 {
+		t.Fatalf("the bridge already matches; nothing may be stopped or rebuilt, got stop=%d ensure=%d", fm.stopCalls, fm.ensureCalls)
+	}
+	if !n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("the record was not corrected")
+	}
+	if m := decodeLan(t, w.Body.String()); m["rebuilt"] != false {
+		t.Fatalf("nothing was rebuilt, got %v", m)
+	}
+}
+
+// And a true no-op — record and bridge agree — still stops nothing and
+// rebuilds nothing, on a RUNNING container.
+func TestNetworkNoOpWhenRecordAndBridgeAgree(t *testing.T) {
+	n, path := lanRunning(t)
+	fm := &fakeMode{state: "running", bridgeLan: true}
+	n.s.mode = fm
+	w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if fm.mismatchCalls != 1 || fm.stopCalls != 0 || fm.ensureCalls != 0 {
+		t.Fatalf("want mismatch=1 stop=0 ensure=0, got %d/%d/%d", fm.mismatchCalls, fm.stopCalls, fm.ensureCalls)
+	}
+	if m := decodeLan(t, w.Body.String()); m["rebuilt"] != false {
+		t.Fatalf("a no-op must not report a rebuild, got %v", m)
+	}
+}
+
+// The last branch the old design could not close (security round 2, finding
+// 1): the store write fails right after the stop. The record still names the
+// old mode and the container is DOWN — it over-claims against a container
+// that has nothing, the safe direction — and the caller is told exactly that
+// state. Nothing is restarted: down is the one state with nothing in force.
+func TestNetworkPersistFailureAfterStopLeavesItDownInThePreviousMode(t *testing.T) {
+	n, path := lanRunning(t)
+	fm := &fakeMode{state: "running", bridgeLan: true}
+	n.s.mode = fm
+	// The store saves by writing a temp file beside projects.json and
+	// renaming it, so an unwritable directory fails the persist and nothing
+	// else. Not meaningful as root, which ignores directory modes.
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions; the persist cannot be made to fail this way")
+	}
+	dir := n.s.cfg.UserStateDir(identity.DeriveUsername(n.admin))
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":false}`)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d (%s)", w.Code, w.Body.String())
+	}
+	if fm.stopCalls != 1 || fm.ensureCalls != 0 {
+		t.Fatalf("want stop=1 ensure=0, got stop=%d ensure=%d", fm.stopCalls, fm.ensureCalls)
+	}
+	if fm.state != "stopped" {
+		t.Fatalf("the container should be left down, got %q", fm.state)
+	}
+	if !n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("the record changed although the persist failed")
+	}
+	if b := w.Body.String(); !strings.Contains(b, "NOT changed") || !strings.Contains(b, "stopped") {
+		t.Errorf("the error should say the project was stopped and the mode not changed, got %q", b)
+	}
+}
+
+// The sibling of the case above (review 2026-09-10, finding 1): the bridge
+// already matches the request and only the record is behind it — the drift
+// itself, which this PUT exists to repair — and the persist fails. The
+// container is left alone (nothing to stop: it is where it should be), the
+// record keeps its stale value, and the caller is told that the reported
+// mode is the stale one, not merely that a write failed.
+func TestNetworkPersistFailureOnDriftedRecordSaysWhatIsReported(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions; the persist cannot be made to fail this way")
+	}
+	n := newNetHarness(t)
+	fm := &fakeMode{state: "running", bridgeLan: true} // record: sandbox, bridge: lan-
+	n.s.mode = fm
+	dir := n.s.cfg.UserStateDir(identity.DeriveUsername(n.admin))
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":true}`)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("want 500, got %d (%s)", w.Code, w.Body.String())
+	}
+	if fm.stopCalls != 0 || fm.ensureCalls != 0 || fm.state != "running" {
+		t.Fatalf("a container already on the requested bridge must be left running; stop=%d ensure=%d state=%q", fm.stopCalls, fm.ensureCalls, fm.state)
+	}
+	if n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("the record changed although the persist failed")
+	}
+	if b := w.Body.String(); !strings.Contains(b, "already on the requested bridge") {
+		t.Errorf("the error should say the project keeps reporting the previous mode, got %q", b)
+	}
+}
+
+// RunOpts.Lan is a READ the orchestrator performs under the project lock,
+// not a value the caller snapshotted when the request began: a start that
+// waits on the lock while a mode change completes must see the record that
+// change wrote (security review 2026-09-10, round 2).
+func TestLanOfReadsTheRecordAtCallTime(t *testing.T) {
+	n := newNetHarness(t)
+	sp, err := n.s.space(identity.DeriveUsername(n.admin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := lanOf(sp, n.pid)
+	if lan, err := read(); err != nil || lan {
+		t.Fatalf("before: want sandbox, got %v %v", lan, err)
+	}
+	if err := sp.projects.SetLanAccess(n.pid, true); err != nil {
+		t.Fatal(err)
+	}
+	if lan, err := read(); err != nil || !lan {
+		t.Fatalf("after the change: want LAN, got %v %v", lan, err)
+	}
+	if err := sp.projects.Remove(n.pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := read(); err == nil {
+		t.Fatal("a deleted record must be an error, never a default mode")
+	}
+}
+
+// The no-op decision reads the record UNDER the lock, not the copy the
+// handler took before it (security review 2026-09-10, round 3): a PUT that
+// waited on the lock while another PUT changed the record must act on the
+// record as changed. Here the project is stopped, so the live bridge is not
+// consulted and only the record can tell a no-op from a change.
+func TestNetworkNoOpDecisionReadsTheRecordUnderTheLock(t *testing.T) {
+	n := newNetHarness(t)
+	sp, err := n.s.space(identity.DeriveUsername(n.admin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := &fakeMode{state: "stopped"}
+	// Between this request's record read and its lock, another request
+	// enables LAN.
+	fm.onLock = func() {
+		if err := sp.projects.SetLanAccess(n.pid, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n.s.mode = fm
+	w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":false}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	// THE ASSERTION: the record must say sandbox. A handler comparing against
+	// its pre-lock copy sees "sandbox == sandbox", calls this a no-op, and
+	// leaves the record saying LAN under a reply that says sandbox.
+	if n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("record says LAN after a disable that answered 200 — the no-op decision used a stale copy of the record")
 	}
 }

@@ -164,12 +164,26 @@ type RunOpts struct {
 	Name      string // friendly name (label + hostname)
 	Dir       string // workspace dir under ~/projects
 	GuestUser string // in-guest username (per-user setting)
-	// Lan is the project's network mode (ADR-067): false = SANDBOX (bridge
-	// sdb-<hash>, matched by the root firewall's drops, internet only),
-	// true = LAN (bridge lan-<hash>, matched by no styrman rule, so the
-	// project reaches whatever the host reaches). It is the caller's copy of
-	// Project.LanAccess and it is the ONLY input to the bridge name.
-	Lan bool
+	// Lan reads the project's network mode (ADR-067): false = SANDBOX
+	// (bridge sdb-<hash>, matched by the root firewall's drops, internet
+	// only), true = LAN (bridge lan-<hash>, matched by no styrman rule, so
+	// the project reaches whatever the host reaches). It is the ONLY input
+	// to the bridge name, and it is a READ, not a value: the orchestrator
+	// calls it under the project's lock at the moment it decides the bridge,
+	// so a mode change serialized on the same lock is always seen. As a
+	// caller-held snapshot it was the record as of the request's start, and
+	// a start that straddled a revocation brought the container up on the
+	// old bridge with the record already saying otherwise (security review
+	// 2026-09-10, round 2). A nil Lan means sandbox, the closed default.
+	Lan func() (bool, error)
+}
+
+// lan evaluates opts.Lan, defaulting to sandbox.
+func (r RunOpts) lan() (bool, error) {
+	if r.Lan == nil {
+		return false, nil
+	}
+	return r.Lan()
 }
 
 // EnsureRunning makes sure the project's microVM exists and is running, and
@@ -179,7 +193,80 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 	l := o.lockProject(key(user, project))
 	l.Lock()
 	defer l.Unlock()
+	return o.ensureRunningLocked(ctx, user, project, opts)
+}
 
+// Project is one project seen while its lock is held (WithProject): the
+// calls a network-mode change makes, run without taking the lock again.
+// Everything a mode change decides — is the
+// container running, is its bridge wrong, stop it, write the record, start
+// it — happens against this view, so no start can slip in between two of
+// the steps, and a start that is waiting on the lock reads the record (its
+// RunOpts.Lan) only after the change is complete.
+type Project interface {
+	Status(ctx context.Context) (Status, error)
+	// ModeMismatch reports whether the project's network is on a bridge
+	// whose prefix disagrees with the wanted mode. Asked about RUNNING
+	// containers only, so a missing network IS a mismatch here, unlike on
+	// the start path; an inspect error is returned, never folded into "no".
+	ModeMismatch(ctx context.Context, lan bool) (bool, error)
+	Stop(ctx context.Context) error
+	EnsureRunning(ctx context.Context, opts RunOpts) (string, error)
+}
+
+// WithProject runs fn while holding the project's lock. fn must not call
+// back into a locking method of Orchestrator for the same project.
+func (o *Orchestrator) WithProject(user, project string, fn func(Project)) {
+	l := o.lockProject(key(user, project))
+	l.Lock()
+	defer l.Unlock()
+	fn(lockedProject{o: o, user: user, project: project})
+}
+
+type lockedProject struct {
+	o             *Orchestrator
+	user, project string
+}
+
+func (p lockedProject) Status(ctx context.Context) (Status, error) {
+	return p.o.Status(ctx, p.user, p.project)
+}
+
+func (p lockedProject) ModeMismatch(ctx context.Context, lan bool) (bool, error) {
+	netName := config.NetworkName(p.project)
+	cur, found, err := p.o.currentBridge(ctx, netName)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		// Unlike the start path, where a missing network is simply created
+		// under the wanted mode, a RUNNING container with no project network
+		// is on no bridge styrman named, so no firewall rule matches it.
+		// Docker refuses to remove a network with endpoints, so this took
+		// manual intervention; rebuild rather than call it a no-op (security
+		// review 2026-09-10, finding 1).
+		p.o.logger.Warn("project network is missing under a running container; rebuilding", "network", netName)
+		return true, nil
+	}
+	return cur != config.BridgeNameFor(netName, lan), nil
+}
+
+func (p lockedProject) Stop(ctx context.Context) error {
+	return p.o.stopMarked(ctx, p.user, p.project)
+}
+
+func (p lockedProject) EnsureRunning(ctx context.Context, opts RunOpts) (string, error) {
+	return p.o.ensureRunningLocked(ctx, p.user, p.project, opts)
+}
+
+// ensureRunningLocked is EnsureRunning's body; the caller holds the
+// project's lock.
+func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project string, opts RunOpts) (string, error) {
+	// The mode is read HERE, under the lock, not by the caller: see RunOpts.
+	lan, err := opts.lan()
+	if err != nil {
+		return "", fmt.Errorf("network mode: cannot read the project record, refusing to start on an unverified bridge: %w", err)
+	}
 	name := config.ContainerName(project)
 	id := ""
 	insp, err := o.docker.ContainerInspect(ctx, name)
@@ -230,13 +317,13 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 	// handler stops the project first, and a project left in the wrong mode by
 	// a failed toggle is healed on its next start, however it got there.
 	if err == nil && (insp.State == nil || !insp.State.Running) {
-		mismatch, merr := o.bridgeModeMismatch(ctx, config.NetworkName(project), opts.Lan)
+		mismatch, merr := o.bridgeModeMismatch(ctx, config.NetworkName(project), lan)
 		if merr != nil {
 			return "", fmt.Errorf("network mode: cannot inspect the project network, refusing to start on an unverified bridge: %w", merr)
 		}
 		if mismatch {
 			o.logger.Info("recreating stopped container for a network mode change",
-				"project", project, "lan", opts.Lan)
+				"project", project, "lan", lan)
 			if rerr := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); rerr != nil {
 				return "", fmt.Errorf("recreate for network mode: %w", rerr)
 			}
@@ -263,7 +350,7 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 				// Defense in depth: if the project's network went missing
 				// (e.g. an older buggy sweep removed it), recreate it and
 				// reconnect the container rather than leaving it unstartable.
-				if o.recreateMissingNetwork(ctx, id, config.NetworkName(project), opts.Lan) {
+				if o.recreateMissingNetwork(ctx, id, config.NetworkName(project), lan) {
 					if err2 := o.docker.ContainerStart(ctx, id, container.StartOptions{}); err2 != nil {
 						return "", fmt.Errorf("start %s after network recreate: %w", name, err2)
 					}
@@ -326,7 +413,7 @@ func (o *Orchestrator) EnsureRunning(ctx context.Context, user, project string, 
 		id, err = o.create(ctx, createSpec{
 			name:          name,
 			netName:       config.NetworkName(project),
-			lan:           opts.Lan,
+			lan:           lan,
 			hostname:      guestHostname(opts.Name),
 			guestUser:     opts.GuestUser,
 			homePath:      phome,
@@ -810,6 +897,21 @@ func (o *Orchestrator) createBridgeNetwork(ctx context.Context, netName string, 
 	return err
 }
 
+// currentBridge returns the bridge interface name a project network was
+// created with. found is false for a missing network; any other inspect
+// error is returned. An empty name with found true is a network Docker
+// auto-named (br-<hash>), which no styrman code path creates.
+func (o *Orchestrator) currentBridge(ctx context.Context, netName string) (name string, found bool, err error) {
+	insp, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{})
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return insp.Options["com.docker.network.bridge.name"], true, nil
+}
+
 // bridgeModeMismatch reports whether the project's existing network carries a
 // bridge interface name that disagrees with the wanted mode (ADR-067) — i.e.
 // whether a mode change is pending and the container must be rebuilt to apply
@@ -825,23 +927,21 @@ func (o *Orchestrator) createBridgeNetwork(ctx context.Context, netName string, 
 // already saying sandbox. Refusing leaves the container down — the safe state
 // — and the next start retries the check.
 func (o *Orchestrator) bridgeModeMismatch(ctx context.Context, netName string, lan bool) (bool, error) {
-	insp, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{})
+	cur, found, err := o.currentBridge(ctx, netName)
 	if err != nil {
-		if errdefs.IsNotFound(err) {
-			// No network at all: recreateMissingNetwork owns that case and
-			// builds the bridge under the right name anyway. Not a mismatch.
-			return false, nil
-		}
-		// Any OTHER inspect failure is "I cannot tell", and that must not
-		// read as "no mismatch": on a revocation the caller has just stopped
-		// the container, and starting it on an unverified bridge would put
-		// it back on lan- with the record already saying sandbox — a
-		// fail-open nothing would correct (security review, 2026-09-09).
-		// Surface the error; the container stays down, which is the safe
-		// state, and the next start retries the check.
+		// "I cannot tell" must not read as "no mismatch": on a revocation
+		// the caller has just stopped the container, and starting it on an
+		// unverified bridge would put it back on lan- with the record
+		// already saying sandbox — a fail-open nothing would correct
+		// (security review, 2026-09-09). Surface the error; the container
+		// stays down, which is the safe state, and the next start retries.
 		return false, err
 	}
-	cur := insp.Options["com.docker.network.bridge.name"]
+	if !found {
+		// No network at all: recreateMissingNetwork owns that case and
+		// builds the bridge under the right name anyway. Not a mismatch.
+		return false, nil
+	}
 	if cur == "" {
 		// A network Docker auto-named (br-<hash>). No styrman code path
 		// creates one — create() and recreateMissingNetwork both set the
@@ -1003,6 +1103,11 @@ func (o *Orchestrator) Stop(ctx context.Context, user, project string) error {
 	l := o.lockProject(key(user, project))
 	l.Lock()
 	defer l.Unlock()
+	return o.stopMarked(ctx, user, project)
+}
+
+// stopMarked is Stop's body; the caller holds the project's lock.
+func (o *Orchestrator) stopMarked(ctx context.Context, user, project string) error {
 	// Mark BEFORE stopping (under the lock): the container stop kills every
 	// attached terminal exec, and their auto-reconnects must already see the
 	// marker — otherwise the first one boots the VM straight back up.

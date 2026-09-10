@@ -481,7 +481,13 @@ rotated token, or a tool signed into inside a project instead of at setup).
   starts. There is no intermediate state — no `pending`/`error`/
   `unavailable`, no host firewall to be outdated or misconfigured, because
   the switch is the interface name the server itself picks at network
-  create, not a request to anything root-owned. A small `LAN` chip flags the
+  create, not a request to anything root-owned. The switch compares the
+  request against the project's LIVE bridge, not the stored record, so a
+  project whose badge has drifted from its actual reach is repaired by
+  simply toggling the switch again — no separate Stop/Start needed. A
+  change that could not be applied (the container couldn't be inspected,
+  stopped, or restarted) reports that the mode was **NOT changed**, and in
+  that case nothing changed. A small `LAN` chip flags the
   project in the sidebar and on the dashboard while the mode is LAN. The
   credential broker no longer withholds the SSH key from LAN projects —
   see "Credential broker" above — so unlike ADR-065/066 there is nothing to
@@ -562,6 +568,7 @@ re-import it.
 | Local network switch disabled: "Not available on this server" | The root half is not installed, outdated (script below version 4 — see ADR-066), or has no prefix: on the host, `sudo bash deploy/firewall/install.sh` (from `/opt/styrman` at the deployed tag), then check `cat /run/styrman-firewall/status`, `systemctl status styrman-firewall.timer styrman-firewall.path` and `journalctl -u styrman-firewall`. "Applying…" that turns into an error after 90 s means the reconciler never ran: same three commands. |
 | A project in LAN mode can't reach the host or its published ports | Not expected since ADR-067: LAN mode is full same-network parity by design, no opt-in required. Check the project's actual bridge — `ip -o link show \| grep lan-` — and that Docker's own inter-bridge DROP isn't the thing being hit by mistake; `sudo iptables -S STYRMAN-FWD`/`STYRMAN-IN` should show no rule matching a `lan-*` interface at all. |
 | Toggling a project's network mode restarted it / lost something | Expected (ADR-067): applying the switch rebuilds the project's container — home and workspace (bind mounts) survive, packages replay from the apt manifest, but anything living only in the container's own filesystem is gone. |
+| A project's network badge disagrees with its actual reach | Re-issue the same PUT (toggle the switch again in the UI): it compares the request against the container's LIVE bridge, not the stored record, so a drifted record repairs itself. If the reply says the mode was NOT changed, the container could not be inspected/stopped/started and nothing changed — check `docker logs styrman-<uuid>`. |
 
 ## 6. Development
 

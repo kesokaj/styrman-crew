@@ -36,36 +36,6 @@ import (
 // plain start 2 minutes and a rebuild is strictly more work.
 const lanRebuildTimeout = 3 * time.Minute
 
-// rollbackMode puts the record back to the mode still in force after an
-// apply failed with the container possibly still running on the old bridge.
-// The point is that every surface reading the record — the switch, the badge,
-// the API — must report what is actually in effect, never what was asked
-// for: a record claiming "sandboxed" over a container still on a lan- bridge
-// is a fail-open nothing would ever correct, since the mismatch heal in
-// EnsureRunning fires for STOPPED containers only.
-func (s *Server) rollbackMode(sp *userSpace, id string, requested bool, cause error, what string) {
-	s.netMu.Lock()
-	rb := sp.projects.SetLanAccess(id, !requested)
-	s.netMu.Unlock()
-	if errors.Is(rb, project.ErrNotFound) {
-		// The project was deleted while its mode was changing. There is no
-		// record left to disagree with anything; the delete path removes the
-		// container too. A race, not an incident — do not page anyone.
-		s.logger.Info("network mode: project deleted during the change; nothing to roll back",
-			"project", id, "cause", cause)
-		return
-	}
-	if rb != nil {
-		// Worse: the record now disagrees with reality and we could not
-		// correct it. ERROR — this one needs a human.
-		s.logger.Error("network mode: rollback failed, record disagrees with the running container",
-			"project", id, "recordSays", requested, "actual", !requested, "cause", cause, "error", rb)
-		return
-	}
-	s.logger.Warn("network mode: apply failed, record rolled back",
-		"project", id, "requested", requested, "stillInForce", !requested, "why", what, "cause", cause)
-}
-
 // lanView is GET /api/projects/{id}/network's body and PUT's reply.
 type lanView struct {
 	LanAccess bool `json:"lanAccess"`
@@ -89,6 +59,35 @@ func (s *Server) projectNetwork(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, lanView{LanAccess: p.LanAccess, CanEnable: u.Admin})
 }
 
+// setProjectNetwork applies a mode in ONE order for both directions, under
+// the project's lock for the whole decision:
+//
+//	inspect → if the container is RUNNING on the wrong bridge: stop,
+//	persist, start → else: persist.
+//
+// The record is written at the one moment nothing is in force — after the
+// old bridge is gone and before the new one exists — so no single failure
+// can leave it claiming LESS access than the container has. A failure before
+// the write changes nothing and says so; a failure after it leaves the
+// container down with the record ahead of it, which the next start applies.
+// An earlier version wrote the record first and rolled it back on failure;
+// three fail-opens landed on that rollback in one day (BUG-028/029/031), and
+// each one was a branch where the record said "sandbox" over a container
+// still on lan-. There is no rollback now because there is nothing to roll
+// back.
+//
+// Whether anything needs doing is decided against the LIVE bridge name, not
+// the record: a record that has drifted from the bridge is repaired by
+// re-issuing the PUT (security review 2026-09-09, round 3 — the old
+// record-based short-circuit answered 200 and touched nothing).
+//
+// The lock is held from the inspect to the reply, and every start reads the
+// record under the same lock (RunOpts.Lan), so a start racing this change
+// either completes first — and is then seen running on the wrong bridge and
+// rebuilt — or waits, and then reads the record this change wrote. With the
+// steps taken as separate calls, a start that read the old record before the
+// change and ran between two of them brought the container up on the old
+// bridge (security review 2026-09-10, round 2).
 func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		LanAccess *bool `json:"lanAccess"`
@@ -116,77 +115,124 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, errors.New("project is being deleted"))
 		return
 	}
-
-	// netMu serializes the record write against deleteProject's record
-	// removal. Held for the WRITE only, never across the rebuild below: it is
-	// a server-wide mutex, and a three-minute hold would block every other
-	// project's mode change and deletion. The rebuild is already serialized
-	// per project by the orchestrator's own lock.
-	s.netMu.Lock()
-	if p.LanAccess == on {
-		s.netMu.Unlock()
-		writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin})
-		return
-	}
-	if err := sp.projects.SetLanAccess(p.ID, on); err != nil {
-		s.netMu.Unlock()
-		writeErr(w, http.StatusInternalServerError, fmt.Errorf("cannot persist setting: %w", err))
-		return
-	}
-	s.netMu.Unlock()
-
-	// An isolation change is worth a durable line whether or not it rebuilt.
-	s.logger.Info("network mode changed", "by", u.Email, "project", p.ID,
-		"projectName", p.Name, "lanAccess", on)
-
 	ctx, cancel := context.WithTimeout(context.Background(), lanRebuildTimeout)
 	defer cancel()
-	st, err := s.mode.Status(ctx, u.Username, p.ID)
-	if err != nil {
-		// NOT the same as "stopped". Status maps a missing container to
-		// ("absent", nil); a non-nil error is a real inspect failure, and the
-		// container may well be running on the old bridge. Treating that as
-		// "nothing to do" was the same fail-open as a failed Stop, one line
-		// up: the record would claim the new mode while the old one stayed in
-		// force, with nothing to reconcile them. Same remedy.
-		s.rollbackMode(sp, p.ID, on, err, "could not inspect the project")
-		writeErr(w, http.StatusInternalServerError,
-			fmt.Errorf("the project could not be inspected, so the mode was NOT changed: %w", err))
-		return
+	// persist is the record write. netMu serializes it against
+	// deleteProject's record removal; it is always the INNER lock (the
+	// project lock is held here, and deleteProject takes netMu only after
+	// its Destroy has returned), so the two cannot deadlock.
+	persist := func() error {
+		s.netMu.Lock()
+		defer s.netMu.Unlock()
+		return sp.projects.SetLanAccess(p.ID, on)
 	}
-	if st.State != "running" {
-		// Stopped or absent: the record is the truth and EnsureRunning's
-		// mismatch check applies it on the next start. Nothing to do.
-		writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin})
-		return
+	// A project deleted between the re-read below and the write is a 404,
+	// not a persist failure with a message about a project that is gone.
+	gone := func(err error) bool {
+		if !errors.Is(err, project.ErrNotFound) {
+			return false
+		}
+		writeErr(w, http.StatusNotFound, err)
+		return true
 	}
-	if err := s.mode.Stop(ctx, u.Username, p.ID); err != nil {
-		// FAIL CLOSED on the reported state. The container is still running on
-		// the OLD bridge, so the mode did not change — but the record already
-		// says it did, and nothing would ever reconcile the two: the
-		// mismatch heal in EnsureRunning fires for STOPPED containers only, so
-		// a container left running on the wrong bridge stays there.
-		//
-		// Revoking (LAN -> sandbox) is the dangerous direction: the record
-		// would claim "sandboxed" while the project still had LAN access, and
-		// every surface that reads the record — the switch, the badge, the
-		// API — would repeat that claim indefinitely. Put the record back so
-		// what we report is what is actually in force.
-		s.rollbackMode(sp, p.ID, on, err, "could not stop the project")
-		writeErr(w, http.StatusInternalServerError,
-			fmt.Errorf("the project could not be stopped, so the mode was NOT changed: %w", err))
-		return
-	}
-	if _, err := s.mode.EnsureRunning(ctx, u.Username, p.ID, orchestrator.RunOpts{
-		Name: p.Name, Dir: p.Dir, GuestUser: sp.profile.GuestUser(), Lan: on,
-	}); err != nil {
-		writeErr(w, http.StatusInternalServerError,
-			fmt.Errorf("saved, but the project could not be restarted: %w — start it to apply the change", err))
-		return
-	}
-	go func() { // background pre-attach, as createProject and startProject do
-		time.Sleep(time.Second)
-		s.orch.EnsureSelfAttached(u.Username, p.ID)
-	}()
-	writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin, Rebuilt: true})
+	s.mode.WithProject(u.Username, p.ID, func(pr orchestrator.Project) {
+		// The record as of NOW, under the lock — not the copy getProjectFor
+		// took before it. Two PUTs racing on a stopped project would
+		// otherwise both see the same pre-change record, and the second
+		// would call itself a no-op over a record the first had just changed
+		// (security review 2026-09-10, round 3).
+		rec, err := sp.projects.Get(p.ID)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, err)
+			return
+		}
+		st, err := pr.Status(ctx)
+		if err != nil {
+			// NOT the same as "stopped". Status maps a missing container to
+			// ("absent", nil); a non-nil error is a real inspect failure, and
+			// the container may well be running on the old bridge (BUG-029).
+			// Nothing has been written, so nothing needs undoing.
+			writeErr(w, http.StatusInternalServerError,
+				fmt.Errorf("the project could not be inspected, so the mode was NOT changed: %w", err))
+			return
+		}
+		// wrongBridge: a RUNNING container whose bridge disagrees with the
+		// wanted mode — the only state in which anything is in force that
+		// must not be. Stopped or absent, nothing is in force and the next
+		// start applies the record, whatever the bridge says.
+		wrongBridge := false
+		if st.State == "running" {
+			wrongBridge, err = pr.ModeMismatch(ctx, on)
+			if err != nil {
+				// Same shape as the inspect failure above, one layer down
+				// (BUG-031): "I cannot tell" must never read as "nothing to do".
+				writeErr(w, http.StatusInternalServerError,
+					fmt.Errorf("the project network could not be inspected, so the mode was NOT changed: %w", err))
+				return
+			}
+		}
+		if rec.LanAccess == on && !wrongBridge {
+			writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin})
+			return
+		}
+		if !wrongBridge {
+			if err := persist(); err != nil {
+				if gone(err) {
+					return
+				}
+				// The bridge already matched the request and only the record
+				// was behind it. Nothing changed hands here — the record
+				// under-claimed (or over-claimed) before this request and
+				// still does — but say so, because the state does not repair
+				// itself: the re-PUT is the fix and it is the thing that just
+				// failed. Stop, then Start, applies the record as it stands.
+				s.logger.Warn("network mode: the bridge already matches the request but the record could not be saved; it keeps reporting the previous mode",
+					"project", p.ID, "requested", on, "recordSays", rec.LanAccess, "error", err)
+				writeErr(w, http.StatusInternalServerError,
+					fmt.Errorf("the project is already on the requested bridge but the setting could not be saved, so it keeps reporting the previous mode: %w", err))
+				return
+			}
+			s.logger.Info("network mode changed", "by", u.Email, "project", p.ID,
+				"projectName", p.Name, "lanAccess", on, "rebuilt", false)
+			writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin})
+			return
+		}
+		if err := pr.Stop(ctx); err != nil {
+			// The container is still running on the OLD bridge and the
+			// record still says so. True on both counts: nothing changed.
+			writeErr(w, http.StatusInternalServerError,
+				fmt.Errorf("the project could not be stopped, so the mode was NOT changed: %w", err))
+			return
+		}
+		if err := persist(); err != nil {
+			if gone(err) {
+				return
+			}
+			// The container is DOWN and the record still names the old mode:
+			// it over-claims against a container that has nothing, which is
+			// the safe direction, and the next start applies the record as
+			// it stands. Say what state the project is in.
+			s.logger.Warn("network mode: project stopped but the setting could not be saved; it stays in its previous mode",
+				"project", p.ID, "requested", on, "error", err)
+			writeErr(w, http.StatusInternalServerError,
+				fmt.Errorf("the project was stopped but the setting could not be saved, so the mode was NOT changed — start it to continue in the previous mode: %w", err))
+			return
+		}
+		if _, err := pr.EnsureRunning(ctx, orchestrator.RunOpts{
+			Name: rec.Name, Dir: rec.Dir, GuestUser: sp.profile.GuestUser(), Lan: lanOf(sp, p.ID),
+		}); err != nil {
+			// Container down, record ahead of it: the next start applies it.
+			writeErr(w, http.StatusInternalServerError,
+				fmt.Errorf("saved, but the project could not be restarted: %w — start it to apply the change", err))
+			return
+		}
+		// An isolation change is worth a durable line whether or not it rebuilt.
+		s.logger.Info("network mode changed", "by", u.Email, "project", p.ID,
+			"projectName", p.Name, "lanAccess", on, "rebuilt", true)
+		go func() { // background pre-attach, as createProject and startProject do
+			time.Sleep(time.Second)
+			s.orch.EnsureSelfAttached(u.Username, p.ID)
+		}()
+		writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin, Rebuilt: true})
+	})
 }
