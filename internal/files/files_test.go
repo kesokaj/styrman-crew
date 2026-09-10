@@ -210,8 +210,16 @@ func TestRejectNonRegular(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Read blocked on a FIFO (DoS)")
 	}
-	if IsRegular(root, "projects/p/pipe") {
-		t.Fatal("FIFO must not be a regular file")
+	// The no-follow read must refuse it just as promptly (O_NONBLOCK, then
+	// the regular-file check).
+	go func() { _, err := ReadRawNoFollow(root, "projects/p/pipe", 0); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("ReadRawNoFollow of a FIFO must fail")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ReadRawNoFollow blocked on a FIFO (DoS)")
 	}
 	// The WRITE paths must refuse it just as promptly (audit finding: a
 	// write-only open of a FIFO blocks until a reader appears).
@@ -304,5 +312,14 @@ func TestReadRawNoFollowRefusesASymlinkedFinalComponent(t *testing.T) {
 	}
 	if _, err := ReadRawNoFollow(root, "projects/p/.ssh/missing.pub", 0); err == nil {
 		t.Fatal("a missing file is an error, not empty content")
+	}
+	// The documented limit: a HARD link is not a symlink and IS read. The
+	// caller (setup.go) keeps one line and requires a public-key shape, which
+	// is what stands between this and the UI.
+	if err := os.Link(priv, filepath.Join(dir, "hard.pub")); err != nil {
+		t.Skipf("hard links unsupported here: %v", err)
+	}
+	if b, err := ReadRawNoFollow(root, "projects/p/.ssh/hard.pub", 0); err != nil || !strings.Contains(string(b), "PRIVATE") {
+		t.Fatalf("a hard-linked .pub reads (documented limit); got %v / %q", err, b)
 	}
 }

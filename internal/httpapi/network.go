@@ -126,15 +126,6 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 		defer s.netMu.Unlock()
 		return sp.projects.SetLanAccess(p.ID, on)
 	}
-	// A project deleted between the re-read below and the write is a 404,
-	// not a persist failure with a message about a project that is gone.
-	gone := func(err error) bool {
-		if !errors.Is(err, project.ErrNotFound) {
-			return false
-		}
-		writeErr(w, http.StatusNotFound, err)
-		return true
-	}
 	s.mode.WithProject(u.Username, p.ID, func(pr orchestrator.Project) {
 		// The record as of NOW, under the lock — not the copy getProjectFor
 		// took before it. Two PUTs racing on a stopped project would
@@ -177,7 +168,10 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 		}
 		if !wrongBridge {
 			if err := persist(); err != nil {
-				if gone(err) {
+				if errors.Is(err, project.ErrNotFound) {
+					// Deleted between the re-read and the write: a plain 404,
+					// not a sentence about a state the project no longer has.
+					writeErr(w, http.StatusNotFound, err)
 					return
 				}
 				// The bridge already matched the request and only the record
@@ -205,7 +199,8 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := persist(); err != nil {
-			if gone(err) {
+			if errors.Is(err, project.ErrNotFound) {
+				writeErr(w, http.StatusNotFound, err) // deleted mid-change; see above
 				return
 			}
 			// The container is DOWN and the record still names the old mode:

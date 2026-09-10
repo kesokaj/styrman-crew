@@ -233,14 +233,17 @@ func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
 
 	// ssh — the .pub is echoed to the UI and offered for copying, so it is
 	// read WITHOUT following a symlink: a .pub pointed at the PRIVATE key
-	// beside it is inside the confined root and IsRegular/ReadRaw would
-	// happily follow it (security review 2026-09-10 — the previous check
-	// claimed to refuse this and did not). A missing or linked .pub reads as
-	// "no key"; only a single line is ever echoed.
+	// beside it is inside the confined root and ReadRaw would happily follow
+	// it (security review 2026-09-10 — the previous check claimed to refuse
+	// this and did not). O_NOFOLLOW does not cover a HARD link, so the
+	// content is validated too: one line, and it must have a public-key
+	// shape (`<type> <base64>…`) — a private-key header, or anything else,
+	// is "no key".
 	pub := ""
 	if b, err := files.ReadRawNoFollow(h, ".ssh/id_ed25519.pub", 8192); err == nil {
-		if line, _, _ := strings.Cut(strings.TrimSpace(string(b)), "\n"); line != "" {
-			pub = strings.TrimSpace(line)
+		line, _, _ := strings.Cut(strings.TrimSpace(string(b)), "\n")
+		if line = strings.TrimSpace(line); publicKeyLine(line) {
+			pub = line
 		}
 	}
 	ssh := toolInfo{Name: "ssh", Ready: pub != ""}
@@ -287,4 +290,23 @@ func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
 	tools = append(tools, agy)
 
 	writeJSON(w, http.StatusOK, map[string]any{"tools": tools})
+}
+
+// publicKeyLine reports whether line has the shape OpenSSH writes to a .pub:
+// a key type, a space, a base64 body, optionally a comment — on one line.
+func publicKeyLine(line string) bool {
+	typ, rest, ok := strings.Cut(line, " ")
+	if !ok || !(strings.HasPrefix(typ, "ssh-") || strings.HasPrefix(typ, "ecdsa-") || strings.HasPrefix(typ, "sk-")) {
+		return false
+	}
+	body, _, _ := strings.Cut(strings.TrimLeft(rest, " "), " ")
+	if body == "" {
+		return false
+	}
+	for _, r := range body {
+		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '+' || r == '/' || r == '=') {
+			return false
+		}
+	}
+	return true
 }

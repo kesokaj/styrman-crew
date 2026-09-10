@@ -25,6 +25,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 	"unicode/utf8"
 )
 
@@ -439,7 +441,9 @@ func ReadRaw(root, rel string, max int64) ([]byte, error) {
 // here the concern is a .pub pointed at the PRIVATE key beside it, which is
 // inside the root and would be read and displayed (security review
 // 2026-09-10). O_NOFOLLOW fails the open with ELOOP instead, atomically,
-// with no check-then-open window.
+// with no check-then-open window. A HARD link is not a symlink and is read;
+// what is read is therefore still the caller's to validate (setup.go keeps
+// one line and requires a public-key shape).
 func ReadRawNoFollow(root, rel string, max int64) ([]byte, error) {
 	rt, err := openRoot(root)
 	if err != nil {
@@ -461,8 +465,10 @@ func ReadRawNoFollow(root, rel string, max int64) ([]byte, error) {
 		return nil, err
 	}
 	defer d.Close()
-	fd, err := syscall.Openat(int(d.Fd()), base,
-		syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	// x/sys/unix, not syscall: syscall.Openat exists on Linux only and the
+	// dev machines are macOS (review 2026-09-10).
+	fd, err := unix.Openat(int(d.Fd()), base,
+		unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: rel, Err: err}
 	}
@@ -592,18 +598,6 @@ func RemoveAll(root, rel string) error {
 	}
 	defer rt.Close()
 	return rt.RemoveAll(cleanRel(rel))
-}
-
-// IsRegular reports whether rel is a regular file (not a FIFO/device/socket
-// that would block or misbehave on Open), following symlinks confined to root.
-func IsRegular(root, rel string) bool {
-	rt, err := openRoot(root)
-	if err != nil {
-		return false
-	}
-	defer rt.Close()
-	st, err := rt.Stat(cleanRel(rel))
-	return err == nil && st.Mode().IsRegular()
 }
 
 // Exists reports whether rel exists under root (confined). Symlinks that
