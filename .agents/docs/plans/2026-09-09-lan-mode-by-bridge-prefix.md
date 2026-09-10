@@ -451,7 +451,7 @@ it back, watches it restart, and the same ping now times out.
 - [x] Replace the `integration.sh` LAN block with the checks listed under Verification; delete `STYRMAN_IT_LIVE_LAN` and its documented race (TODO.md item, now moot) — verify: `bash .agents/docs/testing/styrman/integration.sh`, AI
 - [x] Replace the two e2e LAN blocks — verify: `bash web/e2e/run.sh`, AI
 - [x] **The live adversarial run**, all five steps, written to `.agents/docs/testing/2026-09-09-lan-mode-live.md` — verify: real Kata, this host, **user + AI**
-- [ ] The browser E2E criteria walked by hand — verify: **user**
+- [x] The browser E2E criteria walked by hand — verify: **user** — DONE 2026-09-10 by the operator in the browser at crew.styrman.xyz on v1.25.0: new project, ping to LAN hosts fails in sandbox; LAN switch on (about 30 s for the rebuild); ping to the same hosts succeeds
 
 ### Phase 6 — Definition of Done and release
 - [x] `verifier` over the whole change, with test counts before/after — verify: log in `testing/`, AI — DONE 2026-09-09: `testing/2026-09-09-verify-adr-067.md` (PASS on `5481ea2`, no count drops; the tree changed under it, so the FINAL tree was re-verified by hand after the review fixes: go 15 pkgs, vitest 127, integration 84/0/3, e2e 86/0/2 exit 0 with zero leaks, firewall 24/0 under `unshare -Urnm`, which the verifier's sandbox could not run)
