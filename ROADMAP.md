@@ -12,13 +12,18 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**v1.25.0 shipped 2026-09-09; ADR-067 is live in production.** The
-per-project network mode is the bridge interface prefix (`sdb-` sandbox,
-`lan-` LAN), chosen by the server; ADR-065/066's root-mediated machinery is
-deleted. Tag `v1.25.0` on `6e73b43`, deployed by the auto-updater at 18:11,
-firewall converged on the following tick, `iptables -S` unchanged. Gate:
-`.agents/docs/reviews/2026-09-09-preflight-v1.25.0.md`. Plan
-`.agents/docs/plans/2026-09-09-lan-mode-by-bridge-prefix.md` is 43 of 44.
+**v1.26.0 shipped 2026-09-10.** Tag on release commit `300f5b3` (gated
+commit `5df2959`), deployed by the auto-updater at 11:07, server healthy in
+26 s, all three images at 1.26.0. Gate:
+`.agents/docs/reviews/2026-09-10-preflight-v1.26.0.md`; release entry:
+`.agents/docs/changes/2026-09-10-v1.26.0-release.md`. What it carries for a
+user: the network-mode PUT decides under the project lock with no rollback
+and repairs a drifted badge on re-toggle; the ssh public key with a copy
+button in Settings → Credentials; two security fixes from the gate (the
+symlinked-`.pub` guard, the multi-line key). History: v1.25.0 shipped
+2026-09-09 with ADR-067 live in production — the per-project network mode
+is the bridge interface prefix, and ADR-065/066's root-mediated machinery
+is deleted.
 
 **Nothing open for the operator.** Decided 2026-09-10: sshd keeps password
 login (LAN mode is for specific projects; the operator accepts the exposure,
@@ -27,13 +32,13 @@ operator: the browser walk-through (plan now 44 of 44: sandbox ping fails,
 LAN ping succeeds after a roughly 30 s rebuild) and the `install.sh` run
 that removed the retired `.path` unit and spool mount.
 
-**Next code task on this area** — done and unreleased: the network-mode
-PUT (commit `42716a8`, `.agents/docs/changes/2026-09-10-network-mode-put-locked.md`,
-BUG-032) now decides under the project lock inside `Orchestrator.WithProject`,
-persists the record only after applying with nothing in force (no rollback),
-and treats a no-op as agreement with the live bridge, so a re-PUT is itself
-the recovery; every start reads the mode under that same lock, closing the
-toggle-vs-start race. Ships with the next tag. Still owed, separately: the
+**Next code task on this area** — the network-mode PUT (commit `42716a8`,
+`.agents/docs/changes/2026-09-10-network-mode-put-locked.md`, BUG-032) now
+decides under the project lock inside `Orchestrator.WithProject`, persists
+the record only after applying with nothing in force (no rollback), and
+treats a no-op as agreement with the live bridge, so a re-PUT is itself the
+recovery; every start reads the mode under that same lock, closing the
+toggle-vs-start race — shipped in v1.26.0. Still owed, separately: the
 credential-broker reachability test from a LAN project on the compose
 deployment (`.agents/docs/reviews/2026-09-09-security-adr-067.md`) — a test,
 no code. Next code task: the top unticked 🟢 item in `TODO.md`'s Inbox

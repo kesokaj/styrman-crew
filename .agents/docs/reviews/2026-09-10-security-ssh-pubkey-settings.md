@@ -378,3 +378,187 @@ showing themselves. Out of scope for this diff, which changes none of it.
   filesystem as the file owner. If the home bind mount forbade hard links this
   finding would drop to informational — the mount options were not read.
 - `web/e2e/` and the integration suite were not run; no server was driven.
+
+## Round 3 (2026-09-10) — the answer to round 2
+
+Range reviewed: `a8ebbbb..5df2959 -- internal web/src` (`21ba6d9` portable openat +
+key-shape check + `IsRegular` gone, `fdef866` the comments, `5df2959` TAB kept
+legal in the control reject). Blobs pinned: `internal/files/files.go` a112d70,
+`internal/files/files_test.go` dcf7099, `internal/httpapi/setup.go` 1f7042d,
+`internal/httpapi/setup_pubkey_test.go` 7c95f88, `internal/httpapi/network.go`
+b6b5422, `internal/httpapi/network_test.go` d97b756, `web/src/lib/sshKey.ts`
+3b704aa, `web/src/lib/sshKey.test.ts` 5c1a1c3. All eight are ASCII or UTF-8 text
+with zero raw C0/C1 control bytes and no U+2028/U+2029 (`file(1)`, `grep -cP`
+over those ranges) — `sshKey.test.ts` spells its vectors as two-character
+Unicode escapes, not as bytes, which is the BUG-007 shape. `git diff --numstat`
+shows deletions only where lines were replaced (`files.go` 16/21 = `IsRegular`
+removed plus the comment rewritten; `network.go` 6/11 = the `gone` closure
+inlined), so nothing was overwritten (BUG-005). Probes ran against a
+`git archive 5df2959` copy of the tree in the session scratchpad; no repo file
+was touched.
+
+### Verdict: CLEAR — round 2's medium is closed, and closed at the right layer
+
+The hard-link case that survived round 2 no longer reaches the user, and the
+comments no longer claim anything false. Driving the REAL endpoint path
+(`testServer` builds the Server through `New`, which calls
+`files.Trust(cfg.HomesDir, ...)`, so `UserHome("tester")` is
+`<HomesDir>/tester/base` — a sub-root below a Trust base, the production shape)
+with a `.pub` hard-linked to the private key returns `ready=false, details=[]`:
+the `ReadRawNoFollow` read succeeds exactly as round 2 measured, and
+`publicKeyLine` then throws the content away. Every shape round 2 named is
+refused at that same place, and the two residual lows are narrower than the ones
+they replace. What is left is a documented, accepted limit — the guest owns the
+file, so any base64 it prefixes with a key type is echoed to its own owner's
+browser — and the three rewritten comments now say precisely that and no more.
+
+### Measured through `toolDetails` (real handler, real `GET /api/settings/tools` path, Trust base)
+
+| `.ssh/id_ed25519.pub` is... | result |
+|---|---|
+| a HARD LINK to `id_ed25519` | `ready=false`, no details — round 2's medium, closed |
+| a SYMLINK to `id_ed25519` | `ready=false` (ELOOP inside the read) |
+| a byte-for-byte COPY of the private key | `ready=false` (line 1 is the armor header) |
+| the private key's LINE 2 alone, `b3BlbnNzaC1rZXktdjEAAAAA...` | `ready=false` — valid base64, but it contains no space, so `strings.Cut(line, " ")` returns `ok=false` before any prefix test. This is the case the shape check has to get right, and it does |
+| `-----BEGIN RSA PRIVATE KEY-----` (PEM header) | `ready=false` |
+| a DIRECTORY named `id_ed25519.pub` | `ready=false` (`not a regular file`) |
+| a real key on line 1, secret on line 2 | `ready=true`, details = line 1 only |
+| a real key | `ready=true`, details = the line |
+
+### Findings (round 3)
+
+- **[low / confidence: high]** `web/src/lib/sshKey.ts:41` — the new reject is
+  `\p{Cc}` plus U+2028/U+2029, narrower than round 2's remediation (`\p{C}` or
+  printable ASCII), so `\p{Cf}` and `\p{Zs}` still pass. Measured against the
+  COMMITTED module (esbuild of blob 3b704aa; the compiled regex line and the
+  control-check line are byte-identical to the source): ESC U+001B, NUL U+0000,
+  DEL U+007F, NEL U+0085, 8-bit CSI U+009B, CR, LF, U+2028 and U+2029 are now all
+  rejected — round 2's actual vectors are gone — but RLO U+202E, ZWSP U+200B,
+  BOM U+FEFF, SOFT HYPHEN U+00AD and NBSP U+00A0 are ACCEPTED and returned
+  verbatim into `title={c.copy}` (`settings.tsx:343`) and the clipboard (`:205`).
+  Unlike U+2028, which JS `\s` collapsed in the row, `abbreviateKey` leaves
+  U+202E in place: the row renders `ssh-ed25519 AAAAC3Nz...Y6Hk6s me<U+202E>evil`
+  with the tail bidi-reversed. That is display spoofing of the user's own row,
+  inert on an authorized_keys paste (sshd takes the whole comment field), and it
+  needs the same in-guest compromise that bounds every finding in this file —
+  hence low, not medium. Remediation is one character: `\p{C}` in place of
+  `\p{Cc}` (TAB is already substituted out before the test), plus `\p{Zs}` and
+  U+00AD if invisible spacing matters. Not a regression: strictly fewer
+  characters pass than in round 2.
+
+- **[low / confidence: medium]** `internal/httpapi/setup.go:298` `publicKeyLine`
+  — the shape check validates the TYPE and the BASE64 BODY and stops; the
+  comment field is unchecked, so the server still serialises control characters
+  into its JSON response. Measured on the real handler: a `.pub` whose comment
+  contains ESC U+001B and a bare CR yields `ready=true` with those bytes intact
+  in `details[0]`. Nothing renders it today, because the frontend check above
+  rejects the whole line — but that makes the browser the only filter on a
+  server response, and any other consumer of `GET /api/settings/tools` (curl in a
+  terminal, a future client) receives the bytes. The asymmetry also invites the
+  next reader to trust the server-side "content check" for more than it does.
+  Remediation: reject any byte outside printable ASCII across the whole line
+  inside `publicKeyLine` — which is all an OpenSSH `.pub` ever contains — and add
+  the case to `setup_pubkey_test.go`'s reject table. Confidence medium on
+  materiality, high on the measurement.
+
+### Round 2's items, checked one by one
+
+1. **The content check is the stated guard, and it is what fires.**
+   `setup.go:243-249` keeps one line and requires `publicKeyLine`; the table
+   above is that check firing on symlink, hard link and copy alike.
+   `setup_pubkey_test.go` (a NEW file, no collision with anything tracked)
+   covers four accept and seven reject cases, including the armor header and the
+   line-2 base64 body; `TestPublicKeyLine` passes.
+2. **The three comments now claim only what is true.** `files.go:437-447` states
+   the hard-link limit explicitly ("whoever can `ln` can `cp`"),
+   `setup.go:234-242` names the content check as the guard, and `sshKey.ts:5-10`
+   says the file is the user's own so the CONTENT check is the guard, "not the
+   file's kind". I could not find a sentence in any of the three that a probe
+   contradicts. This is round 2's remediation in preference order (1), taken
+   WITHOUT the `Nlink` check that would have been (2) — the right call, and the
+   shorter one.
+3. **`TestReadRawNoFollowBelowATrustBase` exists** (`files_test.go:327-353`) and
+   is the sub-root shape production uses: `Trust(base)`, root `<base>/alice/p/x`,
+   symlinked `.pub` refused, real `.pub` read. The hard-link limit is pinned as a
+   test too (`files_test.go:317-324`), with `t.Skipf` where the filesystem has no
+   hard links — a documented limit that now fails loudly if someone "fixes" it
+   silently. Round 2's low is closed.
+4. **The control-character reject exists and is tested** (`sshKey.test.ts:53-60`,
+   six characters). `npx vitest run src/lib/sshKey.test.ts`: 11 passed. The
+   shipped bundle agrees with the source: `web/dist/client/assets/settings-DNDjnDEy.js`
+   carries the `p{Cc}` class, the two separator code points and the 4096 bound,
+   and the `settings-CojjHv98.js` round 2 examined is deleted in this range.
+   Note on process, not security: `5df2959` exists because `fdef866` shipped a
+   RED vitest case (TAB rejected as a separator) that a grep in the check chain
+   masked. The fix is correct; the check chain that let a red test through is a
+   bug record's business.
+5. **`unix.Openat` replaces `syscall.Openat`** — necessary and sufficient:
+   `GOOS=darwin go doc syscall.Openat` reports "no symbol Openat in package
+   syscall" (the previous commit could not build on the operator's macOS
+   machines), `GOOS=darwin GOARCH=arm64 go build ./...` is clean at this commit,
+   and on Linux the ELOOP behaviour is unchanged (`files_test.go` symlink cases
+   pass). `golang.org/x/sys` moves from `// indirect` to a direct require at the
+   SAME version v0.47.0 already in the module graph — `git diff a8ebbbb..5df2959
+   -- go.sum` is empty, so no new code enters the build. Justified against
+   stdlib-first: the stdlib has no portable `openat`.
+
+### Accepted limit, not a finding
+
+A guest that can write its own base home can put a key type in front of any
+base64 and have it echoed: measured, `ssh-ed25519 b3BlbnNzaC1rZXktdjEAAAAA... x`
+is accepted by the server AND by the frontend regex. No shape check can prevent
+that, because the base64 body of a public key and a chunk of a private key are
+the same alphabet. It is not a leak: the reader is the file's own owner, in
+their own browser, over an authenticated request (`authGuard`, unchanged since
+round 1), and the guest could already read the key inside its own VM. All three
+comments now say exactly this. Recorded here so round 4 does not re-open it as
+new.
+
+### Also in range, not part of the ssh work
+
+`internal/httpapi/network.go` replaces the `gone` closure with two inline
+`errors.Is(err, project.ErrNotFound)` branches — behaviour-identical (same
+status, same `writeErr`), with no authz, lock or ordering change;
+`network_test.go` adds `TestNetworkProjectDeletedMidPutIs404`, whose second half
+the test itself labels as pinning the reply shape rather than a reachable
+interleaving. No security impact either way. `go vet` and `go test
+./internal/files/ ./internal/httpapi/` are clean at this commit.
+
+### Checked (round 3)
+
+- **Secrets:** none added. The only secret near this path is the caller's own
+  private key, and every route from it to the screen is closed above; no key
+  material, path or token reaches a log line or an error string — the
+  `ReadRawNoFollow` errors carry the relative name only.
+- **Injection:** the clipboard remains the only sink. Two-line smuggling stays
+  closed (re-measured against the committed module); the residual is the
+  character class in finding 1. No shell, SQL or path is built from any of this;
+  the read is a fixed relative name under the caller's own home.
+- **Authz/authn:** untouched by all three commits — no route, guard, identity
+  derivation or admin check appears in the diff, so round 1's `authGuard`
+  analysis of `GET /api/settings/tools` stands unchanged.
+- **Crypto:** none introduced, nothing hand-rolled. `unix.Openat` is a syscall
+  wrapper from a vetted `golang.org/x/` module, not a primitive.
+- **Dependencies:** one line moved from indirect to direct at an unchanged
+  version; `go.sum`, `web/package.json` and `web/package-lock.json` are untouched
+  in this range (`git diff --stat` empty), so round 1's `deploy/vulncheck.sh` and
+  `npm audit` results still describe this tree and were NOT re-run — no new
+  module version entered the build for them to have found.
+- **GCP surface:** not applicable — self-hosted; nothing in the diff touches IAM,
+  a service account, Secret Manager or Cloud Run.
+
+### Not examined (round 3)
+
+- `web/dist/client` beyond the settings asset: I confirmed that ONE bundle
+  carries the new check and that the old one is gone, not that every rebuilt
+  asset in the range corresponds to its source.
+- No server was driven end to end and no browser ran: `web/e2e/run.sh` and
+  `.agents/docs/testing/styrman/integration.sh` were not executed, and the row's
+  rendering of U+202E is reasoned from `abbreviateKey`'s output plus React's
+  escaping, not observed in a browser.
+- `go test ./...` across the repo and the separate Caddy ingress module were not
+  run — only the two packages in the diff, plus the `GOOS=darwin` builds.
+- Round 2's open item stays open: whether the deployed image's home bind mount
+  permits `ln` at all was again not checked against a running Kata VM. It no
+  longer changes any severity, since the content check does not care how the
+  bytes got there.

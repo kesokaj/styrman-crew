@@ -61,3 +61,27 @@ operator's instruction to tag with the two narrow re-check rows outstanding.
 ## Pre-gate commits on the branch
 
 `42716a8`, `d31ab63`, `cebad2b`, `29e05a1`, `a8ebbbb`, `75171f0`, `a875624`, `21ba6d9`, `fdef866`, `5df2959` (all pushed to `origin/main` before the tag).
+
+## Appended after the tag — the two rows in flight at tag time
+
+Tag `v1.26.0` pushed 11:02:41; deployed by the updater's 11:06 tick, server
+healthy 11:07:29 (`styrman-server:1.26.0`, `styrman-caddy:1.26.0`,
+`styrman-runtime:1.26.0`; firewall chains unchanged).
+
+- **Reviewer round 3** (over `21ba6d9`): APPROVE WITH NITS. All four
+  round-2 items closed by measurement (darwin build, go.sum unchanged, FIFO
+  assertion discriminates, hard-link limit pinned, inlined 404 branch still
+  tested). Two lows → TODO: `publicKeyLine` untested at its `toolDetails`
+  call site; prefix-only key-type test (`ssh- AAAA` accepted). Neither
+  changes what a user can do; the file is their own.
+- **Security round 3** (over `a8ebbbb..5df2959`): CLEAR. Round 2's medium
+  closed at the right layer — measured through the real `toolDetails` under
+  a Trust base: a `.pub` hard-linked, symlinked or copied from the private
+  key, the PEM header, and the key body's base64 line 2 are all rejected;
+  a real key still reads; one line echoed. Two lows → TODO: the frontend
+  rejects `\p{Cc}` rather than `\p{C}` (RLO/ZWSP/BOM/NBSP still reach the
+  title and clipboard — display spoofing of the user's own row); the
+  server does not strip control bytes from the comment field for
+  non-browser API consumers.
+
+No blocking finding landed. The SHIP verdict stands as written.
