@@ -22,7 +22,7 @@ Add new items below as they arise.
 
 - [x] 🟡 A mode toggle races a concurrent start (same review, medium): `RunOpts.Lan` is a caller snapshot of the record read outside the orchestrator lock, so a `POST /start` that read the OLD record can bring the container up on the old bridge after the toggle's `Status` said "stopped" — and running containers are never re-checked. Needs a very tight race. Fix sketch: have `EnsureRunning` (or the start handler, under `netMu`) re-read the record at the moment it decides the bridge name, so the name always reflects the record as of the start. (added 2026-09-09) **DONE 2026-09-10** — `RunOpts.Lan` is a read under the project lock and the PUT runs under the same lock; security round 3 confirms every interleaving closed.
 
-- [ ] 🟢 `waitReady` timeout after a successful `ContainerStart` inside `ensureRunningLocked` leaves the "deliberately stopped" marker set on a container that may be running (reviewer round 2, low, pre-existing since BUG-030's fix) — clear the marker after `ContainerStart` succeeds, or re-inspect on that branch. (added 2026-09-10)
+- [x] 🟢 `waitReady` timeout after a successful `ContainerStart` inside `ensureRunningLocked` leaves the "deliberately stopped" marker set on a container that may be running (reviewer round 2, low, pre-existing since BUG-030's fix) — clear the marker after `ContainerStart` succeeds, or re-inspect on that branch. (added 2026-09-10) **DONE 2026-09-10** — the marker is lifted right after the start, before the readiness wait; see this entry.
 
 - [ ] 🟢 The network-mode handler writes its HTTP reply while holding the project lock (security round 3, low/low, latent: bodies are tiny) — collect the reply inside the closure and write after `WithProject` returns. (added 2026-09-10)
 

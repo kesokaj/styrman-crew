@@ -438,6 +438,16 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 		return "", fmt.Errorf("inspect %s: %w", name, err)
 	}
 
+	// The container is STARTED from here on, by this call, on purpose — so
+	// the "deliberately stopped" marker is lifted NOW, before the readiness
+	// wait, not after it. The marker's one job is to keep a terminal
+	// auto-reconnect from booting a VM someone stopped; a start that has
+	// happened makes it stale whatever waitReady says next. Lifting it only
+	// on success left it set when the start succeeded and the 90 s wait did
+	// not (a slow cold boot): the VM came up anyway and every reconnect was
+	// refused with close 4002 "project stopped" until someone pressed Start
+	// (review of v1.26.0's delta, low; the shape of BUG-030 one step later).
+	o.stopped.Delete(key(user, project))
 	if err := o.waitReady(ctx, id, 90*time.Second); err != nil {
 		return "", fmt.Errorf("project %s did not become ready: %w", name, err)
 	}
@@ -446,9 +456,6 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 	// HTTP responses (observed as browser ERR_CONNECTION_REFUSED on the
 	// published dev port). The port-preview proxy attaches lazily instead.
 	o.Touch(user, project)
-	// Any successful EnsureRunning is an intentional boot — lift the
-	// deliberately-stopped marker so terminals reconnect normally again.
-	o.stopped.Delete(key(user, project))
 	return id, nil
 }
 
