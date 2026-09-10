@@ -284,6 +284,7 @@ type fakeMode struct {
 	mismatchCalls int
 	ensureLan     []bool // the mode each start read through RunOpts.Lan
 	onLock        func() // runs when the lock is taken, before the handler's decision
+	onStop        func() // runs inside Stop, before it returns success
 }
 
 func (f *fakeMode) WithProject(_, _ string, fn func(orchestrator.Project)) {
@@ -314,6 +315,9 @@ func (f *fakeMode) Stop(_ context.Context) error {
 		return f.stopErr
 	}
 	f.state = "stopped"
+	if f.onStop != nil {
+		f.onStop()
+	}
 	return nil
 }
 
@@ -659,4 +663,66 @@ func TestNetworkNoOpDecisionReadsTheRecordUnderTheLock(t *testing.T) {
 	if n.lanAccessOf(t, n.admin, n.pid) {
 		t.Fatal("record says LAN after a disable that answered 200 — the no-op decision used a stale copy of the record")
 	}
+}
+
+// A project whose record disappears between the re-read under the lock and
+// the persist (deleteProject removes the record under netMu, which the
+// persist takes AFTER the project lock) is reported as gone — 404 — not as a
+// persist failure with a sentence about a project's state (review
+// 2026-09-10 of the release delta: the branch had no test). Both persist
+// sites: after a stop, and on the record-only path.
+func TestNetworkProjectDeletedMidPutIs404(t *testing.T) {
+	n, path := lanRunning(t)
+	sp, err := n.s.space(identity.DeriveUsername(n.admin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rebuild path: the delete lands while the container is being stopped.
+	fm := &fakeMode{state: "running", bridgeLan: true}
+	fm.onStop = func() {
+		if err := sp.projects.Remove(n.pid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n.s.mode = fm
+	w := doAs(t, n.h, n.admin, http.MethodPut, path, `{"lanAccess":false}`)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("deleted after the stop: want 404, got %d (%s)", w.Code, w.Body.String())
+	}
+	if fm.ensureCalls != 0 {
+		t.Fatal("nothing may be started for a project that no longer exists")
+	}
+
+	// Record-only path: the record goes away after the handler's re-read
+	// and before its persist — emulated from inside Status, which sits
+	// between the two. Not reachable through deleteProject today (Destroy
+	// holds the project lock before Remove), so this pins the reply shape,
+	// not a live interleaving.
+	n2 := newNetHarness(t)
+	sp2, err := n2.s.space(identity.DeriveUsername(n2.admin))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n2.s.mode = &statusHookMode{fakeMode: &fakeMode{state: "stopped"}, onStatus: func() {
+		if err := sp2.projects.Remove(n2.pid); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	w2 := doAs(t, n2.h, n2.admin, http.MethodPut, "/api/projects/"+n2.pid+"/network", `{"lanAccess":true}`)
+	if w2.Code != http.StatusNotFound {
+		t.Fatalf("deleted before the record-only persist: want 404, got %d (%s)", w2.Code, w2.Body.String())
+	}
+}
+
+// statusHookMode is fakeMode with a hook inside Status.
+type statusHookMode struct {
+	*fakeMode
+	onStatus func()
+}
+
+func (m *statusHookMode) WithProject(_, _ string, fn func(orchestrator.Project)) { fn(m) }
+
+func (m *statusHookMode) Status(ctx context.Context) (orchestrator.Status, error) {
+	m.onStatus()
+	return m.fakeMode.Status(ctx)
 }
