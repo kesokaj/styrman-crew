@@ -41,8 +41,17 @@ recovery; every start reads the mode under that same lock, closing the
 toggle-vs-start race — shipped in v1.26.0. Still owed, separately: the
 credential-broker reachability test from a LAN project on the compose
 deployment (`.agents/docs/reviews/2026-09-09-security-adr-067.md`) — a test,
-no code. Next code task: the top unticked 🟢 item in `TODO.md`'s Inbox
-(`waitReady` timeout leaving the "deliberately stopped" marker set).
+no code.
+
+**Active plan:** `.agents/docs/plans/2026-09-10-todo-closeout.md` — the
+operator's decision of 2026-09-10 ("go all"): every open TODO item is fixed
+in six phases (server small fixes; web; deploy/scripts; terminal
+re-authorization; the Docker seam that gives the orchestrator its first unit
+tests; Definition of Done) or was struck with a reason the same day (ten
+items). The only item that stays open for the operator is the backups
+clean-up (GCS bucket + service account, and the orphaned archive on the
+host). The `waitReady` marker item was done earlier today (commit
+`ea6928a`).
 
 <details>
 <summary>How it got there (written while ADR-067 was pending; kept as record)</summary>
