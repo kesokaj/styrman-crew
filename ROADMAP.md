@@ -22,9 +22,10 @@ firewall converged on the following tick, `iptables -S` unchanged. Gate:
 
 **Open, all the operator's:** the browser walk-through (the plan's one
 unticked box); whether to disable sshd password auth before the first LAN
-project (this host accepts passwords, and a LAN project reaches it); one run
-of `sudo bash deploy/firewall/install.sh` from `/opt/styrman` at `v1.25.0`
-to remove the retired, inert `.path` unit and spool mount.
+project (this host accepts passwords, and a LAN project reaches it). The
+retired `.path` unit and spool mount were removed by running `sudo bash
+deploy/firewall/install.sh` from `/opt/styrman` at `v1.25.0` on 2026-09-10,
+verified gone.
 
 **Next code task on this area** — top of `TODO.md`: replace the network-mode
 PUT's record-first-then-rollback with persist-after-apply on tightening,
