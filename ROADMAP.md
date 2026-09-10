@@ -29,18 +29,16 @@ root-mediated machinery is deleted; v1.26.0 followed the same day with the
 network-mode PUT deciding under the project lock, the ssh public key copy
 button, and two security fixes from the gate.
 
-**Nothing open for the operator but the two root commands, now due.**
-Decided 2026-09-10: sshd keeps password login (LAN mode is for specific
-projects; the operator accepts the exposure, recorded in
-`.agents/docs/deploy/remote.md`). Done 2026-09-10 by the operator: the
-browser walk-through (plan now 44 of 44: sandbox ping fails, LAN ping
-succeeds after a roughly 30 s rebuild) and the `install.sh` run that
-removed the retired `.path` unit and spool mount. Now that v1.27.0 shipped,
-the operator's two root commands are due: `sudo bash
-deploy/firewall/install.sh` (boot-time firewall unit) and `sudo bash
-deploy/host-setup.sh` (Docker address pool), once, per `deploy/remote.md`,
-plus the backups clean-up (GCS bucket + service account in project
-`driven-eft-h4it`, and shredding `/var/lib/styrman/backups/` on the host).
+**Nothing open for the operator.** Decided 2026-09-10: sshd keeps password
+login (LAN mode is for specific projects; the operator accepts the
+exposure, recorded in `.agents/docs/deploy/remote.md`). Done 2026-09-10 by
+the operator: the browser walk-through (plan now 44 of 44: sandbox ping
+fails, LAN ping succeeds after a roughly 30 s rebuild) and the `install.sh`
+run that removed the retired `.path` unit and spool mount, plus the two
+root commands, `sudo bash deploy/firewall/install.sh` (boot-time firewall
+unit, now enabled) and `sudo bash deploy/host-setup.sh` (Docker address
+pool 172.16.0.0/12, now in place). The backups clean-up was verified
+already gone. `TODO.md` has no open item.
 
 **Next code task on this area** — the network-mode PUT (commit `42716a8`,
 `.agents/docs/changes/2026-09-10-network-mode-put-locked.md`, BUG-032) now
@@ -48,10 +46,11 @@ decides under the project lock inside `Orchestrator.WithProject`, persists
 the record only after applying with nothing in force (no rollback), and
 treats a no-op as agreement with the live bridge, so a re-PUT is itself the
 recovery; every start reads the mode under that same lock, closing the
-toggle-vs-start race — shipped in v1.26.0. Still owed, separately: the
-credential-broker reachability test from a LAN project on the compose
-deployment (`.agents/docs/reviews/2026-09-09-security-adr-067.md`) — a test,
-no code.
+toggle-vs-start race — shipped in v1.26.0. The credential-broker
+reachability test from a LAN project
+(`.agents/docs/reviews/2026-09-09-security-adr-067.md`) was run 2026-09-10
+on the production deployment with two users and passed on every probe
+(`.agents/docs/testing/2026-09-10-broker-reachability-live.md`).
 
 **TODO close-out shipped in v1.27.0:** plan
 `.agents/docs/plans/2026-09-10-todo-closeout.md` is complete except Phase
@@ -65,9 +64,10 @@ fixed. `TODO.md` now has ONE open item, the operator's backups clean-up
 `/var/lib/styrman/backups/` on the host). Final verification on the
 committed tree: integration 84/0/3, e2e 87/0/2, go test -race, vitest 147,
 `deploy/verify-commit.sh` on `0201b8c`
-(`testing/2026-09-10-verify-closeout-final.md`). Still owed and unchanged:
-the credential-broker reachability test from a LAN project on the compose
-deployment. Next: cut a release when the operator says so (`/preflight`).
+(`testing/2026-09-10-verify-closeout-final.md`). The credential-broker
+reachability test from a LAN project was run on 2026-09-10 on production
+with two users and passed every probe
+(`testing/2026-09-10-broker-reachability-live.md`).
 
 <details>
 <summary>How it got there (written while ADR-067 was pending; kept as record)</summary>
@@ -139,13 +139,7 @@ Carried forward, unstarted: the operator's picks from `TODO.md` — the legacy
 
 ## Next
 
-Closed 2026-09-03 (ADR-062): `integration.sh` now asserts the seeded harness
-inside a booted project (`sh-agent status` no drift, the two-line
-`CLAUDE.md`, 28 skills / 7 agents, no previous-harness artifacts) and bounds
-boot→ready by R1's 15 s hard limit from the container's own timestamps — the
-"no automated assertion that a seeded agent harness is correct" item and its
-boot-latency gap. Tier 5 in `.agents/docs/testing/styrman/README.md` keeps
-only what a script cannot judge.
+<!-- Nothing queued. The last closed item (ADR-062, 2026-09-03) lives in changes/. -->
 
 ## Later / Ideas
 
