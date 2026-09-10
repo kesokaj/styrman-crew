@@ -346,9 +346,9 @@ user).
 - [x] O `dockerAPI` + fake + the listed orchestrator tests (incl. E's) — verify: `go test ./internal/orchestrator -race`, mutation-check the wrong-bridge and symlink cases, AI
 - [x] BUG-003 residual closed in TODO; changes entry, commit, push — AI
 ### Phase 6 — Definition of Done over the whole change
-- [ ] verifier (all tiers, counts before/after), reviewer (diff), security (auth/ingress/files touched), documentation (api.md `provisioning` state and WS close 4003 "access revoked", guide, deploy docs, testing README counts), changelog, bugs — verify: artifacts in `testing/`, `reviews/`, `changes/`, AI
-- [ ] integration 84+/0 and e2e 86+/0 on the final tree — verify: logs, AI
-- [ ] TODO.md has no unticked item except the operator's; ROADMAP "Now" updated — verify: `grep -c '^- \[ \]' TODO.md` = 1, AI
+- [x] verifier (all tiers, counts before/after), reviewer (diff), security (auth/ingress/files touched), documentation (api.md `provisioning` state and WS close 4003 "access revoked", guide, deploy docs, testing README counts), changelog, bugs — verify: artifacts in `testing/`, `reviews/`, `changes/`, AI
+- [x] integration 84+/0 and e2e 86+/0 on the final tree — verify: logs, AI
+- [x] TODO.md has no unticked item except the operator's; ROADMAP "Now" updated — verify: `grep -c '^- \[ \]' TODO.md` = 1, AI
 
 ## Risks
 - O is the size driver (61 call sites); it is last so the rest lands even if

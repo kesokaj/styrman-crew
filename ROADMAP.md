@@ -30,7 +30,11 @@ login (LAN mode is for specific projects; the operator accepts the exposure,
 recorded in `.agents/docs/deploy/remote.md`). Done 2026-09-10 by the
 operator: the browser walk-through (plan now 44 of 44: sandbox ping fails,
 LAN ping succeeds after a roughly 30 s rebuild) and the `install.sh` run
-that removed the retired `.path` unit and spool mount.
+that removed the retired `.path` unit and spool mount. After the next
+release, the operator's two root commands are `sudo bash
+deploy/firewall/install.sh` (enables the boot-time firewall unit) and
+`sudo bash deploy/host-setup.sh` (Docker address pool), once, per
+`deploy/remote.md`.
 
 **Next code task on this area** — the network-mode PUT (commit `42716a8`,
 `.agents/docs/changes/2026-09-10-network-mode-put-locked.md`, BUG-032) now
@@ -43,15 +47,21 @@ credential-broker reachability test from a LAN project on the compose
 deployment (`.agents/docs/reviews/2026-09-09-security-adr-067.md`) — a test,
 no code.
 
-**Active plan:** `.agents/docs/plans/2026-09-10-todo-closeout.md` — the
-operator's decision of 2026-09-10 ("go all"): every open TODO item is fixed
-in six phases (server small fixes; web; deploy/scripts; terminal
-re-authorization; the Docker seam that gives the orchestrator its first unit
-tests; Definition of Done) or was struck with a reason the same day (ten
-items). The only item that stays open for the operator is the backups
-clean-up (GCS bucket + service account, and the orphaned archive on the
-host). The `waitReady` marker item was done earlier today (commit
-`ea6928a`).
+**TODO close-out done (unreleased):** plan
+`.agents/docs/plans/2026-09-10-todo-closeout.md` is complete except Phase
+6's final trail box (this edit). Five phase commits on `main` since
+`v1.26.0`: `7dae197` server fixes, `3ce8a37` web + terminal
+re-authorization, `46f3ec2` deploy and scripts, `0201b8c` the Docker seam
+with the orchestrator's first unit tests, docs and BUG-034..037. Twelve
+TODO items were struck with reasons by the operator's decision, the rest
+fixed. `TODO.md` now has ONE open item, the operator's backups clean-up
+(GCS bucket + service account in project `driven-eft-h4it`, and shredding
+`/var/lib/styrman/backups/` on the host). Final verification on the
+committed tree: integration 84/0/3, e2e 87/0/2, go test -race, vitest 147,
+`deploy/verify-commit.sh` on `0201b8c`
+(`testing/2026-09-10-verify-closeout-final.md`). Still owed and unchanged:
+the credential-broker reachability test from a LAN project on the compose
+deployment. Next: cut a release when the operator says so (`/preflight`).
 
 <details>
 <summary>How it got there (written while ADR-067 was pending; kept as record)</summary>
