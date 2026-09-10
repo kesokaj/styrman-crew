@@ -107,6 +107,10 @@ fi
 # ─── 3. Activate ────────────────────────────────────────────────────────────
 run systemctl daemon-reload
 run systemctl start styrman-firewall.service
+# Enabled as a boot-time unit too: the base rules land once right after
+# docker.service instead of at the timer's first tick (the service's
+# [Install] section; ADR-065 follow-up (f), closed 2026-09-10).
+run systemctl enable styrman-firewall.service
 run systemctl enable --now styrman-firewall.timer
 if [ "${DRY}" = 0 ]; then
     log "STYRMAN-FWD:"

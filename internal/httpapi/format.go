@@ -117,8 +117,9 @@ func (s *Server) formatFile(w http.ResponseWriter, r *http.Request) {
 // unit-testable (format_test.go): it MUST read an exact byte count rather than
 // waiting for stdin EOF — see the long comment in orchestrator.Exec.
 func formatScript(ext string, n int, cmd string) string {
-	return fmt.Sprintf(`F=$(mktemp -p . --suffix=.%s) || { printf 'STYRMAN_ERR\ncannot create temp file'; exit 0; }
-trap 'rm -f "$F" "${F}.err" "${F}.out"' EXIT
+	// Temp file outside the workspace, as in checkScript.
+	return fmt.Sprintf(`D="$HOME/.styrman/tmp"; mkdir -p "$D" && find "$D" -type f -mmin +60 -delete 2>/dev/null; F=$(mktemp -p "$D" --suffix=.%s) || { printf 'STYRMAN_ERR\ncannot create temp file'; exit 0; }
+trap 'rm -f "$F" "${F}.err"' EXIT
 E="${F}.err"
 head -c %d > "$F"
 [ "$(wc -c < "$F")" -eq %d ] || { printf 'STYRMAN_ERR\nshort read: editor content did not arrive intact'; exit 0; }

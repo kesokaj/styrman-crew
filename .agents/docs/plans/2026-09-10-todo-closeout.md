@@ -333,12 +333,12 @@ user).
 - [x] 29 `projectBadge` extraction + vitest — verify: `npm test`, AI
 - [x] rebuild dist, changes entry, commit, push — AI
 ### Phase 3 — Deploy and scripts
-- [ ] A bump the 8 ingress deps; ingress tests; caddy image build proves the versions — verify: `verify-commit.sh` divergence list empty, AI
-- [ ] K1 timer flag; K2 and K3 already closed — strike with the note; K4 temp outside the workspace; K5 tool label + parser case; K6 trap — verify: `bash -n`, `go test ./internal/httpapi` (check/format tests), AI
-- [ ] L `ensure-test-image.sh` wired into both suites — verify: run with a touched `image/skel` file → rebuild observed, AI
-- [ ] M(d) address pool in host-setup merge (idempotent, `python3` merge test by running the snippet on a fixture) — verify: dry run against a fixture daemon.json, AI; applied by the operator later
-- [ ] M(f) ordering decided by measurement; unit change or `OnBootSec`; ADR-067 amendment — verify: firewall tests (`deploy/firewall/*_test*`) + `systemctl show` after the operator's install, both
-- [ ] changes entry, commit, push — AI
+- [x] A bump the 8 ingress deps; ingress tests; caddy image build proves the versions — verify: `verify-commit.sh` divergence list empty, AI
+- [x] K1 timer flag; K2 and K3 already closed — strike with the note; K4 temp outside the workspace; K5 tool label + parser case; K6 trap — verify: `bash -n`, `go test ./internal/httpapi` (check/format tests), AI
+- [x] L `ensure-test-image.sh` wired into both suites — verify: run with a touched `image/skel` file → rebuild observed, AI
+- [x] M(d) address pool in host-setup merge (idempotent, `python3` merge test by running the snippet on a fixture) — verify: dry run against a fixture daemon.json, AI; applied by the operator later
+- [x] M(f) ordering decided by measurement; unit change or `OnBootSec`; ADR-067 amendment — verify: firewall tests (`deploy/firewall/*_test*`) + `systemctl show` after the operator's install, both
+- [x] changes entry, commit, push — AI (M(f)'s boot-order verification is the operator's after the next `install.sh`)
 ### Phase 4 — Terminal re-authorization
 - [x] I ticker + 4003 + frontend handling + bridge test — verify: `go test ./internal/terminal -race`, vitest, e2e green, AI
 - [x] changes entry, commit, push — AI (with Phase 2, one commit: the two share api.ts and server.go)

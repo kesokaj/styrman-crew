@@ -2,7 +2,11 @@
 Description=Re-apply styrman network isolation rules (self-heal)
 
 [Timer]
-OnBootSec=15s
+# 5 s, not 15: project containers restart at boot on their own (restart
+# policy unless-stopped), and the service is also WantedBy=multi-user.target
+# so the base rules land once right after docker.service; this first tick is
+# the belt to that brace (ADR-065 follow-up (f), closed 2026-09-10).
+OnBootSec=5s
 OnUnitActiveSec=60s
 AccuracySec=5s
 

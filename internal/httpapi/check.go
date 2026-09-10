@@ -120,7 +120,7 @@ func checkerFor(ext, base string, shebang bool) *checker {
 	case "yaml", "yml":
 		return &checker{tool: "yq", cmd: `printf 'STYRMAN_TOOL yq\n'; yq e . "$F" >/dev/null`}
 	case "tf", "tfvars", "hcl":
-		return &checker{tool: "tofu", cmd: `printf 'STYRMAN_TOOL gcc\n'; tofu fmt -check "$F" >/dev/null`}
+		return &checker{tool: "tofu", cmd: `printf 'STYRMAN_TOOL tofu\n'; tofu fmt -check "$F" >/dev/null`}
 	}
 	return nil
 }
@@ -194,6 +194,27 @@ func parseCheckOutput(tool, out string) []checkDiagnostic {
 		}
 		// Not JSON: hadolint failed before producing any (e.g. not installed).
 
+	case "tofu":
+		// `tofu fmt -check` prints the bare name of each file that is not
+		// formatted and nothing else on success; a parse error comes as
+		// `Error: …` lines. Neither is gcc-shaped (measured in the runtime
+		// image, review of the close-out's phase 3): a listed file is one
+		// warning at line 1, an Error block one error.
+		for _, l := range lines {
+			l = strings.TrimSpace(l)
+			switch {
+			case l == "":
+			case strings.HasPrefix(l, "Error:"):
+				ds = append(ds, checkDiagnostic{Line: 1, Severity: "error", Message: strings.TrimSpace(strings.TrimPrefix(l, "Error:"))})
+			case !strings.ContainsAny(l, " \t") && (strings.HasSuffix(l, ".tf") || strings.HasSuffix(l, ".tfvars") || strings.HasSuffix(l, ".hcl")):
+				// A bare path: this file is not formatted.
+				ds = append(ds, checkDiagnostic{Line: 1, Severity: "warning", Message: "not formatted — run `tofu fmt`"})
+			default:
+				// Everything else (`on tmp.tf line 3:`, the source excerpt,
+				// box-drawn detail) belongs to the Error block above it.
+			}
+		}
+		return ds
 	case "gofmt", "shellcheck", "gcc":
 		for _, l := range lines {
 			if m := reGCC.FindStringSubmatch(l); m != nil {
@@ -403,8 +424,12 @@ func (s *Server) checkFile(w http.ResponseWriter, r *http.Request) {
 // unit-testable (check_test.go): it MUST read an exact byte count rather than
 // waiting for stdin EOF — see the long comment in orchestrator.Exec.
 func checkScript(suffix string, n int, cmd string) string {
-	return fmt.Sprintf(`F=$(mktemp -p . --suffix=.%s) || { printf 'STYRMAN_ERR\ncannot create temp file'; exit 0; }
-trap 'rm -f "$F" "${F}.err" "${F}.out"' EXIT
+	// The temp file lives OUTSIDE the workspace (~/.styrman/tmp, the guest's
+	// own state dir): every checker takes the file by path and needs no module
+	// context, and a workspace-root temp showed up in git status and the file
+	// explorer on every debounce tick (carried-over review low, 2026-09-01).
+	return fmt.Sprintf(`D="$HOME/.styrman/tmp"; mkdir -p "$D" && find "$D" -type f -mmin +60 -delete 2>/dev/null; F=$(mktemp -p "$D" --suffix=.%s) || { printf 'STYRMAN_ERR\ncannot create temp file'; exit 0; }
+trap 'rm -f "$F" "${F}.out"' EXIT
 head -c %d > "$F"
 [ "$(wc -c < "$F")" -eq %d ] || { printf 'STYRMAN_ERR\nshort read: editor content did not arrive intact'; exit 0; }
 { %s ; } > "${F}.out" 2>&1

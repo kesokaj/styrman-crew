@@ -16,6 +16,8 @@
 set -euo pipefail
 
 IMAGE="${1:-styrman-runtime:test}"
+# A stale image is rebuilt before the first check (BUG-026); FATAL on failure.
+bash "$(dirname "${BASH_SOURCE[0]}")/ensure-test-image.sh" "${IMAGE}"
 PORT=18080
 ME="$(id -un)"        # auth-none mode acts as the OS user
 ID=""                 # project UUID, captured after create

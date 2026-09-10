@@ -531,6 +531,10 @@ host_converge() {
     if [ "${changed}" = "1" ]; then
         if ! out="$(systemctl daemon-reload 2>&1)"; then log "WARN: daemon-reload after host-converge: ${out}"; fi
         if ! out="$(systemctl enable --now styrman-firewall.timer 2>&1)"; then log "WARN: enabling the firewall units: ${out}"; fi
+        # The service is a boot-time unit too (its [Install] section): the
+        # base rules land once right after docker.service, not at the
+        # timer's first tick (ADR-065 follow-up (f), closed 2026-09-10).
+        if ! out="$(systemctl enable styrman-firewall.service 2>&1)"; then log "WARN: enabling styrman-firewall.service at boot: ${out}"; fi
         if ! out="$(systemctl start styrman-firewall.service 2>&1)"; then log "WARN: starting styrman-firewall.service: ${out}"; fi
         log "host-converge: firewall script + units installed from ${SELF_HEAD:0:12} (see journalctl -u styrman-firewall)"
     fi

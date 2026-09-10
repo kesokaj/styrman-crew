@@ -119,6 +119,16 @@ for _k in ("ipv6", "ip6tables"):
 if cfg.get("live-restore") is not True:
     cfg["live-restore"] = True
     changed = True
+# Pin the pool NEW bridges draw from to 172.16.0.0/12 (/24 each): the
+# firewall's drop list names the private ranges, and a 16th project bridge
+# would otherwise land in 192.168/16 and collide with the LAN the drops are
+# meant to keep projects out of. Existing networks keep their subnets; only
+# networks created after the restart draw from the pool (ADR-065 follow-up
+# (d), closed 2026-09-10).
+_want_pool = [{"base": "172.16.0.0/12", "size": 24}]
+if cfg.get("default-address-pools") != _want_pool:
+    cfg["default-address-pools"] = _want_pool
+    changed = True
 # Bound container log growth so a chatty guest can't fill the disk.
 if cfg.get("log-driver") != "json-file":
     cfg["log-driver"] = "json-file"

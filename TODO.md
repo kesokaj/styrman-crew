@@ -134,9 +134,9 @@ Add new items below as they arise.
   none re-argued, all still open: `deploy/update/styrman-update.timer`'s
   `Persistent=true` is inert on a monotonic (`OnBootSec`/`OnUnitActiveSec`)
   timer; `deploy/host-setup.sh` step 8c is still physically ordered before
-  step 8b; `deploy()` calls `fail` (which exits) on a checkout error instead
+  step 8b (**already closed** — step 8b was removed entirely, verified 2026-09-10); `deploy()` calls `fail` (which exits) on a checkout error instead
   of `return 1` like the build/health paths, so that one path still bypasses
-  the failed-tag latch; `mktemp -p .` in both `check.go` and `format.go`
+  the failed-tag latch (**already closed** — it does `log …; return 1`, `styrman-update:560`, verified 2026-09-10); `mktemp -p .` in both `check.go` and `format.go`
   writes into the workspace root on every debounce tick instead of a
   dot-dir; the Terraform checker still reports `STYRMAN_TOOL gcc` to the UI
   (mislabelled — it runs `tofu fmt -check`, not gcc, and that's a formatting

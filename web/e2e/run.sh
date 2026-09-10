@@ -12,6 +12,8 @@ set -euo pipefail
 # production's image (and the integration tier's prereq used to REBUILD it,
 # re-stamping what production boots — audit finding 2026-09-01).
 IMAGE="${1:-styrman-runtime:test}"
+# A stale image is rebuilt before the first check (BUG-026); FATAL on failure.
+bash "$(dirname "${BASH_SOURCE[0]}")/../../.agents/docs/testing/styrman/ensure-test-image.sh" "${IMAGE}"
 PORT="${STYRMAN_E2E_PORT:-18090}"
 STATE="$(mktemp -d /tmp/styrman-e2e-XXXX)"
 # Epoch seconds at start. cleanup() removes only networks created AFTER this,

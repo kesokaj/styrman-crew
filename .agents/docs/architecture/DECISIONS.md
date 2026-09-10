@@ -2567,3 +2567,36 @@ claim that was briefly wrong should stay visible as such.
 Source: reviews/2026-09-09-preflight-review-v1.25.0.md, reviews/2026-09-09-preflight-security-v1.25.0.md.
 Verification: TestNetworkStatusErrorOnRevocationRollsBack (mutation-checked); BUG-031 has no unit test — see its record.
 
+---
+
+## ADR-067 — amendment (2026-09-10): the base rules land at boot right after docker.service
+
+The close-out plan (2026-09-10) left the timing of `styrman-firewall.service` to be decided
+by measurement: run the base rules BEFORE `docker.service`, or keep `After=` and shrink the
+window. Two facts decided it without a netns experiment. Project containers carry restart
+policy `unless-stopped` (`orchestrator.go`, `restartPolicy`), so they come back at daemon
+start on their own and the window between that and the timer's first tick (15 s) was real.
+And the script inserts its jump into `DOCKER-USER` (`ensure_jump DOCKER-USER sdb-+
+STYRMAN-FWD`) without creating that chain — Docker creates it — so the unit cannot usefully
+run before the daemon at all. Whether Docker would preserve a pre-created chain was NOT
+measured and does not matter for this ordering.
+
+**Decision:** `styrman-firewall.service` gains `[Install] WantedBy=multi-user.target`. Both
+installers (`deploy/firewall/install.sh` and the updater's `host_converge`) now `systemctl enable`
+the service. This schedules the base rules to run once right after `docker.service`, closing the
+≤15 s boot window where neither layer was in place (project containers restart on their own unless-stopped policy,
+so the window between daemon start and the timer's first `OnBootSec` tick was real). The timer's
+`OnBootSec` drops from 15 s → 5 s as supporting margin. Changes take effect on the operator's next
+`sudo bash deploy/firewall/install.sh` (root); until then only the 5 s tick applies.
+
+**Consequences:** once the operator has re-run `install.sh`, the base rules land right after
+`docker.service` at every boot and the timer's 5 s first tick is a margin, not the only run.
+Residual: the few hundred milliseconds between the daemon restarting its containers and the
+unit's ExecStart. Verification is the operator's: `systemctl is-enabled styrman-firewall.service`
+→ `enabled` after `install.sh` (it reads `static` until then), and `systemctl show -p After
+styrman-firewall.service` naming `docker.service`. Not yet verified on this host at the time
+of writing.
+
+Source: deploy/firewall/styrman-firewall.service, deploy/firewall/install.sh, deploy/update/styrman-update.
+Verification: `.agents/docs/changes/2026-09-10-closeout-phase3-deploy.md`.
+

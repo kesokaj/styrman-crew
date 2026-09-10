@@ -300,3 +300,44 @@ func TestCheckAndFormatGetTheLargeBodyLimit(t *testing.T) {
 		t.Errorf("maxCheckBytes (%d) is unreachable: it must exceed the 1 MiB default and fit the 8 MiB route limit", maxCheckBytes)
 	}
 }
+
+// tofu fmt -check prints bare file names (not formatted) or an `Error:` block
+// (parse failure) — neither gcc-shaped; the tofu case turns each into one
+// diagnostic so a misformatted .tf file is never shown as clean (review of
+// the close-out's phase 3).
+func TestParseCheckOutputTofu(t *testing.T) {
+	if ds := parseCheckOutput("tofu", ""); len(ds) != 0 {
+		t.Fatalf("clean: %v", ds)
+	}
+	ds := parseCheckOutput("tofu", "/home/x/.styrman/tmp/tmp.abc.tf\n")
+	if len(ds) != 1 || ds[0].Severity != "warning" || ds[0].Line != 1 || !strings.Contains(ds[0].Message, "tofu fmt") {
+		t.Fatalf("not formatted: %+v", ds)
+	}
+	ds = parseCheckOutput("tofu", "Error: Argument or block definition required\n\n  on tmp.tf line 3:\n   3: resource \"x\" {\n╷\n│ boom\n╵\n")
+	if len(ds) != 1 || ds[0].Severity != "error" || !strings.Contains(ds[0].Message, "Argument or block") {
+		t.Fatalf("parse error: %+v", ds)
+	}
+}
+
+// The guest temp file lives OUTSIDE the workspace (carried-over review low,
+// 2026-09-01): a regression back to `mktemp -p .` would put editor content
+// in the project tree on every debounce tick.
+func TestScriptsKeepTempFilesOutOfTheWorkspace(t *testing.T) {
+	for name, s := range map[string]string{
+		"check":  checkScript("go", 1, "true"),
+		"format": formatScript("go", 1, "true"),
+	} {
+		if !strings.Contains(s, `mktemp -p "$D"`) || !strings.Contains(s, `D="$HOME/.styrman/tmp"`) {
+			t.Errorf("%s script does not use the ~/.styrman/tmp dir:\n%s", name, s)
+		}
+		if strings.Contains(s, "mktemp -p .") {
+			t.Errorf("%s script still creates its temp file in the workspace", name)
+		}
+	}
+	if s := checkScript("go", 1, "true"); strings.Contains(s, `${F}.err`) {
+		t.Error("check trap names a file it never creates")
+	}
+	if s := formatScript("go", 1, "true"); strings.Contains(s, `${F}.out`) {
+		t.Error("format trap names a file it never creates")
+	}
+}
