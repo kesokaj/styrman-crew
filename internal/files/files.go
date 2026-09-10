@@ -435,15 +435,16 @@ func ReadRaw(root, rel string, max int64) ([]byte, error) {
 }
 
 // ReadRawNoFollow is ReadRaw for a file whose LAST path component must be
-// the file itself, never a symlink: a user's `.ssh/id_ed25519.pub` that the
-// UI will echo and offer to copy. IsRegular and ReadRaw follow a symlink
-// confined to the root — correct for reads that only need confinement, but
-// here the concern is a .pub pointed at the PRIVATE key beside it, which is
-// inside the root and would be read and displayed (security review
-// 2026-09-10). O_NOFOLLOW fails the open with ELOOP instead, atomically,
-// with no check-then-open window. A HARD link is not a symlink and is read;
-// what is read is therefore still the caller's to validate (setup.go keeps
-// one line and requires a public-key shape).
+// the file itself, never a symlink. ReadRaw follows a symlink confined to
+// the root — correct for reads that only need confinement; this read is for
+// content the UI will echo, such as a `.ssh/id_ed25519.pub`, where a link to
+// the private key beside it would otherwise be read (security review
+// 2026-09-10). O_NOFOLLOW fails that open with ELOOP, atomically, with no
+// check-then-open window. It is NOT a guard on what the file contains: a
+// hard link is not a symlink and is read, and whoever can `ln` can `cp` the
+// private key over the .pub just as well. Any caller that echoes the
+// content must validate the content (setup.go requires a public-key
+// shape); this read only removes the one accident a link could cause.
 func ReadRawNoFollow(root, rel string, max int64) ([]byte, error) {
 	rt, err := openRoot(root)
 	if err != nil {

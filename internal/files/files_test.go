@@ -323,3 +323,31 @@ func TestReadRawNoFollowRefusesASymlinkedFinalComponent(t *testing.T) {
 		t.Fatalf("a hard-linked .pub reads (documented limit); got %v / %q", err, b)
 	}
 }
+
+// The same, below a files.Trust base — the shape production always has (a
+// sub-root reached through Root.OpenRoot; BUG-004, .agents/rules/guest-
+// writable-paths.md): the symlinked .pub is refused there too.
+func TestReadRawNoFollowBelowATrustBase(t *testing.T) {
+	base := t.TempDir()
+	Trust(base)
+	root := filepath.Join(base, "alice", "p", "x")
+	dir := filepath.Join(root, ".ssh")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "id_ed25519"), []byte("-----BEGIN OPENSSH PRIVATE KEY-----\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("id_ed25519", filepath.Join(dir, "id_ed25519.pub")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadRawNoFollow(root, ".ssh/id_ed25519.pub", 0); err == nil {
+		t.Fatal("a symlinked .pub below a Trust base must be refused")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "real.pub"), []byte("ssh-ed25519 AAAA me\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := ReadRawNoFollow(root, ".ssh/real.pub", 0); err != nil || string(b) != "ssh-ed25519 AAAA me\n" {
+		t.Fatalf("a real .pub below a Trust base must read: %v / %q", err, b)
+	}
+}

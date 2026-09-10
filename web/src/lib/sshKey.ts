@@ -3,10 +3,11 @@
 // Kept free of React so vitest covers the parsing (sshKey.test.ts).
 //
 // The server already echoes the key: GET /api/settings/tools returns the
-// "ssh" tool with its Details = [the .pub line], read from the user's base
-// home and refused if the file is a symlink (internal/httpapi/setup.go), so
-// a .pub pointed at a PRIVATE key never reaches the browser. What is left to
-// do here is pick that line out and never mistake anything else for it.
+// "ssh" tool with its Details = [the .pub's first line], read from the
+// user's base home without following a symlink and only if it has a
+// public-key shape (internal/httpapi/setup.go) — the file is the user's own,
+// so the CONTENT check is the guard, not the file's kind. The same shape
+// check is repeated here so the copy button never offers anything else.
 
 import type { ToolInfo } from "./api";
 
@@ -33,7 +34,9 @@ export function sshPublicKey(tools: ToolInfo[] | undefined): string {
   const ssh = tools?.find((t) => t.name === "ssh");
   for (const d of ssh?.details ?? []) {
     const line = d.trim();
-    if (line.length > MAX_KEY_LEN || /[\r\n]/.test(line)) continue;
+    // Any control or line/paragraph separator character is a reject, not
+    // just CR/LF: they reach the title attribute and the clipboard verbatim.
+    if (line.length > MAX_KEY_LEN || /[\p{Cc}\u2028\u2029]/u.test(line)) continue;
     if (PUBLIC_KEY.test(line)) return line;
   }
   return "";

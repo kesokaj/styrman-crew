@@ -231,14 +231,15 @@ func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
 	}
 	tools = append(tools, git)
 
-	// ssh — the .pub is echoed to the UI and offered for copying, so it is
-	// read WITHOUT following a symlink: a .pub pointed at the PRIVATE key
-	// beside it is inside the confined root and ReadRaw would happily follow
-	// it (security review 2026-09-10 — the previous check claimed to refuse
-	// this and did not). O_NOFOLLOW does not cover a HARD link, so the
-	// content is validated too: one line, and it must have a public-key
-	// shape (`<type> <base64>…`) — a private-key header, or anything else,
-	// is "no key".
+	// ssh — the .pub is echoed to the UI and offered for copying. The
+	// guard is the CONTENT check: one line, and it must have a public-key
+	// shape (`<type> <base64>…`); a private-key header, or anything else, is
+	// "no key". That is what stands whether the .pub is a symlink, a hard
+	// link, or a copy of the private key — the file is the user's own and
+	// they can make it anything. The no-follow read on top of it only keeps
+	// a link from being followed at all (security review 2026-09-10, two
+	// rounds: the previous IsRegular check claimed to refuse a symlink and
+	// did not, and no open flag covers a hard link or a copy).
 	pub := ""
 	if b, err := files.ReadRawNoFollow(h, ".ssh/id_ed25519.pub", 8192); err == nil {
 		line, _, _ := strings.Cut(strings.TrimSpace(string(b)), "\n")

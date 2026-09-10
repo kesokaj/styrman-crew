@@ -50,6 +50,14 @@ describe("sshPublicKey", () => {
     }
   });
 
+  it("rejects control and separator characters anywhere in the line", () => {
+    const body = "AAAAC3NzaC1lZDI1NTE5AAAAIGb8Q7wq1p3E7c9rZk4x2sY6Hk6s";
+    for (const c of ["\u001b", "\u0000", "\u000b", "\u000c", "\u2028", "\u2029"]) {
+      const d = `ssh-ed25519 ${body} user${c}host`;
+      expect(sshPublicKey([{ name: "ssh", ready: true, details: [d] }])).toBe("");
+    }
+  });
+
   it("rejects an implausibly long value", () => {
     const huge = `ssh-rsa ${"A".repeat(5000)}`;
     expect(sshPublicKey([{ name: "ssh", ready: true, details: [huge] }])).toBe("");
