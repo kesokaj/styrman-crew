@@ -27,14 +27,17 @@ retired `.path` unit and spool mount were removed by running `sudo bash
 deploy/firewall/install.sh` from `/opt/styrman` at `v1.25.0` on 2026-09-10,
 verified gone.
 
-**Next code task on this area** — top of `TODO.md`: replace the network-mode
-PUT's record-first-then-rollback with persist-after-apply on tightening,
-and compare against the live bridge name so a re-PUT is itself the
-recovery. Three fail-opens (BUG-028/029/031) were found on that mechanism
-in one day; AGENTS.md's rule after a third round is to delete it, not
-defend it. Separate from that, and owed: the credential-broker reachability
-test from a LAN project on the compose deployment
-(`.agents/docs/reviews/2026-09-09-security-adr-067.md`) — a test, no code.
+**Next code task on this area** — done and unreleased: the network-mode
+PUT (commit `42716a8`, `.agents/docs/changes/2026-09-10-network-mode-put-locked.md`,
+BUG-032) now decides under the project lock inside `Orchestrator.WithProject`,
+persists the record only after applying with nothing in force (no rollback),
+and treats a no-op as agreement with the live bridge, so a re-PUT is itself
+the recovery; every start reads the mode under that same lock, closing the
+toggle-vs-start race. Ships with the next tag. Still owed, separately: the
+credential-broker reachability test from a LAN project on the compose
+deployment (`.agents/docs/reviews/2026-09-09-security-adr-067.md`) — a test,
+no code. Next code task: the top unticked 🟢 item in `TODO.md`'s Inbox
+(`waitReady` timeout leaving the "deliberately stopped" marker set).
 
 <details>
 <summary>How it got there (written while ADR-067 was pending; kept as record)</summary>
