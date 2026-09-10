@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -285,13 +286,16 @@ type fakeMode struct {
 	ensureLan     []bool // the mode each start read through RunOpts.Lan
 	onLock        func() // runs when the lock is taken, before the handler's decision
 	onStop        func() // runs inside Stop, before it returns success
+	locked        bool   // true while the handler's closure runs
 }
 
 func (f *fakeMode) WithProject(_, _ string, fn func(orchestrator.Project)) {
 	if f.onLock != nil {
 		f.onLock()
 	}
+	f.locked = true
 	fn(f)
+	f.locked = false
 }
 
 func (f *fakeMode) Status(_ context.Context) (orchestrator.Status, error) {
@@ -728,4 +732,62 @@ func (m *statusHookMode) WithProject(_, _ string, fn func(orchestrator.Project))
 func (m *statusHookMode) Status(ctx context.Context) (orchestrator.Status, error) {
 	m.onStatus()
 	return m.fakeMode.Status(ctx)
+}
+
+// ─── The reply is written AFTER the lock (TODO close-out, item C) ───
+
+// lockedWriter records, at the moment the status line is written, whether
+// the fake still holds the project lock. The handler must have left
+// WithProject before it answers: a slow client must not hold a project's
+// lock for the length of a response write.
+type lockedWriter struct {
+	*httptest.ResponseRecorder
+	fm         *fakeMode
+	wroteUnder *bool
+}
+
+func (l *lockedWriter) WriteHeader(code int) {
+	if l.fm.locked {
+		*l.wroteUnder = true
+	}
+	l.ResponseRecorder.WriteHeader(code)
+}
+
+func TestNetworkReplyIsWrittenAfterTheLockIsReleased(t *testing.T) {
+	n := newNetHarness(t)
+	fm := &fakeMode{state: "running", bridgeLan: true} // record sandbox: a rebuild
+	n.s.mode = fm
+	wroteUnder := false
+	w := &lockedWriter{ResponseRecorder: httptest.NewRecorder(), fm: fm, wroteUnder: &wroteUnder}
+	r := httptest.NewRequest(http.MethodPut, "/api/projects/"+n.pid+"/network", strings.NewReader(`{"lanAccess":false}`))
+	r.Header.Set(HeaderEmail, n.admin)
+	r.Header.Set(HeaderIngress, "test-ingress-token")
+	n.h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if fm.ensureCalls != 1 {
+		t.Fatalf("precondition: the rebuild path must have run, ensure=%d", fm.ensureCalls)
+	}
+	if wroteUnder {
+		t.Fatal("the status line was written while the project lock was still held")
+	}
+}
+
+// neverMode is a runtime whose WithProject never runs the closure. The
+// handler must answer fail-closed, not with a zero status.
+type neverMode struct{}
+
+func (neverMode) WithProject(_, _ string, _ func(orchestrator.Project)) {}
+
+func TestNetworkNoDecisionIsA500(t *testing.T) {
+	n := newNetHarness(t)
+	n.s.mode = neverMode{}
+	w := doAs(t, n.h, n.admin, http.MethodPut, "/api/projects/"+n.pid+"/network", `{"lanAccess":true}`)
+	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "NOT changed") {
+		t.Fatalf("want a fail-closed 500 saying NOT changed, got %d (%s)", w.Code, w.Body.String())
+	}
+	if n.lanAccessOf(t, n.admin, n.pid) {
+		t.Fatal("nothing may have been written")
+	}
 }

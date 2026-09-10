@@ -49,6 +49,18 @@ file any more** (the `LAN_*` keys it may still carry are inert), and
 rediscovers it later should not be misled into thinking it still configures
 anything.
 
+**Pre-ADR-027 workspaces (removed with the next tag):** the automatic
+migration of a legacy workspace
+(`homes/<user>/base/projects/<dir>` → `projects/<user>/<uuid>`) is deleted
+from the server (plan `.agents/docs/plans/2026-09-10-todo-closeout.md`,
+item F). The only known deployment migrated at v1.19.x, where the server
+has logged a benign WARN at every start for the missing path ever since. A
+host that still holds a tree under `homes/<user>/base/projects/` must move
+it by hand into `/var/lib/styrman/projects/<user>/<uuid>` (the UUID is the
+project's id in `users/<user>/projects.json`) BEFORE upgrading; otherwise
+the project boots with an empty workspace while the old tree stays on disk
+untouched.
+
 ### Per-project network mode (ADR-067)
 
 A project's network mode is not a firewall rule the host applies — it is which Docker bridge INTERFACE name the server chose when it created the project's network: `sdb-<hash>` (sandbox, the default) or `lan-<hash>` (LAN), same sha1 suffix of the same network name either way. The `sdb-*` jumps in `styrman-firewall.sh` match the sandbox prefix; a `lan-*` bridge is matched by no styrman rule at all, so it is exactly a normal Docker container on this host: it NATs out as the host and reaches whatever the host reaches (the local network, the host's own addresses including `sshd`, and host-published Docker ports). It gains no reach into other projects — that guarantee is Docker's own, unconditional per-bridge `DROP` rule, not something this script grants or withholds.

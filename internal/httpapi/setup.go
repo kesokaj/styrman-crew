@@ -220,14 +220,17 @@ func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
 
 	var tools []toolInfo
 
-	// git
-	gitcfg := read(".gitconfig")
-	git := toolInfo{Name: "git", Ready: strings.Contains(gitcfg, "email")}
-	for _, line := range strings.Split(gitcfg, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "name = ") || strings.HasPrefix(line, "email = ") {
-			git.Details = append(git.Details, line)
-		}
+	// git — the same parser the commit identity uses (gitUserFromConfig), so
+	// the card and the author line cannot disagree; the values are already
+	// control-stripped there (TODO close-out 2026-09-10, item G; security
+	// review of phase 1, low).
+	gitName, gitEmail := s.gitIdentity(u.Username)
+	git := toolInfo{Name: "git", Ready: gitEmail != ""}
+	if gitName != "" {
+		git.Details = append(git.Details, "name = "+gitName)
+	}
+	if gitEmail != "" {
+		git.Details = append(git.Details, "email = "+gitEmail)
 	}
 	tools = append(tools, git)
 
@@ -243,8 +246,8 @@ func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
 	pub := ""
 	if b, err := files.ReadRawNoFollow(h, ".ssh/id_ed25519.pub", 8192); err == nil {
 		line, _, _ := strings.Cut(strings.TrimSpace(string(b)), "\n")
-		if line = strings.TrimSpace(line); publicKeyLine(line) {
-			pub = line
+		if clean, ok := publicKeyLine(strings.TrimSpace(line)); ok {
+			pub = clean
 		}
 	}
 	ssh := toolInfo{Name: "ssh", Ready: pub != ""}
@@ -293,21 +296,35 @@ func (s *Server) toolDetails(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tools": tools})
 }
 
-// publicKeyLine reports whether line has the shape OpenSSH writes to a .pub:
-// a key type, a space, a base64 body, optionally a comment — on one line.
-func publicKeyLine(line string) bool {
+// publicKeyLine reports whether line has the shape OpenSSH writes to a .pub —
+// a known key type, a space, a base64 body, optionally a comment, on one
+// line — and returns it SANITISED: the comment stripped of control and
+// formatting characters and its whitespace collapsed to single ASCII spaces,
+// since the line is echoed to every API consumer, not only the browser. The
+// type must be one of the tokens OpenSSH itself writes: a bare prefix
+// (`ssh- AAAA`, an `sk-ant-…` API token) is not a key (TODO close-out 2026-09-10,
+// items 5 and 7; the SPA's check in web/src/lib/sshKey.ts matches this enum).
+func publicKeyLine(line string) (string, bool) {
+	line = strings.ReplaceAll(line, "\t", " ") // a TAB separator is legal in a .pub
 	typ, rest, ok := strings.Cut(line, " ")
-	if !ok || !(strings.HasPrefix(typ, "ssh-") || strings.HasPrefix(typ, "ecdsa-") || strings.HasPrefix(typ, "sk-")) {
-		return false
+	if !ok || !keyTypeRe.MatchString(typ) {
+		return "", false
 	}
-	body, _, _ := strings.Cut(strings.TrimLeft(rest, " "), " ")
+	body, comment, _ := strings.Cut(strings.TrimLeft(rest, " "), " ")
 	if body == "" {
-		return false
+		return "", false
 	}
 	for _, r := range body {
 		if !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '+' || r == '/' || r == '=') {
-			return false
+			return "", false
 		}
 	}
-	return true
+	out := typ + " " + body
+	if c := strings.Join(strings.Fields(stripControls(comment)), " "); c != "" {
+		out += " " + c
+	}
+	return out, true
 }
+
+// keyTypeRe is the set of key types that produce a .pub OpenSSH can load.
+var keyTypeRe = regexp.MustCompile(`^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com)$`)

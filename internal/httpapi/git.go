@@ -6,17 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os/exec"
 	// `path`, not `path/filepath`: ws is a GUEST-side POSIX path, and its
 	// meaning must not depend on the server's OS.
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
+	"github.com/kesokaj/styrman-crew/internal/files"
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 	"github.com/kesokaj/styrman-crew/internal/project"
 )
@@ -75,15 +74,97 @@ func (s *Server) gitContext(r *http.Request) (user, cid, guest, ws string, p pro
 // syncs the auth token but not `user.name`/`user.email` — so the commit path
 // injects it from here via `-c` flags. Empty when not configured yet.
 func (s *Server) gitIdentity(user string) (name, email string) {
-	cfg := filepath.Join(s.cfg.UserHome(user), ".gitconfig")
-	get := func(key string) string {
-		out, err := exec.Command("git", "config", "--file", cfg, key).Output()
-		if err != nil {
-			return ""
-		}
-		return strings.TrimSpace(string(out))
+	// A confined read through internal/files, like every other base-home
+	// read — this was the one plain-path read left (security review of
+	// ADR-064 Phase 1, low; TODO close-out 2026-09-10 item G). Parsed here
+	// rather than by `git config --file`: no exec, and the settings card
+	// (toolDetails) uses the same parser so the two cannot disagree.
+	b, err := files.ReadRaw(s.cfg.UserHome(user), ".gitconfig", 64<<10)
+	if err != nil {
+		return "", ""
 	}
-	return get("user.name"), get("user.email")
+	return gitUserFromConfig(string(b))
+}
+
+// gitUserFromConfig returns user.name and user.email from gitconfig text,
+// with `git config --file`'s reading of the parts that matter here: section
+// headers and keys are case-insensitive; `[user]` only — a subsection
+// (`[user "x"]`) is a different section; `=` may carry any whitespace;
+// a value may be double-quoted, with \" and \\ unescaped; `#` and `;`
+// start a comment outside quotes; the LAST assignment wins, across a
+// reopened [user] section. Not honoured: [include] directives (git itself
+// does not follow them for --file without --includes).
+func gitUserFromConfig(text string) (name, email string) {
+	inUser := false
+	for _, raw := range strings.Split(text, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || line[0] == '#' || line[0] == ';' {
+			continue
+		}
+		if line[0] == '[' {
+			// `[user] ; comment` is valid: the header ends at the first `]`.
+			hdr, _, ok := strings.Cut(line[1:], "]")
+			inUser = ok && strings.EqualFold(strings.TrimSpace(hdr), "user")
+			continue
+		}
+		if !inUser {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		v = gitConfigValue(v)
+		switch strings.ToLower(strings.TrimSpace(k)) {
+		case "name":
+			name = v
+		case "email":
+			email = v
+		}
+	}
+	// No control characters in an identity: the values reach `git -c` argv
+	// in the guest and the broker's TSV env, where a decoded "\n" escape
+	// would be a record separator (security review 2026-09-10, low).
+	return stripControls(name), stripControls(email)
+}
+
+// gitConfigValue unquotes one value: a leading double quote starts a quoted
+// string in which \" \\ \n \t \b are git's escapes (any other escaped
+// character stands for itself); otherwise the value runs to the first
+// unquoted # or ; and is trimmed.
+func gitConfigValue(v string) string {
+	v = strings.TrimSpace(v)
+	if !strings.HasPrefix(v, "\"") {
+		if i := strings.IndexAny(v, "#;"); i >= 0 {
+			v = v[:i]
+		}
+		return strings.TrimSpace(v)
+	}
+	var out strings.Builder
+	esc := false
+	for _, r := range v[1:] {
+		switch {
+		case esc:
+			switch r {
+			case 'n':
+				out.WriteByte('\n')
+			case 't':
+				out.WriteByte('\t')
+			case 'b':
+				out.WriteByte('\b')
+			default:
+				out.WriteRune(r)
+			}
+			esc = false
+		case r == '\\':
+			esc = true
+		case r == '"':
+			return out.String()
+		default:
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
 }
 
 // gitExec runs `git -C <ws> <args>` in the guest and returns (exitCode, output).

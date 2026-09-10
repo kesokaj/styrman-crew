@@ -316,15 +316,15 @@ user).
 
 ## Phases
 ### Phase 0 — Records (done today except the commit)
-- [ ] Ten strikes in TODO.md with reasons; ROADMAP "Now" points at this plan — verify: `git diff --stat TODO.md ROADMAP.md`, AI
+- [x] Ten strikes in TODO.md with reasons; ROADMAP "Now" points at this plan — verify: `git diff --stat TODO.md ROADMAP.md`, AI
 ### Phase 1 — Server: small fixes
-- [ ] C reply after the lock + test — verify: `go test ./internal/httpapi -race`, AI
-- [ ] D `toolDetails` key test (symlink/hardlink/copy/real) — verify: same, AI
-- [ ] 5+7 `publicKeyLine` full type enum, sanitised comment, tests — verify: same, AI
-- [ ] E two-sample unmark + Warn — verify: build/vet; unit test in Phase 5, AI
-- [ ] F delete the legacy workspace path and its tests; `documentation` updates `deploy/remote.md` (upgrade note: a host still holding `homes/<u>/base/projects/<dir>` must move it by hand before upgrading) and the change entry carries the same sentence — verify: `go test ./...`, `git diff --stat cmd/ internal/config` explained, server start log has no migration WARN, AI
-- [ ] G confined gitconfig read + parser test — verify: `go test ./internal/httpapi`, AI
-- [ ] changes entry, commit, push — AI
+- [x] C reply after the lock + test — verify: `go test ./internal/httpapi -race`, AI
+- [x] D `toolDetails` key test (symlink/hardlink/copy/real) — verify: same, AI
+- [x] 5+7 `publicKeyLine` full type enum, sanitised comment, tests — verify: same, AI
+- [x] E two-sample unmark + Warn — verify: build/vet; unit test in Phase 5, AI
+- [x] F delete the legacy workspace path and its tests; `documentation` updates `deploy/remote.md` (upgrade note: a host still holding `homes/<u>/base/projects/<dir>` must move it by hand before upgrading) and the change entry carries the same sentence — verify: `go test ./...`, `git diff --stat cmd/ internal/config` explained, server start log has no migration WARN, AI
+- [x] G confined gitconfig read + parser test — verify: `go test ./internal/httpapi`, AI
+- [x] changes entry, commit, push — AI (commit follows; Phase 1 DONE 2026-09-10: reviewer approve-with-nits fixed, security 3 lows fixed, verifier PASS)
 ### Phase 2 — Web
 - [ ] H `\p{C}` + `abbreviateKey` space collapse + tests — verify: vitest, AI
 - [ ] K7 AbortSignal through `checkFile`; K8 lint gutter gated on `checkable`; K9 Discard clears the draft (+ store test) — verify: `npm run check && lint && test`, AI

@@ -372,23 +372,6 @@ func (c *Config) ProjectHome(user, project string) string {
 	return filepath.Join(c.TenantDir(user), "p", project)
 }
 
-// LegacyWorkspaceExists reports whether a project's PRE-ADR-027 workspace is
-// still sitting in the shared home — the signal that migration hasn't
-// completed and nothing may create (and thereby permanently shadow) the new
-// location with an empty dir.
-func (c *Config) LegacyWorkspaceExists(user, projectDir string) bool {
-	p := filepath.Join(c.UserHome(user), "projects", projectDir)
-	st, err := os.Lstat(p)
-	if err != nil || !st.IsDir() {
-		return false
-	}
-	// An empty dir is only the bind's mount-point stub (Docker recreates it
-	// inside the home on every start) — not a real unmigrated tree.
-	// Unreadable counts as content: fail safe, never shadow real data.
-	entries, err := os.ReadDir(p)
-	return err != nil || len(entries) > 0
-}
-
 // ProjectWorkspace is the host-side working tree of one project (ADR-027):
 // per-project storage OUTSIDE the shared home, bind-mounted into the microVM
 // at ~/projects/<dir>. Keyed by UUID — names are renamable. The parent

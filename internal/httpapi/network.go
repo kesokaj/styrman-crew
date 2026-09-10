@@ -126,6 +126,18 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 		defer s.netMu.Unlock()
 		return sp.projects.SetLanAccess(p.ID, on)
 	}
+	// The reply is DECIDED under the lock and WRITTEN after it: a slow client
+	// must not hold the project's lock for the length of a response write
+	// (security review 2026-09-10, low). Initialised fail-closed so a runtime
+	// that never runs the closure cannot answer with a zero status.
+	type reply struct {
+		status int
+		body   any
+		err    error
+	}
+	fail := func(status int, err error) reply { return reply{status: status, err: err} }
+	ok := func(status int, body any) reply { return reply{status: status, body: body} }
+	res := fail(http.StatusInternalServerError, errors.New("the mode was NOT changed: no decision was made"))
 	s.mode.WithProject(u.Username, p.ID, func(pr orchestrator.Project) {
 		// The record as of NOW, under the lock — not the copy getProjectFor
 		// took before it. Two PUTs racing on a stopped project would
@@ -134,7 +146,7 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 		// (security review 2026-09-10, round 3).
 		rec, err := sp.projects.Get(p.ID)
 		if err != nil {
-			writeErr(w, http.StatusNotFound, err)
+			res = fail(http.StatusNotFound, err)
 			return
 		}
 		st, err := pr.Status(ctx)
@@ -143,7 +155,7 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 			// ("absent", nil); a non-nil error is a real inspect failure, and
 			// the container may well be running on the old bridge (BUG-029).
 			// Nothing has been written, so nothing needs undoing.
-			writeErr(w, http.StatusInternalServerError,
+			res = fail(http.StatusInternalServerError,
 				fmt.Errorf("the project could not be inspected, so the mode was NOT changed: %w", err))
 			return
 		}
@@ -157,13 +169,13 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				// Same shape as the inspect failure above, one layer down
 				// (BUG-031): "I cannot tell" must never read as "nothing to do".
-				writeErr(w, http.StatusInternalServerError,
+				res = fail(http.StatusInternalServerError,
 					fmt.Errorf("the project network could not be inspected, so the mode was NOT changed: %w", err))
 				return
 			}
 		}
 		if rec.LanAccess == on && !wrongBridge {
-			writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin})
+			res = ok(http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin})
 			return
 		}
 		if !wrongBridge {
@@ -171,7 +183,7 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 				if errors.Is(err, project.ErrNotFound) {
 					// Deleted between the re-read and the write: a plain 404,
 					// not a sentence about a state the project no longer has.
-					writeErr(w, http.StatusNotFound, err)
+					res = fail(http.StatusNotFound, err)
 					return
 				}
 				// The bridge already matched the request and only the record
@@ -182,25 +194,25 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 				// failed. Stop, then Start, applies the record as it stands.
 				s.logger.Warn("network mode: the bridge already matches the request but the record could not be saved; it keeps reporting the previous mode",
 					"project", p.ID, "requested", on, "recordSays", rec.LanAccess, "error", err)
-				writeErr(w, http.StatusInternalServerError,
+				res = fail(http.StatusInternalServerError,
 					fmt.Errorf("the project is already on the requested bridge but the setting could not be saved, so it keeps reporting the previous mode: %w", err))
 				return
 			}
 			s.logger.Info("network mode changed", "by", u.Email, "project", p.ID,
 				"projectName", p.Name, "lanAccess", on, "rebuilt", false)
-			writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin})
+			res = ok(http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin})
 			return
 		}
 		if err := pr.Stop(ctx); err != nil {
 			// The container is still running on the OLD bridge and the
 			// record still says so. True on both counts: nothing changed.
-			writeErr(w, http.StatusInternalServerError,
+			res = fail(http.StatusInternalServerError,
 				fmt.Errorf("the project could not be stopped, so the mode was NOT changed: %w", err))
 			return
 		}
 		if err := persist(); err != nil {
 			if errors.Is(err, project.ErrNotFound) {
-				writeErr(w, http.StatusNotFound, err) // deleted mid-change; see above
+				res = fail(http.StatusNotFound, err) // deleted mid-change; see above
 				return
 			}
 			// The container is DOWN and the record still names the old mode:
@@ -209,7 +221,7 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 			// it stands. Say what state the project is in.
 			s.logger.Warn("network mode: project stopped but the setting could not be saved; it stays in its previous mode",
 				"project", p.ID, "requested", on, "error", err)
-			writeErr(w, http.StatusInternalServerError,
+			res = fail(http.StatusInternalServerError,
 				fmt.Errorf("the project was stopped but the setting could not be saved, so the mode was NOT changed — start it to continue in the previous mode: %w", err))
 			return
 		}
@@ -217,7 +229,7 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 			Name: rec.Name, Dir: rec.Dir, GuestUser: sp.profile.GuestUser(), Lan: lanOf(sp, p.ID),
 		}); err != nil {
 			// Container down, record ahead of it: the next start applies it.
-			writeErr(w, http.StatusInternalServerError,
+			res = fail(http.StatusInternalServerError,
 				fmt.Errorf("saved, but the project could not be restarted: %w — start it to apply the change", err))
 			return
 		}
@@ -228,6 +240,11 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(time.Second)
 			s.orch.EnsureSelfAttached(u.Username, p.ID)
 		}()
-		writeJSON(w, http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin, Rebuilt: true})
+		res = ok(http.StatusOK, lanView{LanAccess: on, CanEnable: u.Admin, Rebuilt: true})
 	})
+	if res.err != nil {
+		writeErr(w, res.status, res.err)
+		return
+	}
+	writeJSON(w, res.status, res.body)
 }

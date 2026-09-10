@@ -18,7 +18,6 @@ import (
 	"github.com/kesokaj/styrman-crew/internal/config"
 	"github.com/kesokaj/styrman-crew/internal/credbroker"
 	"github.com/kesokaj/styrman-crew/internal/credstore"
-	"github.com/kesokaj/styrman-crew/internal/files"
 	"github.com/kesokaj/styrman-crew/internal/gitrepo"
 	"github.com/kesokaj/styrman-crew/internal/httpapi"
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
@@ -79,7 +78,6 @@ func main() {
 	// running across server upgrades (restart: unless-stopped), so a project
 	// being migrated must be stopped first — renaming a workspace out from
 	// under a live VM would strand agents mid-write.
-	migrateWorkspaces(cfg, orch, logger)
 	ensureRepos(cfg, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -237,64 +235,6 @@ func migrateLegacy(cfg *config.Config, logger *slog.Logger) {
 	// docker CLI.
 }
 
-// migrateWorkspaces moves pre-ADR-027 workspaces (inside the shared home at
-// ~/projects/<dir>) to their per-project storage dirs
-// (StateDir/projects/<user>/<uuid>). One-time, per project, on boot — a
-// same-filesystem rename, so cheap and atomic. A project whose microVM is
-// still running (they survive server upgrades: restart unless-stopped) is
-// STOPPED gracefully first — renaming under a live VM would strand it. A
-// failed or conflicting move is logged loudly and left for the next boot;
-// legacyWorkspace guards in ensureRepos/EnsureRunning keep an unmigrated
-// project from being silently recreated empty in the meantime.
-func migrateWorkspaces(cfg *config.Config, orch *orchestrator.Orchestrator, logger *slog.Logger) {
-	forEachProject(cfg, logger, func(user string, p project.Project) {
-		// Confined resolve: refuse a guest-planted symlink escaping the home.
-		oldWS, err := files.ContainedPath(cfg.UserHome(user), "projects/"+p.Dir)
-		if err != nil {
-			logger.Warn("workspace migration: old path rejected", "user", user, "project", p.ID, "error", err)
-			return
-		}
-		if st, err := os.Lstat(oldWS); err != nil || !st.IsDir() {
-			return // nothing to migrate; creation/sweep handles the rest
-		}
-		newWS := cfg.ProjectWorkspace(user, p.ID)
-		if _, err := os.Stat(newWS); err == nil {
-			// An EMPTY old dir is just the bind's mount-point stub that
-			// Docker recreates inside the home on every container start —
-			// expected post-migration, not a conflict.
-			if entries, rerr := os.ReadDir(oldWS); rerr == nil && len(entries) == 0 {
-				return
-			}
-			logger.Warn("workspace migration CONFLICT: both locations hold content — leaving both untouched, resolve by hand",
-				"user", user, "project", p.Name, "old", oldWS, "new", newWS)
-			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		defer cancel()
-		if st, err := orch.Status(ctx, user, p.ID); err == nil && st.State == "running" {
-			logger.Info("workspace migration: stopping running project first", "user", user, "project", p.Name)
-			if err := orch.Stop(ctx, user, p.ID); err != nil {
-				logger.Error("workspace migration: stop failed — project NOT migrated this boot",
-					"user", user, "project", p.Name, "error", err)
-				return
-			}
-		}
-		if err := os.MkdirAll(filepath.Dir(newWS), 0o700); err != nil {
-			logger.Error("workspace migration: cannot create projects root", "user", user, "error", err)
-			return
-		}
-		if err := os.Rename(oldWS, newWS); err != nil {
-			// EXDEV possible when STYRMAN_HOMES_DIR sits on another mount —
-			// the legacyWorkspace guards keep the project safe until resolved.
-			logger.Error("workspace migration FAILED — project stays on the old path (guarded) until fixed",
-				"user", user, "project", p.Name, "from", oldWS, "to", newWS, "error", err)
-			return
-		}
-		logger.Info("workspace migrated to per-project storage (ADR-027)",
-			"user", user, "project", p.Name, "to", newWS)
-	})
-}
-
 // forEachProject iterates every user's project records on disk.
 func forEachProject(cfg *config.Config, logger *slog.Logger, fn func(user string, p project.Project)) {
 	usersDir := filepath.Join(cfg.StateDir, "users")
@@ -333,14 +273,6 @@ func ensureRepos(cfg *config.Config, logger *slog.Logger) {
 		// home-containment guard needed anymore.
 		ws := cfg.ProjectWorkspace(user, p.ID)
 		if _, err := os.Stat(ws); err != nil {
-			// NEVER create the new location while the old one still holds
-			// the real tree (failed migration) — an empty dir here would
-			// shadow it permanently (review finding).
-			if cfg.LegacyWorkspaceExists(user, p.Dir) {
-				logger.Error("R13 sweep: workspace not migrated yet — skipping (see migration errors above)",
-					"user", user, "project", p.Name)
-				return
-			}
 			// Missing entirely (e.g. restored metadata without data) — R13
 			// says every project IS a repo, so recreate an empty one.
 			if err := os.MkdirAll(ws, 0o700); err != nil {

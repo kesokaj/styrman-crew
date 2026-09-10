@@ -364,14 +364,6 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 		// auto-create a missing source as root, and every guest write to the
 		// workspace would then fail (same failure class as the home mount).
 		ws := o.cfg.ProjectWorkspace(user, project)
-		if _, serr := os.Stat(ws); serr != nil {
-			// Missing new location + real tree still in the home = failed
-			// ADR-027 migration. Creating an empty dir here would shadow the
-			// real workspace permanently — refuse and let a boot retry it.
-			if o.cfg.LegacyWorkspaceExists(user, opts.Dir) {
-				return "", fmt.Errorf("workspace migration incomplete for %s — restart the server to retry", opts.Dir)
-			}
-		}
 		if err := os.MkdirAll(ws, 0o700); err != nil {
 			return "", fmt.Errorf("create workspace dir: %w", err)
 		}
@@ -1118,7 +1110,8 @@ func (o *Orchestrator) stopMarked(ctx context.Context, user, project string) err
 	// Mark BEFORE stopping (under the lock): the container stop kills every
 	// attached terminal exec, and their auto-reconnects must already see the
 	// marker — otherwise the first one boots the VM straight back up.
-	o.stopped.Store(key(user, project), true)
+	marker := time.Now()
+	o.stopped.Store(key(user, project), marker)
 	if err := o.stopLocked(ctx, project); err != nil {
 		// If the container is still running, "deliberately stopped" is
 		// false: leaving the marker would have every terminal auto-reconnect
@@ -1127,7 +1120,7 @@ func (o *Orchestrator) stopMarked(ctx context.Context, user, project string) err
 		// is still right (see above); it is undone only when the stop
 		// provably did not happen — see unmarkIfStillRunning for why not
 		// unconditionally.
-		o.unmarkIfStillRunning(ctx, user, project)
+		o.unmarkIfStillRunning(user, project, marker)
 		return err
 	}
 	return nil
@@ -1141,18 +1134,47 @@ func (o *Orchestrator) stopMarked(ctx context.Context, user, project string) err
 // boot it straight back (the exact resurrection the marker exists to stop).
 // An inspect that fails or shows anything but Running keeps the marker: the
 // user can always press Start, whereas a resurrected VM is a surprise.
-func (o *Orchestrator) unmarkIfStillRunning(_ context.Context, user, project string) {
-	// A FRESH budget, not the caller's ctx: the likeliest reason the stop
-	// failed is that ctx expired (2 min from stopProject, 3 from the mode
-	// toggle), and an inspect on a dead ctx fails at once — which would keep
-	// the marker stuck in exactly BUG-030's own scenario, a wedged stop on a
-	// container that is still up. Five seconds is ample for one inspect.
-	ictx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	insp, err := o.docker.ContainerInspect(ictx, config.ContainerName(project))
-	if err == nil && insp.State != nil && insp.State.Running {
-		o.stopped.Delete(key(user, project))
-	}
+//
+// Two samples, 2 s apart, both Running: one sample is not proof the stop is
+// not still in flight — a deadline firing mid-ContainerStop leaves the
+// daemon stopping while an inspect still says Running (v1.25.0 preflight
+// round 4, low). The samples run in a goroutine because both callers hold
+// the project's lock and a 2 s sleep under it would block every attach and
+// toggle for that project. The marker's VALUE is the stop's start time and
+// the delete is a CompareAndDelete on it: a newer stop that re-marked the
+// project meanwhile keeps its own marker. Bounded at about 12 s; nothing
+// waits on it.
+func (o *Orchestrator) unmarkIfStillRunning(user, project string, marker time.Time) {
+	go func() {
+		k := key(user, project)
+		for sample := 1; sample <= 2; sample++ {
+			// A FRESH budget, not the caller's ctx: the likeliest reason the
+			// stop failed is that ctx expired (2 min from stopProject, 3 from
+			// the mode toggle), and an inspect on a dead ctx fails at once —
+			// which would keep the marker stuck in exactly BUG-030's own
+			// scenario, a wedged stop on a container that is still up.
+			ictx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			insp, err := o.docker.ContainerInspect(ictx, config.ContainerName(project))
+			cancel()
+			if err != nil {
+				o.logger.Warn("stop failed and the marker is kept: cannot inspect the container",
+					"project", project, "sample", sample, "error", err)
+				return
+			}
+			if insp.State == nil || !insp.State.Running {
+				o.logger.Warn("stop failed but the container is down — the stop half-succeeded; marker kept so a reconnect cannot resurrect it",
+					"project", project, "sample", sample)
+				return
+			}
+			if sample == 1 {
+				time.Sleep(2 * time.Second)
+			}
+		}
+		if o.stopped.CompareAndDelete(k, marker) {
+			o.logger.Warn("stop failed and the container is still running; marker cleared so terminals can reconnect",
+				"project", project)
+		}
+	}()
 }
 
 // Stopped reports whether the project was deliberately stopped (Stop button
@@ -1231,12 +1253,13 @@ func (o *Orchestrator) stopIfIdle(ctx context.Context, user, project string, idl
 	}
 	// Same marker as an explicit Stop: an open tab's auto-reconnect used to
 	// boot the VM right back after the reaper stopped it.
-	o.stopped.Store(key(user, project), true)
+	marker := time.Now()
+	o.stopped.Store(key(user, project), marker)
 	if err := o.stopLocked(ctx, project); err != nil {
 		// Same rule as Stop, same guard: only a container still running gets
 		// its marker back — a reaper tick can race a user's Stop, and then
 		// the project IS down and must stay marked.
-		o.unmarkIfStillRunning(ctx, user, project)
+		o.unmarkIfStillRunning(user, project, marker)
 		return err
 	}
 	return nil
