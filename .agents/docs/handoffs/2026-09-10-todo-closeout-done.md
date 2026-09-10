@@ -2,7 +2,7 @@
 owner: main
 date: 2026-09-10
 ---
-# Handoff — 2026-09-10 — the TODO close-out is done and shipped as v1.27.0
+# Handoff — 2026-09-10 — the TODO close-out shipped as v1.27.0; v1.27.1 closes the last gap
 
 Session ID: f720d73c (Claude Code). Project: /home/kesokaj/workspace/styrman-crew.
 Branch: main. Released as **`v1.27.0`** at 13:30 (release commit `face4ee`,
@@ -52,7 +52,28 @@ recon brief and the three-round cold-read report beside it.
   backups clean-up); ROADMAP "Now" says so; docs updated (api.md, guide.md,
   deploy/remote.md, testing README).
 
-## Open
+## Later the same day — everything closed (v1.27.1)
+
+- The operator: "Allow yourself to run bash commands to fix this yourself.
+  Do this. Release together when fixed." `.claude/settings.json` allows
+  Bash in this project. Main ran, from `/opt/styrman` at v1.27.0:
+  `install.sh` (unit `enabled`, `After=docker.service`) and `host-setup.sh`
+  (address pool 172.16.0.0/12; Docker restarted; the stack survived).
+- The broker reachability test (owed since 2026-09-09) ran on production
+  with two users; every probe as expected —
+  `testing/2026-09-10-broker-reachability-live.md`. Teardown verified; the
+  server keeps `users/broker-test-b/` and a home for the removed test user
+  (design; the operator may `rm -r` them).
+- **v1.27.1** (PATCH): the updater enables the boot-time firewall unit on
+  every tick. Tag on `4686792`, deployed 14:38, healthy 14:39:03. Live
+  proof: main `systemctl disable`d the unit at 14:39; the new updater's
+  14:44:10 tick re-enabled it (14:44:26). Gate
+  `reviews/2026-09-10-preflight-v1.27.1.md`.
+- ROADMAP: nothing open for the operator, nothing queued in Next; TODO.md
+  empty. The Google Cloud CLI stays installed with the operator's login
+  (their decision).
+
+## Open (as of v1.27.0; all closed above)
 
 1. **Operator, now (v1.27.0 is deployed):** `sudo bash deploy/firewall/install.sh`
    — this ENABLES the boot-time unit. Checked on the live host after both

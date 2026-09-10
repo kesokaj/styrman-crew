@@ -12,7 +12,17 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**v1.27.0 shipped 2026-09-10.** Tag on release commit `face4ee` (gated
+**v1.27.1 shipped 2026-09-10** (PATCH) — tag on release commit `4686792`,
+deployed by the auto-updater at 14:38, server healthy at 14:39:03. One fix:
+the updater enables the boot-time firewall unit on every converge tick
+(v1.27.0's converge only did so when a unit file changed, so the unit
+stayed disabled on a host that had not run `install.sh`; BUG-035
+recurrence). Proven live: main disabled the unit after the deploy and the
+new updater's next tick re-enabled it. Gate:
+`.agents/docs/reviews/2026-09-10-preflight-v1.27.1.md`; release entry:
+`.agents/docs/changes/2026-09-10-v1.27.1-release.md`.
+
+v1.27.0 shipped earlier the same day. Tag on release commit `face4ee` (gated
 commit `0201b8c`), deployed by the auto-updater at 13:31, server healthy at
 13:32:01, all three images at 1.27.0. Gate:
 `.agents/docs/reviews/2026-09-10-preflight-v1.27.0.md`; release entry:
