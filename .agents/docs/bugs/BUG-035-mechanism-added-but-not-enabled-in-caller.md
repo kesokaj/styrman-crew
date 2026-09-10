@@ -38,7 +38,40 @@ When adding a unit section, a flag, or a default, grep every
 installer/caller that must honour it and list them explicitly in the change
 entry. A guard that lives in a caller's default argument must be re-stated
 inside any new callee that can supply its own argument — do not rely on the
-default being inherited.
+default being inherited. See also
+`.agents/rules/mechanism-reaches-every-caller.md`.
+
+## Recurrence (2026-09-10, same day)
+
+The fix itself reproduced the class it fixed. `systemctl enable
+styrman-firewall.service` was added to the updater's `host_converge`, but
+INSIDE the `if [ "${changed}" = "1" ]` block. v1.27.0 shipped at 13:30; the
+tick that installed the new unit file ran the PREVIOUS updater binary (no
+enable line yet); the next tick (13:36, the new updater) saw no file change
+and skipped the block. `systemctl is-enabled styrman-firewall.service` still
+read `disabled` after deploy. Caught by main checking the live host, per the
+ADR-067 amendment's rule that verification after `install.sh`/deploy is the
+operator's, which held again here.
+
+Root cause, as a class: the "caller" was traced by name but not by the
+PATH the first execution actually takes — a self-updating tool's install
+tick runs the OLD binary, so a step gated on "something changed this tick"
+can never see the change that shipped it. Fix in the working tree: the
+`systemctl enable` call moved OUT of the changed-block to run
+unconditionally every tick (idempotent), so the second tick catches up;
+ships with the next tag.
+
+Prevention addition: when a step is added to a self-updating tool's
+converge/install path, ask which VERSION of the tool executes the first
+run after the change ships (usually the OLD one) — gate nothing needed on
+that first run behind a "did anything change" condition; make it
+unconditional or idempotent instead. Verify with the exact live-host
+command the bug record names, not by reading the unit file's text. See
+`.agents/rules/mechanism-reaches-every-caller.md`.
 
 ## Related
 BUG-034, BUG-036 — same TODO close-out, found by the same review pass.
+BUG-034 (claims vs evidence — verify on the live host, not from source
+text). This is the second occurrence of "mechanism added, caller path not
+fully traced" on the same day; the rule now lives in
+`.agents/rules/mechanism-reaches-every-caller.md`.

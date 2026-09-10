@@ -531,13 +531,17 @@ host_converge() {
     if [ "${changed}" = "1" ]; then
         if ! out="$(systemctl daemon-reload 2>&1)"; then log "WARN: daemon-reload after host-converge: ${out}"; fi
         if ! out="$(systemctl enable --now styrman-firewall.timer 2>&1)"; then log "WARN: enabling the firewall units: ${out}"; fi
-        # The service is a boot-time unit too (its [Install] section): the
-        # base rules land once right after docker.service, not at the
-        # timer's first tick (ADR-065 follow-up (f), closed 2026-09-10).
-        if ! out="$(systemctl enable styrman-firewall.service 2>&1)"; then log "WARN: enabling styrman-firewall.service at boot: ${out}"; fi
         if ! out="$(systemctl start styrman-firewall.service 2>&1)"; then log "WARN: starting styrman-firewall.service: ${out}"; fi
         log "host-converge: firewall script + units installed from ${SELF_HEAD:0:12} (see journalctl -u styrman-firewall)"
     fi
+    # The service is a boot-time unit too (its [Install] section): the base
+    # rules land once right after docker.service, not at the timer's first
+    # tick (ADR-065 follow-up (f), closed 2026-09-10). Enabled on EVERY tick,
+    # not only when a unit file changed: the v1.27.0 tick that installed the
+    # new unit ran the previous updater (which had no enable), and the next
+    # tick saw nothing changed — so the unit stayed disabled until the
+    # operator's install.sh. `systemctl enable` is idempotent and cheap.
+    if ! out="$(systemctl enable styrman-firewall.service 2>&1)"; then log "WARN: enabling styrman-firewall.service at boot: ${out}"; fi
     [ "${failed}" = "0" ] || log "WARN: host-converge incomplete — the previous firewall script may still be installed"
     return 0
 }

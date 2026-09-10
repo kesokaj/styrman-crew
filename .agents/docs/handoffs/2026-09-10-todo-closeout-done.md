@@ -2,11 +2,14 @@
 owner: main
 date: 2026-09-10
 ---
-# Handoff — 2026-09-10 — the TODO close-out is done; unreleased
+# Handoff — 2026-09-10 — the TODO close-out is done and shipped as v1.27.0
 
 Session ID: f720d73c (Claude Code). Project: /home/kesokaj/workspace/styrman-crew.
-Branch: main. Last release `v1.26.0` (11:07 today). Five phase commits since:
-`7dae197`, `3ce8a37`, `46f3ec2`, `0201b8c`, plus this trail commit.
+Branch: main. Released as **`v1.27.0`** at 13:30 (release commit `face4ee`,
+gated commit `0201b8c`; gate `reviews/2026-09-10-preflight-v1.27.0.md`,
+VERDICT: SHIP). The updater's 13:30:58 tick built all three images; the
+server was healthy at 13:32:01; firewall chains unchanged. Five phase
+commits: `7dae197`, `3ce8a37`, `46f3ec2`, `0201b8c`, then the trail.
 
 **Supersedes `2026-09-10-v1.26.0-shipped.md`.**
 
@@ -51,18 +54,24 @@ recon brief and the three-round cold-read report beside it.
 
 ## Open
 
-1. **Operator, after the next tag:** `sudo bash deploy/firewall/install.sh`
-   (enables the boot-time unit; until then only the 5 s tick narrows the boot
-   window) and `sudo bash deploy/host-setup.sh` (address pool; restarts
-   Docker, live-restore keeps VMs up). Verify: `systemctl is-enabled
-   styrman-firewall.service` → enabled.
+1. **Operator, now (v1.27.0 is deployed):** `sudo bash deploy/firewall/install.sh`
+   — this ENABLES the boot-time unit. Checked on the live host after both
+   post-deploy updater ticks (13:31 and 13:36): `systemctl is-enabled
+   styrman-firewall.service` → `disabled`. Cause: the updater's converge
+   step enabled it only when a unit file changed, and the tick that
+   installed the unit ran the previous updater (BUG-035 recurrence; the
+   enable is now unconditional in the working tree, ships next tag; rule
+   graduated to `.agents/rules/mechanism-reaches-every-caller.md`). Until the
+   operator runs it, only the timer's 5 s first tick narrows the boot
+   window. Then `sudo bash deploy/host-setup.sh` (address pool; restarts
+   Docker, live-restore keeps VMs up). Verify: `is-enabled` → `enabled`.
 2. **Operator, TODO's last item:** delete the GCS backup bucket + service
    account; shred `/var/lib/styrman/backups/`.
 3. **Owed (agent):** the credential-broker reachability test from a LAN
    project on the compose deployment (`reviews/2026-09-09-security-adr-067.md`).
-4. **Release:** everything above is unreleased. `/preflight` when the
-   operator says so; MINOR (new behaviour: provisioning state, 4003,
-   checkable-only gutter; nothing broken).
+4. **Released** as v1.27.0 (MINOR). A fresh Google sign-in after the bump
+   is the operator's check. The updater fix above (unconditional enable) is
+   the one unreleased source change on the branch.
 5. BUG-038: the e2e runner once exited 2 after a green suite with a bash
    parse message from its trap; the traced rerun was clean. Observed, not
    root-caused.
@@ -93,8 +102,9 @@ recon brief and the three-round cold-read report beside it.
 
 ## Environment State
 
-- `main` pushed through `0201b8c` + this commit. Production still
-  `v1.26.0`. `styrman-runtime:test` current (2026-09-09). No leaked test
+- `main` pushed through `face4ee` (tag `v1.27.0`) + this trail. Production
+  `styrman-server:1.27.0` healthy, `styrman-caddy:1.27.0`,
+  `styrman-runtime:1.27.0` built. `styrman-runtime:test` current (2026-09-09). No leaked test
   containers, networks or state dirs. `styrman-caddy:verify` image exists
   locally from the Phase 3 build (harmless; `docker rmi` if unwanted).
 
@@ -107,5 +117,7 @@ recon brief and the three-round cold-read report beside it.
 
 ## Next Steps
 
-1. Operator: say "ship it" for a MINOR release; then the two root commands.
-2. Agent: the broker-reachability test on the compose deployment.
+1. Operator: `install.sh` (enables the boot unit), `host-setup.sh`, a fresh
+   sign-in, the backups clean-up.
+2. Agent: the broker-reachability test on the compose deployment; the
+   updater's unconditional enable ships with the next tag.

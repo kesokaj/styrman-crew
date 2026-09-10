@@ -12,29 +12,35 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**v1.26.0 shipped 2026-09-10.** Tag on release commit `300f5b3` (gated
-commit `5df2959`), deployed by the auto-updater at 11:07, server healthy in
-26 s, all three images at 1.26.0. Gate:
-`.agents/docs/reviews/2026-09-10-preflight-v1.26.0.md`; release entry:
-`.agents/docs/changes/2026-09-10-v1.26.0-release.md`. What it carries for a
-user: the network-mode PUT decides under the project lock with no rollback
-and repairs a drifted badge on re-toggle; the ssh public key with a copy
-button in Settings → Credentials; two security fixes from the gate (the
-symlinked-`.pub` guard, the multi-line key). History: v1.25.0 shipped
-2026-09-09 with ADR-067 live in production — the per-project network mode
-is the bridge interface prefix, and ADR-065/066's root-mediated machinery
-is deleted.
+**v1.27.0 shipped 2026-09-10.** Tag on release commit `face4ee` (gated
+commit `0201b8c`), deployed by the auto-updater at 13:31, server healthy at
+13:32:01, all three images at 1.27.0. Gate:
+`.agents/docs/reviews/2026-09-10-preflight-v1.27.0.md`; release entry:
+`.agents/docs/changes/2026-09-10-v1.27.0-release.md`. What it carries for a
+user: the sidebar's "provisioning" state, terminal revocation within a
+minute of a user's removal, the editor's checkable-only gutter and real
+Discard, tofu diagnostics, the settings git card and ssh line from one
+parser; for operators: the ingress dependencies converged, the boot-time
+firewall unit, the Docker address pool, the legacy workspace migration
+removed; internally the orchestrator's first unit tests. History: v1.25.0
+shipped 2026-09-09 with ADR-067 live in production — the per-project
+network mode is the bridge interface prefix, and ADR-065/066's
+root-mediated machinery is deleted; v1.26.0 followed the same day with the
+network-mode PUT deciding under the project lock, the ssh public key copy
+button, and two security fixes from the gate.
 
-**Nothing open for the operator.** Decided 2026-09-10: sshd keeps password
-login (LAN mode is for specific projects; the operator accepts the exposure,
-recorded in `.agents/docs/deploy/remote.md`). Done 2026-09-10 by the
-operator: the browser walk-through (plan now 44 of 44: sandbox ping fails,
-LAN ping succeeds after a roughly 30 s rebuild) and the `install.sh` run
-that removed the retired `.path` unit and spool mount. After the next
-release, the operator's two root commands are `sudo bash
-deploy/firewall/install.sh` (enables the boot-time firewall unit) and
-`sudo bash deploy/host-setup.sh` (Docker address pool), once, per
-`deploy/remote.md`.
+**Nothing open for the operator but the two root commands, now due.**
+Decided 2026-09-10: sshd keeps password login (LAN mode is for specific
+projects; the operator accepts the exposure, recorded in
+`.agents/docs/deploy/remote.md`). Done 2026-09-10 by the operator: the
+browser walk-through (plan now 44 of 44: sandbox ping fails, LAN ping
+succeeds after a roughly 30 s rebuild) and the `install.sh` run that
+removed the retired `.path` unit and spool mount. Now that v1.27.0 shipped,
+the operator's two root commands are due: `sudo bash
+deploy/firewall/install.sh` (boot-time firewall unit) and `sudo bash
+deploy/host-setup.sh` (Docker address pool), once, per `deploy/remote.md`,
+plus the backups clean-up (GCS bucket + service account in project
+`driven-eft-h4it`, and shredding `/var/lib/styrman/backups/` on the host).
 
 **Next code task on this area** — the network-mode PUT (commit `42716a8`,
 `.agents/docs/changes/2026-09-10-network-mode-put-locked.md`, BUG-032) now
@@ -47,7 +53,7 @@ credential-broker reachability test from a LAN project on the compose
 deployment (`.agents/docs/reviews/2026-09-09-security-adr-067.md`) — a test,
 no code.
 
-**TODO close-out done (unreleased):** plan
+**TODO close-out shipped in v1.27.0:** plan
 `.agents/docs/plans/2026-09-10-todo-closeout.md` is complete except Phase
 6's final trail box (this edit). Five phase commits on `main` since
 `v1.26.0`: `7dae197` server fixes, `3ce8a37` web + terminal
