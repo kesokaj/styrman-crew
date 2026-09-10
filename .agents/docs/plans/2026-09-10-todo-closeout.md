@@ -343,8 +343,8 @@ user).
 - [x] I ticker + 4003 + frontend handling + bridge test — verify: `go test ./internal/terminal -race`, vitest, e2e green, AI
 - [x] changes entry, commit, push — AI (with Phase 2, one commit: the two share api.ts and server.go)
 ### Phase 5 — The Docker seam
-- [ ] O `dockerAPI` + fake + the listed orchestrator tests (incl. E's) — verify: `go test ./internal/orchestrator -race`, mutation-check the wrong-bridge and symlink cases, AI
-- [ ] BUG-003 residual closed in TODO; changes entry, commit, push — AI
+- [x] O `dockerAPI` + fake + the listed orchestrator tests (incl. E's) — verify: `go test ./internal/orchestrator -race`, mutation-check the wrong-bridge and symlink cases, AI
+- [x] BUG-003 residual closed in TODO; changes entry, commit, push — AI
 ### Phase 6 — Definition of Done over the whole change
 - [ ] verifier (all tiers, counts before/after), reviewer (diff), security (auth/ingress/files touched), documentation (api.md `provisioning` state and WS close 4003 "access revoked", guide, deploy docs, testing README counts), changelog, bugs — verify: artifacts in `testing/`, `reviews/`, `changes/`, AI
 - [ ] integration 84+/0 and e2e 86+/0 on the final tree — verify: logs, AI

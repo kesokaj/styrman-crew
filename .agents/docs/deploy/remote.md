@@ -49,6 +49,35 @@ file any more** (the `LAN_*` keys it may still carry are inert), and
 rediscovers it later should not be misled into thinking it still configures
 anything.
 
+### Post-upgrade steps for the next tag (TODO close-out 2026-09-10)
+
+Run both once, after deploying the next tag:
+
+```bash
+sudo bash deploy/firewall/install.sh    # from /opt/styrman at the deployed tag
+sudo bash deploy/host-setup.sh --user $USER
+```
+
+`install.sh` now also ENABLES `styrman-firewall.service` at boot (`WantedBy=
+multi-user.target`), not just the timer: the base rules land once right
+after `docker.service` instead of waiting for the timer's first tick, and
+that first tick itself now fires at `OnBootSec=5s` (down from 15s) as the
+belt to that brace — closing the boot-ordering window ADR-067's follow-up
+(f) measured. Re-running `install.sh` on an already-converged host is a
+no-op beyond that.
+
+`host-setup.sh`'s `daemon.json` merge adds `default-address-pools:
+[{"base":"172.16.0.0/12","size":24}]` when absent, so a 16th-or-later
+project bridge draws from a range the firewall's drop list actually names
+instead of colliding with `192.168.0.0/16` (the LAN those drops exist to
+keep sandbox projects out of). This takes effect for NEW Docker networks
+only — an already-created project's bridge keeps its existing subnet — and
+needs a Docker daemon restart to apply at all: `host-setup.sh` detects the
+`daemon.json` change and runs `systemctl restart docker` itself.
+`live-restore` (already on) keeps every running project microVM up across
+that restart, so nobody's session is interrupted; only project creations
+AFTER the restart draw from the new pool.
+
 **Pre-ADR-027 workspaces (removed with the next tag):** the automatic
 migration of a legacy workspace
 (`homes/<user>/base/projects/<dir>` → `projects/<user>/<uuid>`) is deleted

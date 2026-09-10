@@ -31,7 +31,7 @@ import (
 
 // Orchestrator creates, adopts, and reaps project microVMs.
 type Orchestrator struct {
-	docker *client.Client
+	docker dockerAPI // *client.Client in production; a fake in tests (docker.go)
 	cfg    *config.Config
 	logger *slog.Logger
 

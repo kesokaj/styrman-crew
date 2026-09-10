@@ -115,7 +115,14 @@ selections before a keypress can land — the runtime image's tmux
    a RENDERED preview with an Edit toggle; a **Format** button reformats with
    the file's real CLI formatter running INSIDE the project VM — `gofmt`,
    `prettier`, `black`/`ruff`, `rustfmt`, `shfmt`, `terraform fmt`/`tofu fmt`
-   — except JSON, which still formats locally/offline (v1.7.3); upload by
+   — except JSON, which still formats locally/offline (v1.7.3); a syntax
+   gutter (red squiggles from the same in-VM checker) appears ONLY for file
+   types the server actually has a checker for — the SPA's
+   `CHECKABLE_EXTENSIONS` mirrors the server's `checkFile` cases one for
+   one (TODO close-out 2026-09-10, item K8), so a `.xyz` file never shows a
+   gutter that can only ever report "no checker"; each edit debounces one
+   in-flight check request, aborting the previous one rather than racing it
+   (item K7); upload by
    drag (an upload that overwrites an already-open file evicts that file's
    editor pane, keyed off the server's own reported saved base names rather
    than what was dropped — on a clean success AND on a mid-stream failure
@@ -123,7 +130,11 @@ selections before a keypress can land — the runtime image's tmux
    error too, 2026-09-02 — so a stale in-memory copy of overwritten content
    can never linger visibly open; its Recent chip is kept, since the file
    itself still exists), download; destructive operations on
-   platform-managed home paths are refused), Ports (what's
+   platform-managed home paths are refused). Closing a file with unsaved
+   edits via its "Discard" confirm now actually discards: the parked draft
+   and its dirty flag are cleared and the loaded doc is dropped so the next
+   open re-reads the file from disk, rather than a close that silently kept
+   the buffer around (item K9)., Ports (what's
    listening, with process / inner-docker image, shareable
    `/p/<id>/<t>/port/<port>/` links; per-port sharing — adding a Google
    email mints a stable **private link** `https://<token>.private.…/`
@@ -246,7 +257,12 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   list/get views (mirrors `deleteError`) — the sidebar shows a red "repo
   setup failed" badge with the message as its title; the guest output behind
   that message is redacted (`redactSecrets`) before it reaches the message
-  or a server log.
+  or a server log. While the clone/init/`gh` step is still running — before
+  it can fail or succeed — the sidebar shows a "provisioning…" chip in the
+  same slot (`state:"provisioning"`, TODO close-out 2026-09-10, item N; the
+  chip choice is a pure `projectBadge(p)` function, item 29, unit-tested for
+  every state/error combination rather than left to the component to get
+  right silently).
 - **Isolation** (R12): per-project bridges (`sdb-<uuid>`, named
   `sdb-<11hex>` at the Linux interface level via `config.BridgeNameFor` —
   Docker's default `br-<hash>` interface name would slip past the firewall
@@ -528,7 +544,15 @@ rotated token, or a tool signed into inside a project instead of at setup).
   admins only — LIVE runtime tunables: idle-stop timeout (applies to the
   reaper immediately) and docker disk size for new project VMs, persisted
   in `StateDir/settings.json` over the env defaults. (The user-access card
-  was removed in v1.3 — access = env + admin API.)
+  was removed in v1.3 — access = env + admin API.) An admin's `DELETE
+  /api/settings/users/{email}` is TERMINAL revocation only (TODO close-out
+  2026-09-10, item I): every open terminal of the removed user closes
+  within a minute (close 4003, see api.md/terminal-protocol.md), but their
+  projects, tmux sessions, and brokered credentials keep running until an
+  admin separately stops the projects — removing a user does not stop or
+  delete anything of theirs by itself. Env-provided admins cannot be
+  removed through this API at all; taking one off the list needs an env
+  edit and a server restart.
 - **Where things live** on the host:
 
 | Path                                               | What                                                                                                                           |
