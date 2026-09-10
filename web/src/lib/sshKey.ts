@@ -34,9 +34,11 @@ export function sshPublicKey(tools: ToolInfo[] | undefined): string {
   const ssh = tools?.find((t) => t.name === "ssh");
   for (const d of ssh?.details ?? []) {
     const line = d.trim();
-    // Any control or line/paragraph separator character is a reject, not
-    // just CR/LF: they reach the title attribute and the clipboard verbatim.
-    if (line.length > MAX_KEY_LEN || /[\p{Cc}\u2028\u2029]/u.test(line)) continue;
+    // Any control character except TAB, and the Unicode line/paragraph
+    // separators, is a reject, not just CR/LF: they reach the title
+    // attribute and the clipboard verbatim. TAB is a legal field separator.
+    if (line.length > MAX_KEY_LEN) continue;
+    if (/[\p{Cc}\u2028\u2029]/u.test(line.replaceAll("\t", " "))) continue;
     if (PUBLIC_KEY.test(line)) return line;
   }
   return "";
