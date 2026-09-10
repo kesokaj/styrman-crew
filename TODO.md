@@ -10,7 +10,7 @@ Add new items below as they arise.
 
 ## Inbox
 
-- [ ] Show the ssh PUBLIC key in Settings → Credentials, not just the path `~/.ssh/id_ed25519` (operator, 2026-09-10: "I like the ssh.pub key to be visible in the settings menu. That is handy."). The setup page's tool status already reads and echoes it (`internal/httpapi/setup.go`, the `ssh` toolInfo's `Details`, symlink-refusing); the settings row's `detail` is a constant string. Small frontend task once the same detail is exposed on the settings side. (added 2026-09-10)
+- [x] Show the ssh PUBLIC key in Settings → Credentials, not just the path `~/.ssh/id_ed25519` (operator, 2026-09-10: "I like the ssh.pub key to be visible in the settings menu. That is handy."). The setup page's tool status already reads and echoes it (`internal/httpapi/setup.go`, the `ssh` toolInfo's `Details`, symlink-refusing); the settings row's `detail` is a constant string. Small frontend task once the same detail is exposed on the settings side. (added 2026-09-10) **DONE 2026-09-10** — frontend-only, see this entry.
 
 - [ ] Converge the eight shared dependencies that still diverge between the root module and `deploy/caddy/ingress` (`go-connections`, `httpsnoop`, `go-logr/logr`, the three OpenTelemetry packages, and two more — `deploy/verify-commit.sh` prints the full list on every run). `docker/docker` was converged on 2026-09-08 and is the one the gate now BLOCKS on; the rest are warnings because turning them all into a release blocker would force an untested eight-package bump. The ingress is the internet-facing component (`network_mode: host`, docker socket mounted), so it is the last place that should sit on older versions. (added 2026-09-08, from the project audit)
 

@@ -16,6 +16,7 @@ import {
 } from "../lib/hooks";
 import { useProjects } from "../lib/projects";
 import { toast } from "../lib/toast";
+import { abbreviateKey, sshPublicKey } from "../lib/sshKey";
 import { useModalA11y } from "../components/ui";
 
 const CodeEditor = lazy(() => import("../components/CodeEditor"));
@@ -200,6 +201,12 @@ function CredentialsSection() {
   const find = (pred: (i: CredItem) => boolean) => items.find(pred);
   const detailOf = (name: string) =>
     (toolData?.tools ?? []).find((t) => t.name === name)?.details?.join("  ");
+  const pubKey = sshPublicKey(toolData?.tools);
+  const copyKey = () =>
+    navigator.clipboard?.writeText(pubKey).then(
+      () => toast("success", "Public key copied"),
+      () => toast("error", "Could not copy — select and copy manually"),
+    );
   // The agent harness roster (skills, subagents) seeded into every project
   // home, read from the newest seeded project; absent until one has booted.
   const rosterOf = (name: string, fallback: string) => {
@@ -225,7 +232,11 @@ function CredentialsSection() {
       set: !!st?.sshKey,
       item: find((i) => i.id.startsWith("ssh-")),
       synced: !!find((i) => i.id.startsWith("ssh-")),
-      detail: "~/.ssh/id_ed25519",
+      // The PUBLIC key itself, abbreviated, with a copy button (below) for
+      // pasting into a git host or an authorized_keys file; the path until
+      // the server has reported the key.
+      detail: pubKey ? abbreviateKey(pubKey) : "~/.ssh/id_ed25519",
+      copy: pubKey,
     },
     {
       label: "github",
@@ -327,9 +338,21 @@ function CredentialsSection() {
             >
               {c.label}
             </button>
-            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-dim">
+            <span
+              className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-dim"
+              title={c.copy || undefined}
+            >
               {c.set ? (c.detail ?? "signed in") : "not set up — click to sign in"}
             </span>
+            {c.copy && (
+              <button
+                onClick={copyKey}
+                className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium text-accent hover:bg-bg"
+                title="Copy the public key"
+              >
+                copy
+              </button>
+            )}
             {!c.synced && (
               <button
                 onClick={() => setManageTool(c.tool)}

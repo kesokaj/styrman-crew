@@ -507,7 +507,11 @@ rotated token, or a tool signed into inside a project instead of at setup).
   **Credentials** view (v1.8.2, replacing the old separate "Tools &
   credentials" cards) — GREEN = signed in and synced to the broker (click a
   green row to read its stored value, v1.8.1), GREY = not set up, RED =
-  signed in locally but not yet synced. Grey and red rows — or their "sign
+  signed in locally but not yet synced. The ssh row's stored value is the
+  user's public key itself (abbreviated, with the full key on hover) and a
+  copy button, ready to paste into a git host or an `authorized_keys` file —
+  read via the same tool-status check the setup page uses, which refuses to
+  echo a `.pub` that is a symlink. Grey and red rows — or their "sign
   in"/"re-sync" button — are clickable too (v1.10.0): clicking opens a modal
   that boots the hidden setup VM once and runs `styrman-setup <tool>` in an
   embedded terminal, harvesting that tool into the broker as soon as the

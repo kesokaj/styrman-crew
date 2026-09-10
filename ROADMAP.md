@@ -20,12 +20,12 @@ firewall converged on the following tick, `iptables -S` unchanged. Gate:
 `.agents/docs/reviews/2026-09-09-preflight-v1.25.0.md`. Plan
 `.agents/docs/plans/2026-09-09-lan-mode-by-bridge-prefix.md` is 43 of 44.
 
-**Open, the operator's:** whether to disable sshd password auth before the
-first LAN project stays on (this host accepts passwords, and a LAN project
-reaches it; procedure in `.agents/docs/deploy/remote.md`). Done 2026-09-10
-by the operator: the browser walk-through (plan now 44 of 44: sandbox
-ping fails, LAN ping succeeds after a roughly 30 s rebuild) and the
-`install.sh` run that removed the retired `.path` unit and spool mount.
+**Nothing open for the operator.** Decided 2026-09-10: sshd keeps password
+login (LAN mode is for specific projects; the operator accepts the exposure,
+recorded in `.agents/docs/deploy/remote.md`). Done 2026-09-10 by the
+operator: the browser walk-through (plan now 44 of 44: sandbox ping fails,
+LAN ping succeeds after a roughly 30 s rebuild) and the `install.sh` run
+that removed the retired `.path` unit and spool mount.
 
 **Next code task on this area** — done and unreleased: the network-mode
 PUT (commit `42716a8`, `.agents/docs/changes/2026-09-10-network-mode-put-locked.md`,

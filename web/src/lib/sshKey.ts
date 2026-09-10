@@ -1,0 +1,43 @@
+// The user's ssh PUBLIC key as the settings page shows it (operator request,
+// 2026-09-10: "I like the ssh.pub key to be visible in the settings menu").
+// Kept free of React so vitest covers the parsing (sshKey.test.ts).
+//
+// The server already echoes the key: GET /api/settings/tools returns the
+// "ssh" tool with its Details = [the .pub line], read from the user's base
+// home and refused if the file is a symlink (internal/httpapi/setup.go), so
+// a .pub pointed at a PRIVATE key never reaches the browser. What is left to
+// do here is pick that line out and never mistake anything else for it.
+
+import type { ToolInfo } from "./api";
+
+/** Public-key line shapes OpenSSH writes: `<type> <base64> [comment]`. */
+const PUBLIC_KEY = /^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-\S+|sk-\S+)\s+[A-Za-z0-9+/=]+(\s+\S.*)?$/;
+
+/**
+ * sshPublicKey — the user's public key, or "" when the server has not
+ * reported one. Only a line that LOOKS like a public key is returned: a
+ * detail that is anything else (a path, an error, a private-key header) is
+ * not something to offer for copying into an authorized_keys file.
+ */
+export function sshPublicKey(tools: ToolInfo[] | undefined): string {
+  const ssh = tools?.find((t) => t.name === "ssh");
+  for (const d of ssh?.details ?? []) {
+    const line = d.trim();
+    if (PUBLIC_KEY.test(line)) return line;
+  }
+  return "";
+}
+
+/**
+ * abbreviateKey — `ssh-ed25519 AAAAC3…Hk6s user@host`: the type, the first
+ * and last few base64 characters, and the comment, so the row stays one line
+ * while the type and the identity are still readable. The full key goes on
+ * the clipboard, never this.
+ */
+export function abbreviateKey(key: string): string {
+  const [type, body, ...rest] = key.split(/\s+/);
+  if (!type || !body) return key;
+  const shortBody =
+    body.length > 16 ? `${body.slice(0, 8)}…${body.slice(-6)}` : body;
+  return [type, shortBody, ...rest].join(" ");
+}

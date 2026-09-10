@@ -85,9 +85,12 @@ sudo sshd -T | grep -E '^(passwordauthentication|permitrootlogin)'
 Once `passwordauthentication no` is reported, LAN mode on any project no
 longer risks a password-guessed root login through this host's `sshd`. As of
 2026-09-08 this host has **not** been hardened:
-`passwordauthentication yes`, no `authorized_keys` for either account —
-worth fixing before turning LAN mode on for any project, even though nothing
-in the code requires it.
+`passwordauthentication yes`, no `authorized_keys` for either account.
+
+**Operator decision, 2026-09-10: password login stays.** LAN mode is used
+for specific projects only, and the operator accepts the exposure above for
+them. The procedure stays here for whoever changes their mind; nothing
+re-raises it.
 
 ## Procedure
 
