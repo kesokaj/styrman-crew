@@ -5,6 +5,7 @@
 // / History / Diff tabs, settings, deep links, and cleanup.
 //
 // Usage: node web/e2e/run.mjs [--base http://127.0.0.1:8080] [--shots /tmp/shots]
+import { readFileSync } from "node:fs";
 import { chromium } from "playwright";
 
 const arg = (name, def) => {
@@ -708,6 +709,31 @@ try {
   // bridge interface name the server picks, so there is nothing to stub and
   // nothing that can be "unavailable". The switch is admin-only to turn ON;
   // this e2e user is an admin.
+  // The editor mounts its lint gutter only for CHECKABLE_EXTENSIONS
+  // (web/src/lib/api.ts), a hand-mirrored copy of the server's checkerFor
+  // switch. Read the list from the SOURCE file and ask the server about each
+  // one, plus one it does not list, so the two cannot drift silently.
+  await check("checkable extensions match the server's checkers", async () => {
+    const src = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+    const m = /CHECKABLE_EXTENSIONS[^\n]*=\s*new Set\(\[([^\]]*)\]/s.exec(src);
+    if (!m) throw new Error("CHECKABLE_EXTENSIONS not found in api.ts");
+    const exts = [...m[1].matchAll(/"([a-z0-9]+)"/g)].map((x) => x[1]);
+    if (exts.length < 5) throw new Error(`suspiciously short list: ${exts}`);
+    const ask = async (ext) => {
+      const res = await page.request.post(`${BASE}/api/projects/${PID}/check`, {
+        data: { path: `drift-guard.${ext}`, content: "" },
+        headers: { "content-type": "application/json" },
+        timeout: 60000,
+      });
+      if (!res.ok()) throw new Error(`check .${ext}: ${res.status()} ${await res.text()}`);
+      return (await res.json()).supported;
+    };
+    for (const ext of exts) {
+      if (!(await ask(ext))) throw new Error(`.${ext} is in CHECKABLE_EXTENSIONS but the server has no checker for it`);
+    }
+    if (await ask("xyzzy")) throw new Error("the server claims a checker for .xyzzy, which the UI does not list");
+  });
+
   await check("network block shows the sandbox default", async () => {
     await panel().getByText("Network", { exact: true }).waitFor({ timeout: 10000 });
     await panel().getByText("Sandboxed.", { exact: false }).waitFor({ timeout: 5000 });

@@ -4,6 +4,7 @@ import {
   notifyFileSaved,
   useEditorPane,
   type PaneFile,
+  discardDraft,
 } from "../lib/editorPane";
 import { ConfirmDialog, IconButton } from "./ui";
 import { XIcon } from "./icons";
@@ -208,6 +209,10 @@ export function EditorPane({
           danger
           onConfirm={() => {
             setConfirmClose(false);
+            // Actually discard: clear the parked buffer and the dirty flag,
+            // and drop the loaded doc so the next open re-reads the file.
+            discardDraft(project, term);
+            setLoaded(null);
             onShowTerminal();
           }}
           onClose={() => setConfirmClose(false)}

@@ -58,6 +58,22 @@ describe("sshPublicKey", () => {
     }
   });
 
+  // The rest of \p{C}: bidi overrides, zero-width and soft-hyphen formatting
+  // characters, and a BOM — invisible in the row, present on the clipboard.
+  it("rejects formatting characters anywhere in the line", () => {
+    const body = "AAAAC3NzaC1lZDI1NTE5AAAAIGb8Q7wq1p3E7c9rZk4x2sY6Hk6s";
+    for (const c of ["\u202e", "\u200b", "\ufeff", "\u00ad", "\u2066"]) {
+      const d = `ssh-ed25519 ${body} user${c}host`;
+      expect(sshPublicKey([{ name: "ssh", ready: true, details: [d] }])).toBe("");
+    }
+  });
+
+  it("rejects a bare type prefix and a token-shaped type, like the server", () => {
+    for (const d of ["ssh- AAAA", "sk- A", "sk-ant-api03-Zm9vYmFyYmF6 foobar", "ecdsa-sha2-nistp999 AAAA"]) {
+      expect(sshPublicKey([{ name: "ssh", ready: true, details: [d] }])).toBe("");
+    }
+  });
+
   it("rejects an implausibly long value", () => {
     const huge = `ssh-rsa ${"A".repeat(5000)}`;
     expect(sshPublicKey([{ name: "ssh", ready: true, details: [huge] }])).toBe("");
@@ -91,6 +107,11 @@ describe("abbreviateKey", () => {
     expect(a.startsWith("ssh-ed25519 AAAAC3Nz…")).toBe(true);
     expect(a.endsWith("Hk6s user@host")).toBe(true);
     expect(a.length).toBeLessThan(ED.length);
+  });
+
+  it("collapses Unicode spaces in the comment", () => {
+    const k = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGb8Q7wq1p3E7c9rZk4x2sY6Hk6s my\u00a0\u00a0laptop\u2003key";
+    expect(abbreviateKey(k).endsWith("Hk6s my laptop key")).toBe(true);
   });
 
   it("leaves a short or malformed value alone", () => {

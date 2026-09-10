@@ -49,6 +49,11 @@ type Bridge struct {
 	// and the tmux -D kick spins the frontend into a reconnect loop.
 	swapMu      sync.Mutex
 	activeConns sync.Map
+	// stillAuthorized is consulted every reauthEvery for an open terminal;
+	// nil in AuthMode=none (see revocationWatch). reauthEvery is a field so a
+	// test can shrink it.
+	stillAuthorized func(email string) bool
+	reauthEvery     time.Duration
 }
 
 // NewBridge creates a Bridge. storeFor resolves a user's terminal store.
@@ -56,8 +61,34 @@ func NewBridge(orch *orchestrator.Orchestrator, cfg *config.Config, logger *slog
 	storeFor func(user string) (TermStore, error),
 	ensure func(ctx context.Context, user, projectID string) (string, string, string, error),
 	guestFor func(user string) string,
+	stillAuthorized func(email string) bool,
 ) *Bridge {
-	return &Bridge{orch: orch, cfg: cfg, logger: logger, storeFor: storeFor, ensure: ensure, guestFor: guestFor}
+	return &Bridge{orch: orch, cfg: cfg, logger: logger, storeFor: storeFor, ensure: ensure, guestFor: guestFor,
+		stillAuthorized: stillAuthorized, reauthEvery: 60 * time.Second}
+}
+
+// revocationWatch calls check every interval until ctx ends; the first false
+// runs onRevoked once and returns. A nil check never fires — AuthMode=none
+// mints an identity that is in no store, so re-checking it would close every
+// local terminal. Split out so the decision is unit-testable without a
+// WebSocket (TODO close-out 2026-09-10, item I).
+func revocationWatch(ctx context.Context, interval time.Duration, check func() bool, onRevoked func()) {
+	if check == nil {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !check() {
+				onRevoked()
+				return
+			}
+		}
+	}
 }
 
 type controlMessage struct {
@@ -80,7 +111,8 @@ func clientSize(r *http.Request) (cols, rows uint16) {
 // ServeHTTP attaches a project terminal: {project} and {term} path values
 // plus optional cols/rows query params.
 func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	user := identity.FromContext(r.Context()).Username
+	id := identity.FromContext(r.Context())
+	user, email := id.Username, id.Email
 	projName := r.PathValue("project")
 	convID := r.PathValue("term")
 	store, err := b.storeFor(user)
@@ -141,6 +173,7 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	b.serve(w, r, session{
 		containerID: containerID,
 		user:        user,
+		email:       email,
 		guest:       guest,
 		key:         user + "/" + projName + "/" + tmuxName,
 		tmuxName:    tmuxName,
@@ -156,7 +189,8 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // 4000 — the frontend finalizes setup and tears the VM down on that signal,
 // so the VM auto-closes on completion instead of idling at a shell prompt.
 func (b *Bridge) ServeSetup(w http.ResponseWriter, r *http.Request) {
-	user := identity.FromContext(r.Context()).Username
+	id := identity.FromContext(r.Context())
+	user, email := id.Username, id.Email
 	guest := b.guestFor(user)
 	containerID, err := b.orch.EnsureSetup(r.Context(), user, guest)
 	if err != nil {
@@ -177,6 +211,7 @@ func (b *Bridge) ServeSetup(w http.ResponseWriter, r *http.Request) {
 	b.serve(w, r, session{
 		containerID: containerID,
 		user:        user,
+		email:       email,
 		guest:       guest,
 		key:         user + "/system/setup/" + tool,
 		tmuxName:    tmuxName,
@@ -212,6 +247,7 @@ type session struct {
 	workdir     string
 	paneCmd     string
 	project     string // "" for system VMs
+	email       string // for the periodic re-authorization check
 }
 
 // serve upgrades the WebSocket and pumps it against a tmux session in the
@@ -329,6 +365,26 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 		}
 	}()
 
+	// Re-authorization: the handshake ran authGuard once; with the eight-hour
+	// session token (ADR-063) a removed user's open tab would otherwise
+	// stream until the socket dropped (security review 2026-09-04, low).
+	// A nil stillAuthorized (AuthMode=none) never fires.
+	var revoked atomic.Bool
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var check func() bool
+		if b.stillAuthorized != nil {
+			check = func() bool { return b.stillAuthorized(s.email) }
+		}
+		revocationWatch(hctx, b.reauthEvery, check, func() {
+			b.logger.Info("terminal closed: user no longer authorized", "user", s.user, "session", s.key)
+			revoked.Store(true)
+			conn.Close(websocket.StatusCode(config.CloseAccessRevoked), "access revoked")
+			hcancel()
+		})
+	}()
+
 	// exec stream → WebSocket. EOF here means the tmux client detached or the
 	// pane command exited; the exit-code check below disambiguates.
 	streamDone := make(chan struct{})
@@ -394,12 +450,17 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 	gone := browserGone.Load()
 	var exitCode int
 	var done, alive, probed bool
-	if !gone {
+	if !gone && !revoked.Load() {
 		if exitCode, done = ex.ExitCodeWait(context.Background(), time.Second); done {
 			alive, probed = b.sessionAlive(s)
 		}
 	}
 	code, reason := closeDecision(gone, done, alive, probed)
+	if revoked.Load() {
+		// The watch already closed the socket with 4003; keep the record and
+		// the log honest, and skip the exit probe (nobody is listening).
+		code, reason = config.CloseAccessRevoked, "access revoked"
+	}
 	// Deterministic stop signal: when the project is deliberately stopped
 	// (Stop button / idle reaper), every pane close is 4002 — without this,
 	// the ExitCodeWait race lands some panes on 4000 ("Paused") and others on

@@ -10,6 +10,7 @@ import {
 } from "../lib/hooks";
 import { DeleteProjectDialog } from "./DeleteProjectDialog";
 import { LanBadge } from "./LanBadge";
+import { projectBadge } from "../lib/projectBadge";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { NotificationBell } from "./NotificationBell";
 import { SetupBanner } from "./SetupBanner";
@@ -265,27 +266,17 @@ export function Sidebar({
                   {pending[p.id]}…
                 </span>
               )}
-              {p.state === "deleting" && (
-                <span className="shrink-0 text-[10px] text-text-dim">
-                  deleting…
-                </span>
-              )}
-              {p.deleteError && p.state !== "deleting" && (
-                <span
-                  className="shrink-0 text-[10px] text-danger"
-                  title={p.deleteError}
-                >
-                  delete failed
-                </span>
-              )}
-              {p.provisionError && !p.deleteError && p.state !== "deleting" && (
-                <span
-                  className="shrink-0 text-[10px] text-danger"
-                  title={p.provisionError}
-                >
-                  repo setup failed
-                </span>
-              )}
+              {(() => {
+                const b = projectBadge(p);
+                return b ? (
+                  <span
+                    className={`shrink-0 text-[10px] ${b.className}`}
+                    title={b.title}
+                  >
+                    {b.text}
+                  </span>
+                ) : null;
+              })()}
               {p.state !== "deleting" && <LanBadge project={p} />}
               <button
                 className="invisible inline-flex h-6 w-6 items-center justify-center rounded-md text-text-dim hover:bg-bg-active hover:text-text group-hover:visible group-focus-within:visible"

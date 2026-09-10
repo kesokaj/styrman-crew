@@ -265,8 +265,11 @@ const CodeEditor = forwardRef<
         // Syntax checking runs a real CLI checker inside the project VM, so it
         // is debounced hard (1s idle) rather than run per keystroke; CodeMirror
         // also cancels a pending run when the doc changes again.
-        lintGutter(),
-        linter(
+        // Only for a file type the server can check (CHECKABLE_EXTENSIONS in
+        // lib/api.ts — `check` is undefined otherwise): an empty gutter on an
+        // uncheckable file reads as "no problems found".
+        ...(check ? [lintGutter()] : []),
+        ...(check ? [linter(
           async (view): Promise<Diagnostic[]> => {
             const fn = checkRef.current;
             if (!fn) return [];
@@ -290,7 +293,7 @@ const CodeEditor = forwardRef<
             });
           },
           { delay: 1000 },
-        ),
+        )] : []),
         // Layout stays static; ONLY the two font rules are compartmentalised,
         // so the reconfigure carries the smallest possible slice.
         EditorView.theme({

@@ -19,7 +19,7 @@ import type { ToolInfo } from "./api";
  * 2026-09-10). The comment may not contain a line break either.
  */
 const PUBLIC_KEY =
-  /^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-[^\s]+|sk-[^\s]+)[ \t]+[A-Za-z0-9+/=]+([ \t]+[^\r\n]*[^\s])?$/;
+  /^(ssh-(ed25519|rsa|dss)|ecdsa-sha2-nistp(256|384|521)|sk-(ssh-ed25519|ecdsa-sha2-nistp256)@openssh\.com)[ \t]+[A-Za-z0-9+/=]+([ \t]+[^\r\n]*[^\s])?$/;
 
 /** Longer than any real key line (a 16 kbit RSA key is under 3000). */
 const MAX_KEY_LEN = 4096;
@@ -34,11 +34,14 @@ export function sshPublicKey(tools: ToolInfo[] | undefined): string {
   const ssh = tools?.find((t) => t.name === "ssh");
   for (const d of ssh?.details ?? []) {
     const line = d.trim();
-    // Any control character except TAB, and the Unicode line/paragraph
-    // separators, is a reject, not just CR/LF: they reach the title
-    // attribute and the clipboard verbatim. TAB is a legal field separator.
+    // Any "other" character (\p{C}: controls, formatting such as RLO and
+    // ZWSP, surrogates, unassigned) except TAB, plus the Unicode line and
+    // paragraph separators, is a reject: they reach the title attribute and
+    // the clipboard verbatim, and a bidi override can make the row lie
+    // about itself (security review 2026-09-10 round 3, low). TAB is a legal
+    // field separator.
     if (line.length > MAX_KEY_LEN) continue;
-    if (/[\p{Cc}\u2028\u2029]/u.test(line.replaceAll("\t", " "))) continue;
+    if (/[\p{C}\u2028\u2029]/u.test(line.replaceAll("\t", " "))) continue;
     if (PUBLIC_KEY.test(line)) return line;
   }
   return "";
@@ -51,7 +54,9 @@ export function sshPublicKey(tools: ToolInfo[] | undefined): string {
  * the clipboard, never this.
  */
 export function abbreviateKey(key: string): string {
-  const [type, body, ...rest] = key.split(/\s+/);
+  // Unicode spaces (NBSP and friends) collapse to one ASCII space, so the
+  // abbreviated row cannot hide a word boundary or pad itself invisibly.
+  const [type, body, ...rest] = key.replace(/\p{Zs}+/gu, " ").split(/\s+/);
   if (!type || !body) return key;
   const shortBody =
     body.length > 16 ? `${body.slice(0, 8)}…${body.slice(-6)}` : body;

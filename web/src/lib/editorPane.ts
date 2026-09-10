@@ -153,6 +153,22 @@ export function openDiffInPane(
 }
 
 /** Last path segment — the display name for chips and the header badge. */
+/**
+ * discardDraft — the Discard button: drop the unsaved buffer and the dirty
+ * flag for a terminal's pane while leaving the open file where it is, so the
+ * next look at the editor shows the file as saved on disk. The confirm
+ * dialog's Discard used to switch views and leave the edits parked in the
+ * draft (carried-over review low, 2026-09-01).
+ */
+export function discardDraft(project: string, term: string) {
+  set(project, term, { ...get(project, term), dirty: false, draft: null });
+}
+
+/** Test seam: read one pane's state. Not for production callers. */
+export function __stateForTest(project: string, term: string): PaneState {
+  return get(project, term);
+}
+
 export function basename(path: string): string {
   return path.includes("/") ? path.slice(path.lastIndexOf("/") + 1) : path;
 }

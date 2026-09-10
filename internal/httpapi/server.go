@@ -144,9 +144,16 @@ type Server struct {
 	// provisionErrs does the same for the background repo provisioning that
 	// runs after the 201 (clone / GitHub repo create) — without it a failed
 	// clone presents as a project that silently ignored the request.
-	deletingMu    sync.Mutex
-	deleting      map[string]bool
-	deleteErrs    map[string]string
+	deletingMu sync.Mutex
+	deleting   map[string]bool
+	deleteErrs map[string]string
+	// provisioning holds the IDs whose background boot+repo provisioning is
+	// still running (set right before the goroutine, deleted by its first
+	// deferred statement), so GET/list can report "provisioning" for the
+	// window between the 201 and the clone finishing — during which the
+	// workspace is briefly not yet a repo (R13) and the container may still
+	// be absent (TODO close-out 2026-09-10, item N).
+	provisioning  sync.Map
 	provisionErrs map[string]string
 
 	// previewOwners memoizes projectID→owner for the preview proxy's
@@ -209,7 +216,18 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 	} else {
 		s.links = ls
 	}
-	s.bridge = terminal.NewBridge(orch, cfg, logger, s.termStoreFor, s.ensureFor, s.guestUserFor)
+	// Re-check terminal authorization only where identity comes from the
+	// userstore: in AuthMode=none the minted identity is in no store.
+	var stillAuthorized func(string) bool
+	if cfg.AuthMode == "header" {
+		// An identity without an email was minted, not looked up (the
+		// loopback dev listener); the store cannot vouch for it either way,
+		// so it is not re-checked (security review of the close-out's phase
+		// 4, low: with an empty allowlist that listener's terminals would
+		// otherwise close every minute).
+		stillAuthorized = func(email string) bool { return email == "" || users.IsAuthorized(email) }
+	}
+	s.bridge = terminal.NewBridge(orch, cfg, logger, s.termStoreFor, s.ensureFor, s.guestUserFor, stillAuthorized)
 	return s
 }
 
@@ -681,14 +699,12 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []projectView{}
 	for _, p := range sp.projects.List() {
-		state := "absent"
+		live := "absent"
 		if st, ok := statuses[u.Username+"/"+p.ID]; ok {
-			state = st.State
+			live = st.State
 		}
 		inFlight, delErr := s.deletingState(u.Username, p.ID)
-		if inFlight {
-			state = "deleting"
-		}
+		state := deriveState(inFlight, s.isProvisioning(p.ID), live)
 		out = append(out, projectView{Project: p, State: state, DeleteError: delErr,
 			ProvisionError: s.provisionError(u.Username, p.ID), LanAccess: p.LanAccess})
 	}
@@ -841,8 +857,10 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusCreated, projectView{Project: p, State: "creating"})
 		return
 	}
+	s.provisioning.Store(p.ID, struct{}{})
 	go func() {
-		defer func() { // outlives the request — net/http's recover doesn't cover it
+		defer s.provisioning.Delete(p.ID) // every return below releases the state
+		defer func() {                    // outlives the request — net/http's recover doesn't cover it
 			if rec := recover(); rec != nil {
 				s.logger.Error("background project boot panicked", "project", p.Name, "panic", rec)
 			}
@@ -904,11 +922,8 @@ func (s *Server) getProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	state := st.State
 	inFlight, delErr := s.deletingState(u.Username, p.ID)
-	if inFlight {
-		state = "deleting"
-	}
+	state := deriveState(inFlight, s.isProvisioning(p.ID), st.State)
 	writeJSON(w, http.StatusOK, projectView{Project: p, State: state, DeleteError: delErr,
 		ProvisionError: s.provisionError(u.Username, p.ID), LanAccess: p.LanAccess})
 }
@@ -1274,6 +1289,27 @@ func writeErr(w http.ResponseWriter, status int, err error) {
 		status = http.StatusNotFound
 	}
 	writeJSON(w, status, map[string]any{"error": map[string]string{"message": err.Error()}})
+}
+
+// deriveState is the project state a view reports: a delete in flight wins
+// over everything (the record is going away), provisioning wins over the
+// live container state (the container may still be absent while the clone
+// has not run — that IS the window the state exists to show), and otherwise
+// the container's own state.
+func deriveState(deleting, provisioning bool, live string) string {
+	switch {
+	case deleting:
+		return "deleting"
+	case provisioning:
+		return "provisioning"
+	default:
+		return live
+	}
+}
+
+func (s *Server) isProvisioning(id string) bool {
+	_, ok := s.provisioning.Load(id)
+	return ok
 }
 
 // clampTitle bounds a terminal title (N25): titles land in conversations.json

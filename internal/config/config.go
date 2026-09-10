@@ -61,6 +61,11 @@ const (
 	// boot the VM back up); an explicit user action (Start) reconnects with
 	// boot intent instead.
 	CloseProjectStopped = 4002
+	// CloseAccessRevoked: the user was removed from the allowlist while the
+	// terminal was open; the bridge re-checks authorization on a timer and
+	// closes with this code. The client must not reconnect (TODO close-out
+	// 2026-09-10, item I).
+	CloseAccessRevoked = 4003
 	// CloseReplaced: a newer WebSocket attached to the same conversation.
 	// The frontend must NOT auto-reconnect on this code.
 	CloseReplaced = 4001

@@ -12,6 +12,7 @@ import {
   type CheckDiagnostic,
   type FileContent,
   type Scope,
+  CHECKABLE_EXTENSIONS,
 } from "../lib/api";
 import { useAppearance, useTheme } from "../lib/hooks";
 import { toast } from "../lib/toast";
@@ -178,10 +179,17 @@ export function useFileEditorState(
   // an empty gutter reads as "no problems found", so a failed check returns
   // nothing rather than a fabricated pass, and the tool's own errors come back
   // as real diagnostics from the server.
+  // One in-flight check at a time: a new debounce cycle aborts the previous
+  // request instead of letting it run to the 20 s timeout and land late
+  // (carried-over review low, 2026-09-01).
+  const checkAbort = useRef<AbortController | null>(null);
   const runCheck = async (text: string): Promise<CheckDiagnostic[]> => {
     if (file.binary || file.truncated) return [];
+    checkAbort.current?.abort();
+    const ac = new AbortController();
+    checkAbort.current = ac;
     try {
-      const r = await api.checkFile(scope.project, file.path, text);
+      const r = await api.checkFile(scope.project, file.path, text, ac.signal);
       if (!r.supported) {
         setCheckNote(undefined);
         return [];
@@ -191,6 +199,11 @@ export function useFileEditorState(
       );
       return r.diagnostics;
     } catch (e) {
+      // Our own abort — a newer debounce cycle superseded this run — is not
+      // a failure: leave the note alone; CodeMirror drops a stale result.
+      if ((e as Error).name === "AbortError" && checkAbort.current !== ac) {
+        return [];
+      }
       // NEVER present a failed check as a clean file: an empty gutter reads as
       // "no problems found". Say the check could not run instead (review
       // finding — this catch used to clear the note and return [], directly
@@ -412,7 +425,7 @@ export function FileEditorBody({
         wrap={st.wrap}
         fontSize={editorFontSize}
         fontFamily={editorFontFamily}
-        check={st.runCheck}
+        check={CHECKABLE_EXTENSIONS.has(extOf(file.path)) ? st.runCheck : undefined}
         onChange={st.setText}
         onSave={st.save}
       />

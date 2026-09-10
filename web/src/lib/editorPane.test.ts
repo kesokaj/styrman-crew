@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { basename } from "./editorPane";
+import { basename, discardDraft, openFileInPane } from "./editorPane";
 
 // NOTE ON SCOPE: the pane store's per-terminal behaviour — draft parked on
 // unmount, restored only for the file it belongs to, dropped when that file is
@@ -25,5 +25,25 @@ describe("basename", () => {
 
   it("does not treat backslashes as separators (POSIX guest paths)", () => {
     expect(basename("a\\b.txt")).toBe("a\\b.txt");
+  });
+});
+
+// Discard means discard: the parked buffer and the dirty flag go, the open
+// file stays (the pane just shows it as saved on disk next time).
+describe("discardDraft", () => {
+  it("clears the draft and the dirty flag but keeps the file", async () => {
+    const mod = await import("./editorPane");
+    const project = "p-discard";
+    const term = "t1";
+    openFileInPane(project, term, { kind: "project", project }, "a.go");
+    // useEditorPane is a hook; drive the store through the same setters the
+    // pane uses by reaching its internal state via a second open + inspect.
+    const before = mod.__stateForTest?.(project, term);
+    expect(before?.file?.path).toBe("a.go");
+    discardDraft(project, term);
+    const after = mod.__stateForTest?.(project, term);
+    expect(after?.dirty).toBe(false);
+    expect(after?.draft).toBeNull();
+    expect(after?.file?.path).toBe("a.go");
   });
 });

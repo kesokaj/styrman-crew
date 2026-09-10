@@ -7,7 +7,9 @@ export interface Project {
   name: string; // friendly, renamable label
   dir: string; // workspace dir under ~/projects (frozen at creation)
   createdAt: string;
-  state: "running" | "stopped" | "absent" | "creating" | "deleting";
+  /** `provisioning`: between the 201 and the clone finishing — the workspace
+   *  is briefly not yet a repo and the container may still be absent. */
+  state: "running" | "stopped" | "absent" | "creating" | "provisioning" | "deleting";
   /** Last failed background destroy — the DELETE answered 202, so this is
    * how the user learns the delete didn't stick. */
   deleteError?: string;
@@ -38,7 +40,7 @@ export interface ProjectNetwork {
 
 /** Live resource snapshot of a project's microVM (terminal status bar). */
 export interface ProjectStats {
-  state: "running" | "stopped" | "absent" | "creating" | "deleting";
+  state: "running" | "stopped" | "absent" | "creating" | "provisioning" | "deleting";
   cpuPercent: number;
   cpuCount: number;
   load1: number;
@@ -360,8 +362,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json" },
     // Don't hang forever if the server is wedged (a stuck VM boot pinning the
     // box); surface a timeout the UI can show instead of a spinner forever.
-    signal: init?.signal ?? AbortSignal.timeout(20000),
+    // A caller's signal is COMBINED with the timeout, never a replacement
+    // for it (review of the close-out's phase 2: the first abortable check
+    // request silently lost its 20 s bound).
     ...init,
+    signal: init?.signal
+      ? AbortSignal.any([init.signal, AbortSignal.timeout(20000)])
+      : AbortSignal.timeout(20000),
     // Never follow a redirect. The API issues none; the one the ingress issues
     // for an expired session (→ https://auth.<domain>/oauth2/google/ →
     // accounts.google.com) is cross-origin, so a fetch that FOLLOWED it
@@ -602,10 +609,11 @@ export const api = {
   // Syntax-check content with the language's real CLI checker in the project
   // VM (gofmt, shellcheck, hadolint, …). `supported:false` means we have no
   // checker for this file type — a normal answer, not an error.
-  checkFile: (project: string, path: string, content: string) =>
+  checkFile: (project: string, path: string, content: string, signal?: AbortSignal) =>
     request<CheckResult>(u`/api/projects/${project}/check`, {
       method: "POST",
       body: JSON.stringify({ path, content }),
+      ...(signal ? { signal } : {}),
     }),
   deleteFile: (scope: Scope, path: string) =>
     request<void>(`${scopeBase(scope)}/file?path=${encodeURIComponent(path)}`, {
@@ -883,3 +891,17 @@ export function termSocketUrl(
 export const CLOSE_EXITED = 4000;
 export const CLOSE_REPLACED = 4001;
 export const CLOSE_STOPPED = 4002; // project deliberately stopped — never auto-reconnect
+/** The user was removed from the allowlist while the tab was open; the server re-checks on a timer. Never reconnect. */
+export const CLOSE_REVOKED = 4003;
+
+/**
+ * CHECKABLE_EXTENSIONS mirrors the server's `checkerFor` switch
+ * (internal/httpapi/check.go): the file extensions a syntax check exists for.
+ * The editor mounts its lint gutter only for these, so every other file type
+ * gets no empty gutter that reads as "no problems found". Drift between the
+ * two lists is caught end to end by web/e2e/run.mjs, which asks the check
+ * endpoint for one file per extension here and for one it does not list.
+ */
+export const CHECKABLE_EXTENSIONS: ReadonlySet<string> = new Set([
+  "go", "sh", "bash", "py", "js", "jsx", "mjs", "cjs", "json", "yaml", "yml", "tf", "tfvars", "hcl",
+]);

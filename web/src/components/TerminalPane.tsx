@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   CLOSE_EXITED,
   CLOSE_REPLACED,
+  CLOSE_REVOKED,
   CLOSE_STOPPED,
   termSocketUrl,
 } from "../lib/api";
@@ -22,6 +23,7 @@ type ConnState =
   | "exited"
   | "replaced"
   | "stopped" // project VM deliberately stopped (close 4002)
+  | "revoked" // the user was removed while the tab was open (close 4003)
   | "reconnecting"
   | "disconnected";
 
@@ -231,6 +233,13 @@ export function TerminalPane({
           closedForGood = true;
           return;
         }
+        if (ev.code === CLOSE_REVOKED) {
+          // The server re-checked the allowlist and this user is gone.
+          // Reconnecting would only be refused at the handshake.
+          setState("revoked");
+          closedForGood = true;
+          return;
+        }
         if (
           ev.code === CLOSE_EXITED ||
           (target.kind === "setup" && everOpened)
@@ -412,6 +421,7 @@ export function TerminalPane({
               {state === "replaced" && "Opened in another tab"}
               {state === "stopped" &&
                 "Project stopped — everything is kept; Start boots it right back"}
+              {state === "revoked" && "Access revoked — sign in again if this is a mistake"}
               {state === "disconnected" && "Disconnected"}
             </span>
             {(state === "exited" ||

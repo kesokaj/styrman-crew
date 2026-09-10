@@ -326,12 +326,12 @@ user).
 - [x] G confined gitconfig read + parser test — verify: `go test ./internal/httpapi`, AI
 - [x] changes entry, commit, push — AI (commit follows; Phase 1 DONE 2026-09-10: reviewer approve-with-nits fixed, security 3 lows fixed, verifier PASS)
 ### Phase 2 — Web
-- [ ] H `\p{C}` + `abbreviateKey` space collapse + tests — verify: vitest, AI
-- [ ] K7 AbortSignal through `checkFile`; K8 lint gutter gated on `checkable`; K9 Discard clears the draft (+ store test) — verify: `npm run check && lint && test`, AI
-- [ ] B `_shell.html` normalisation script (after confirming nothing reads `u`) — verify: two builds produce identical `_shell.html`, e2e green, AI
-- [ ] N provisioning state: server map + `deriveState` + handler test + API doc + Sidebar chip via `projectBadge` — verify: `go test ./internal/httpapi`, vitest, AI
-- [ ] 29 `projectBadge` extraction + vitest — verify: `npm test`, AI
-- [ ] rebuild dist, changes entry, commit, push — AI
+- [x] H `\p{C}` + `abbreviateKey` space collapse + tests — verify: vitest, AI
+- [x] K7 AbortSignal through `checkFile`; K8 lint gutter gated on `checkable`; K9 Discard clears the draft (+ store test) — verify: `npm run check && lint && test`, AI
+- [x] B `_shell.html` normalisation script (after confirming nothing reads `u`) — verify: two builds produce identical `_shell.html`, e2e green, AI
+- [x] N provisioning state: server map + `deriveState` + handler test + API doc + Sidebar chip via `projectBadge` — verify: `go test ./internal/httpapi`, vitest, AI
+- [x] 29 `projectBadge` extraction + vitest — verify: `npm test`, AI
+- [x] rebuild dist, changes entry, commit, push — AI
 ### Phase 3 — Deploy and scripts
 - [ ] A bump the 8 ingress deps; ingress tests; caddy image build proves the versions — verify: `verify-commit.sh` divergence list empty, AI
 - [ ] K1 timer flag; K2 and K3 already closed — strike with the note; K4 temp outside the workspace; K5 tool label + parser case; K6 trap — verify: `bash -n`, `go test ./internal/httpapi` (check/format tests), AI
@@ -340,8 +340,8 @@ user).
 - [ ] M(f) ordering decided by measurement; unit change or `OnBootSec`; ADR-067 amendment — verify: firewall tests (`deploy/firewall/*_test*`) + `systemctl show` after the operator's install, both
 - [ ] changes entry, commit, push — AI
 ### Phase 4 — Terminal re-authorization
-- [ ] I ticker + 4003 + frontend handling + bridge test — verify: `go test ./internal/terminal -race`, vitest, e2e green, AI
-- [ ] changes entry, commit, push — AI
+- [x] I ticker + 4003 + frontend handling + bridge test — verify: `go test ./internal/terminal -race`, vitest, e2e green, AI
+- [x] changes entry, commit, push — AI (with Phase 2, one commit: the two share api.ts and server.go)
 ### Phase 5 — The Docker seam
 - [ ] O `dockerAPI` + fake + the listed orchestrator tests (incl. E's) — verify: `go test ./internal/orchestrator -race`, mutation-check the wrong-bridge and symlink cases, AI
 - [ ] BUG-003 residual closed in TODO; changes entry, commit, push — AI
