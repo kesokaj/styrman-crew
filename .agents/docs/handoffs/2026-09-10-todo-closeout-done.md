@@ -65,8 +65,13 @@ recon brief and the three-round cold-read report beside it.
    operator runs it, only the timer's 5 s first tick narrows the boot
    window. Then `sudo bash deploy/host-setup.sh` (address pool; restarts
    Docker, live-restore keeps VMs up). Verify: `is-enabled` → `enabled`.
-2. **Operator, TODO's last item:** delete the GCS backup bucket + service
-   account; shred `/var/lib/styrman/backups/`.
+2. ~~Operator, TODO's last item: the backups clean-up~~ — **verified gone
+   2026-09-10** with the operator's Google Cloud login on this host: no
+   such bucket (404), only the default compute service account, no other
+   project, and `/var/lib/styrman/backups/` absent. TODO.md has no open
+   item. The Google Cloud CLI now lives under `~/google-cloud-sdk` with the
+   operator's user credentials in `~/.config/gcloud` — `gcloud auth revoke`
+   if the host should not keep them.
 3. **Owed (agent):** the credential-broker reachability test from a LAN
    project on the compose deployment (`reviews/2026-09-09-security-adr-067.md`).
 4. **Released** as v1.27.0 (MINOR). A fresh Google sign-in after the bump
@@ -117,7 +122,8 @@ recon brief and the three-round cold-read report beside it.
 
 ## Next Steps
 
-1. Operator: `install.sh` (enables the boot unit), `host-setup.sh`, a fresh
-   sign-in, the backups clean-up.
+1. Operator: `install.sh` (enables the boot unit), `host-setup.sh`; the
+   app sign-in after v1.27.0 (done per the operator; key row and
+   provisioning chip to eyeball).
 2. Agent: the broker-reachability test on the compose deployment; the
    updater's unconditional enable ships with the next tag.

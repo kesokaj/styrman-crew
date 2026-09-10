@@ -297,7 +297,7 @@ Add new items below as they arise.
   revocation outweigh it for a repo-scoped read-only credential) — listed
   here so the trade isn't only visible inside the ADR. (security review
   2026-09-01, `.agents/docs/reviews/2026-09-01-security-no-backups.md`) **STRUCK 2026-09-10** — recorded in ADR-056; a TODO line adds nothing.
-- [ ] 🟡 Operator actions from the no-backups/token-auth change: (1) mint
+- [x] 🟡 Operator actions from the no-backups/token-auth change: (1) mint
   the fine-grained GitHub token (this repo only, Contents: Read-only) and
   install it at `/etc/styrman/gh-token` (root:root, `600`) — **DONE
   2026-09-01**, and the first real timer-driven auto-deploy has since run
@@ -309,7 +309,7 @@ Add new items below as they arise.
   archive containing at least one project's home (ssh keys, gcloud ADC,
   claude/agy tokens) with no code path left to list or delete it; no agent
   touches `/var/lib/styrman` (ADR-052).
-  (`.agents/docs/changes/2026-09-01-remove-backups-and-token-auth.md`)
+  (`.agents/docs/changes/2026-09-01-remove-backups-and-token-auth.md`) **DONE 2026-09-10** — verified with the operator's own Google Cloud login on this host (Google Cloud CLI installed under `~/google-cloud-sdk`): project `driven-eft-h4it` has no bucket `styrman-crew-backups-driven-eft-h4it` (404), the only service account is the default compute one, no other project exists under the account, and `/var/lib/styrman/backups/` does not exist on the host. Nothing was left to delete or shred.
 
 - [x] `cloneURLRe` (`internal/httpapi/server.go`) credential-bearing URLs handling. **DONE
   2026-09-02** — **OPTION 1 CHOSEN: reject at the boundary**. Clone URLs with embedded credentials
