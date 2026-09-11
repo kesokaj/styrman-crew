@@ -686,6 +686,22 @@ cmd_edit() {
 compose_dir() { # the dir whose compose file and .env the stack was brought up from
     if [ -f "${CLONE_ENV}" ]; then printf '%s' "${DEPLOY_DIR}"; else printf '%s' "${REPO}"; fi
 }
+# drop_chain iptables|ip6tables PARENT CHAIN: delete every jump from PARENT
+# into CHAIN exactly as it is installed (`-S` lists it with its `-i sdb-+`
+# match — a hand-written `-D PARENT -j CHAIN` never matches, review
+# finding), then flush and delete the chain; every step best-effort, since a
+# chain may already be gone.
+drop_chain() {
+    local ipt="$1" parent="$2" chain="$3" rule
+    have "${ipt}" || return 0
+    while IFS= read -r rule; do
+        [ -n "${rule}" ] || continue
+        # shellcheck disable=SC2086  # the rule's own words are the arguments
+        run "${ipt}" -D "${parent}" ${rule} || true
+    done < <("${ipt}" -S "${parent}" 2>/dev/null | grep -E -- "-j ${chain}\$" | sed -E "s/^-A ${parent} //" || true)
+    run "${ipt}" -F "${chain}" || true
+    run "${ipt}" -X "${chain}" || true
+}
 # rm_tree PATH: every recursive delete goes through guard_path first.
 rm_tree() {
     local p="$1"
@@ -713,14 +729,10 @@ uninstall_level() { # uninstall_level N — executes (or, under DRY=1, prints) t
     [ "${level}" -ge 2 ] || return 0
     # 2. host config: firewall chains (v4 and v6), unit files, binaries, the
     #    KSM tmpfiles entry, /etc/styrman, the deploy clone, the images, .env
-    if have iptables; then
-        run iptables -D DOCKER-USER -j STYRMAN-FWD; run iptables -F STYRMAN-FWD; run iptables -X STYRMAN-FWD
-        run iptables -D INPUT -j STYRMAN-IN; run iptables -F STYRMAN-IN; run iptables -X STYRMAN-IN
-    fi
-    if have ip6tables; then
-        run ip6tables -D FORWARD -j STYRMAN-FWD6; run ip6tables -F STYRMAN-FWD6; run ip6tables -X STYRMAN-FWD6
-        run ip6tables -D INPUT -j STYRMAN-IN6; run ip6tables -F STYRMAN-IN6; run ip6tables -X STYRMAN-IN6
-    fi
+    drop_chain iptables DOCKER-USER STYRMAN-FWD
+    drop_chain iptables INPUT STYRMAN-IN
+    drop_chain ip6tables FORWARD STYRMAN-FWD6
+    drop_chain ip6tables INPUT STYRMAN-IN6
     for u in "${UNITS[@]}"; do [ -f "${UNIT_DIR}/${u}" ] && run rm -f -- "${UNIT_DIR}/${u}"; done
     run systemctl daemon-reload
     [ -e "${BIN_DIR}/styrman-update" ] && run rm -f -- "${BIN_DIR}/styrman-update"
@@ -732,7 +744,7 @@ uninstall_level() { # uninstall_level N — executes (or, under DRY=1, prints) t
     [ -f "${ENV_FILE}" ] && run mv -- "${ENV_FILE}" "${ENV_FILE}.removed-$(date +%Y%m%d-%H%M%S)"
     [ "${level}" -ge 3 ] || return 0
     # 3. every project home, workspace, user store, credential store, transcript
-    du -sh "${STATE_DIR}" 2>/dev/null || true
+    run du -sh "${STATE_DIR}" || true
     rm_tree "${STATE_DIR}"
 }
 cmd_uninstall() {

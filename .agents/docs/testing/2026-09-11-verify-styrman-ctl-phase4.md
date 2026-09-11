@@ -46,3 +46,8 @@ After these: shellcheck clean; 13 tests green; the real `update --setup --dry-ru
 - Accepted: `is_email_list` does not normalize (the server's userstore does); argv flag placement is bash's usual.
 
 After these: shellcheck clean; 15 tests green; the real `status` and `update --setup --dry-run` on this host unchanged in behaviour.
+
+## Reviewer, Phase 4 (`reviews/2026-09-11-review-styrman-ctl-phase4.md`, REQUEST CHANGES) — dispositions
+
+- HIGH (the chain-jump deletes named `-D PARENT -j CHAIN`, but the firewall script installs the jumps with `-i sdb-+`, so `-D` could never match and, without `|| true`, would abort levels 2/3 mid-teardown — after the level-3 word, leaving the state tree untouched): FIXED — `drop_chain` lists the parent chain's jumps with `-S`, deletes each exactly as listed, then flushes and deletes the chain, every step best-effort; the fakes now list the jumps the real way and the tests assert the exact `-D DOCKER-USER -i sdb-+ -j STYRMAN-FWD` (and IPv6) lines; the real level-2 dry-run on this host now shows those exact lines.
+- LOW (`du -sh` ran for real during the plan preview): FIXED — wrapped in `run`; the plan lists it, the dry-run "nothing executed" test now checks it too.

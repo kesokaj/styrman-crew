@@ -651,7 +651,14 @@ esac`
 		t.Fatal(err)
 	}
 	e.env = append(e.env, "STYRMAN_ENV_FILE="+envFile)
-	if err := os.WriteFile(filepath.Join(e.bin, "ip6tables"), []byte("#!/usr/bin/env bash\necho \"ip6tables $*\" >> \""+e.calls+"\"\n"), 0o755); err != nil {
+	// The fakes list the jumps the way the firewall script installs them
+	// (`-i sdb-+`), so the plan must delete exactly those.
+	ipt := "#!/usr/bin/env bash\necho \"iptables $*\" >> \"" + e.calls + "\"\ncase \"$1 $2\" in \"-S DOCKER-USER\") echo '-A DOCKER-USER -i sdb-+ -j STYRMAN-FWD' ;; \"-S INPUT\") echo '-A INPUT -i sdb-+ -j STYRMAN-IN' ;; \"-S STYRMAN-FWD\") printf -- '-N STYRMAN-FWD\\n-A STYRMAN-FWD -j DROP\\n-A STYRMAN-FWD -j DROP\\n' ;; \"-S STYRMAN-IN\") printf -- '-N STYRMAN-IN\\n-A STYRMAN-IN -j DROP\\n' ;; esac\n"
+	if err := os.WriteFile(filepath.Join(e.bin, "iptables"), []byte(ipt), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ip6 := "#!/usr/bin/env bash\necho \"ip6tables $*\" >> \"" + e.calls + "\"\ncase \"$1 $2\" in \"-S FORWARD\") echo '-A FORWARD -i sdb-+ -j STYRMAN-FWD6' ;; \"-S INPUT\") echo '-A INPUT -i sdb-+ -j STYRMAN-IN6' ;; esac\n"
+	if err := os.WriteFile(filepath.Join(e.bin, "ip6tables"), []byte(ip6), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return e
@@ -690,7 +697,8 @@ func TestStyrmanCtlUninstallPlans(t *testing.T) {
 	}
 	l2 := planLines(strings.ReplaceAll(out, "\n  + ", "\n+ "))
 	for _, w := range []string{
-		"iptables -D DOCKER-USER -j STYRMAN-FWD", "iptables -X STYRMAN-IN", "ip6tables -X STYRMAN-FWD6", "ip6tables -D INPUT -j STYRMAN-IN6",
+		"iptables -D DOCKER-USER -i sdb-+ -j STYRMAN-FWD", "iptables -D INPUT -i sdb-+ -j STYRMAN-IN", "iptables -F STYRMAN-FWD", "iptables -X STYRMAN-IN",
+		"ip6tables -D FORWARD -i sdb-+ -j STYRMAN-FWD6", "ip6tables -D INPUT -i sdb-+ -j STYRMAN-IN6", "ip6tables -X STYRMAN-FWD6",
 		"rm -f -- " + filepath.Join(root, "units", "styrman-firewall.timer"), "systemctl daemon-reload",
 		"rm -f -- " + filepath.Join(root, "bin", "styrman-update"), "rm -f -- " + filepath.Join(root, "sbin", "styrman-firewall.sh"),
 		"rm -f -- " + filepath.Join(root, "tmpfiles", "styrman-ksm.conf"),
@@ -713,7 +721,7 @@ func TestStyrmanCtlUninstallPlans(t *testing.T) {
 		t.Fatalf("level 3: %d\n%s", code, out)
 	}
 	l3 := planLines(strings.ReplaceAll(out, "\n  + ", "\n+ "))
-	if indexOf(l3, "rm -rf -- "+filepath.Join(root, "state")) < 0 || !strings.Contains(out, "the word to type for level 3 is: testhost") {
+	if indexOf(l3, "du -sh "+filepath.Join(root, "state")) < 0 || indexOf(l3, "rm -rf -- "+filepath.Join(root, "state")) < 0 || !strings.Contains(out, "the word to type for level 3 is: testhost") {
 		t.Fatalf("level 3:\n%s", out)
 	}
 	for _, l := range l3 {
@@ -723,7 +731,7 @@ func TestStyrmanCtlUninstallPlans(t *testing.T) {
 	}
 	// Nothing executed by any dry run: the fakes saw only reads.
 	calls, _ := os.ReadFile(e.calls)
-	for _, bad := range []string{"docker rm", "network rm", "image rm", "compose", "ip6tables -X", "docker compose"} {
+	for _, bad := range []string{"docker rm", "network rm", "image rm", "compose", "ip6tables -X", "docker compose", "iptables -D", "du "} {
 		if strings.Contains(string(calls), bad) {
 			t.Fatalf("dry run executed %q:\n%s", bad, calls)
 		}
