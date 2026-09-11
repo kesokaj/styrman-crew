@@ -76,7 +76,7 @@ ask() {
         printf -v "${_var}" '%s' "${_default}"
         return 0
     fi
-    local _shown="${_default}"
+    local _shown; _shown="$(printable "${_default}")"
     [ -n "${_secret}" ] && [ -n "${_default}" ] && _shown="********"
     if [ -n "${_secret}" ]; then
         read -rs -p "${_prompt}${_shown:+ [${_shown}]}: " _v < /dev/tty; echo
@@ -175,6 +175,9 @@ is_loopback_addr() {
 validate() {
     local key="$1" v="$2" ok=1
     case " ${COMPUTED_KEYS} " in *" ${key} "*) echo "${key} is computed by host-setup.sh — re-run install" >&2; return 1 ;; esac
+    # No control byte in any value: it would paint the terminal of whoever
+    # reads the value back (the edit table, the prompt, status).
+    [[ "${v}" =~ [[:cntrl:]] ]] && { echo "${key}: control characters are refused" >&2; return 1; }
     case "${key}" in
         BASE_DOMAIN) is_hostname "${v}" && ok=0 ;;
         STYRMAN_PUBLIC_DOMAIN|STYRMAN_PRIVATE_DOMAIN) { [ -z "${v}" ] || is_hostname "${v}"; } && ok=0 ;;
@@ -294,7 +297,7 @@ cmd_status() {
     fver="$(printable "$(cat "${ETC_DIR}/update/failed-version" 2>/dev/null || true)")"
     # updater + clone
     local clone_sha="" clone_tag="" envs_differ=0
-    if [ -d "${DEPLOY_DIR}/.git" ]; then
+    if [ -d "${DEPLOY_DIR}/.git" ] && [ "$(stat -c %u "${DEPLOY_DIR}" 2>/dev/null)" = "$(id -u)" ]; then
         clone_sha="$(printable "$(git -C "${DEPLOY_DIR}" rev-parse --short HEAD 2>/dev/null || true)")"
         clone_tag="$(printable "$(git -C "${DEPLOY_DIR}" describe --tags --exact-match 2>/dev/null || true)")"
         if [ -f "${CLONE_ENV}" ] && [ -f "${ENV_FILE}" ] && ! cmp -s "${CLONE_ENV}" "${ENV_FILE}"; then envs_differ=1; fi
@@ -399,8 +402,11 @@ resolve_version() {
 to_https() { printf '%s' "$1" | sed -E 's#^git@([^:]+):#https://\1/#; s#^ssh://git@([^/]+)/#https://\1/#'; }
 https_origin() {
     local o
-    # Root reading the operator's checkout: name it safe explicitly (git
-    # refuses a differently-owned tree otherwise), as the updater does.
+    # Root reading the operator's checkout: name it safe explicitly for this
+    # one invocation (git refuses a differently-owned tree otherwise). This
+    # waives git's ownership check for ${REPO} only — a tree this script
+    # already trusts completely, since it runs host-setup.sh and compose
+    # from it as root; the waiver adds no trust it did not have.
     o="$(git -c safe.directory="${REPO}" -C "${REPO}" remote get-url origin 2>/dev/null || true)"
     [ -n "${o}" ] || die "this checkout has no git remote 'origin' — the deploy clone needs one"
     o="$(to_https "${o}")"
@@ -430,7 +436,7 @@ cmd_install() {
     [ -f /etc/debian_version ] || [ "${DRY}" = 1 ] || die "not a Debian host (R11: Debian 13)"
     [ -n "${OPERATOR}" ] || die "pass --user <operator account> (no SUDO_USER)"
     local t; for t in python3 curl git; do command -v "${t}" >/dev/null 2>&1 || die "${t} is required (apt-get install -y ${t})"; done
-    [ -z "${env_file}" ] || [ -f "${env_file}" ] || die "--env-file ${env_file}: no such file"
+    [ -z "${env_file}" ] || private_file "${env_file}"   # it carries the OAuth secret and the Cloudflare token
     version="$(resolve_version "${version}")"
 
     log "install: host-setup.sh as root for operator ${OPERATOR}"
@@ -476,10 +482,19 @@ cmd_install() {
 # right when ETC_DIR is /etc/styrman (review finding, Phase 2).
 UPDATER_ENV=("STYRMAN_UPDATE_STATE_DIR=${ETC_DIR}/update" "STYRMAN_DEPLOY_DIR=${DEPLOY_DIR}" "STYRMAN_GH_TOKEN_FILE=${ETC_DIR}/gh-token" "STYRMAN_ALLOWED_SIGNERS=${ETC_DIR}/allowed_signers")
 is_signers_line() { [[ "$1" =~ ^[^[:space:]]+\ (ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)\ [A-Za-z0-9+/=]+(\ [^[:space:]]+)?$ ]]; }
-# private_file PATH: a secret handed in by path must be nobody else's to read.
+# private_file PATH: a secret handed in by path must be nobody else's to
+# read or replace — owned by root or the invoking operator, mode 600-ish,
+# its parent not group/world-writable, not a symlink (security review).
 private_file() {
-    local mode; mode="$(stat -c %a "$1" 2>/dev/null || echo 777)"
-    [ "$(( 8#${mode} & 8#077 ))" = 0 ] || die "$1 is readable by group or others (mode ${mode}); chmod 600 it first"
+    local f="$1" mode owner pmode
+    [ -L "${f}" ] && die "${f}: a symlink is refused"
+    [ -f "${f}" ] || die "${f}: no such file"
+    owner="$(stat -c %U "${f}" 2>/dev/null || echo ?)"
+    [ "${owner}" = root ] || [ "${owner}" = "${SUDO_USER:-}" ] || [ "${owner}" = "$(id -un)" ] || die "${f} is owned by ${owner}, not root or ${SUDO_USER:-you}"
+    mode="$(stat -c %a "${f}" 2>/dev/null || echo 777)"
+    [ "$(( 8#${mode} & 8#077 ))" = 0 ] || die "${f} is readable by group or others (mode ${mode}); chmod 600 it first"
+    pmode="$(stat -c %a "$(dirname -- "${f}")" 2>/dev/null || echo 777)"
+    [ "$(( 8#${pmode} & 8#022 ))" = 0 ] || die "$(dirname -- "${f}") is writable by group or others (mode ${pmode}); a secret file must not sit in a shared directory"
 }
 
 # setup_auto_update [TOKEN_FILE] [SIGNERS_FILE]
@@ -487,8 +502,6 @@ setup_auto_update() {
     local token_file="${1:-}" signers_file="${2:-}" token="" signers="" origin tmpd
     [ -x "${BIN_DIR}/styrman-update" ] || [ "${DRY}" = 1 ] || die "${BIN_DIR}/styrman-update is not installed — run install first"
     if [ -n "${token_file}" ]; then
-        [ -f "${token_file}" ] || die "--gh-token-file ${token_file}: no such file"
-        [ -L "${token_file}" ] && die "--gh-token-file ${token_file}: a symlink is refused"
         private_file "${token_file}"
         token="$(tr -d '\n' < "${token_file}")"
     else
@@ -496,15 +509,20 @@ setup_auto_update() {
     fi
     [ -n "${token}" ] || die "empty GitHub token"
     if [ -n "${signers_file}" ]; then
-        [ -f "${signers_file}" ] || die "--allowed-signers-file ${signers_file}: no such file"
-        [ -L "${signers_file}" ] && die "--allowed-signers-file ${signers_file}: a symlink is refused (this file becomes the updater's release-trust root)"
-        # grep -c '' counts a last line without a trailing newline; wc -l does not.
-        [ "$(grep -c '' "${signers_file}")" -le 1 ] || die "--allowed-signers-file ${signers_file}: one line expected (one signer); more would be silently dropped"
-        signers="$(head -1 "${signers_file}")"
+        private_file "${signers_file}"
+        # Read ONCE (no second open to race), then count and take the line.
+        local blob; blob="$(cat "${signers_file}")"
+        [ "$(printf '%s\n' "${blob}" | grep -c '')" -le 1 ] || die "--allowed-signers-file ${signers_file}: one line expected (one signer); more would be silently dropped"
+        signers="${blob%%$'\n'*}"
     else
         ask signers "allowed_signers line: <your-git-email> <key type> <public key> (from ~/.ssh/id_ed25519.pub)" ""
     fi
     is_signers_line "${signers}" || die "not an allowed_signers line: expected '<email> <ssh key type> <base64 key>'"
+    # Show the operator the fingerprint of the key that is about to become
+    # the updater's release-trust root.
+    if have ssh-keygen; then
+        log "auto-update: trusting signer $(printf '%s' "${signers}" | cut -d' ' -f1): $(printf '%s\n' "${signers}" | cut -d' ' -f2- | ssh-keygen -lf - 2>/dev/null || echo '(fingerprint unavailable)')"
+    fi
     origin="$(https_origin)"
 
     if [ "${DRY}" = 1 ]; then
@@ -530,6 +548,9 @@ setup_auto_update() {
     run install -d -m 700 -o root -g root "${ETC_DIR}"
     run install -m 600 -o root -g root "${tmpd}/gh-token" "${ETC_DIR}/gh-token"
     if [ -d "${DEPLOY_DIR}/.git" ]; then
+        # Root reads and fetches the clone: it must be root's (host-setup.sh
+        # 8c's chown), never a tree another account can edit (security review).
+        [ "$(stat -c %u "${DEPLOY_DIR}" 2>/dev/null)" = "$(id -u)" ] || die "${DEPLOY_DIR} is not owned by the user running this (root in production) — refusing to run git there (chown -R root:root it, or remove it)"
         # The token is offered only to the origin we expect: a clone that
         # points elsewhere is not ours to update (review finding).
         local have_origin
@@ -694,39 +715,59 @@ compose_dir() { # the dir whose compose file and .env the stack was brought up f
 # match — a hand-written `-D PARENT -j CHAIN` never matches, review
 # finding), then flush and delete the chain; every step best-effort, since a
 # chain may already be gone.
+TEARDOWN_FAILED=0
 drop_chain() {
     local ipt="$1" parent="$2" chain="$3" rule
     have "${ipt}" || return 0
+    # -w 5: wait for dockerd's xtables lock instead of failing (the firewall
+    # script does the same); the jumps are re-listed after the deletes and
+    # a chain that is STILL referenced is never flushed — an empty referenced
+    # STYRMAN-FWD would silently drop sandbox isolation (security review).
     while IFS= read -r rule; do
         [ -n "${rule}" ] || continue
         # shellcheck disable=SC2086  # the rule's own words are the arguments
-        run "${ipt}" -D "${parent}" ${rule} || true
-    done < <("${ipt}" -S "${parent}" 2>/dev/null | grep -E -- "-j ${chain}\$" | sed -E "s/^-A ${parent} //" || true)
-    run "${ipt}" -F "${chain}" || true
-    run "${ipt}" -X "${chain}" || true
+        run "${ipt}" -w 5 -D "${parent}" ${rule} || { TEARDOWN_FAILED=$((TEARDOWN_FAILED + 1)); warn "${ipt} -D ${parent} ${rule} failed"; }
+    done < <("${ipt}" -w 5 -S "${parent}" 2>/dev/null | grep -E -- "-j ${chain}\$" | sed -E "s/^-A ${parent} //" || true)
+    if [ "${DRY}" != 1 ] && "${ipt}" -w 5 -S "${parent}" 2>/dev/null | grep -qE -- "-j ${chain}\$"; then
+        TEARDOWN_FAILED=$((TEARDOWN_FAILED + 1))
+        warn "${parent} still jumps into ${chain}; leaving the chain in place (not flushing a referenced chain)"
+        return 0
+    fi
+    run "${ipt}" -w 5 -F "${chain}" || { TEARDOWN_FAILED=$((TEARDOWN_FAILED + 1)); warn "${ipt} -F ${chain} failed"; }
+    run "${ipt}" -w 5 -X "${chain}" || { TEARDOWN_FAILED=$((TEARDOWN_FAILED + 1)); warn "${ipt} -X ${chain} failed"; }
 }
 # looks_like_ours PATH: a tree is deleted only if it carries styrman's own
 # structure — STYRMAN_STATE_DIR and STYRMAN_DEPLOY_DIR are documented knobs
 # an operator (or `sudo -E`) can point anywhere, and `guard_path` alone
 # would then bless `rm -rf /var/lib` (security review). Well-known system
 # roots are refused outright whatever they contain.
+# real_dir PATH: an existing directory that is not a symlink (markers are
+# checked this way too — a planted `projects → /` must not count).
+real_dir()  { [ -d "$1" ] && [ ! -L "$1" ]; }
+real_file() { [ -f "$1" ] && [ ! -L "$1" ]; }
 looks_like_ours() {
     local p="$1"
+    # The tree must be NAMED styrman (/var/lib/styrman, /opt/styrman,
+    # /etc/styrman): a knob pointed at ~/projects' parent or at the
+    # operator's own checkout is refused by name before any marker is
+    # looked at (security review, final round).
+    [ "$(basename -- "${p}")" = styrman ] || { echo "refusing ${p}: a styrman tree is a directory named styrman" >&2; return 1; }
+    # Never under a home, a user's root, or the system prefixes.
     case "${p}" in
-        /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var|/var/lib|/var/log|/var/tmp|/usr/local)
-            echo "refusing ${p}: a system directory" >&2; return 1 ;;
+        /home/*|/root/*|/usr/*|/boot/*|/bin/*|/sbin/*|/lib/*|/lib64/*|/proc/*|/sys/*|/dev/*|/run/*|/var/lib/docker*|/var/log/*|/var/tmp/*|/media/*|/mnt/*|/srv/*)
+            echo "refusing ${p}: under a home or system prefix" >&2; return 1 ;;
     esac
-    # An EMPTY state or etc dir is deletable too: host-setup.sh creates
-    # /etc/styrman empty until auto-update is set up (review finding), and
-    # an empty tree holds nothing foreign to protect. A deploy clone must
-    # look like one.
-    local empty=0; [ -z "$(ls -A "${p}" 2>/dev/null)" ] && empty=1
+    [ -r "${p}" ] || { echo "refusing ${p}: not readable, cannot tell what it holds" >&2; return 1; }
+    # An EMPTY state or etc dir is deletable (host-setup.sh creates
+    # /etc/styrman empty until auto-update is set up; nothing inside to
+    # protect). A deploy clone must look like one.
+    local empty=0; [ -z "$(ls -A "${p}")" ] && empty=1
     if [ "${p}" = "${STATE_DIR}" ]; then
-        [ "${empty}" = 1 ] || [ -d "${p}/homes" ] || [ -d "${p}/projects" ] || [ -d "${p}/users" ] || { echo "refusing ${p}: no homes/, projects/ or users/ inside — not a styrman state tree" >&2; return 1; }
+        [ "${empty}" = 1 ] || real_dir "${p}/homes" || real_dir "${p}/projects" || real_dir "${p}/users" || { echo "refusing ${p}: no homes/, projects/ or users/ inside — not a styrman state tree" >&2; return 1; }
     elif [ "${p}" = "${DEPLOY_DIR}" ]; then
-        if ! { [ -d "${p}/.git" ] && [ -f "${p}/deploy/docker-compose.yml" ]; }; then echo "refusing ${p}: not a styrman deploy clone (no .git + deploy/docker-compose.yml)" >&2; return 1; fi
+        if ! { real_dir "${p}/.git" && real_file "${p}/deploy/docker-compose.yml"; }; then echo "refusing ${p}: not a styrman deploy clone (no .git + deploy/docker-compose.yml)" >&2; return 1; fi
     elif [ "${p}" = "${ETC_DIR}" ]; then
-        [ "${empty}" = 1 ] || [ -d "${p}/update" ] || [ -f "${p}/allowed_signers" ] || [ -f "${p}/gh-token" ] || { echo "refusing ${p}: no update/, allowed_signers or gh-token inside — not styrman's etc dir" >&2; return 1; }
+        [ "${empty}" = 1 ] || real_dir "${p}/update" || real_file "${p}/allowed_signers" || real_file "${p}/gh-token" || { echo "refusing ${p}: no update/, allowed_signers or gh-token inside — not styrman's etc dir" >&2; return 1; }
     fi
     return 0
 }
@@ -736,7 +777,11 @@ rm_tree() {
     local p="$1"
     [ -e "${p}" ] || [ -L "${p}" ] || { log "uninstall: ${p} already absent"; return 0; }
     guard_path "${p}" || die "refusing to delete ${p}"
-    looks_like_ours "${p}" || die "refusing to delete ${p}"
+    # A tree that does not carry styrman's markers is SKIPPED with a warning
+    # — the rest of the teardown proceeds (an interrupted clone or a stray
+    # file must not leave secrets on a host being decommissioned; security
+    # review, final round). The plan shows the skip before the word is asked.
+    looks_like_ours "${p}" || { TEARDOWN_FAILED=$((TEARDOWN_FAILED + 1)); warn "SKIPPING ${p}: not deleted (see the reason above) — remove it by hand if you mean to"; return 0; }
     run rm -rf -- "${p}"
 }
 uninstall_level() { # uninstall_level N — executes (or, under DRY=1, prints) that level's plan
@@ -812,6 +857,9 @@ cmd_uninstall() {
     # shellcheck disable=SC2031
     [ "${DRY}" = 1 ] && { log "uninstall: dry run — confirmation accepted, nothing executed"; return 0; }
     uninstall_level "${level}"
+    if [ "${TEARDOWN_FAILED}" != 0 ]; then
+        die "uninstall --level ${level}: finished with ${TEARDOWN_FAILED} step(s) failed or skipped (see the WARNING lines above)"
+    fi
     log "uninstall --level ${level}: done"
 }
 
@@ -820,6 +868,14 @@ cmd_uninstall() {
 # when the test harness says so (security review).
 cmd_internal() {
     [ "${STYRMAN_CTL_TEST:-}" = 1 ] || die "internal test hooks are disabled (set STYRMAN_CTL_TEST=1 only under the Go test)"
+    # And only on paths under the temp root: the harness works in t.TempDir()
+    # (under TMPDIR), so a hook can never touch a real file (security review).
+    local _arg
+    for _arg in "${@:2}"; do
+        case "${_arg}" in
+            /*) case "$(realpath -m -- "${_arg}")/" in "$(realpath -m -- "${TMPDIR:-/tmp}")/"*) ;; *) die "internal hooks accept only paths under ${TMPDIR:-/tmp}" ;; esac ;;
+        esac
+    done
     case "${1:-}" in
         __validate)  validate "$2" "$3" ;;
         __env-set)   env_set "$2" "$3" "$4" ;;

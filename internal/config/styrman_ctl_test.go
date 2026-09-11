@@ -26,10 +26,15 @@ func ctlSetup(t *testing.T, healthy bool) ctlEnv {
 	root := t.TempDir()
 	bin := filepath.Join(root, "fakebin")
 	calls := filepath.Join(root, "calls.log")
-	for _, d := range []string{"fakebin", "state/projects/u/p1", "state/projects/u/p2", "etc/update", "units", "deploy/deploy", "deploy/.git", "kata/bin"} {
+	for _, d := range []string{"fakebin", "var/lib/styrman/projects/u/p1", "var/lib/styrman/projects/u/p2", "etc/styrman/update", "units", "opt/styrman/deploy", "opt/styrman/.git", "kata/bin"} {
 		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// Secret files handed in by path must sit in a private directory
+	// (t.TempDir() itself is group-writable): the tests keep them here.
+	if err := os.MkdirAll(filepath.Join(root, "secrets"), 0o700); err != nil {
+		t.Fatal(err)
 	}
 	fake := func(name, body string) {
 		script := "#!/usr/bin/env bash\necho \"" + name + " $*\" >> \"" + calls + "\"\n" + body + "\n"
@@ -53,7 +58,8 @@ func ctlSetup(t *testing.T, healthy bool) ctlEnv {
   "version --format") echo 29.7.2 ;;
 esac`)
 	fake("systemctl", `case "$1" in is-enabled) echo enabled ;; is-active) [ "$2" = styrman-update.service ] && echo inactive || echo active ;; esac`)
-	fake("iptables", `case "$2" in STYRMAN-FWD) printf -- '-N STYRMAN-FWD\n-A STYRMAN-FWD -j DROP\n-A STYRMAN-FWD -j DROP\n' ;; STYRMAN-IN) printf -- '-N STYRMAN-IN\n-A STYRMAN-IN -j DROP\n' ;; esac`)
+	fake("iptables", `[ "$1" = -w ] && shift 2
+case "$2" in STYRMAN-FWD) printf -- '-N STYRMAN-FWD\n-A STYRMAN-FWD -j DROP\n-A STYRMAN-FWD -j DROP\n' ;; STYRMAN-IN) printf -- '-N STYRMAN-IN\n-A STYRMAN-IN -j DROP\n' ;; esac`)
 	fake("git", `case "$*" in *rev-parse*) echo 4686792 ;; *) echo v1.27.1 ;; esac`)
 	fake("du", `printf '41G\tx\n'`)
 	fake("hostname", `echo testhost`)
@@ -66,21 +72,21 @@ esac`)
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(root, "etc/update/deployed-version"), []byte("1.27.1\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "etc/styrman/update/deployed-version"), []byte("1.27.1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "etc/update/deployed-sha"), []byte("4686792\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "etc/styrman/update/deployed-sha"), []byte("4686792\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "deploy/deploy/.env"), []byte("BASE_DOMAIN=example.test\nSTYRMAN_HOSTNAME=crew\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "opt/styrman/deploy/.env"), []byte("BASE_DOMAIN=example.test\nSTYRMAN_HOSTNAME=crew\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := append(os.Environ(),
 		"STYRMAN_CTL_TEST=1",
 		"PATH="+bin+":"+os.Getenv("PATH"),
-		"STYRMAN_STATE_DIR="+filepath.Join(root, "state"),
-		"STYRMAN_DEPLOY_DIR="+filepath.Join(root, "deploy"),
-		"STYRMAN_ETC_DIR="+filepath.Join(root, "etc"),
+		"STYRMAN_STATE_DIR="+filepath.Join(root, "var", "lib", "styrman"),
+		"STYRMAN_DEPLOY_DIR="+filepath.Join(root, "opt", "styrman"),
+		"STYRMAN_ETC_DIR="+filepath.Join(root, "etc", "styrman"),
 		"STYRMAN_UNIT_DIR="+filepath.Join(root, "units"),
 		"STYRMAN_BIN_DIR="+filepath.Join(root, "bin"),
 		"STYRMAN_SBIN_DIR="+filepath.Join(root, "sbin"),
@@ -101,7 +107,9 @@ func ctl(t *testing.T, e ctlEnv, args ...string) (string, int) {
 	} else if err != nil {
 		t.Fatalf("%v: %v\n%s", args, err, out)
 	}
-	for _, bad := range []string{"/var/lib/styrman", "/etc/styrman", "/opt/styrman"} {
+	// The scratch trees are named like production (…/var/lib/styrman), so
+	// look for the PRODUCTION roots as whole words, never as a suffix.
+	for _, bad := range []string{" /var/lib/styrman", " /etc/styrman", " /opt/styrman", "\"/var/lib/styrman", "\"/etc/styrman", "\"/opt/styrman", "=/var/lib/styrman", "=/etc/styrman", "=/opt/styrman"} {
 		if strings.Contains(string(out), bad) {
 			t.Fatalf("%v printed a production path %q — the scratch prefix leaked:\n%s", args, bad, out)
 		}
@@ -162,7 +170,7 @@ func TestStyrmanCtlStatusJSON(t *testing.T) {
 	if out, code := ctl(t, e2, "status", "--json", "--dry-run"); code != 1 || !strings.Contains(out, `"exit":1`) {
 		t.Fatalf("degraded status: %d %s", code, out)
 	}
-	if err := os.WriteFile(filepath.Join(e.root, "etc/update/failed-version"), []byte("1.28.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(e.root, "etc/styrman/update/failed-version"), []byte("1.28.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if out, code := ctl(t, e, "status", "--dry-run"); code != 1 || !strings.Contains(out, "FAILED-VERSION LATCHED: 1.28.0") || !strings.Contains(out, "DEGRADED") {
@@ -296,7 +304,7 @@ func TestStyrmanCtlEnvSet(t *testing.T) {
 
 func TestStyrmanCtlGuardPath(t *testing.T) {
 	e := ctlSetup(t, true)
-	state := filepath.Join(e.root, "state")
+	state := filepath.Join(e.root, "var", "lib", "styrman")
 	if out, code := ctl(t, e, "__guard-path", state); code != 0 {
 		t.Fatalf("state dir refused: %s", out)
 	}
@@ -311,18 +319,17 @@ func TestStyrmanCtlGuardPath(t *testing.T) {
 	}
 	e3 := ctlSetup(t, true)
 	e3.env = append(e3.env, "STYRMAN_STATE_DIR="+bare)
-	if out, code := ctl(t, e3, "__rm-tree", bare); code == 0 || !strings.Contains(out, "not a styrman state tree") || strings.Contains(out, "rm -rf") {
-		t.Fatalf("bare dir deletable as the state tree: %d %s", code, out)
+	if out, _ := ctl(t, e3, "__rm-tree", bare, "--dry-run"); !strings.Contains(out, "directory named styrman") || !strings.Contains(out, "SKIPPING") || strings.Contains(out, "rm -rf") {
+		t.Fatalf("bare dir deletable as the state tree: %s", out)
 	}
-	e3.env = append(e3.env, "STYRMAN_STATE_DIR=/var/lib")
-	if out, code := ctl(t, e3, "__rm-tree", "/var/lib", "--dry-run"); code == 0 || !strings.Contains(out, "system directory") || strings.Contains(out, "rm -rf") {
-		t.Fatalf("/var/lib deletable: %d %s", code, out)
-	}
+	// The home/system prefix rule keys on the real /home, /usr, … which a
+	// scratch path cannot reproduce and the hooks refuse outside TMPDIR:
+	// exercised by inspection (looks_like_ours), not here.
 	// The real state tree (with homes/ or projects/ inside) is deletable — in dry-run only here.
 	if out, code := ctl(t, e, "__rm-tree", state, "--dry-run"); code != 0 || !strings.Contains(out, "+ rm -rf -- "+state) {
 		t.Fatalf("state tree not deletable: %d %s", code, out)
 	}
-	for _, bad := range []string{"/", "/tmp", filepath.Join(e.root, "state", ".."), filepath.Join(e.root, "elsewhere"), filepath.Join(e.root, "state/projects"), filepath.Join(e.root, "state") + "/", filepath.Join(e.root, "nonexistent")} {
+	for _, bad := range []string{"/", "/tmp", filepath.Join(e.root, "var", "lib", "styrman", ".."), filepath.Join(e.root, "elsewhere"), filepath.Join(e.root, "var/lib/styrman/projects"), filepath.Join(e.root, "var", "lib", "styrman") + "/", filepath.Join(e.root, "nonexistent")} {
 		if out, code := ctl(t, e, "__guard-path", bad); code == 0 {
 			t.Errorf("%s accepted: %s", bad, out)
 		}
@@ -364,7 +371,7 @@ func TestStyrmanCtlInstallPlan(t *testing.T) {
 	if err := os.WriteFile(envFile, []byte("BASE_DOMAIN=\nGOOGLE_CLIENT_ID=\nGOOGLE_CLIENT_SECRET=\nCLOUDFLARE_API_TOKEN=\nADMIN_EMAIL=\nSTYRMAN_ALLOWED_EMAILS=\nSTYRMAN_HOSTNAME=crew\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	answers := filepath.Join(e.root, "answers.env")
+	answers := filepath.Join(e.root, "secrets", "answers.env")
 	if err := os.WriteFile(answers, []byte("BASE_DOMAIN=example.test\nGOOGLE_CLIENT_ID=id.apps\nGOOGLE_CLIENT_SECRET=s3cret\nCLOUDFLARE_API_TOKEN=cf\nADMIN_EMAIL=a@example.test\nSTYRMAN_ALLOWED_EMAILS=a@example.test,b@example.test\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -434,18 +441,18 @@ func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(e.bin, "git"), []byte(gitFake), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	tok := filepath.Join(e.root, "tok")
+	tok := filepath.Join(e.root, "secrets", "tok")
 	if err := os.WriteFile(tok, []byte("ghp_SECRETTOKEN\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// A world-readable token file is refused before anything is planned.
-	if out, code := ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", filepath.Join(e.root, "signers")); code == 0 || !strings.Contains(out, "chmod 600") {
+	if out, code := ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", filepath.Join(e.root, "secrets", "signers")); code == 0 || !strings.Contains(out, "chmod 600") {
 		t.Fatalf("world-readable token accepted: %d %s", code, out)
 	}
 	if err := os.Chmod(tok, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	signers := filepath.Join(e.root, "signers")
+	signers := filepath.Join(e.root, "secrets", "signers")
 	if err := os.WriteFile(signers, []byte("me@example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -454,7 +461,7 @@ func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Fresh setup: no clone yet.
-	if err := os.RemoveAll(filepath.Join(e.root, "deploy", ".git")); err != nil {
+	if err := os.RemoveAll(filepath.Join(e.root, "opt", "styrman", ".git")); err != nil {
 		t.Fatal(err)
 	}
 	e.env = append(e.env, "STYRMAN_ENV_FILE="+envFile)
@@ -467,13 +474,13 @@ func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
 	}
 	lines := planLines(out)
 	want := []string{
-		"install -d -m 700 -o root -g root " + filepath.Join(e.root, "etc"),
+		"install -d -m 700 -o root -g root " + filepath.Join(e.root, "etc", "styrman"),
 		"install -m 600 -o root -g root", // gh-token from the temp file
-		"clone -- https://github.com/owner/repo.git " + filepath.Join(e.root, "deploy"),
-		"chown -R root:root " + filepath.Join(e.root, "deploy"),
-		"install -m 600 -o root -g root " + envFile + " " + filepath.Join(e.root, "deploy", "deploy", ".env"),
+		"clone -- https://github.com/owner/repo.git " + filepath.Join(e.root, "opt", "styrman"),
+		"chown -R root:root " + filepath.Join(e.root, "opt", "styrman"),
+		"install -m 600 -o root -g root " + envFile + " " + filepath.Join(e.root, "opt", "styrman", "deploy", ".env"),
 		"install -m 644 -o root -g root", // allowed_signers from the temp file
-		"STYRMAN_UPDATE_STATE_DIR=" + filepath.Join(e.root, "etc", "update"),
+		"STYRMAN_UPDATE_STATE_DIR=" + filepath.Join(e.root, "etc", "styrman", "update"),
 		"systemctl enable --now styrman-update.timer",
 		"systemctl start styrman-update.service",
 	}
@@ -491,7 +498,7 @@ func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
 	// The updater's every input is named — token and signers files included
 	// (review finding: they default to /etc/styrman inside the updater).
 	check := lines[indexOf(lines, "styrman-update --check")]
-	for _, w := range []string{"STYRMAN_GH_TOKEN_FILE=" + filepath.Join(e.root, "etc", "gh-token"), "STYRMAN_ALLOWED_SIGNERS=" + filepath.Join(e.root, "etc", "allowed_signers"), "STYRMAN_DEPLOY_DIR=" + filepath.Join(e.root, "deploy")} {
+	for _, w := range []string{"STYRMAN_GH_TOKEN_FILE=" + filepath.Join(e.root, "etc", "styrman", "gh-token"), "STYRMAN_ALLOWED_SIGNERS=" + filepath.Join(e.root, "etc", "styrman", "allowed_signers"), "STYRMAN_DEPLOY_DIR=" + filepath.Join(e.root, "opt", "styrman")} {
 		if !strings.Contains(check, w) {
 			t.Fatalf("--check lacks %q: %s", w, check)
 		}
@@ -513,7 +520,7 @@ func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
 	}
 	// An existing clone is fetched, not re-cloned — under the same scoped
 	// helper, and only when its origin is the one we expect.
-	if err := os.MkdirAll(filepath.Join(e.root, "deploy", ".git"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(e.root, "opt", "styrman", ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	out, _ = ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", signers)
@@ -521,7 +528,7 @@ func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
 	if fetch < 0 || strings.Contains(out, "clone --") || !strings.Contains(planLines(out)[fetch], "credential.https://github.com.helper=") {
 		t.Fatalf("existing clone not fetched under the scoped helper:\n%s", out)
 	}
-	other := "#!/usr/bin/env bash\ncase \"$*\" in \"-C " + filepath.Join(e.root, "deploy") + " remote get-url origin\") echo https://github.com/someone/else.git ;; *get-url*) echo git@github.com:owner/repo.git ;; *) echo v1.27.1 ;; esac\n"
+	other := "#!/usr/bin/env bash\ncase \"$*\" in \"-C " + filepath.Join(e.root, "opt", "styrman") + " remote get-url origin\") echo https://github.com/someone/else.git ;; *get-url*) echo git@github.com:owner/repo.git ;; *) echo v1.27.1 ;; esac\n"
 	if err := os.WriteFile(filepath.Join(e.bin, "git"), []byte(other), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +575,7 @@ func TestStyrmanCtlEditPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.env = append(e.env, "STYRMAN_ENV_FILE="+envFile)
-	cloneEnv := filepath.Join(e.root, "deploy", "deploy", ".env")
+	cloneEnv := filepath.Join(e.root, "opt", "styrman", "deploy", ".env")
 	out, code := ctl(t, e, "edit", "--dry-run", "STYRMAN_IDLE_TIMEOUT=9h", "DEFAULT_RPS=20")
 	if code != 0 {
 		t.Fatalf("edit --dry-run: %d\n%s", code, out)
@@ -583,7 +590,7 @@ func TestStyrmanCtlEditPlan(t *testing.T) {
 			t.Fatalf("plan lacks %q:\n%s", w, out)
 		}
 	}
-	up := indexOf(lines, "env STYRMAN_VERSION=1.27.1 docker compose -f "+filepath.Join(e.root, "deploy", "deploy", "docker-compose.yml")+" --env-file "+cloneEnv+" up -d")
+	up := indexOf(lines, "env STYRMAN_VERSION=1.27.1 docker compose -f "+filepath.Join(e.root, "opt", "styrman", "deploy", "docker-compose.yml")+" --env-file "+cloneEnv+" up -d")
 	if up < 0 || strings.Contains(lines[up], "--build") || indexOf(lines, "wait up to 120s") < up {
 		t.Fatalf("recreate line wrong or misplaced:\n%s", out)
 	}
@@ -608,7 +615,7 @@ func TestStyrmanCtlEditPlan(t *testing.T) {
 	}
 	// Neither .env exists: run install first.
 	e2 := ctlSetup(t, true)
-	if err := os.Remove(filepath.Join(e2.root, "deploy", "deploy", ".env")); err != nil {
+	if err := os.Remove(filepath.Join(e2.root, "opt", "styrman", "deploy", ".env")); err != nil {
 		t.Fatal(err)
 	}
 	e2.env = append(e2.env, "STYRMAN_ENV_FILE="+filepath.Join(e2.root, "missing.env"))
@@ -634,7 +641,7 @@ func TestStyrmanCtlUpdatePlan(t *testing.T) {
 	// reproducible under go test; covered by review and the code's own
 	// structure (rc captured, diagnostics unconditional).
 	out, _ = ctl(t, e, "update", "--redeploy", "--dry-run")
-	force := indexOf(planLines(out), "STYRMAN_UPDATE_STATE_DIR="+filepath.Join(e.root, "etc", "update"))
+	force := indexOf(planLines(out), "STYRMAN_UPDATE_STATE_DIR="+filepath.Join(e.root, "etc", "styrman", "update"))
 	if force < 0 || !strings.Contains(planLines(out)[force], "styrman-update --force") || !strings.Contains(planLines(out)[force], "STYRMAN_GH_TOKEN_FILE=") || strings.Contains(out, "systemctl start styrman-update.service") {
 		t.Fatalf("redeploy plan:\n%s", out)
 	}
@@ -667,7 +674,7 @@ esac`
 	if err := os.WriteFile(filepath.Join(e.bin, "docker"), []byte(docker), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"bin/styrman-update", "sbin/styrman-firewall.sh", "tmpfiles/styrman-ksm.conf", "units/styrman-firewall.timer", "units/styrman-update.timer", "deploy/deploy/docker-compose.yml"} {
+	for _, f := range []string{"bin/styrman-update", "sbin/styrman-firewall.sh", "tmpfiles/styrman-ksm.conf", "units/styrman-firewall.timer", "units/styrman-update.timer", "opt/styrman/deploy/docker-compose.yml"} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(e.root, f)), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -682,11 +689,11 @@ esac`
 	e.env = append(e.env, "STYRMAN_ENV_FILE="+envFile)
 	// The fakes list the jumps the way the firewall script installs them
 	// (`-i sdb-+`), so the plan must delete exactly those.
-	ipt := "#!/usr/bin/env bash\necho \"iptables $*\" >> \"" + e.calls + "\"\ncase \"$1 $2\" in \"-S DOCKER-USER\") echo '-A DOCKER-USER -i sdb-+ -j STYRMAN-FWD' ;; \"-S INPUT\") echo '-A INPUT -i sdb-+ -j STYRMAN-IN' ;; \"-S STYRMAN-FWD\") printf -- '-N STYRMAN-FWD\\n-A STYRMAN-FWD -j DROP\\n-A STYRMAN-FWD -j DROP\\n' ;; \"-S STYRMAN-IN\") printf -- '-N STYRMAN-IN\\n-A STYRMAN-IN -j DROP\\n' ;; esac\n"
+	ipt := "#!/usr/bin/env bash\necho \"iptables $*\" >> \"" + e.calls + "\"\n[ \"$1\" = -w ] && shift 2\ncase \"$1 $2\" in \"-S DOCKER-USER\") echo '-A DOCKER-USER -i sdb-+ -j STYRMAN-FWD' ;; \"-S INPUT\") echo '-A INPUT -i sdb-+ -j STYRMAN-IN' ;; \"-S STYRMAN-FWD\") printf -- '-N STYRMAN-FWD\\n-A STYRMAN-FWD -j DROP\\n-A STYRMAN-FWD -j DROP\\n' ;; \"-S STYRMAN-IN\") printf -- '-N STYRMAN-IN\\n-A STYRMAN-IN -j DROP\\n' ;; esac\n"
 	if err := os.WriteFile(filepath.Join(e.bin, "iptables"), []byte(ipt), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ip6 := "#!/usr/bin/env bash\necho \"ip6tables $*\" >> \"" + e.calls + "\"\ncase \"$1 $2\" in \"-S FORWARD\") echo '-A FORWARD -i sdb-+ -j STYRMAN-FWD6' ;; \"-S INPUT\") echo '-A INPUT -i sdb-+ -j STYRMAN-IN6' ;; esac\n"
+	ip6 := "#!/usr/bin/env bash\necho \"ip6tables $*\" >> \"" + e.calls + "\"\n[ \"$1\" = -w ] && shift 2\ncase \"$1 $2\" in \"-S FORWARD\") echo '-A FORWARD -i sdb-+ -j STYRMAN-FWD6' ;; \"-S INPUT\") echo '-A INPUT -i sdb-+ -j STYRMAN-IN6' ;; esac\n"
 	if err := os.WriteFile(filepath.Join(e.bin, "ip6tables"), []byte(ip6), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -703,7 +710,7 @@ func TestStyrmanCtlUninstallPlans(t *testing.T) {
 	}
 	l1 := planLines(strings.ReplaceAll(out, "\n  + ", "\n+ "))
 	for _, w := range []string{
-		"docker compose -f " + filepath.Join(root, "deploy", "deploy", "docker-compose.yml") + " --env-file " + filepath.Join(root, "deploy", "deploy", ".env") + " down --remove-orphans",
+		"docker compose -f " + filepath.Join(root, "opt", "styrman", "deploy", "docker-compose.yml") + " --env-file " + filepath.Join(root, "opt", "styrman", "deploy", ".env") + " down --remove-orphans",
 		"docker rm -f c1 c2", "docker network rm sdb-aaaa", "docker network rm lan-bbbb",
 		"systemctl disable --now styrman-firewall.timer", "systemctl disable --now styrman-update.timer",
 	} {
@@ -726,12 +733,12 @@ func TestStyrmanCtlUninstallPlans(t *testing.T) {
 	}
 	l2 := planLines(strings.ReplaceAll(out, "\n  + ", "\n+ "))
 	for _, w := range []string{
-		"iptables -D DOCKER-USER -i sdb-+ -j STYRMAN-FWD", "iptables -D INPUT -i sdb-+ -j STYRMAN-IN", "iptables -F STYRMAN-FWD", "iptables -X STYRMAN-IN",
-		"ip6tables -D FORWARD -i sdb-+ -j STYRMAN-FWD6", "ip6tables -D INPUT -i sdb-+ -j STYRMAN-IN6", "ip6tables -X STYRMAN-FWD6",
+		"iptables -w 5 -D DOCKER-USER -i sdb-+ -j STYRMAN-FWD", "iptables -w 5 -D INPUT -i sdb-+ -j STYRMAN-IN", "iptables -w 5 -F STYRMAN-FWD", "iptables -w 5 -X STYRMAN-IN",
+		"ip6tables -w 5 -D FORWARD -i sdb-+ -j STYRMAN-FWD6", "ip6tables -w 5 -D INPUT -i sdb-+ -j STYRMAN-IN6", "ip6tables -w 5 -X STYRMAN-FWD6",
 		"rm -f -- " + filepath.Join(root, "units", "styrman-firewall.timer"), "systemctl daemon-reload",
 		"rm -f -- " + filepath.Join(root, "bin", "styrman-update"), "rm -f -- " + filepath.Join(root, "sbin", "styrman-firewall.sh"),
 		"rm -f -- " + filepath.Join(root, "tmpfiles", "styrman-ksm.conf"),
-		"rm -rf -- " + filepath.Join(root, "etc"), "rm -rf -- " + filepath.Join(root, "deploy"),
+		"rm -rf -- " + filepath.Join(root, "etc", "styrman"), "rm -rf -- " + filepath.Join(root, "opt", "styrman"),
 		"docker image rm styrman-runtime:1.27.1", "docker image rm styrman-caddy:1.27.1",
 		"mv -- " + filepath.Join(root, "checkout.env") + " " + filepath.Join(root, "checkout.env") + ".removed-",
 	} {
@@ -739,7 +746,7 @@ func TestStyrmanCtlUninstallPlans(t *testing.T) {
 			t.Fatalf("level 2 lacks %q:\n%s", w, out)
 		}
 	}
-	for _, bad := range []string{"image rm nginx", "rm -rf -- " + filepath.Join(root, "state")} {
+	for _, bad := range []string{"image rm nginx", "rm -rf -- " + filepath.Join(root, "var", "lib", "styrman")} {
 		if indexOf(l2, bad) >= 0 {
 			t.Fatalf("level 2 must not contain %q:\n%s", bad, out)
 		}
@@ -750,7 +757,7 @@ func TestStyrmanCtlUninstallPlans(t *testing.T) {
 		t.Fatalf("level 3: %d\n%s", code, out)
 	}
 	l3 := planLines(strings.ReplaceAll(out, "\n  + ", "\n+ "))
-	if indexOf(l3, "du -sh "+filepath.Join(root, "state")) < 0 || indexOf(l3, "rm -rf -- "+filepath.Join(root, "state")) < 0 || !strings.Contains(out, "the word to type for level 3 is: testhost") {
+	if indexOf(l3, "du -sh "+filepath.Join(root, "var", "lib", "styrman")) < 0 || indexOf(l3, "rm -rf -- "+filepath.Join(root, "var", "lib", "styrman")) < 0 || !strings.Contains(out, "the word to type for level 3 is: testhost") {
 		t.Fatalf("level 3:\n%s", out)
 	}
 	for _, l := range l3 {
@@ -786,28 +793,38 @@ func TestStyrmanCtlUninstallConfirmations(t *testing.T) {
 	}
 	// An EMPTY /etc/styrman (host-setup.sh creates it empty until auto-update
 	// is set up) is deletable — the marker rule must not abort level 2 there.
-	if err := os.RemoveAll(filepath.Join(e.root, "etc")); err != nil {
+	if err := os.RemoveAll(filepath.Join(e.root, "etc", "styrman")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(e.root, "etc"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(e.root, "etc", "styrman"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if out, code := ctl(t, e, "uninstall", "--level", "2", "--dry-run"); code != 0 || !strings.Contains(out, "rm -rf -- "+filepath.Join(e.root, "etc")) {
+	if out, code := ctl(t, e, "uninstall", "--level", "2", "--dry-run"); code != 0 || !strings.Contains(out, "rm -rf -- "+filepath.Join(e.root, "etc", "styrman")) {
 		t.Fatalf("empty etc dir not deletable: %d\n%s", code, out)
 	}
 	// A bare directory as the state tree is refused (a knob pointed elsewhere).
-	if err := os.WriteFile(filepath.Join(e.root, "etc", "gh-token"), []byte("x"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(e.root, "etc", "styrman", "gh-token"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	// A clone that does not look like one (an interrupted git clone: .git
+	// present, no compose file) is SKIPPED with a warning and the rest of
+	// the plan still runs — never a die inside the plan (security review).
+	if err := os.Remove(filepath.Join(e.root, "opt", "styrman", "deploy", "docker-compose.yml")); err != nil {
+		t.Fatal(err)
+	}
+	out, code := ctl(t, e, "uninstall", "--level", "3", "--dry-run")
+	if code != 0 || !strings.Contains(out, "SKIPPING "+filepath.Join(e.root, "opt", "styrman")) || strings.Contains(out, "rm -rf -- "+filepath.Join(e.root, "opt", "styrman")) || !strings.Contains(out, "rm -rf -- "+filepath.Join(e.root, "var", "lib", "styrman")) {
+		t.Fatalf("interrupted clone did not skip-and-continue: %d\n%s", code, out)
 	}
 	// A symlinked tree is refused by the guard before any delete is planned.
-	if err := os.RemoveAll(filepath.Join(e.root, "etc")); err != nil {
+	if err := os.RemoveAll(filepath.Join(e.root, "etc", "styrman")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(filepath.Join(e.root, "state"), filepath.Join(e.root, "etc")); err != nil {
+	if err := os.Symlink(filepath.Join(e.root, "var", "lib", "styrman"), filepath.Join(e.root, "etc", "styrman")); err != nil {
 		t.Fatal(err)
 	}
-	out, code := ctl(t, e, "uninstall", "--level", "2", "--dry-run")
-	if code == 0 || !strings.Contains(out, "refusing to delete") || strings.Contains(out, "rm -rf -- "+filepath.Join(e.root, "etc")) {
+	out, code = ctl(t, e, "uninstall", "--level", "2", "--dry-run")
+	if code == 0 || !strings.Contains(out, "refusing to delete") || strings.Contains(out, "rm -rf -- "+filepath.Join(e.root, "etc", "styrman")) {
 		t.Fatalf("symlinked etc: %d\n%s", code, out)
 	}
 }
