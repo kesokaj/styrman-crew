@@ -94,10 +94,15 @@ confirm_word() {
 }
 
 # ─── .env helpers ───────────────────────────────────────────────────────────
+is_key() { [[ "$1" =~ ^[A-Z][A-Z0-9_]*$ ]]; }
 env_get() { # env_get FILE KEY → value ('' if absent); the LAST assignment wins, like compose
     local file="$1" key="$2"
+    is_key "${key}" || die "not a key: ${key}"
     [ -f "${file}" ] || return 0
-    sed -n "s/^${key}=//p" "${file}" | tail -1
+    # The key travels as an awk VARIABLE and is matched literally — never
+    # interpolated into a program (security review: a key with a slash
+    # changed a sed program; with GNU sed's e flag that is command execution).
+    awk -v k="${key}" 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { if (v != "") print v; else if (found) print ""; }' "${file}"
 }
 # env_set FILE KEY VALUE: replaces the key's line or appends one; atomic
 # (temp + mv in the same directory), mode 600, owner kept; refuses a
@@ -106,22 +111,28 @@ env_set() {
     local file="$1" key="$2" value="$3" tmp dir
     [ -L "${file}" ] && die "refusing to write ${file}: it is a symlink"
     [ -f "${file}" ] || die "no such file: ${file}"
-    case "${value}" in *$'\n'*) die "refusing a value with a newline for ${key}" ;; esac
-    [[ "${key}" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "not a key: ${key}"
+    # No newline and no backslash: a newline smuggles a second assignment,
+    # and a backslash would let an escape sequence become one downstream
+    # (security review: awk -v decoded "\\n" into a real newline).
+    case "${value}" in *$'\n'*) die "refusing a value with a newline for ${key}" ;; *\\*) die "refusing a value with a backslash for ${key}" ;; esac
+    is_key "${key}" || die "not a key: ${key}"
+    # Dry run: the plan names the write and nothing touches the directory
+    # (not even a temp file).
+    if [ "${DRY}" = 1 ]; then echo "+ env_set ${file} ${key}"; return 0; fi
     dir="$(dirname "${file}")"
     tmp="$(mktemp "${dir}/.env.XXXXXX")"
     if grep -q "^${key}=" "${file}"; then
         # Replace every assignment of the key with one line, keep the rest.
-        awk -v k="${key}" -v v="${value}" 'BEGIN{done=0} index($0,k"=")==1 {if(!done){print k"="v; done=1}; next} {print}' "${file}" > "${tmp}"
+        # The value reaches awk through the ENVIRONMENT, which awk never
+        # escape-processes (unlike -v).
+        V="${value}" awk -v k="${key}" 'BEGIN{done=0} index($0,k"=")==1 {if(!done){print k"=" ENVIRON["V"]; done=1}; next} {print}' "${file}" > "${tmp}"
     else
         cat "${file}" > "${tmp}"
         printf '%s=%s\n' "${key}" "${value}" >> "${tmp}"
     fi
     chmod 600 "${tmp}"
     chown --reference="${file}" "${tmp}" 2>/dev/null || true
-    run mv -f "${tmp}" "${file}"
-    [ "${DRY}" = 1 ] && rm -f "${tmp}"
-    return 0
+    mv -f "${tmp}" "${file}"
 }
 
 # ─── Validation: one rule per key of .env.example ───────────────────────────
@@ -199,10 +210,14 @@ guard_path() {
     real="$(realpath -m -- "${p}")"
     [ "${real}" = "/" ] && { echo "refusing ${p}: it is /" >&2; return 1; }
     [[ "${real}" =~ ^/[^/]+/[^/]+ ]] || { echo "refusing ${p}: a single path component" >&2; return 1; }
-    [ -L "${p}" ] && { echo "refusing ${p}: it is a symlink" >&2; return 1; }
+    # Canonical as GIVEN: any symlink component (the leaf included) or a
+    # `..` makes realpath differ from the literal path, and a delete must
+    # never be resolved through a link (BUG-009's rule).
+    [ "${real}" = "${p}" ] || { echo "refusing ${p}: not canonical (a symlink or .. in the path)" >&2; return 1; }
+    [ -d "${p}" ] || { echo "refusing ${p}: not an existing directory" >&2; return 1; }
     local allowed
     for allowed in "${STATE_DIR}" "${DEPLOY_DIR}" "${ETC_DIR}"; do
-        [ "${real}" = "$(realpath -m -- "${allowed}")" ] && return 0
+        [ "${p}" = "${allowed}" ] && return 0
     done
     echo "refusing ${p}: not one of the configured styrman trees" >&2
     return 1
@@ -226,13 +241,24 @@ deployed_version() { # from the updater's state, else the running server image t
     if [ -z "${v}" ]; then v="$(container_field styrman-server '{{.Config.Image}}')"; v="${v##*:}"; fi
     printf '%s' "${v}"
 }
-json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+# printable: what a file, a git tag or a container label contributed to the
+# screen — control bytes stripped (a hostile deployed-version or tag must
+# not drive the terminal).
+printable() { printf '%s' "$1" | tr -d '\000-\037\177'; }
+json_str() {
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"
+    else
+        local v; v="$(printable "$1" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        printf '"%s"' "${v}"
+    fi
+}
 
 cmd_status() {
     local as_json=0
     while [ $# -gt 0 ]; do case "$1" in --json) as_json=1; shift ;; *) die "status: unknown flag $1" ;; esac; done
     need_root
-    local host; host="$(hostname 2>/dev/null || uname -n)"
+    local host; host="$(printable "$(hostname 2>/dev/null || uname -n)")"
     local installed=0
     # An `if`, not a bare `a || b && c` list: under set -e a list whose last
     # command fails ends the script.
@@ -241,9 +267,9 @@ cmd_status() {
     fi
     # server
     local health server_img caddy_img running url base hn
-    health="$(container_field styrman-server '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')"
-    server_img="$(container_field styrman-server '{{.Config.Image}}')"
-    caddy_img="$(container_field styrman-caddy '{{.Config.Image}}')"
+    health="$(printable "$(container_field styrman-server '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')")"
+    server_img="$(printable "$(container_field styrman-server '{{.Config.Image}}')")"
+    caddy_img="$(printable "$(container_field styrman-caddy '{{.Config.Image}}')")"
     running="$(container_field styrman-server '{{.State.Running}}')"
     # The checkout may carry no .env at all (production deploys from the
     # clone): read whichever copy exists, the checkout's first.
@@ -252,14 +278,14 @@ cmd_status() {
     url=""; [ -n "${base}" ] && url="https://${hn:-styrman}.${base}"
     # deployed
     local dver dsha fver
-    dver="$(deployed_version)"
-    dsha="$(cat "${ETC_DIR}/update/deployed-sha" 2>/dev/null || true)"
-    fver="$(cat "${ETC_DIR}/update/failed-version" 2>/dev/null || true)"
+    dver="$(printable "$(deployed_version)")"
+    dsha="$(printable "$(cat "${ETC_DIR}/update/deployed-sha" 2>/dev/null || true)")"
+    fver="$(printable "$(cat "${ETC_DIR}/update/failed-version" 2>/dev/null || true)")"
     # updater + clone
     local clone_sha="" clone_tag="" envs_differ=0
     if [ -d "${DEPLOY_DIR}/.git" ]; then
-        clone_sha="$(git -C "${DEPLOY_DIR}" rev-parse --short HEAD 2>/dev/null || true)"
-        clone_tag="$(git -C "${DEPLOY_DIR}" describe --tags --exact-match 2>/dev/null || true)"
+        clone_sha="$(printable "$(git -C "${DEPLOY_DIR}" rev-parse --short HEAD 2>/dev/null || true)")"
+        clone_tag="$(printable "$(git -C "${DEPLOY_DIR}" describe --tags --exact-match 2>/dev/null || true)")"
         if [ -f "${CLONE_ENV}" ] && [ -f "${ENV_FILE}" ] && ! cmp -s "${CLONE_ENV}" "${ENV_FILE}"; then envs_differ=1; fi
     fi
     # units + firewall
@@ -427,6 +453,11 @@ cmd_install() {
 }
 
 # ─── update --setup: host-setup.sh 8c's prose as code ───────────────────────
+# Every hand invocation of the updater names ALL of its inputs: the state dir
+# (no default by design, ADR-052), the clone, and the token/signers files —
+# the last two default to /etc/styrman inside the updater, which is only
+# right when ETC_DIR is /etc/styrman (review finding, Phase 2).
+UPDATER_ENV=("STYRMAN_UPDATE_STATE_DIR=${ETC_DIR}/update" "STYRMAN_DEPLOY_DIR=${DEPLOY_DIR}" "STYRMAN_GH_TOKEN_FILE=${ETC_DIR}/gh-token" "STYRMAN_ALLOWED_SIGNERS=${ETC_DIR}/allowed_signers")
 is_signers_line() { [[ "$1" =~ ^[^[:space:]]+\ (ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)\ [A-Za-z0-9+/=]+ ]]; }
 
 # setup_auto_update [TOKEN_FILE] [SIGNERS_FILE]
@@ -449,16 +480,22 @@ setup_auto_update() {
     is_signers_line "${signers}" || die "not an allowed_signers line: expected '<email> <ssh key type> <base64 key>'"
     origin="$(https_origin)"
 
-    tmpd="$(mktemp -d)"; chmod 700 "${tmpd}"
-    trap 'rm -rf "${tmpd}"' EXIT
-    # Secrets travel through root-only temp files, never argv or the plan.
-    (umask 077; printf '%s' "${token}" > "${tmpd}/gh-token"; printf '%s\n' "${signers}" > "${tmpd}/allowed_signers")
-    # One-shot askpass: git asks for a username, then a password; nothing is
-    # stored in any git config (the updater has its own helper reading the
-    # root-only token file, host-setup.sh 8c).
-    # shellcheck disable=SC2016  # $1 belongs to the helper script being written
-    printf '#!/usr/bin/env bash\ncase "$1" in *sername*) echo x-access-token ;; *) cat "%s" ;; esac\n' "${ETC_DIR}/gh-token" > "${tmpd}/askpass"
-    chmod 700 "${tmpd}/askpass"
+    if [ "${DRY}" = 1 ]; then
+        # The plan names the temp paths; nothing — secrets least of all —
+        # touches the disk under --dry-run (review finding).
+        tmpd="<tmpdir>"
+    else
+        tmpd="$(mktemp -d)"; chmod 700 "${tmpd}"
+        trap 'rm -rf "${tmpd}"' EXIT
+        # Secrets travel through root-only temp files, never argv or the plan.
+        (umask 077; printf '%s' "${token}" > "${tmpd}/gh-token"; printf '%s\n' "${signers}" > "${tmpd}/allowed_signers")
+        # One-shot askpass: git asks for a username, then a password; nothing
+        # is stored in any git config (the updater has its own helper reading
+        # the root-only token file, host-setup.sh 8c).
+        # shellcheck disable=SC2016  # $1 belongs to the helper script being written
+        printf '#!/usr/bin/env bash\ncase "$1" in *sername*) echo x-access-token ;; *) cat "%s" ;; esac\n' "${ETC_DIR}/gh-token" > "${tmpd}/askpass"
+        chmod 700 "${tmpd}/askpass"
+    fi
 
     log "auto-update: token → ${ETC_DIR}/gh-token (root, 600)"
     run install -d -m 700 -o root -g root "${ETC_DIR}"
@@ -487,30 +524,124 @@ setup_auto_update() {
     log "auto-update: allowed_signers → ${ETC_DIR}/allowed_signers (root, 644)"
     run install -m 644 -o root -g root "${tmpd}/allowed_signers" "${ETC_DIR}/allowed_signers"
     log "auto-update: dry check, then enable the timer and run the first tick"
-    run env "STYRMAN_UPDATE_STATE_DIR=${ETC_DIR}/update" "STYRMAN_DEPLOY_DIR=${DEPLOY_DIR}" "${BIN_DIR}/styrman-update" --check
+    run env "${UPDATER_ENV[@]}" "${BIN_DIR}/styrman-update" --check
     run systemctl enable --now styrman-update.timer
     run systemctl start styrman-update.service
-    rm -rf "${tmpd}"; trap - EXIT
+    [ "${DRY}" = 1 ] || { rm -rf "${tmpd}"; trap - EXIT; }
 }
 
+# ─── update: one auto-updater tick (or a forced redeploy of the current tag) ─
 cmd_update() {
-    local setup=0 gh_token_file="" signers_file=""
+    local setup=0 redeploy=0 gh_token_file="" signers_file=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --setup) setup=1; shift ;;
+            --redeploy) redeploy=1; shift ;;
             --gh-token-file) gh_token_file="$2"; shift 2 ;;
             --allowed-signers-file) signers_file="$2"; shift 2 ;;
-            --redeploy) die "update --redeploy: not implemented yet (plan phase 3)" ;;
             *) die "update: unknown flag $1" ;;
         esac
     done
     need_root
-    [ "${setup}" = 1 ] || die "update: not implemented yet (plan phase 3) — \`update --setup\` works"
-    setup_auto_update "${gh_token_file}" "${signers_file}"
+    if [ "${setup}" = 1 ]; then setup_auto_update "${gh_token_file}" "${signers_file}"; return; fi
+    # The updater is THE update path (versioning.md): signature-verified,
+    # from its own clone. The wrapper never runs compose against the clone
+    # by hand — the break-glass command stays a documented command.
+    [ "$(systemctl is-enabled styrman-update.timer 2>/dev/null || true)" = enabled ] || [ "${DRY}" = 1 ] \
+        || die "auto-update is not set up on this host — run \`styrman-ctl update --setup\` first"
+    if [ "${redeploy}" = 1 ]; then
+        log "update: forced redeploy of the current tag (clears a latched failed-version)"
+        run env "${UPDATER_ENV[@]}" "${BIN_DIR}/styrman-update" --force
+    else
+        log "update: running one updater tick now (deploys the newest signed release tag, if newer)"
+        run systemctl start styrman-update.service
+    fi
+    run journalctl -u styrman-update.service -n 20 --no-pager
+    cmd_status || true
+}
+
+# ─── edit: the .env editor that re-applies ─────────────────────────────────
+# The keys `edit` understands, in .env.example order; everything else is
+# "edit the file by hand". Computed keys are listed read-only.
+EDIT_KEYS="BASE_DOMAIN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET CLOUDFLARE_API_TOKEN ADMIN_EMAIL STYRMAN_ALLOWED_EMAILS SUPERADMINS STYRMAN_HOSTNAME STYRMAN_PUBLIC_DOMAIN STYRMAN_PRIVATE_DOMAIN STYRMAN_IMAGE STYRMAN_IDLE_TIMEOUT STYRMAN_TRANSCRIPT_TTL STYRMAN_BROKER_ADDR AUTH_DOMAIN SHELL_DOMAIN APPS_DOMAIN DEFAULT_RPS CADDY_ADMIN"
+masked() { case " ${SECRET_KEYS} " in *" $1 "*) [ -n "$2" ] && echo "********" || echo "" ;; *) echo "$2" ;; esac; }
+
+cmd_edit() {
+    local apply=1 kv changes=() targets=() src
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --no-apply) apply=0; shift ;;
+            *=*) changes+=("$1"); shift ;;
+            *) die "edit: unknown argument $1 (KEY=VALUE, or --no-apply)" ;;
+        esac
+    done
+    need_root
+    # Both copies when both exist: the updater deploys with the clone's.
+    [ -f "${ENV_FILE}" ] && targets+=("${ENV_FILE}")
+    [ -f "${CLONE_ENV}" ] && targets+=("${CLONE_ENV}")
+    [ "${#targets[@]}" -gt 0 ] || die "no deploy/.env in this checkout or the clone — run install first"
+    src="${targets[0]}"
+    if [ "${#changes[@]}" = 0 ]; then
+        has_tty || die "edit: no terminal — pass KEY=VALUE arguments"
+        local keys=() k i n choice v cur
+        read -r -a keys <<< "${EDIT_KEYS} ${COMPUTED_KEYS}"
+        while :; do
+            local also=""; [ -z "${targets[1]:-}" ] || also=" and the clone copy"
+            echo "deploy/.env (${src}${also}):"
+            i=0
+            for k in "${keys[@]}"; do
+                i=$((i + 1)); cur="$(env_get "${src}" "${k}")"
+                local note=""
+                case " ${COMPUTED_KEYS} " in *" ${k} "*) note="  (computed by host-setup.sh)" ;; esac
+                printf '  %2d. %-24s %s%s\n' "${i}" "${k}" "$(masked "${k}" "${cur}")" "${note}"
+            done
+            read -r -p "number to change, or done: " choice < /dev/tty
+            case "${choice}" in done|"") break ;; esac
+            if ! { [[ "${choice}" =~ ^[0-9]+$ ]] && [ "${choice}" -ge 1 ] && [ "${choice}" -le "${#keys[@]}" ]; }; then echo "no such number"; continue; fi
+            k="${keys[$((choice - 1))]}"
+            case " ${COMPUTED_KEYS} " in *" ${k} "*) echo "${k} is computed by host-setup.sh — re-run install"; continue ;; esac
+            n=0
+            while :; do
+                ask v "${k}" "$(env_get "${src}" "${k}")" "$(case " ${SECRET_KEYS} " in *" ${k} "*) echo 1 ;; esac)"
+                validate "${k}" "${v}" && break
+                n=$((n + 1)); [ "${n}" -lt 3 ] || { echo "giving up on ${k}"; v=""; break; }
+            done
+            [ -z "${v}" ] || changes+=("${k}=${v}")
+        done
+    fi
+    [ "${#changes[@]}" -gt 0 ] || { log "edit: nothing changed"; return 0; }
+    # Validate everything before writing anything.
+    local key value
+    for kv in "${changes[@]}"; do
+        key="${kv%%=*}"; value="${kv#*=}"
+        validate "${key}" "${value}" || die "edit: ${key} refused"
+    done
+    local t
+    for kv in "${changes[@]}"; do
+        key="${kv%%=*}"; value="${kv#*=}"
+        for t in "${targets[@]}"; do env_set "${t}" "${key}" "${value}"; done
+        log "edit: ${key} set in ${#targets[@]} file(s)"
+    done
+    [ "${apply}" = 1 ] || { log "edit: written, not applied (--no-apply); apply with \`styrman-ctl edit\` later or restart the stack"; return 0; }
+    # Re-apply: recreate the stack at the DEPLOYED version from the dir the
+    # updater deploys from (the clone) or, without one, this checkout. No
+    # --build: images are immutable per version; a changed env needs a
+    # recreate only.
+    local ver dir
+    ver="$(deployed_version)"; ver="${ver#v}"
+    [[ "${ver}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "edit: cannot tell the deployed version (no updater state, no running styrman-server) — start the stack first"
+    if [ -f "${CLONE_ENV}" ]; then dir="${DEPLOY_DIR}"; else dir="${REPO}"; fi
+    log "edit: re-applying — recreating the stack at ${ver} from ${dir}"
+    run env "STYRMAN_VERSION=${ver}" docker compose -f "${dir}/deploy/docker-compose.yml" --env-file "${dir}/deploy/.env" up -d
+    wait_healthy 120 || die "the stack was recreated but styrman-server is not healthy; \`styrman-ctl status\`"
+    cmd_status || true
 }
 
 # ─── Internal test hooks (used by the Go test; not for operators) ───────────
+# Gated: `__env-set` can rewrite any file as root, so the hooks exist only
+# when the test harness says so (security review).
 cmd_internal() {
+    [ "${STYRMAN_CTL_TEST:-}" = 1 ] || die "internal test hooks are disabled (set STYRMAN_CTL_TEST=1 only under the Go test)"
     case "${1:-}" in
         __validate)  validate "$2" "$3" ;;
         __env-set)   env_set "$2" "$3" "$4" ;;
@@ -527,8 +658,8 @@ styrman-ctl — install, update, edit, uninstall and inspect a styrman host
   sudo deploy/styrman-ctl                menu
   sudo deploy/styrman-ctl status [--json]
   sudo deploy/styrman-ctl install [--user U] [--version X.Y.Z] [--env-file F] [--gh-token-file F] [--allowed-signers-file F] [--skip-auto-update]
-  sudo deploy/styrman-ctl update --setup [--gh-token-file F] [--allowed-signers-file F]   (plain update: plan phase 3)
-  sudo deploy/styrman-ctl edit …         (not yet: plan phase 3)
+  sudo deploy/styrman-ctl update [--redeploy] | --setup [--gh-token-file F] [--allowed-signers-file F]
+  sudo deploy/styrman-ctl edit [KEY=VALUE ...] [--no-apply]
   sudo deploy/styrman-ctl uninstall …    (not yet: plan phase 4)
   deploy/styrman-ctl help
 
@@ -572,7 +703,8 @@ main() {
         help|-h|--help) cmd_help ;;
         install) cmd_install "$@" ;;
         update) cmd_update "$@" ;;
-        edit|uninstall) die "${verb}: not implemented yet (plan .agents/docs/plans/2026-09-11-installer-ctl.md)" ;;
+        edit) cmd_edit "$@" ;;
+        uninstall) die "${verb}: not implemented yet (plan .agents/docs/plans/2026-09-11-installer-ctl.md)" ;;
         __*) cmd_internal "${verb}" "$@" ;;
         *) die "unknown verb ${verb} (try: help)" ;;
     esac

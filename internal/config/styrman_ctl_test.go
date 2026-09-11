@@ -76,6 +76,7 @@ esac`)
 		t.Fatal(err)
 	}
 	env := append(os.Environ(),
+		"STYRMAN_CTL_TEST=1",
 		"PATH="+bin+":"+os.Getenv("PATH"),
 		"STYRMAN_STATE_DIR="+filepath.Join(root, "state"),
 		"STYRMAN_DEPLOY_DIR="+filepath.Join(root, "deploy"),
@@ -248,13 +249,48 @@ func TestStyrmanCtlEnvSet(t *testing.T) {
 	if out, code := ctl(t, e, "__env-set", f, "A", "x\nEVIL=1"); code == 0 || !strings.Contains(out, "newline") {
 		t.Fatalf("newline accepted: %d %s", code, out)
 	}
+	// A LITERAL backslash-n: awk -v would have decoded it into a real newline
+	// and smuggled a second assignment (security review, high).
+	if out, code := ctl(t, e, "__env-set", f, "B", `x\nSUPERADMINS=evil@x.y`); code == 0 || !strings.Contains(out, "backslash") {
+		t.Fatalf("backslash accepted: %d %s", code, out)
+	}
+	if got, _ := os.ReadFile(f); strings.Contains(string(got), "evil") || strings.Count(string(got), "SUPERADMINS") != 0 {
+		t.Fatalf("a second assignment was smuggled in:\n%s", got)
+	}
+	// env_get takes the key as a literal, never as a program.
+	if out, code := ctl(t, e, "__env-get", f, "A/,s/x/y/"); code == 0 || !strings.Contains(out, "not a key") {
+		t.Fatalf("hostile key accepted by env_get: %d %s", code, out)
+	}
+	// The hooks are gated on the harness variable.
+	e2 := ctlSetup(t, true)
+	var without []string
+	for _, kv := range e2.env {
+		if !strings.HasPrefix(kv, "STYRMAN_CTL_TEST=") {
+			without = append(without, kv)
+		}
+	}
+	e2.env = without
+	if out, code := ctl(t, e2, "__env-set", f, "A", "2"); code == 0 || !strings.Contains(out, "disabled") {
+		t.Fatalf("hooks usable without the harness variable: %d %s", code, out)
+	}
 	if _, code := ctl(t, e, "__env-set", f, "lower", "x"); code == 0 {
 		t.Fatal("non-key accepted")
 	}
 	out, code := ctl(t, e, "__env-set", f, "A", "9", "--dry-run")
 	got, _ = os.ReadFile(f)
-	if code != 0 || !strings.Contains(out, "+ mv -f") || !strings.Contains(string(got), "A=1\n") {
+	if code != 0 || !strings.Contains(out, "+ env_set "+f+" A") || !strings.Contains(string(got), "A=1\n") {
 		t.Fatalf("dry-run env-set: %d %s\n%s", code, out, got)
+	}
+	// And no temp file was left or even created beside it.
+	if entries, _ := os.ReadDir(e.root); func() bool {
+		for _, en := range entries {
+			if strings.HasPrefix(en.Name(), ".env.") {
+				return true
+			}
+		}
+		return false
+	}() {
+		t.Fatal("dry-run env-set left a temp file")
 	}
 }
 
@@ -264,7 +300,7 @@ func TestStyrmanCtlGuardPath(t *testing.T) {
 	if out, code := ctl(t, e, "__guard-path", state); code != 0 {
 		t.Fatalf("state dir refused: %s", out)
 	}
-	for _, bad := range []string{"/", "/tmp", filepath.Join(e.root, "state", ".."), filepath.Join(e.root, "elsewhere"), filepath.Join(e.root, "state/projects")} {
+	for _, bad := range []string{"/", "/tmp", filepath.Join(e.root, "state", ".."), filepath.Join(e.root, "elsewhere"), filepath.Join(e.root, "state/projects"), filepath.Join(e.root, "state") + "/", filepath.Join(e.root, "nonexistent")} {
 		if out, code := ctl(t, e, "__guard-path", bad); code == 0 {
 			t.Errorf("%s accepted: %s", bad, out)
 		}
@@ -327,7 +363,7 @@ func TestStyrmanCtlInstallPlan(t *testing.T) {
 		t.Fatalf("compose must be pinned to the env file: %s", lines[up])
 	}
 	// The six must-fill keys were validated and written (dry-run: the moves are planned, the file untouched).
-	if n := strings.Count(out, "+ mv -f"); n != 6 {
+	if n := strings.Count(out, "+ env_set "); n != 6 {
 		t.Fatalf("expected 6 planned .env writes, got %d:\n%s", n, out)
 	}
 	if got, _ := os.ReadFile(envFile); !strings.Contains(string(got), "BASE_DOMAIN=\n") {
@@ -423,6 +459,18 @@ func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
 		}
 		last = i
 	}
+	// The updater's every input is named — token and signers files included
+	// (review finding: they default to /etc/styrman inside the updater).
+	check := lines[indexOf(lines, "styrman-update --check")]
+	for _, w := range []string{"STYRMAN_GH_TOKEN_FILE=" + filepath.Join(e.root, "etc", "gh-token"), "STYRMAN_ALLOWED_SIGNERS=" + filepath.Join(e.root, "etc", "allowed_signers"), "STYRMAN_DEPLOY_DIR=" + filepath.Join(e.root, "deploy")} {
+		if !strings.Contains(check, w) {
+			t.Fatalf("--check lacks %q: %s", w, check)
+		}
+	}
+	// Dry run wrote no temp files with the secrets (the plan names <tmpdir>).
+	if !strings.Contains(out, "<tmpdir>/gh-token") {
+		t.Fatalf("dry run should plan with a placeholder temp dir:\n%s", out)
+	}
 	clone := lines[indexOf(lines, "git clone")]
 	if !strings.Contains(clone, "GIT_ASKPASS=") || !strings.Contains(clone, "GIT_TERMINAL_PROMPT=0") {
 		t.Fatalf("clone runs without the one-shot askpass: %s", clone)
@@ -445,8 +493,90 @@ func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
 	if out, code := ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", signers); code == 0 || !strings.Contains(out, "allowed_signers line") || len(planLines(out)) != 0 {
 		t.Fatalf("bad signers accepted: %d %s", code, out)
 	}
-	// Plain update is still the Phase 3 stub.
-	if out, code := ctl(t, e, "update", "--dry-run"); code == 0 || !strings.Contains(out, "not implemented") {
-		t.Fatalf("plain update: %d %s", code, out)
+}
+
+// ── Phase 3: edit and update, as dry-run plans ─────────────────────────────
+
+func TestStyrmanCtlEditPlan(t *testing.T) {
+	e := ctlSetup(t, true)
+	envFile := filepath.Join(e.root, "checkout.env")
+	if err := os.WriteFile(envFile, []byte("BASE_DOMAIN=example.test\nSTYRMAN_IDLE_TIMEOUT=8h\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.env = append(e.env, "STYRMAN_ENV_FILE="+envFile)
+	cloneEnv := filepath.Join(e.root, "deploy", "deploy", ".env")
+	out, code := ctl(t, e, "edit", "--dry-run", "STYRMAN_IDLE_TIMEOUT=9h", "DEFAULT_RPS=20")
+	if code != 0 {
+		t.Fatalf("edit --dry-run: %d\n%s", code, out)
+	}
+	lines := planLines(out)
+	// Every key into BOTH copies, then one recreate from the clone at the deployed version, then the wait.
+	for _, w := range []string{
+		"+ env_set " + envFile + " STYRMAN_IDLE_TIMEOUT", "+ env_set " + cloneEnv + " STYRMAN_IDLE_TIMEOUT",
+		"+ env_set " + envFile + " DEFAULT_RPS", "+ env_set " + cloneEnv + " DEFAULT_RPS",
+	} {
+		if indexOf(lines, w) < 0 {
+			t.Fatalf("plan lacks %q:\n%s", w, out)
+		}
+	}
+	up := indexOf(lines, "env STYRMAN_VERSION=1.27.1 docker compose -f "+filepath.Join(e.root, "deploy", "deploy", "docker-compose.yml")+" --env-file "+cloneEnv+" up -d")
+	if up < 0 || strings.Contains(lines[up], "--build") || indexOf(lines, "wait up to 120s") < up {
+		t.Fatalf("recreate line wrong or misplaced:\n%s", out)
+	}
+	if got, _ := os.ReadFile(envFile); !strings.Contains(string(got), "STYRMAN_IDLE_TIMEOUT=8h") {
+		t.Fatalf("dry run wrote the env file:\n%s", got)
+	}
+	// --no-apply writes but never recreates.
+	out, _ = ctl(t, e, "edit", "--dry-run", "--no-apply", "STYRMAN_IDLE_TIMEOUT=9h")
+	if indexOf(planLines(out), "docker compose") >= 0 || !strings.Contains(out, "not applied") {
+		t.Fatalf("--no-apply recreated:\n%s", out)
+	}
+	// Refusals happen before ANY write: a computed key, an unknown key, an invalid value.
+	for _, bad := range []string{"STYRMAN_UID=1001", "NOT_A_KEY=1", "STYRMAN_IDLE_TIMEOUT=nine hours", "CADDY_ADMIN=localhost:2019"} {
+		out, code := ctl(t, e, "edit", "--dry-run", "STYRMAN_HOSTNAME=crew", bad)
+		if code == 0 || len(planLines(out)) != 0 {
+			t.Fatalf("%s: code %d, plan %v", bad, code, planLines(out))
+		}
+	}
+	// No terminal and no arguments: told to pass KEY=VALUE.
+	if out, code := ctl(t, e, "edit", "--dry-run"); code == 0 || !strings.Contains(out, "KEY=VALUE") {
+		t.Fatalf("edit without args: %d %s", code, out)
+	}
+	// Neither .env exists: run install first.
+	e2 := ctlSetup(t, true)
+	if err := os.Remove(filepath.Join(e2.root, "deploy", "deploy", ".env")); err != nil {
+		t.Fatal(err)
+	}
+	e2.env = append(e2.env, "STYRMAN_ENV_FILE="+filepath.Join(e2.root, "missing.env"))
+	if out, code := ctl(t, e2, "edit", "--dry-run", "STYRMAN_HOSTNAME=crew"); code == 0 || !strings.Contains(out, "run install first") {
+		t.Fatalf("edit without any .env: %d %s", code, out)
+	}
+}
+
+func TestStyrmanCtlUpdatePlan(t *testing.T) {
+	e := ctlSetup(t, true)
+	out, code := ctl(t, e, "update", "--dry-run")
+	if code != 0 {
+		t.Fatalf("update --dry-run: %d\n%s", code, out)
+	}
+	lines := planLines(out)
+	start := indexOf(lines, "systemctl start styrman-update.service")
+	journal := indexOf(lines, "journalctl -u styrman-update.service")
+	if start < 0 || journal < start {
+		t.Fatalf("update plan:\n%s", out)
+	}
+	out, _ = ctl(t, e, "update", "--redeploy", "--dry-run")
+	force := indexOf(planLines(out), "STYRMAN_UPDATE_STATE_DIR="+filepath.Join(e.root, "etc", "update"))
+	if force < 0 || !strings.Contains(planLines(out)[force], "styrman-update --force") || !strings.Contains(planLines(out)[force], "STYRMAN_GH_TOKEN_FILE=") || strings.Contains(out, "systemctl start styrman-update.service") {
+		t.Fatalf("redeploy plan:\n%s", out)
+	}
+	// Timer not enabled → the --setup hint (only enforced outside dry-run, so
+	// exercise it through the fake with dry-run off: need_root would refuse
+	// first, which is the same "nothing runs" outcome we want to see).
+	if err := os.WriteFile(filepath.Join(e.bin, "systemctl"), []byte("#!/usr/bin/env bash\ncase \"$1\" in is-enabled) echo disabled ;; is-active) echo inactive ;; esac\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := ctl(t, e, "update"); code == 0 || !strings.Contains(out, "run as root") {
+		t.Fatalf("update as non-root: %d %s", code, out)
 	}
 }

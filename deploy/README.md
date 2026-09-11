@@ -20,8 +20,11 @@ status [--json]` reports what is installed, deployed and running (exit 0 ok,
 the runtime image and brings the stack up at the checkout's release tag (or
 `--version`), then offers to set up auto-update; `sudo deploy/styrman-ctl
 update --setup` does that setup on its own (token, clone, `.env` copy,
-`allowed_signers`, timer) — the 8c prose above as prompts. `edit`, plain
-`update` and `uninstall` arrive with the plan's later phases. `--dry-run`
+`allowed_signers`, timer) — the 8c prose above as prompts; `sudo
+deploy/styrman-ctl update` runs one updater tick now (`--redeploy` forces
+the current tag and clears a latched failure); `sudo deploy/styrman-ctl edit
+[KEY=VALUE …]` edits `.env` (both copies, validated) and recreates the stack
+at the deployed version. `uninstall` arrives with the plan's last phase. `--dry-run`
 prints every command a verb would run and runs nothing; `--yes` with
 `--env-file`, `--gh-token-file` and `--allowed-signers-file` runs unattended.
 
