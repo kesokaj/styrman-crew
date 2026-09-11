@@ -303,8 +303,10 @@ func TestStyrmanCtlGuardPath(t *testing.T) {
 	// A knob pointed at a system root or at a tree without styrman's own
 	// structure is refused by rm_tree even though guard_path accepts the
 	// configured path (security review: STYRMAN_STATE_DIR=/var/lib).
+	// A foreign, NON-empty tree (an empty one is deletable by design: nothing
+	// inside to protect).
 	bare := filepath.Join(e.root, "bare")
-	if err := os.MkdirAll(bare, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(bare, "someone-elses-data"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	e3 := ctlSetup(t, true)
@@ -781,6 +783,21 @@ func TestStyrmanCtlUninstallConfirmations(t *testing.T) {
 	}
 	if out, code := ctl(t, e, "uninstall", "--dry-run"); code == 0 || !strings.Contains(out, "--level 1|2|3") {
 		t.Fatalf("no level, no tty: %d %s", code, out)
+	}
+	// An EMPTY /etc/styrman (host-setup.sh creates it empty until auto-update
+	// is set up) is deletable — the marker rule must not abort level 2 there.
+	if err := os.RemoveAll(filepath.Join(e.root, "etc")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(e.root, "etc"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := ctl(t, e, "uninstall", "--level", "2", "--dry-run"); code != 0 || !strings.Contains(out, "rm -rf -- "+filepath.Join(e.root, "etc")) {
+		t.Fatalf("empty etc dir not deletable: %d\n%s", code, out)
+	}
+	// A bare directory as the state tree is refused (a knob pointed elsewhere).
+	if err := os.WriteFile(filepath.Join(e.root, "etc", "gh-token"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	// A symlinked tree is refused by the guard before any delete is planned.
 	if err := os.RemoveAll(filepath.Join(e.root, "etc")); err != nil {

@@ -716,12 +716,17 @@ looks_like_ours() {
         /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var|/var/lib|/var/log|/var/tmp|/usr/local)
             echo "refusing ${p}: a system directory" >&2; return 1 ;;
     esac
+    # An EMPTY state or etc dir is deletable too: host-setup.sh creates
+    # /etc/styrman empty until auto-update is set up (review finding), and
+    # an empty tree holds nothing foreign to protect. A deploy clone must
+    # look like one.
+    local empty=0; [ -z "$(ls -A "${p}" 2>/dev/null)" ] && empty=1
     if [ "${p}" = "${STATE_DIR}" ]; then
-        [ -d "${p}/homes" ] || [ -d "${p}/projects" ] || [ -d "${p}/users" ] || { echo "refusing ${p}: no homes/, projects/ or users/ inside — not a styrman state tree" >&2; return 1; }
+        [ "${empty}" = 1 ] || [ -d "${p}/homes" ] || [ -d "${p}/projects" ] || [ -d "${p}/users" ] || { echo "refusing ${p}: no homes/, projects/ or users/ inside — not a styrman state tree" >&2; return 1; }
     elif [ "${p}" = "${DEPLOY_DIR}" ]; then
         if ! { [ -d "${p}/.git" ] && [ -f "${p}/deploy/docker-compose.yml" ]; }; then echo "refusing ${p}: not a styrman deploy clone (no .git + deploy/docker-compose.yml)" >&2; return 1; fi
     elif [ "${p}" = "${ETC_DIR}" ]; then
-        [ -d "${p}/update" ] || [ -f "${p}/allowed_signers" ] || [ -f "${p}/gh-token" ] || { echo "refusing ${p}: no update/, allowed_signers or gh-token inside — not styrman's etc dir" >&2; return 1; }
+        [ "${empty}" = 1 ] || [ -d "${p}/update" ] || [ -f "${p}/allowed_signers" ] || [ -f "${p}/gh-token" ] || { echo "refusing ${p}: no update/, allowed_signers or gh-token inside — not styrman's etc dir" >&2; return 1; }
     fi
     return 0
 }

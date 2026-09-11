@@ -61,3 +61,9 @@ After these: shellcheck clean; 15 tests green; the real `status` and `update --s
 - F4/F6/F8 partials: F6's owner check is the mode check plus the symlink refusal above (owner is the operator's own file by construction); F4's origin check is in; F8's anchor is in. F10 (info) accepted.
 
 After these: shellcheck clean; 15 tests green; the real `uninstall --level 3 --dry-run` on this host still plans the three trees (they carry the markers) and nothing else changed.
+
+## Final reviewer pass (`reviews/2026-09-11-review-styrman-ctl-final.md`, over the post-review commits) — disposition
+
+- HIGH (`looks_like_ours` refused an EMPTY `/etc/styrman`, which `host-setup.sh` creates empty until auto-update is set up — every level-2/3 uninstall on such a host would have aborted, dry-run preview included): FIXED — an empty state or etc directory is deletable (nothing inside to protect); a deploy clone must still look like one; test seeds an empty etc dir and asserts level 2 plans its removal, and the "foreign tree" test now uses a non-empty directory. Verified bare: shellcheck 0, `go test` exit 0 (15 tests), `go vet` 0.
+- The other eight fixes in that range were confirmed closed with no new defect.
+- Verifier over `e34bf37` (`testing/2026-09-11-verifier-styrman-ctl-final.md`): PASS — every tier, eight real read-only commands on the host, state byte-identical before and after.
