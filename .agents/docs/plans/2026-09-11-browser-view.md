@@ -92,9 +92,9 @@ Decisions taken with the operator on 2026-09-11 (scope confirmation):
 | server | `internal/orchestrator/browser.go` (new) + `browser_test.go` | `BrowserStart`, `BrowserStop`, `BrowserStatus` over `Exec` |
 | server | `internal/orchestrator/ports.go` | drop `config.BrowserPort` from `ListeningPorts` output |
 | server | `internal/httpapi/browser.go` (new) + `browser_test.go` | REST handlers, WS relay, `previewPortAllowed` guard |
-| server | `internal/httpapi/proxy.go`, `shares.go`, `links.go` | refuse `config.BrowserPort` (400) in `proxyPort`, `setShares`, `createLink` |
+| server | `internal/httpapi/proxy.go`, `shares.go`, `links_api.go` | refuse `config.BrowserPort` (400) in `proxyPort`, `setShares`, `createLink` |
 | server | `internal/httpapi/server.go` | route registration |
-| web | `web/src/lib/editorPane.ts` (+test) | `view` union gains `"browser"`; `browser: { url: string \| null }` field + `openInBrowser(project, term, url)` |
+| web | `web/src/lib/editorPane.ts` (+test) | `view` union gains `"browser"`; `browser: { url: string \| null }` field + `openInBrowser(project, term, url)`; the no-op guard in `set()` (`editorPane.ts:96-107`) gains `prev.browser === next.browser` — exactly the omission its own comment records for `diff`; `openInBrowser` always allocates a NEW `browser` object so a second port while already on the Browser view is never a no-op; a unit test opens two ports in a row and asserts two emits |
 | web | `web/src/lib/cdp.ts` (new, +test) | minimal CDP client over a WebSocket |
 | web | `web/src/lib/browserInput.ts` (new, +test) | pure key / mouse / wheel → CDP `Input.*` param mapping and coordinate scaling |
 | web | `web/src/lib/api.ts` (+ `api.encoding.test.ts`) | `browserStatus`, `browserStart`, `browserStop`, `browserSocketUrl` |
@@ -424,7 +424,7 @@ brings the browser back with a fresh tab.
 - [ ] Phase checkpoint — who: AI
 
 ### Phase 3 — SPA: CDP client, BrowserPane, toggle, Ports button
-- [ ] `editorPane.ts`: `"browser"` view + `browser.url` + `openInBrowser`; tests — verify: `npm test`; who: AI
+- [ ] `editorPane.ts`: `"browser"` view + `browser.url` + `openInBrowser` + the guard's `browser` comparison; tests include the two-ports-in-a-row case — verify: `npm test`; who: AI
 - [ ] `cdp.ts` + tests — verify: `npm test`; who: AI
 - [ ] `browserInput.ts` + tests — verify: `npm test`; who: AI
 - [ ] `api.ts` four calls + encoding tests — verify: `npm test`; who: AI
