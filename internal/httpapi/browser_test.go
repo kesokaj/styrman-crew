@@ -453,6 +453,17 @@ func TestBrowserStartPassesPeer(t *testing.T) {
 	if !hasWord(env, "STYRMAN_BROWSER_PEER=172.16.0.254") {
 		t.Fatalf("start exec env = %v, want the peer", env)
 	}
+	// An unknown peer is passed as an EMPTY value, never omitted: the
+	// launcher reads "set but empty" as "no forwarder" and only an unset
+	// variable falls back to the broker's host.
+	env = nil
+	s.browserPeerFn = func(context.Context, string) string { return "" }
+	if w := do(t, h, http.MethodPost, "/api/projects/"+pid+"/browser/start", ""); w.Code != http.StatusOK {
+		t.Fatalf("start = %d %s", w.Code, w.Body.String())
+	}
+	if !hasWord(env, "STYRMAN_BROWSER_PEER=") {
+		t.Fatalf("start exec env = %v, want an explicit empty peer", env)
+	}
 }
 
 type envRecordingGuest struct {

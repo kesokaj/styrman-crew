@@ -68,7 +68,12 @@ version_of() { probe | jq -r '.Browser // empty' 2>/dev/null || true; }
 # stray comma would read as more options (security review).
 peer_range() {
     local host=""
-    if [ -n "${STYRMAN_BROWSER_PEER:-}" ]; then
+    # SET decides, not non-empty: the server always sets STYRMAN_BROWSER_PEER
+    # on its starts — empty when it could not learn its own address — and
+    # an empty value must mean "no forwarder", not "fall back to the
+    # broker's host" (security review, round 4). Only an UNSET variable (a
+    # browser the agent's MCP server started) uses the broker fallback.
+    if [ -n "${STYRMAN_BROWSER_PEER+set}" ]; then
         host="${STYRMAN_BROWSER_PEER}"
     elif [ -n "${STYRMAN_CRED_BROKER:-}" ]; then
         host="${STYRMAN_CRED_BROKER#*://}"

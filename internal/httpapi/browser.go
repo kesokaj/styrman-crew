@@ -72,11 +72,14 @@ func (s *Server) browserExec(ctx context.Context, user, project, guestUser, verb
 	}
 	env := []string{"HOME=/home/" + guestUser, "USER=" + guestUser}
 	if verb == "start" {
-		// The forwarder admits exactly this address (ADR-068 amendment); an
-		// unknown peer means no forwarder — the launcher fails closed.
-		if peer := s.browserPeer(ctx, project); peer != "" {
-			env = append(env, "STYRMAN_BROWSER_PEER="+peer)
-		}
+		// The forwarder admits exactly this address (ADR-068 amendment). The
+		// variable is ALWAYS set on a server-run start — empty when the peer
+		// is unknown — because the launcher reads "set but empty" as "no
+		// forwarder" and only an UNSET variable (an agent-started browser)
+		// falls back to the broker's host. Omitting it here would hand the
+		// launcher that fallback and undo the fail-closed answer (security
+		// review, round 4).
+		env = append(env, "STYRMAN_BROWSER_PEER="+s.browserPeer(ctx, project))
 	}
 	code, out, err := s.guest.Exec(ctx, st.ContainerID, orchestrator.ExecSpec{
 		Cmd:  []string{browserLauncher, verb},
@@ -425,10 +428,12 @@ func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn) {
 	go func() { paneErr <- pump(upstream, pane) }()
 	upErr := make(chan error, 1)
 	go func() { upErr <- pump(pane, upstream) }()
-	// Heartbeat toward the pane: a tab that went away without a close frame
-	// (laptop lid, network drop) must not hold its slot and its guest exec
-	// forever — r.Context() is no longer cancelled once the socket is
-	// hijacked. Same shape as the terminal bridge's ping loop.
+	// Heartbeat toward BOTH sides: a tab that went away without a close
+	// frame (laptop lid, network drop) or a guest whose TCP half-died must
+	// not hold the slot and the guest exec forever — r.Context() is no
+	// longer cancelled once the socket is hijacked. Same shape as the
+	// terminal bridge's ping loop; the timeout is generous because a pong
+	// waits behind the frames already queued on a busy screencast.
 	pingErr := make(chan error, 1)
 	go func() {
 		t := time.NewTicker(browserRelayPing)
@@ -438,8 +443,11 @@ func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				pctx, pc := context.WithTimeout(ctx, 10*time.Second)
+				pctx, pc := context.WithTimeout(ctx, browserRelayPing/2)
 				err := pane.Ping(pctx)
+				if err == nil {
+					err = upstream.Ping(pctx)
+				}
 				pc()
 				if err != nil {
 					pingErr <- err

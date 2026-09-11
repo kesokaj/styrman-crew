@@ -61,3 +61,20 @@ stale link/share records still shown in the owner's UI while 404ing.
 3. Ask the agent to take a screenshot or click something — the pane follows.
 4. Record the outcome in this file's follow-up (or a new `testing/` log) and
    tick the plan's "Manual agent walk" box.
+
+## Security round 4 (`reviews/2026-09-11-security-browser-phase4.md`, 0 high / 0 medium / 8 low / 2 info) — 2026-09-11, after the Phase 4 commit
+
+Fixed (commit "browser: security round 4"): the fail-closed peer now reaches
+the launcher — the server always SETS `STYRMAN_BROWSER_PEER` on its starts
+(empty when unknown) and the launcher reads set-but-empty as "no forwarder",
+falling back to the broker's host only for an UNSET variable (an
+agent-started browser); test `TestBrowserStartPassesPeer` covers the empty
+case and the launcher's `peer_range` was exercised with both shapes. The
+relay heartbeat pings both sides with a timeout of half the interval (15 s),
+so a half-dead guest socket also frees its slot and a pong queued behind a
+busy screencast is not mistaken for a dead pane. Accepted for now, with
+reasons: the `listTerminals` degradation has no expiry or client marker (a
+lasting scan failure reads as "all paused" — the WARN line says why; a
+marker is a follow-up); `deleteAllTerminals` deleting records despite kill
+failures is pre-existing behaviour outside this feature; the remaining lows
+and infos are wording and partials already listed as follow-ups in the plan.
