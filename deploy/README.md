@@ -15,9 +15,15 @@ STYRMAN_VERSION=<x.y.z> docker compose up -d --build
 `styrman-ctl` — one front door over the scripts above (plan
 `../.agents/docs/plans/2026-09-11-installer-ctl.md`): `sudo deploy/styrman-ctl
 status [--json]` reports what is installed, deployed and running (exit 0 ok,
-1 degraded, 2 nothing installed); `install`, `update`, `edit` and
-`uninstall` arrive with the plan's later phases. `--dry-run` prints every
-command a verb would run and runs nothing.
+1 degraded, 2 nothing installed); `sudo deploy/styrman-ctl install` runs
+`host-setup.sh`, asks for the six must-fill `.env` keys (validated), builds
+the runtime image and brings the stack up at the checkout's release tag (or
+`--version`), then offers to set up auto-update; `sudo deploy/styrman-ctl
+update --setup` does that setup on its own (token, clone, `.env` copy,
+`allowed_signers`, timer) — the 8c prose above as prompts. `edit`, plain
+`update` and `uninstall` arrive with the plan's later phases. `--dry-run`
+prints every command a verb would run and runs nothing; `--yes` with
+`--env-file`, `--gh-token-file` and `--allowed-signers-file` runs unattended.
 
 Full walkthrough: `../.agents/docs/specs/styrman/deploy.md` (including the
 credential broker's bridge-only listener). There is no backup layer —

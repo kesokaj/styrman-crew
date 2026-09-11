@@ -206,7 +206,7 @@ func TestStyrmanCtlValidate(t *testing.T) {
 		{"BASE_DOMAIN", "not a host"}, {"BASE_DOMAIN", ""}, {"STYRMAN_HOSTNAME", "a.b"}, {"ADMIN_EMAIL", "nope"},
 		{"STYRMAN_ALLOWED_EMAILS", ""}, {"STYRMAN_ALLOWED_EMAILS", "a@b.co,,"}, {"STYRMAN_IDLE_TIMEOUT", "8 hours"},
 		{"STYRMAN_BROKER_ADDR", "8091"}, {"DEFAULT_RPS", "ten"}, {"CADDY_ADMIN", "localhost:2019"},
-		{"CADDY_ADMIN", "0.0.0.0:2019"}, {"STYRMAN_IMAGE", "styrman-runtime:dev"}, {"GOOGLE_CLIENT_SECRET", "has space"},
+		{"CADDY_ADMIN", "0.0.0.0:2019"}, {"CADDY_ADMIN", "127.0.0.1:70000"}, {"CADDY_ADMIN", "127.0.0.999:2019"}, {"STYRMAN_IMAGE", "styrman-runtime:dev"}, {"GOOGLE_CLIENT_SECRET", "has space"},
 		{"STYRMAN_UID", "1000"}, {"STYRMAN_JWT_KEY", "abc"}, {"NOT_A_KEY", "x"},
 	}
 	for _, b := range bad {
@@ -276,5 +276,177 @@ func TestStyrmanCtlGuardPath(t *testing.T) {
 	e.env = append(e.env, "STYRMAN_STATE_DIR="+link)
 	if out, code := ctl(t, e, "__guard-path", link); code == 0 || !strings.Contains(out, "symlink") {
 		t.Fatalf("symlinked state accepted: %d %s", code, out)
+	}
+}
+
+// ── Phase 2: install and update --setup, as dry-run plans ──────────────────
+
+func planLines(out string) []string {
+	var lines []string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "+ ") {
+			lines = append(lines, l)
+		}
+	}
+	return lines
+}
+
+func indexOf(lines []string, sub string) int {
+	for i, l := range lines {
+		if strings.Contains(l, sub) {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestStyrmanCtlInstallPlan(t *testing.T) {
+	e := ctlSetup(t, true)
+	envFile := filepath.Join(e.root, "checkout.env")
+	if err := os.WriteFile(envFile, []byte("BASE_DOMAIN=\nGOOGLE_CLIENT_ID=\nGOOGLE_CLIENT_SECRET=\nCLOUDFLARE_API_TOKEN=\nADMIN_EMAIL=\nSTYRMAN_ALLOWED_EMAILS=\nSTYRMAN_HOSTNAME=crew\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	answers := filepath.Join(e.root, "answers.env")
+	if err := os.WriteFile(answers, []byte("BASE_DOMAIN=example.test\nGOOGLE_CLIENT_ID=id.apps\nGOOGLE_CLIENT_SECRET=s3cret\nCLOUDFLARE_API_TOKEN=cf\nADMIN_EMAIL=a@example.test\nSTYRMAN_ALLOWED_EMAILS=a@example.test,b@example.test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.env = append(e.env, "STYRMAN_ENV_FILE="+envFile, "SUDO_USER=tester")
+	out, code := ctl(t, e, "install", "--dry-run", "--yes", "--version", "1.2.3", "--env-file", answers, "--skip-auto-update")
+	if code != 0 {
+		t.Fatalf("install --dry-run: %d\n%s", code, out)
+	}
+	lines := planLines(out)
+	hs := indexOf(lines, "host-setup.sh --user tester")
+	build := indexOf(lines, "docker build -t styrman-runtime:1.2.3 --build-arg STYRMAN_VERSION=1.2.3")
+	up := indexOf(lines, "env STYRMAN_VERSION=1.2.3 docker compose -f")
+	wait := indexOf(lines, "wait up to 120s")
+	if hs < 0 || build < 0 || up < 0 || wait < 0 || !(hs < build && build < up && up < wait) {
+		t.Fatalf("plan order wrong (host-setup %d, build %d, up %d, wait %d):\n%s", hs, build, up, wait, out)
+	}
+	if !strings.Contains(lines[up], "--env-file "+envFile) {
+		t.Fatalf("compose must be pinned to the env file: %s", lines[up])
+	}
+	// The six must-fill keys were validated and written (dry-run: the moves are planned, the file untouched).
+	if n := strings.Count(out, "+ mv -f"); n != 6 {
+		t.Fatalf("expected 6 planned .env writes, got %d:\n%s", n, out)
+	}
+	if got, _ := os.ReadFile(envFile); !strings.Contains(string(got), "BASE_DOMAIN=\n") {
+		t.Fatalf("dry run wrote the env file:\n%s", got)
+	}
+	// Nothing ran: the fakes only saw status-style read calls, never host-setup or docker build.
+	calls, _ := os.ReadFile(e.calls)
+	if strings.Contains(string(calls), "docker build") || strings.Contains(string(calls), "compose") {
+		t.Fatalf("dry run executed something:\n%s", calls)
+	}
+}
+
+func TestStyrmanCtlInstallRefusals(t *testing.T) {
+	e := ctlSetup(t, true)
+	envFile := filepath.Join(e.root, "checkout.env")
+	if err := os.WriteFile(envFile, []byte("BASE_DOMAIN=\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := append([]string{}, e.env...)
+	// Unattended without a value for a must-fill key: dies naming the key.
+	e.env = append(base, "STYRMAN_ENV_FILE="+envFile, "SUDO_USER=tester")
+	if out, code := ctl(t, e, "install", "--dry-run", "--yes", "--version", "1.2.3", "--skip-auto-update"); code == 0 || !strings.Contains(out, "BASE_DOMAIN") {
+		t.Fatalf("missing key accepted: %d %s", code, out)
+	}
+	// A bad version and a missing version (the fake git describes nothing usable).
+	if out, code := ctl(t, e, "install", "--dry-run", "--yes", "--version", "v1", "--skip-auto-update"); code == 0 || !strings.Contains(out, "no release version") {
+		t.Fatalf("bad version accepted: %d %s", code, out)
+	}
+	// No operator at all.
+	e.env = append(base, "STYRMAN_ENV_FILE="+envFile, "SUDO_USER=")
+	if out, code := ctl(t, e, "install", "--dry-run", "--yes", "--version", "1.2.3", "--skip-auto-update"); code == 0 || !strings.Contains(out, "--user") {
+		t.Fatalf("no operator accepted: %d %s", code, out)
+	}
+	// From inside the updater's clone: refused. The checkout IS the repo, so
+	// point the deploy dir at an ancestor of it.
+	e.env = append(base, "STYRMAN_ENV_FILE="+envFile, "SUDO_USER=tester", "STYRMAN_DEPLOY_DIR="+filepath.Dir(repoRoot(t)))
+	if out, code := ctl(t, e, "install", "--dry-run", "--yes", "--version", "1.2.3", "--skip-auto-update"); code == 0 || !strings.Contains(out, "auto-updater's clone") {
+		t.Fatalf("install from the clone accepted: %d %s", code, out)
+	}
+}
+
+func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
+	e := ctlSetup(t, true)
+	// A fake git that reports an ssh origin and records everything (askpass env included).
+	gitFake := "#!/usr/bin/env bash\necho \"git $* GIT_ASKPASS=${GIT_ASKPASS:-} GIT_TERMINAL_PROMPT=${GIT_TERMINAL_PROMPT:-}\" >> \"" + e.calls + "\"\ncase \"$*\" in *get-url*) echo git@github.com:owner/repo.git ;; *rev-parse*) echo 4686792 ;; *) echo v1.27.1 ;; esac\n"
+	if err := os.WriteFile(filepath.Join(e.bin, "git"), []byte(gitFake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tok := filepath.Join(e.root, "tok")
+	if err := os.WriteFile(tok, []byte("ghp_SECRETTOKEN\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	signers := filepath.Join(e.root, "signers")
+	if err := os.WriteFile(signers, []byte("me@example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(e.root, "checkout.env")
+	if err := os.WriteFile(envFile, []byte("BASE_DOMAIN=example.test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Fresh setup: no clone yet.
+	if err := os.RemoveAll(filepath.Join(e.root, "deploy", ".git")); err != nil {
+		t.Fatal(err)
+	}
+	e.env = append(e.env, "STYRMAN_ENV_FILE="+envFile)
+	out, code := ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", signers)
+	if code != 0 {
+		t.Fatalf("update --setup --dry-run: %d\n%s", code, out)
+	}
+	if strings.Contains(out, "SECRETTOKEN") {
+		t.Fatalf("the token leaked into the plan:\n%s", out)
+	}
+	lines := planLines(out)
+	want := []string{
+		"install -d -m 700 -o root -g root " + filepath.Join(e.root, "etc"),
+		"install -m 600 -o root -g root", // gh-token from the temp file
+		"git clone https://github.com/owner/repo.git " + filepath.Join(e.root, "deploy"),
+		"chown -R root:root " + filepath.Join(e.root, "deploy"),
+		"install -m 600 -o root -g root " + envFile + " " + filepath.Join(e.root, "deploy", "deploy", ".env"),
+		"install -m 644 -o root -g root", // allowed_signers from the temp file
+		"STYRMAN_UPDATE_STATE_DIR=" + filepath.Join(e.root, "etc", "update"),
+		"systemctl enable --now styrman-update.timer",
+		"systemctl start styrman-update.service",
+	}
+	last := -1
+	for _, w := range want {
+		i := indexOf(lines, w)
+		if i < 0 {
+			t.Fatalf("plan lacks %q:\n%s", w, out)
+		}
+		if i < last {
+			t.Fatalf("plan out of order at %q:\n%s", w, out)
+		}
+		last = i
+	}
+	clone := lines[indexOf(lines, "git clone")]
+	if !strings.Contains(clone, "GIT_ASKPASS=") || !strings.Contains(clone, "GIT_TERMINAL_PROMPT=0") {
+		t.Fatalf("clone runs without the one-shot askpass: %s", clone)
+	}
+	if strings.Contains(out, "credential.helper") {
+		t.Fatalf("a credential helper reached git config:\n%s", out)
+	}
+	// An existing clone is fetched, not re-cloned.
+	if err := os.MkdirAll(filepath.Join(e.root, "deploy", ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, _ = ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", signers)
+	if !strings.Contains(out, "fetch --tags") || strings.Contains(out, "git clone") {
+		t.Fatalf("existing clone not fetched:\n%s", out)
+	}
+	// A malformed signers line is refused before anything is planned.
+	if err := os.WriteFile(signers, []byte("not a signers line\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", signers); code == 0 || !strings.Contains(out, "allowed_signers line") || len(planLines(out)) != 0 {
+		t.Fatalf("bad signers accepted: %d %s", code, out)
+	}
+	// Plain update is still the Phase 3 stub.
+	if out, code := ctl(t, e, "update", "--dry-run"); code == 0 || !strings.Contains(out, "not implemented") {
+		t.Fatalf("plain update: %d %s", code, out)
 	}
 }

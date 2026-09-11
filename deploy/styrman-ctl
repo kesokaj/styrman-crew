@@ -32,7 +32,11 @@ SBIN_DIR="${STYRMAN_SBIN_DIR:-/usr/local/sbin}"
 TMPFILES_DIR="${STYRMAN_TMPFILES_DIR:-/etc/tmpfiles.d}"
 KATA_DIR="${STYRMAN_KATA_DIR:-/opt/kata}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="${REPO}/deploy/.env"
+# The checkout's .env (host-setup.sh 5b scaffolds it beside docker-compose.yml);
+# overridable so the tests never write into the real checkout.
+ENV_FILE="${STYRMAN_ENV_FILE:-${REPO}/deploy/.env}"
+OPERATOR="${SUDO_USER:-}"
+MUST_FILL="BASE_DOMAIN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET CLOUDFLARE_API_TOKEN ADMIN_EMAIL STYRMAN_ALLOWED_EMAILS"
 CLONE_ENV="${DEPLOY_DIR}/deploy/.env"
 # shellcheck disable=SC2034  # used by uninstall (plan phase 4)
 UNITS=(styrman-firewall.service styrman-firewall.timer styrman-update.service styrman-update.timer)
@@ -50,22 +54,28 @@ need_root() { [ "${DRY}" = 1 ] || [ "$(id -u)" = 0 ] || die "run as root (sudo),
 # ask VAR "prompt" "default" [secret]: reads from the terminal, never from a
 # pipe; under --yes (or with no terminal) the default is taken, and an empty
 # default is an error rather than a hang.
+# has_tty: can /dev/tty actually be OPENED (a permission bit says nothing
+# under systemd, cron or go test, where the device exists but no terminal is
+# attached).
+has_tty() { ( : < /dev/tty ) 2>/dev/null; }
+# Its own locals carry underscores: `printf -v "${var}"` assigns by NAME and
+# would otherwise land on a same-named local here instead of the caller's.
 ask() {
-    local var="$1" prompt="$2" default="${3:-}" secret="${4:-}" v=""
-    if [ "${YES}" = 1 ] || [ ! -t 0 ] && [ ! -r /dev/tty ]; then
-        [ -n "${default}" ] || die "no value for ${var} (non-interactive; pass it explicitly)"
-        printf -v "${var}" '%s' "${default}"
+    local _var="$1" _prompt="$2" _default="${3:-}" _secret="${4:-}" _v=""
+    if [ "${YES}" = 1 ] || ! has_tty; then
+        [ -n "${_default}" ] || die "no value for ${_prompt} (non-interactive; pass it explicitly)"
+        printf -v "${_var}" '%s' "${_default}"
         return 0
     fi
-    local shown="${default}"
-    [ -n "${secret}" ] && [ -n "${default}" ] && shown="********"
-    if [ -n "${secret}" ]; then
-        read -rs -p "${prompt}${shown:+ [${shown}]}: " v < /dev/tty; echo
+    local _shown="${_default}"
+    [ -n "${_secret}" ] && [ -n "${_default}" ] && _shown="********"
+    if [ -n "${_secret}" ]; then
+        read -rs -p "${_prompt}${_shown:+ [${_shown}]}: " _v < /dev/tty; echo
     else
-        read -r -p "${prompt}${shown:+ [${shown}]}: " v < /dev/tty
+        read -r -p "${_prompt}${_shown:+ [${_shown}]}: " _v < /dev/tty
     fi
-    [ -n "${v}" ] || v="${default}"
-    printf -v "${var}" '%s' "${v}"
+    [ -n "${_v}" ] || _v="${_default}"
+    printf -v "${_var}" '%s' "${_v}"
 }
 
 # confirm_word WORD "why": the operator types the exact word; --confirm WORD
@@ -77,7 +87,7 @@ confirm_word() {
         [ "${CONFIRM_GIVEN}" = "${word}" ] || die "--confirm ${CONFIRM_GIVEN} does not match the required word — aborted, nothing changed"
         return 0
     fi
-    [ -r /dev/tty ] || die "no terminal to confirm on; pass --confirm ${word} to proceed unattended"
+    has_tty || die "no terminal to confirm on; pass --confirm ${word} to proceed unattended"
     echo "${why}"
     read -r -p "Type ${word} to continue: " typed < /dev/tty
     [ "${typed}" = "${word}" ] || die "aborted, nothing changed"
@@ -126,7 +136,21 @@ is_label()    { [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; }
 is_email()    { [[ "$1" =~ ^[^[:space:]@,]+@[^[:space:]@,]+\.[^[:space:]@,]+$ ]]; }
 is_email_list() { local IFS=, e; for e in $1; do e="${e// /}"; [ -n "${e}" ] || return 1; is_email "${e}" || return 1; done; [ -n "$1" ]; }
 is_duration() { [[ "$1" =~ ^([0-9]+(ns|us|ms|s|m|h))+$ ]]; }
-is_loopback_addr() { [[ "$1" =~ ^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]{1,5}$ ]] || [[ "$1" =~ ^\[::1\]:[0-9]{1,5}$ ]]; }
+is_port() { [[ "$1" =~ ^[0-9]{1,5}$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
+is_octet() { [[ "$1" =~ ^[0-9]{1,3}$ ]] && [ "$1" -le 255 ]; }
+is_loopback_addr() {
+    local a b c port
+    if [[ "$1" =~ ^127\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3}):([0-9]{1,5})$ ]]; then
+        # Copy the groups first: each helper's own =~ rewrites BASH_REMATCH.
+        a="${BASH_REMATCH[1]}"; b="${BASH_REMATCH[2]}"; c="${BASH_REMATCH[3]}"; port="${BASH_REMATCH[4]}"
+        is_octet "${a}" && is_octet "${b}" && is_octet "${c}" && is_port "${port}"
+    elif [[ "$1" =~ ^\[::1\]:([0-9]{1,5})$ ]]; then
+        port="${BASH_REMATCH[1]}"
+        is_port "${port}"
+    else
+        return 1
+    fi
+}
 # validate KEY VALUE → 0, or 1 with the rule on stderr.
 validate() {
     local key="$1" v="$2" ok=1
@@ -290,6 +314,201 @@ cmd_status() {
     return "${rc}"
 }
 
+# ─── install ────────────────────────────────────────────────────────────────
+# wait_healthy SECONDS: the compose healthcheck's verdict on styrman-server.
+wait_healthy() {
+    local n="$1" i st
+    if [ "${DRY}" = 1 ]; then echo "+ wait up to ${n}s for styrman-server to report healthy"; return 0; fi
+    for ((i = 0; i < n; i++)); do
+        st="$(container_field styrman-server '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')"
+        [ "${st}" = healthy ] && return 0
+        sleep 1
+    done
+    echo "styrman-server is not healthy after ${n}s — last log lines:" >&2
+    docker logs --tail 30 styrman-server >&2 2>/dev/null || true
+    return 1
+}
+
+# ask_env_key KEY DEFAULT: prompt (validating, re-asking while interactive)
+# and write the key to the checkout's .env. Unattended: the default must
+# validate or the run dies naming the key.
+ask_env_key() {
+    local key="$1" default="$2" secret="" v
+    case " ${SECRET_KEYS} " in *" ${key} "*) secret=1 ;; esac
+    while :; do
+        ask v "${key}" "${default}" "${secret}"
+        if validate "${key}" "${v}"; then break; fi
+        [ "${YES}" = 1 ] && die "invalid value for ${key} (non-interactive)"
+        has_tty || die "invalid value for ${key}"
+        default="${v}"
+    done
+    env_set "${ENV_FILE}" "${key}" "${v}"
+}
+
+# resolve_version FLAG: --version wins, else the checkout's newest reachable
+# release tag without its v; never a bare commit sha (ADR-053).
+resolve_version() {
+    local v="$1"
+    if [ -z "${v}" ]; then
+        v="$(git -C "${REPO}" describe --tags --abbrev=0 2>/dev/null || true)"
+        v="${v#v}"
+    fi
+    [[ "${v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "no release version: pass --version X.Y.Z (the checkout has no reachable vX.Y.Z tag; a commit sha is never a version, ADR-053)"
+    printf '%s' "${v}"
+}
+
+# https_origin: this checkout's origin as an https URL (an ssh form is
+# rewritten; the updater clones over https with a token).
+https_origin() {
+    local o
+    o="$(git -C "${REPO}" remote get-url origin 2>/dev/null || true)"
+    [ -n "${o}" ] || die "this checkout has no git remote 'origin' — the deploy clone needs one"
+    o="$(printf '%s' "${o}" | sed -E 's#^git@([^:]+):#https://\1/#; s#^ssh://git@([^/]+)/#https://\1/#')"
+    printf '%s' "${o}"
+}
+
+cmd_install() {
+    local version="" env_file="" gh_token_file="" signers_file="" skip_au=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --user) OPERATOR="$2"; shift 2 ;;
+            --version) version="$2"; shift 2 ;;
+            --env-file) env_file="$2"; shift 2 ;;
+            --gh-token-file) gh_token_file="$2"; shift 2 ;;
+            --allowed-signers-file) signers_file="$2"; shift 2 ;;
+            --skip-auto-update) skip_au=1; shift ;;
+            *) die "install: unknown flag $1" ;;
+        esac
+    done
+    need_root
+    # Never from the updater's clone: an auto checkout there would stomp
+    # the operator's work, and the clone is root's (host-setup.sh 8c).
+    case "$(realpath -m -- "${REPO}")/" in "$(realpath -m -- "${DEPLOY_DIR}")/"*) die "refusing to install from ${REPO}: it is the auto-updater's clone (${DEPLOY_DIR}); run install from your own checkout" ;; esac
+    [ -f /etc/debian_version ] || [ "${DRY}" = 1 ] || die "not a Debian host (R11: Debian 13)"
+    [ -n "${OPERATOR}" ] || die "pass --user <operator account> (no SUDO_USER)"
+    local t; for t in python3 curl git; do command -v "${t}" >/dev/null 2>&1 || die "${t} is required (apt-get install -y ${t})"; done
+    [ -z "${env_file}" ] || [ -f "${env_file}" ] || die "--env-file ${env_file}: no such file"
+    version="$(resolve_version "${version}")"
+
+    log "install: host-setup.sh as root for operator ${OPERATOR}"
+    run bash "${REPO}/deploy/host-setup.sh" --user "${OPERATOR}"
+
+    log "install: deploy/.env — the must-fill keys"
+    if [ ! -f "${ENV_FILE}" ]; then
+        [ "${DRY}" = 1 ] || die "host-setup.sh did not scaffold ${ENV_FILE}"
+        echo "+ (dry run) would prompt for: ${MUST_FILL} and write ${ENV_FILE}"
+    else
+        local key default
+        for key in ${MUST_FILL}; do
+            default="$(env_get "${ENV_FILE}" "${key}")"
+            [ -z "${env_file}" ] || { local given; given="$(env_get "${env_file}" "${key}")"; [ -z "${given}" ] || default="${given}"; }
+            ask_env_key "${key}" "${default}"
+        done
+    fi
+
+    log "install: runtime image and stack at version ${version} (from this checkout — the documented first bring-up)"
+    run docker build -t "styrman-runtime:${version}" --build-arg "STYRMAN_VERSION=${version}" "${REPO}/image"
+    run env "STYRMAN_VERSION=${version}" docker compose -f "${REPO}/deploy/docker-compose.yml" --env-file "${ENV_FILE}" up -d --build
+    wait_healthy 120 || die "the stack came up but styrman-server is not healthy; \`styrman-ctl status\` and \`docker logs styrman-server\`"
+    local base hn; base="$(env_get "${ENV_FILE}" BASE_DOMAIN)"; hn="$(env_get "${ENV_FILE}" STYRMAN_HOSTNAME)"
+    [ -z "${base}" ] || log "install: styrman is up at https://${hn:-styrman}.${base}"
+
+    if [ "${skip_au}" = 1 ]; then
+        log "install: auto-update skipped (--skip-auto-update); \`styrman-ctl update --setup\` sets it up later"
+    elif [ "${YES}" = 1 ] && { [ -z "${gh_token_file}" ] || [ -z "${signers_file}" ]; }; then
+        log "install: auto-update skipped — unattended and no --gh-token-file/--allowed-signers-file; \`styrman-ctl update --setup\` sets it up later"
+    else
+        local want=y
+        [ "${YES}" = 1 ] || ask want "Set up auto-update now (the updater deploys signed release tags itself)? [y/N]" "n"
+        case "${want}" in y|Y|yes) setup_auto_update "${gh_token_file}" "${signers_file}" ;; *) log "install: auto-update not set up; \`styrman-ctl update --setup\` does it later" ;; esac
+    fi
+
+    log "install: done. Log out and back in once so YOUR shell picks up the docker group (host-setup.sh added ${OPERATOR} to it; this run needed no group, it ran as root)."
+}
+
+# ─── update --setup: host-setup.sh 8c's prose as code ───────────────────────
+is_signers_line() { [[ "$1" =~ ^[^[:space:]]+\ (ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)\ [A-Za-z0-9+/=]+ ]]; }
+
+# setup_auto_update [TOKEN_FILE] [SIGNERS_FILE]
+setup_auto_update() {
+    local token_file="${1:-}" signers_file="${2:-}" token="" signers="" origin tmpd
+    [ -x "${BIN_DIR}/styrman-update" ] || [ "${DRY}" = 1 ] || die "${BIN_DIR}/styrman-update is not installed — run install first"
+    if [ -n "${token_file}" ]; then
+        [ -f "${token_file}" ] || die "--gh-token-file ${token_file}: no such file"
+        token="$(tr -d '\n' < "${token_file}")"
+    else
+        ask token "GitHub fine-grained token for this repository (Contents: read-only; never echoed)" "" secret
+    fi
+    [ -n "${token}" ] || die "empty GitHub token"
+    if [ -n "${signers_file}" ]; then
+        [ -f "${signers_file}" ] || die "--allowed-signers-file ${signers_file}: no such file"
+        signers="$(head -1 "${signers_file}")"
+    else
+        ask signers "allowed_signers line: <your-git-email> <key type> <public key> (from ~/.ssh/id_ed25519.pub)" ""
+    fi
+    is_signers_line "${signers}" || die "not an allowed_signers line: expected '<email> <ssh key type> <base64 key>'"
+    origin="$(https_origin)"
+
+    tmpd="$(mktemp -d)"; chmod 700 "${tmpd}"
+    trap 'rm -rf "${tmpd}"' EXIT
+    # Secrets travel through root-only temp files, never argv or the plan.
+    (umask 077; printf '%s' "${token}" > "${tmpd}/gh-token"; printf '%s\n' "${signers}" > "${tmpd}/allowed_signers")
+    # One-shot askpass: git asks for a username, then a password; nothing is
+    # stored in any git config (the updater has its own helper reading the
+    # root-only token file, host-setup.sh 8c).
+    # shellcheck disable=SC2016  # $1 belongs to the helper script being written
+    printf '#!/usr/bin/env bash\ncase "$1" in *sername*) echo x-access-token ;; *) cat "%s" ;; esac\n' "${ETC_DIR}/gh-token" > "${tmpd}/askpass"
+    chmod 700 "${tmpd}/askpass"
+
+    log "auto-update: token → ${ETC_DIR}/gh-token (root, 600)"
+    run install -d -m 700 -o root -g root "${ETC_DIR}"
+    run install -m 600 -o root -g root "${tmpd}/gh-token" "${ETC_DIR}/gh-token"
+    if [ -d "${DEPLOY_DIR}/.git" ]; then
+        log "auto-update: clone exists at ${DEPLOY_DIR} — fetching tags"
+        run env "GIT_ASKPASS=${tmpd}/askpass" GIT_TERMINAL_PROMPT=0 git -C "${DEPLOY_DIR}" fetch --tags
+    else
+        log "auto-update: cloning ${origin} → ${DEPLOY_DIR} (https, token via a one-shot askpass)"
+        run env "GIT_ASKPASS=${tmpd}/askpass" GIT_TERMINAL_PROMPT=0 git clone "${origin}" "${DEPLOY_DIR}"
+    fi
+    run chown -R root:root "${DEPLOY_DIR}"
+    if [ -f "${CLONE_ENV}" ] && [ -f "${ENV_FILE}" ] && ! cmp -s "${CLONE_ENV}" "${ENV_FILE}"; then
+        local ow=n
+        if [ "${YES}" = 1 ]; then ow=y; else ask ow "${CLONE_ENV} differs from ${ENV_FILE}; overwrite the clone's copy? [y/N]" "n"; fi
+        case "${ow}" in y|Y|yes) run install -m 600 -o root -g root "${ENV_FILE}" "${CLONE_ENV}" ;; *) log "auto-update: keeping the clone's .env" ;; esac
+    else
+        if [ -f "${ENV_FILE}" ]; then
+            run install -m 600 -o root -g root "${ENV_FILE}" "${CLONE_ENV}"
+        elif [ "${DRY}" = 1 ]; then
+            echo "+ (dry run) would copy ${ENV_FILE} → ${CLONE_ENV}"
+        else
+            die "no ${ENV_FILE} to copy into the clone — run install first"
+        fi
+    fi
+    log "auto-update: allowed_signers → ${ETC_DIR}/allowed_signers (root, 644)"
+    run install -m 644 -o root -g root "${tmpd}/allowed_signers" "${ETC_DIR}/allowed_signers"
+    log "auto-update: dry check, then enable the timer and run the first tick"
+    run env "STYRMAN_UPDATE_STATE_DIR=${ETC_DIR}/update" "STYRMAN_DEPLOY_DIR=${DEPLOY_DIR}" "${BIN_DIR}/styrman-update" --check
+    run systemctl enable --now styrman-update.timer
+    run systemctl start styrman-update.service
+    rm -rf "${tmpd}"; trap - EXIT
+}
+
+cmd_update() {
+    local setup=0 gh_token_file="" signers_file=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --setup) setup=1; shift ;;
+            --gh-token-file) gh_token_file="$2"; shift 2 ;;
+            --allowed-signers-file) signers_file="$2"; shift 2 ;;
+            --redeploy) die "update --redeploy: not implemented yet (plan phase 3)" ;;
+            *) die "update: unknown flag $1" ;;
+        esac
+    done
+    need_root
+    [ "${setup}" = 1 ] || die "update: not implemented yet (plan phase 3) — \`update --setup\` works"
+    setup_auto_update "${gh_token_file}" "${signers_file}"
+}
+
 # ─── Internal test hooks (used by the Go test; not for operators) ───────────
 cmd_internal() {
     case "${1:-}" in
@@ -307,8 +526,8 @@ styrman-ctl — install, update, edit, uninstall and inspect a styrman host
 
   sudo deploy/styrman-ctl                menu
   sudo deploy/styrman-ctl status [--json]
-  sudo deploy/styrman-ctl install …      (not yet: plan phase 2)
-  sudo deploy/styrman-ctl update …       (not yet: plan phase 3)
+  sudo deploy/styrman-ctl install [--user U] [--version X.Y.Z] [--env-file F] [--gh-token-file F] [--allowed-signers-file F] [--skip-auto-update]
+  sudo deploy/styrman-ctl update --setup [--gh-token-file F] [--allowed-signers-file F]   (plain update: plan phase 3)
   sudo deploy/styrman-ctl edit …         (not yet: plan phase 3)
   sudo deploy/styrman-ctl uninstall …    (not yet: plan phase 4)
   deploy/styrman-ctl help
@@ -323,7 +542,7 @@ H
 }
 
 cmd_menu() {
-    [ -r /dev/tty ] || { cmd_help; exit 2; }
+    has_tty || { cmd_help; exit 2; }
     local choice
     echo "styrman-ctl"
     echo "  1) install    2) update    3) edit    4) uninstall    5) status    q) quit"
@@ -351,7 +570,9 @@ main() {
         "") cmd_menu ;;
         status) cmd_status "$@" ;;
         help|-h|--help) cmd_help ;;
-        install|update|edit|uninstall) die "${verb}: not implemented yet (plan .agents/docs/plans/2026-09-11-installer-ctl.md)" ;;
+        install) cmd_install "$@" ;;
+        update) cmd_update "$@" ;;
+        edit|uninstall) die "${verb}: not implemented yet (plan .agents/docs/plans/2026-09-11-installer-ctl.md)" ;;
         __*) cmd_internal "${verb}" "$@" ;;
         *) die "unknown verb ${verb} (try: help)" ;;
     esac
