@@ -232,8 +232,11 @@ units_state() { # prints is-enabled/is-active for styrman-firewall.{service,time
    the username prompt and the token file's content for the password
    prompt), so no credential is ever stored in the clone's config; the
    updater later uses its own helper reading `${STYRMAN_ETC_DIR}/gh-token`
-   (`host-setup.sh` 8c). Then `git -C ... checkout "v${V}"` for the tag
-   being deployed.
+   (`host-setup.sh` 8c). NO checkout here: the updater's first tick fetches
+   the tags and checks out the newest signed release itself
+   (`deploy/update/styrman-update:231-238,568`), and that tick is step 5 of
+   this same flow — a manual checkout would be redundant at best and, with
+   no defined version under `update --setup`, a guess at worst.
 3. `.env`: `install -m 600 -o root -g root` this checkout's `deploy/.env`
    to `${STYRMAN_DEPLOY_DIR}/deploy/.env`, and the whole clone stays
    `root:root` (`chown -R root:root "${STYRMAN_DEPLOY_DIR}"` after the
@@ -284,9 +287,13 @@ label=styrman.managed=true` — project microVMs AND the hidden setup VMs,
 which carry `styrman.system=setup` and no project label): `docker rm -f`;
 for each network named `sdb-*`/`lan-*` (`docker network ls --format
 '{{.Name}}'`): `docker network rm`; `systemctl disable --now` the four
-units (absent units skipped). Level 2 adds: `iptables -F STYRMAN-FWD`,
+units (absent units skipped). Level 2 adds: the firewall chains, IPv4 AND IPv6 — `iptables -F STYRMAN-FWD`,
 `-D DOCKER-USER -j STYRMAN-FWD`, `-X STYRMAN-FWD` (same for `STYRMAN-IN` in
-`INPUT`), `rm -f` of the unit files + `daemon-reload`, the two binaries, the
+`INPUT`), and when `ip6tables` exists the same for `STYRMAN-FWD6` (jump
+from `FORWARD`) and `STYRMAN-IN6` (jump from `INPUT`), which
+`deploy/firewall/styrman-firewall.sh:97-110` creates whenever `ip6tables`
+is present; each `-D`/`-X` is best-effort (`|| true`) since a chain may
+already be gone — then `rm -f` of the unit files + `daemon-reload`, the two binaries, the
 tmpfiles entry, `rm -rf "${STYRMAN_ETC_DIR}"` and `"${STYRMAN_DEPLOY_DIR}"`
 (each refused if it is a symlink or not root-owned — the BUG-009 rule),
 `docker image rm` of `styrman-runtime:*`, `styrman-server:*`,
