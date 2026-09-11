@@ -225,10 +225,15 @@ units_state() { # prints is-enabled/is-active for styrman-firewall.{service,time
 
 1. Token: `ask` (secret) or `--gh-token-file` → `install -m 600 -o root`
    to `${STYRMAN_ETC_DIR}/gh-token` (never echoed, never logged).
-2. Clone: `run git clone <https origin of this checkout> "${STYRMAN_DEPLOY_DIR}"`
-   with the token as a `GIT_ASKPASS` helper for this one command (no
-   credential stored in the clone's config), or `git -C ... fetch` if it
-   already exists; `git checkout` the tag being deployed.
+2. Clone: `run git clone <https origin of this checkout> "${STYRMAN_DEPLOY_DIR}"`,
+   or `git -C "${STYRMAN_DEPLOY_DIR}" fetch --tags` when the clone exists —
+   BOTH run with the same one-shot `GIT_ASKPASS` helper (a temp script under
+   `mktemp -d`, mode 700, removed on exit, that prints `x-access-token` for
+   the username prompt and the token file's content for the password
+   prompt), so no credential is ever stored in the clone's config; the
+   updater later uses its own helper reading `${STYRMAN_ETC_DIR}/gh-token`
+   (`host-setup.sh` 8c). Then `git -C ... checkout "v${V}"` for the tag
+   being deployed.
 3. `.env`: `install -m 600 -o root -g root` this checkout's `deploy/.env`
    to `${STYRMAN_DEPLOY_DIR}/deploy/.env`, and the whole clone stays
    `root:root` (`chown -R root:root "${STYRMAN_DEPLOY_DIR}"` after the
@@ -273,9 +278,12 @@ host-setup.sh; re-run install").
 
 Prints the level's plan (every command, from `run` in dry-run form), asks
 for the confirmation word, then executes through `run`. Level 1 commands, in
-order: `docker compose ... down --remove-orphans`; for each container
-`styrman-*` (label `styrman.project`): `docker rm -f`; for each network
-`sdb-*`/`lan-*`: `docker network rm`; `systemctl disable --now` the four
+order: `docker compose ... down --remove-orphans`; for each container with
+the label `styrman.managed=true` (`docker ps -aq --filter
+label=styrman.managed=true` — project microVMs AND the hidden setup VMs,
+which carry `styrman.system=setup` and no project label): `docker rm -f`;
+for each network named `sdb-*`/`lan-*` (`docker network ls --format
+'{{.Name}}'`): `docker network rm`; `systemctl disable --now` the four
 units (absent units skipped). Level 2 adds: `iptables -F STYRMAN-FWD`,
 `-D DOCKER-USER -j STYRMAN-FWD`, `-X STYRMAN-FWD` (same for `STYRMAN-IN` in
 `INPUT`), `rm -f` of the unit files + `daemon-reload`, the two binaries, the
@@ -300,6 +308,9 @@ styrman-ctl status  (host <name>, 2026-09-11 14:02)
   projects   3 running microVMs, 12 project dirs, /var/lib/styrman 41G
   host       Docker 29.7.2, Kata 3.31.0 (mvm), operator kesokaj
 ```
+The host name shown, and the word level-3 `uninstall` asks the operator to
+type, is `hostname` (the kernel's node name, `uname -n`); `--json` carries
+it as `"host"`.
 `--json`: the same as one object. Exit 0 all green, 1 anything degraded
 (failed-version latched, a unit disabled, server unhealthy), 2 nothing
 installed (no compose project, no units).
