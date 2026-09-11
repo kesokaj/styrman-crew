@@ -164,7 +164,9 @@ func TestBrowserPortRefusedOnPreviewSharesLinks(t *testing.T) {
 			{http.MethodPost, "/api/projects/" + pid + "/ports/" + port + "/links", `{"ttl":"1h"}`},
 		} {
 			w := do(t, h, c.method, c.path, c.body)
-			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "project's browser") {
+			// The message names the port that was asked for (review nit:
+			// 9229 used to be refused as "port 9222").
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "port "+port+" is the project's browser") {
 				t.Errorf("%s %s = %d %s, want 400 browser refusal", c.method, c.path, w.Code, w.Body.String())
 			}
 		}
@@ -326,4 +328,126 @@ func errorsAs(err error, target *websocket.CloseError) bool {
 		err = u.Unwrap()
 	}
 	return false
+}
+
+// A link or share record for the browser's port that predates the mint's
+// refusal must not serve: the public link route is authGuard-exempt, so it
+// would hand out no-login DevTools control (security review, round 2).
+func TestBrowserPortLinkAndShareRecordsDoNotServe(t *testing.T) {
+	f := &fakeGuest{reply: browserReply(true, 0, "")}
+	s, h, pid := browserTest(t, f, attached("10.0.0.2:9222"))
+	for _, port := range []int{config.BrowserPort, config.BrowserChromePort} {
+		l, err := s.links.Create(pid, "tester", port, "tester@example.com", time.Hour, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w := do(t, h, http.MethodGet, "/link/"+l.Token+"/", ""); w.Code != http.StatusNotFound {
+			t.Fatalf("stale public link for %d served: %d %s", port, w.Code, w.Body.String())
+		}
+		sp, err := s.space("tester")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sp.projects.SetPortShares(pid, port, []string{"guest@example.com"}); err != nil {
+			t.Fatal(err)
+		}
+		pl, err := s.links.EnsurePrivate(pid, "tester", port, "tester@example.com", time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w := do(t, h, http.MethodGet, "/shared/"+pl.Token+"/", ""); w.Code != http.StatusNotFound {
+			t.Fatalf("stale private share for %d served: %d %s", port, w.Code, w.Body.String())
+		}
+	}
+	// A normal port's records still serve (well, reach the proxy: 502 from a
+	// guest that is not there, not 404).
+	l, _ := s.links.Create(pid, "tester", 3000, "tester@example.com", time.Hour, time.Now())
+	if w := do(t, h, http.MethodGet, "/link/"+l.Token+"/", ""); w.Code == http.StatusNotFound {
+		t.Fatalf("a normal port's link 404s: %s", w.Body.String())
+	}
+}
+
+// The guest chooses what answers on its port; a redirect there must not steer
+// this server (which sits on every project bridge) anywhere else.
+func TestBrowserRelayFollowsNoRedirect(t *testing.T) {
+	victim := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the relay followed a redirect to %s", r.URL)
+	}))
+	defer victim.Close()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, victim.URL+"/json/version", http.StatusFound)
+	})
+	dev := httptest.NewServer(mux)
+	defer dev.Close()
+	f := &fakeGuest{reply: browserReply(true, 0, "")}
+	_, h, pid := browserTest(t, f, attached(strings.TrimPrefix(dev.URL, "http://")))
+	c, _ := dialRelay(t, h, pid)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, _, err := c.Read(ctx); websocket.CloseStatus(err) != websocket.StatusCode(config.CloseBrowserUnavailable) {
+		t.Fatalf("redirected discovery: err = %v, want close %d", err, config.CloseBrowserUnavailable)
+	}
+	// Same for the WebSocket dial itself.
+	mux2 := http.NewServeMux()
+	mux2.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"webSocketDebuggerUrl":"ws://x/devtools/browser/abc"}`))
+	})
+	mux2.HandleFunc("/devtools/browser/abc", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, victim.URL+"/devtools/browser/abc", http.StatusMovedPermanently)
+	})
+	dev2 := httptest.NewServer(mux2)
+	defer dev2.Close()
+	_, h2, pid2 := browserTest(t, &fakeGuest{reply: browserReply(true, 0, "")}, attached(strings.TrimPrefix(dev2.URL, "http://")))
+	c2, _ := dialRelay(t, h2, pid2)
+	if _, _, err := c2.Read(ctx); websocket.CloseStatus(err) != websocket.StatusCode(config.CloseBrowserUnavailable) {
+		t.Fatalf("redirected dial: err = %v, want close %d", err, config.CloseBrowserUnavailable)
+	}
+}
+
+// Origin is checked before any side effect, and the relay count is capped.
+func TestBrowserRelayOriginAndCap(t *testing.T) {
+	f := &fakeGuest{reply: browserReply(true, 0, "")}
+	s, h, pid := browserTest(t, f, attached("10.0.0.2:9222"))
+	r := httptest.NewRequest(http.MethodGet, "/ws/browser/"+pid, nil)
+	r.Header.Set("Origin", "http://evil.example")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden || len(f.calls) != 0 {
+		t.Fatalf("cross-origin: %d, execs %v", w.Code, f.calls)
+	}
+	s.browserRelays.Store(browserRelayMax)
+	if w := do(t, h, http.MethodGet, "/ws/browser/"+pid, ""); w.Code != http.StatusServiceUnavailable || len(f.calls) != 0 {
+		t.Fatalf("over the cap: %d, execs %v", w.Code, f.calls)
+	}
+	s.browserRelays.Store(0)
+}
+
+// The launcher learns the server's own bridge address on every start and
+// nothing else — the forwarder admits exactly that.
+func TestBrowserStartPassesPeer(t *testing.T) {
+	var env []string
+	f := &fakeGuest{}
+	f.reply = browserReply(true, 0, "")
+	s, h, pid := browserTest(t, f, attached("10.0.0.2:9222"))
+	s.browserPeerFn = func(context.Context, string) string { return "172.16.0.254" }
+	s.guest = &envRecordingGuest{fakeGuest: f, envs: &env}
+	if w := do(t, h, http.MethodPost, "/api/projects/"+pid+"/browser/start", ""); w.Code != http.StatusOK {
+		t.Fatalf("start = %d %s", w.Code, w.Body.String())
+	}
+	if !hasWord(env, "STYRMAN_BROWSER_PEER=172.16.0.254") {
+		t.Fatalf("start exec env = %v, want the peer", env)
+	}
+}
+
+type envRecordingGuest struct {
+	*fakeGuest
+	envs *[]string
+}
+
+func (g *envRecordingGuest) Exec(ctx context.Context, id string, spec orchestrator.ExecSpec) (int, string, error) {
+	if len(spec.Cmd) == 2 && spec.Cmd[1] == "start" {
+		*g.envs = append(*g.envs, spec.Env...)
+	}
+	return g.fakeGuest.Exec(ctx, id, spec)
 }

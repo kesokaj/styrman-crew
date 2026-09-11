@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { api, termSocketUrl } from "./api";
+import { api, browserSocketUrl, termSocketUrl } from "./api";
 
 // Every value the client interpolates into a path is percent-encoded by the
 // `u` tag in api.ts. The weakness it closes is path RETARGETING: browsers
@@ -65,6 +65,9 @@ describe("api paths encode every interpolated value", () => {
     ["deleteAllTerminals", () => api.deleteAllTerminals(CLIMB), "/api/projects/"],
     ["pauseTerminal", () => api.pauseTerminal("p", CLIMB), "/api/projects/p/terminals/"],
     ["listPorts", () => api.listPorts(CLIMB), "/api/projects/"],
+    ["browserStatus", () => api.browserStatus(CLIMB), "/api/projects/"],
+    ["browserStart", () => api.browserStart(CLIMB), "/api/projects/"],
+    ["browserStop", () => api.browserStop(CLIMB), "/api/projects/"],
     ["getPortShares", () => api.getPortShares(CLIMB, 8080), "/api/projects/"],
     ["setPortShares", () => api.setPortShares(CLIMB, 8080, []), "/api/projects/"],
     ["listLinks", () => api.listLinks(CLIMB), "/api/projects/"],
@@ -144,6 +147,22 @@ describe("api paths encode every interpolated value", () => {
     const href = api.downloadUrl({ kind: "project", project: CLIMB }, "/a.txt");
     expect(new URL(href, ORIGIN).pathname).toMatch(/^\/api\/projects\//);
     expect(new URL(href, ORIGIN).pathname.split("/")).not.toContain("..");
+  });
+});
+
+describe("browserSocketUrl", () => {
+  beforeEach(() => {
+    vi.stubGlobal("location", { protocol: "https:", host: "crew.styrman.xyz" });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("encodes the project id and picks wss under https", () => {
+    const url = new URL(browserSocketUrl(CLIMB));
+    expect(url.protocol).toBe("wss:");
+    expect(url.pathname).toMatch(/^\/ws\/browser\//);
+    expect(url.pathname.split("/")).not.toContain("..");
+    expect(url.pathname.split("/")).toHaveLength(4);
+    expect(new URL(browserSocketUrl("p")).pathname).toBe("/ws/browser/p");
   });
 });
 

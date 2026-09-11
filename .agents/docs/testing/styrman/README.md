@@ -377,8 +377,9 @@ field, agy's also on `disabled == false`); `styrman-browser start` as the
 project user answers `/json/version` with Chromium's sandbox on — the check
 reads the live process's cmdline and fails on `--no-sandbox`; `stop` leaves
 `status` reporting not running; server side (Phase 2): the ports list omits
-9222/9229 while the browser listens, `/proxy/{id}/9222/` and the share PUT
-answer 400, and the owner's status/start/stop routes round-trip):
+9229 while a bare-exec'd browser listens (loopback-only by design without a
+peer), `/proxy/{id}/9222/` and the share PUT answer 400, and the owner's
+status/start/stop routes round-trip with the 9222 forwarder up and hidden):
 `sh-agent status` exits 0 with no drift; `~/.claude/CLAUDE.md` is the
 two-line import stub; 28 skills and 7 agy agents; none of `~/.agents/bin`,
 `~/.gemini/GEMINI.md`, `~/.claude/settings.json`; boot→ready under R1's 15 s

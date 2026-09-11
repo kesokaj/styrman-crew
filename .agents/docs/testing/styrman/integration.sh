@@ -118,15 +118,21 @@ check "browser MCP server registered for claude and agy" \
 # stays on (no --no-sandbox).
 check "styrman-browser start answers /json/version with the sandbox on" \
     "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser start >/dev/null && docker exec ${CN} curl -fsS http://127.0.0.1:9229/json/version | grep -q '\"Browser\": \"Chrome/' && ! docker exec ${CN} sh -c 'tr \"\\0\" \" \" < /proc/\$(cat ${GH}/.styrman/browser/pid)/cmdline' | grep -q -- --no-sandbox"
-# Server side (Phase 2): the DevTools port is owner-only through the relay —
+# Server side (Phase 2): the DevTools ports are owner-only through the relay —
 # never listed (the Ports panel is where every share/link starts), never
-# previewed. Start it first so 9222 really is listening during the scan.
-check "ports list omits the browser's 9222 while it listens" \
-    "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser start >/dev/null && docker exec ${CN} sh -c 'ss -ltnH | grep -q \":9222 \"' && ! curl -fsS ${API}/api/projects/${ID}/ports | jq -e '.ports[] | select(.port == 9222 or .port == 9229)' >/dev/null"
+# previewed. A bare exec'd start (no STYRMAN_BROWSER_PEER) leaves the browser
+# loopback-only by design, so 9229 is the port that must be listening and
+# hidden here; 9222 is covered by the routes check below, where the SERVER
+# starts it with the peer.
+check "ports list omits the browser's 9229 while it listens" \
+    "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser start >/dev/null && docker exec ${CN} sh -c 'ss -ltnH | grep -q \":9229 \"' && ! curl -fsS ${API}/api/projects/${ID}/ports | jq -e '.ports[] | select(.port == 9222 or .port == 9229)' >/dev/null"
 check "preview proxy refuses the browser port with a 400" \
     "[ \"\$(curl -s -o /dev/null -w '%{http_code}' ${API}/proxy/${ID}/9222/)\" = 400 ] && [ \"\$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' -d '{\"emails\":[]}' ${API}/api/projects/${ID}/ports/9222/shares)\" = 400 ]"
-check "browser status/start/stop routes answer for the owner" \
-    "curl -fsS -X POST ${API}/api/projects/${ID}/browser/start | grep -q '\"running\":true' && curl -fsS ${API}/api/projects/${ID}/browser | grep -q '\"version\":\"Chrome/' && [ \"\$(curl -s -o /dev/null -w '%{http_code}' -X POST ${API}/api/projects/${ID}/browser/stop)\" = 204 ] && curl -fsS ${API}/api/projects/${ID}/browser | grep -q '\"running\":false'"
+# The server's start carries STYRMAN_BROWSER_PEER (its own bridge address),
+# so this is also where the 9222 forwarder appears — and it too stays off
+# the ports list.
+check "browser status/start/stop routes answer for the owner (9222 up, hidden)" \
+    "curl -fsS -X POST ${API}/api/projects/${ID}/browser/start | grep -q '\"running\":true' && docker exec ${CN} sh -c 'ss -ltnH | grep -q \":9222 \"' && ! curl -fsS ${API}/api/projects/${ID}/ports | jq -e '.ports[] | select(.port == 9222)' >/dev/null && curl -fsS ${API}/api/projects/${ID}/browser | grep -q '\"version\":\"Chrome/' && [ \"\$(curl -s -o /dev/null -w '%{http_code}' -X POST ${API}/api/projects/${ID}/browser/stop)\" = 204 ] && curl -fsS ${API}/api/projects/${ID}/browser | grep -q '\"running\":false'"
 check "styrman-browser stop ends it (status reports not running)" \
     "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser stop && docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser status | grep -q '\"running\":false'"
 

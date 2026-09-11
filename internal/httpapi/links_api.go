@@ -188,6 +188,12 @@ func (s *Server) serveLink(w http.ResponseWriter, r *http.Request) {
 	if viaTokenHost {
 		extPrefix = "" // the token host's visitor URL has no /link|/shared prefix
 	}
+	// A record for the browser's port — minted before the mint refused it —
+	// must not serve either (ADR-068; security review): no oracle, plain 404.
+	if previewPortAllowed(l.Port) != nil {
+		http.NotFound(w, r)
+		return
+	}
 	s.serveProxy(w, r2, l.Owner, l.Project, l.Port, prefix, extPrefix, !viaTokenHost)
 }
 
@@ -253,6 +259,12 @@ func (s *Server) serveShared(w http.ResponseWriter, r *http.Request) {
 	extPrefix := prefix
 	if viaTokenHost {
 		extPrefix = "" // the token host's visitor URL has no /link|/shared prefix
+	}
+	// A record for the browser's port — minted before the mint refused it —
+	// must not serve either (ADR-068; security review): no oracle, plain 404.
+	if previewPortAllowed(l.Port) != nil {
+		http.NotFound(w, r)
+		return
 	}
 	s.serveProxy(w, r2, l.Owner, l.Project, l.Port, prefix, extPrefix, !viaTokenHost)
 }

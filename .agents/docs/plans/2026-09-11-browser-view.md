@@ -159,11 +159,18 @@ styrman-browser mcp      # `start` (quiet) then `exec chrome-devtools-mcp --brow
   Chromium IGNORES `--remote-debugging-address` and binds loopback only
   (verified 2026-09-11 with `ss` in the Kata guest), and the server reaches
   the guest over the bridge. `stop` signals the group, so both die together.
-  Security review (2026-09-11) narrowed it: socat runs with
-  `range=<peer>/32,max-children=4` where the peer is the server's own
-  bridge address (parsed from `STYRMAN_CRED_BROKER`, else the default
-  gateway), so an inner container the user runs cannot reach DevTools; the
-  `mcp` verb uses Chromium's loopback port 9229 directly.
+  Security review (2026-09-11, two rounds) narrowed it: socat runs in its
+  own process group with `range=<peer>/32,max-children=4` where the peer is
+  the server's own bridge address, passed EXPLICITLY as
+  `STYRMAN_BROWSER_PEER` on every server-run `start`
+  (`Orchestrator.BrowserPeer`: the server container's live address on that
+  network, or the bridge gateway for a host-run dev server), else the host
+  of `STYRMAN_CRED_BROKER`; IPv4 literal only; no peer → no forwarder
+  (fail closed, the MCP verb still works on loopback 9229, and the pane's
+  later `start` adds the forwarder to the running browser). The relay
+  follows no redirect from the guest, checks Origin before any side effect
+  and caps concurrent relays; stale link/share records for the browser
+  ports 404.
   No `--no-sandbox`: probed 2026-09-11 inside a real Kata `mvm` container
   of `styrman-runtime:1.27.1` (guest kernel 6.18.28, user namespaces
   enabled) — the launch above, as an unprivileged user, answered
@@ -430,9 +437,13 @@ the compose server sits on the bridge itself.
 E2E criteria — golden path: open a project, click Browser, see the page,
 type a URL of a site served inside the project, see it render, click a link
 in it, see the URL bar follow. Edge case: stop the project from the sidebar
-while the Browser view is open — the pane shows "Project is stopped" with
-the terminal link, and starting the project again and clicking Reconnect
-brings the browser back with a fresh tab.
+while the Browser view is open — the pane shows "Browser disconnected" the
+moment the guest's Chromium goes (the relay closes 1011); Reconnect on the
+stopped project shows "Project is stopped" with Show terminal and
+Reconnect; after the project is started again, Reconnect brings the browser
+back with a fresh tab. (Observed 2026-09-11, twice; the stop itself takes
+≈48 s on this host with or without a browser running — pre-existing, not
+this feature's.)
 
 ## Phases
 
@@ -456,14 +467,14 @@ brings the browser back with a fresh tab.
 - [x] Phase checkpoint — committed 2026-09-11 (change entry `changes/2026-09-11-browser-phase2-server-and-review-fixes.md`, ADR-068 amendment); who: AI
 
 ### Phase 3 — SPA: CDP client, BrowserPane, toggle, Ports button
-- [ ] `editorPane.ts`: `"browser"` view + `browser.url` + `openInBrowser` + the guard's `browser` comparison; `openFileInPane` (`editorPane.ts:120-135`) and every other literal `PaneState` builder carry `browser` through (it is the one `set()` caller that does not spread `prev`); tests include the two-ports-in-a-row case — verify: `npm run check && npm test`; who: AI
-- [ ] `cdp.ts` + tests — verify: `npm test`; who: AI
-- [ ] `browserInput.ts` + tests — verify: `npm test`; who: AI
-- [ ] `api.ts` four calls + encoding tests — verify: `npm test`; who: AI
-- [ ] `BrowserPane.tsx`: connect / states / tab strip / URL bar / canvas / input / dialogs / open-url — verify: `npm run check && npm run lint`; hand-walk in a real browser against the local server: golden path above; who: AI
-- [ ] `p.$project.$term.tsx`: the fourth pill (`aria-label="Browser"`, `title` in the same voice), `browserUsed` latch, hidden mount — verify: existing e2e view-toggle checks still green; who: AI
-- [ ] `SidePanelPorts.tsx`: "Open in Browser" per row — verify: hand-walk; who: AI
-- [ ] Phase checkpoint — who: AI
+- [x] `editorPane.ts`: `"browser"` view, `browser: BrowserRequest | null`, `openInBrowser` / `clearBrowserRequest`, the guard's `browser` comparison, `openFileInPane` carrying it through; tests: same-URL twice yields a new request object, file/draft kept, clear is idempotent — `npm run check && npm test` green 2026-09-11; who: AI
+- [x] `cdp.ts` (`CdpClient` over a `CdpTransport` interface, `CdpError`, `CDP_CLOSED`) + 6 tests: id correlation out of order, protocol error, event fan-out with sessionId and unsubscribe, malformed/binary/unknown frames dropped, close rejects every pending call and refuses new ones, close reports once — green 2026-09-11; who: AI
+- [x] `browserInput.ts` (`pointOf`, `modifiersOf`, `mouseParams`, `wheelParams`, `keyParams`, `normalizeUrl`) + 11 tests — green 2026-09-11 (one defect caught by its own test: `localhost:8080/x` read as a scheme; the scheme test now needs `://` or a known non-hierarchical scheme); who: AI
+- [x] `api.ts`: `browserStatus`/`browserStart`/`browserStop`/`browserSocketUrl` + encoding tests (three call sites in the hostile-value table, a `browserSocketUrl` describe) — green 2026-09-11; who: AI
+- [x] `BrowserPane.tsx` — verified 2026-09-11 by a Playwright walk of the built SPA against a local server and a real Kata project in LAN mode (`testing/2026-09-11-verify-browser-phase3.md`): first frame within seconds; typed `localhost:4100` navigates and the URL bar follows; the tab strip shows the page's title (after a `Target.getTargets` refresh on load — Chromium's `targetInfoChanged` carries the URL as an interim title); a click inside the page navigates; Back returns; Ctrl+L focuses the address bar; New tab works; the terminal survives; Ports → browser switches the view and navigates. Three defects found by the walk and fixed: the pane's automatic handshake retry was unbounded (now one per chain); the init failure handler overwrote a 4002 "stopped" with "disconnected" a microtask later (now defers to the close handler); the stopped state offered no way back in once the project ran again (now Show terminal + Reconnect); who: AI
+- [x] `p.$project.$term.tsx`: the fourth pill, `browserUsed` latch, hidden-not-unmounted mount — the walk's "terminal still mounted" step passed; the existing e2e toggle checks run in Phase 4; who: AI
+- [x] `SidePanelPorts.tsx`: a "browser" button per port row — the walk's step 9 passed; who: AI
+- [x] Phase checkpoint — committed 2026-09-11 (change entry `changes/2026-09-11-browser-phase3-spa-and-security-round2.md`; integration `passed=90 failed=0 skipped=3` on the corrected checks); who: AI
 
 ### Phase 4 — E2E, docs, done
 - [ ] `run.mjs`: the four checks; README Tier 4 count — verify: `bash web/e2e/run.sh` green, `passed=` up by 4; who: AI

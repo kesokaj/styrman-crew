@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { basename, discardDraft, openFileInPane } from "./editorPane";
+import {
+  __stateForTest,
+  basename,
+  clearBrowserRequest,
+  discardDraft,
+  openFileInPane,
+  openInBrowser,
+} from "./editorPane";
 
 // NOTE ON SCOPE: the pane store's per-terminal behaviour — draft parked on
 // unmount, restored only for the file it belongs to, dropped when that file is
@@ -45,5 +52,39 @@ describe("discardDraft", () => {
     expect(after?.dirty).toBe(false);
     expect(after?.draft).toBeNull();
     expect(after?.file?.path).toBe("a.go");
+  });
+});
+
+describe("openInBrowser", () => {
+  it("switches the view and carries a fresh request object each time", () => {
+    openInBrowser("p", "t", "http://localhost:3000/");
+    const first = __stateForTest("p", "t");
+    expect(first.view).toBe("browser");
+    expect(first.browser).toEqual({ url: "http://localhost:3000/" });
+    // The SAME url again is a new request: the store's identity guard must
+    // see a change, or a second "Open in Browser" is a silent no-op.
+    openInBrowser("p", "t", "http://localhost:3000/");
+    const second = __stateForTest("p", "t");
+    expect(second.browser).not.toBe(first.browser);
+    expect(second.browser).toEqual(first.browser);
+  });
+
+  it("keeps the open file and its draft while switching", () => {
+    openFileInPane("p2", "t", { kind: "project", project: "p2" }, "a.txt");
+    openInBrowser("p2", "t", "http://localhost:8080/");
+    const st = __stateForTest("p2", "t");
+    expect(st.view).toBe("browser");
+    expect(st.file?.path).toBe("a.txt");
+  });
+
+  it("clearBrowserRequest drops the request and nothing else", () => {
+    openInBrowser("p3", "t", "http://localhost:1/");
+    clearBrowserRequest("p3", "t");
+    const st = __stateForTest("p3", "t");
+    expect(st.browser).toBeNull();
+    expect(st.view).toBe("browser");
+    // Idempotent: a second clear is a no-op (same state object).
+    clearBrowserRequest("p3", "t");
+    expect(__stateForTest("p3", "t")).toBe(st);
   });
 });

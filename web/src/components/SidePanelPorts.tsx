@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, portUrl, type PortInfo, type PublicLink } from "../lib/api";
 import { usePolled } from "../lib/hooks";
 import { copyToClipboard, toast } from "../lib/toast";
+import { openInBrowser } from "../lib/editorPane";
 import { LocalNetwork } from "./LocalNetwork";
 
 export function PortsTab({ project, term }: { project: string; term: string }) {
@@ -75,6 +76,15 @@ function PortRow({
         <span className="min-w-0 flex-1 truncate text-[11px] text-text-dim">
           {info.image ? `🐳 ${info.image}` : info.process || ""}
         </span>
+        {/* The project's own browser (ADR-068): localhost there IS this
+            microVM, so the port opens with no proxy, share or link. */}
+        <button
+          className="shrink-0 text-[11px] text-text-dim hover:text-text"
+          onClick={() => openInBrowser(project, term, `http://localhost:${info.port}/`)}
+          title="Open in this project's browser (the Browser view)"
+        >
+          browser
+        </button>
         <button
           className="shrink-0 text-[11px] text-text-dim hover:text-text"
           onClick={() =>

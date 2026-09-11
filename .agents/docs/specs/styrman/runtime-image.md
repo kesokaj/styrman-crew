@@ -80,20 +80,32 @@ new-headless Chromium ignores `--remote-debugging-address` (verified
 2026-09-11: `ss` shows `127.0.0.1:9229` whatever the flag says) — and that
 is what in-guest clients use (`mcp` → `--browserUrl http://127.0.0.1:9229`).
 For the styrman server, which reaches the guest over the project bridge, a
-`socat` forwarder in the same process group publishes it as `0.0.0.0:9222`
-with `range=<peer>/32,max-children=4`: the ONE admitted source is the
-server's own address on this bridge — the credential broker's, parsed from
-`STYRMAN_CRED_BROKER` in a containerized deploy, or the bridge gateway when
-the server runs on the host and sets no broker URL; with neither, no
-forwarder runs and the browser stays loopback-only. A container the user
-runs inside the project's dockerd can reach the guest's bridge IP but is
-refused by `range=` — a DevTools client reads `file://` inside the guest,
-i.e. the brokered credentials, and an image the user merely runs must not
-gain that (security review 2026-09-11; verified under Kata: with a foreign
-`STYRMAN_CRED_BROKER` the host is refused, with none the gateway is
-admitted). Chromium refuses a `Host` header that is neither `localhost` nor
-an IP literal (`Host: example.test` → 500), which every caller satisfies.
-The server never lists, proxies or shares 9222/9229 (`internal/httpapi`).
+`socat` forwarder in its own process group (`socat.pid`) publishes it as
+`0.0.0.0:9222` with `range=<peer>/32,max-children=4`: the ONE admitted
+source is the server's own address on this bridge, which the server passes
+as `STYRMAN_BROWSER_PEER` on every `start` it runs (a containerized server
+reads its live address on that network from its own container; a host-run
+dev server is the bridge gateway, from the network's IPAM config —
+`Orchestrator.BrowserPeer`), falling back to the host of
+`STYRMAN_CRED_BROKER` (the same address in a containerized deploy). Only an
+IPv4 literal is accepted, since the value lands inside socat's option list.
+With NO peer — a browser the agent's MCP server started, which has neither
+variable — no forwarder runs and the browser stays loopback-only; the pane's
+first `start` then arrives with the peer and `ensure_forwarder` adds the
+door to the already-running Chromium. A container the user runs inside the
+project's dockerd can reach the guest's bridge IP but is refused by
+`range=` — a DevTools client reads `file://` inside the guest, i.e. the
+brokered credentials, and an image the user merely runs must not gain that.
+Nothing guesses a peer: an unknown one fails CLOSED (security review
+2026-09-11, two rounds; verified under Kata: no env → 9222 not listening;
+`STYRMAN_BROWSER_PEER=<gateway>` → forwarder up and the host admitted;
+`STYRMAN_BROWSER_PEER=1.2.3.4,range=0.0.0.0/0` → refused, no forwarder;
+`stop` takes both groups down). Chromium refuses a `Host` header that is
+neither `localhost` nor an IP literal (`Host: example.test` → 500), which
+every caller satisfies. The server never lists, proxies, shares or links
+9222/9229 (`internal/httpapi`), follows no redirect from the guest's
+DevTools server, checks the pane's Origin before any side effect, and caps
+concurrent relays at 32.
 
 Origins: no `--remote-allow-origins`. Chromium's DevTools server admits a
 WebSocket upgrade that carries NO Origin header (the styrman relay and

@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -105,17 +106,21 @@ type Server struct {
 	// orch is the real orchestrator; guest is the same object behind the
 	// narrow interface above, swapped for a fake in tests. Both point at the
 	// same instance in production — see New.
-	orch   *orchestrator.Orchestrator
-	guest  guestRuntime
+	orch  *orchestrator.Orchestrator
+	guest guestRuntime
 	// browserUpstreamFn, when set, replaces browserUpstream's orchestrator
 	// lookup — tests point the CDP relay at an httptest server.
 	browserUpstreamFn func(ctx context.Context, user, project string) (host string, fresh bool, err error)
-	mode   modeRuntime
-	tmux   *conversation.Manager
-	bridge *terminal.Bridge
-	users  *userstore.Store
-	logger *slog.Logger
-	links  *links.Store
+	// browserPeerFn likewise replaces the orchestrator's BrowserPeer in tests.
+	browserPeerFn func(ctx context.Context, project string) string
+	// browserRelays counts live CDP relays (capped at browserRelayMax).
+	browserRelays atomic.Int32
+	mode          modeRuntime
+	tmux          *conversation.Manager
+	bridge        *terminal.Bridge
+	users         *userstore.Store
+	logger        *slog.Logger
+	links         *links.Store
 
 	spacesMu sync.Mutex
 	spaces   map[string]*userSpace

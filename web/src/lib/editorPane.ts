@@ -36,12 +36,22 @@ export type DiffTarget = {
   subject?: string;
 };
 
+/**
+ * A request for the Browser view to navigate somewhere (ADR-068): "Open in
+ * Browser" on a Ports row sets it, the pane consumes it and clears it. Always
+ * a NEW object per request, so the store's identity guard sees a second
+ * request for the same URL as a change (the `diff` lesson below).
+ */
+export type BrowserRequest = { url: string };
+
 export type PaneState = {
-  view: "terminal" | "editor" | "diff";
+  view: "terminal" | "editor" | "diff" | "browser";
   /** The file the editor pane is showing, or null before one is opened. */
   file: PaneFile | null;
   /** What the diff view is showing, or null before one is opened. */
   diff: DiffTarget | null;
+  /** A pending navigation for the Browser view, or null. */
+  browser: BrowserRequest | null;
   /**
    * The pane has unsaved edits. Lives here, not inside the pane, because the
    * TERMINAL view has to show it: the editor is hidden, so its only other
@@ -66,6 +76,7 @@ const DEFAULT: PaneState = {
   view: "terminal",
   file: null,
   diff: null,
+  browser: null,
   dirty: false,
   draft: null,
 };
@@ -103,6 +114,9 @@ function set(project: string, term: string, next: PaneState) {
     // guard says nothing did, and the pane keeps showing the previous file's
     // diff. (`draft` is left out deliberately; see its docstring.)
     prev.diff === next.diff &&
+    // `browser` for the same reason as `diff`: left out, "Open in Browser"
+    // for a second port while already on the Browser view would be a no-op.
+    prev.browser === next.browser &&
     prev.dirty === next.dirty
   ) {
     return;
@@ -130,9 +144,26 @@ export function openFileInPane(
     view: "editor",
     file: { scope, path },
     diff: get(project, term).diff,
+    browser: get(project, term).browser,
     dirty: get(project, term).dirty,
     draft: get(project, term).draft,
   });
+}
+
+/**
+ * Show the Browser view and ask it to navigate to `url` (ADR-068). Everything
+ * else on the pane is carried through, like openDiffInPane. A new request
+ * object every time — see BrowserRequest.
+ */
+export function openInBrowser(project: string, term: string, url: string) {
+  const prev = get(project, term);
+  set(project, term, { ...prev, view: "browser", browser: { url } });
+}
+
+/** The pane has navigated: drop the pending request (identity change only). */
+export function clearBrowserRequest(project: string, term: string) {
+  const prev = get(project, term);
+  if (prev.browser) set(project, term, { ...prev, browser: null });
 }
 
 /**

@@ -7,6 +7,7 @@ import { TerminalPane } from "../components/TerminalPane";
 import { TerminalStatusBar } from "../components/TerminalStatusBar";
 import { EditorPane } from "../components/EditorPane";
 import { DiffPane } from "../components/DiffPane";
+import { BrowserPane } from "../components/BrowserPane";
 import { ConfirmDialog } from "../components/ui";
 import { basename, useEditorPane } from "../lib/editorPane";
 
@@ -49,6 +50,11 @@ function TerminalPage() {
   // later should find ONE pattern in this file, not two.
   const diffUsed = useRef(false);
   if (pane.view === "diff" || pane.diff) diffUsed.current = true;
+  // And for the Browser view (ADR-068): once mounted it keeps its relay
+  // socket open while hidden, so switching back shows the page at once and
+  // a tab the agent opened meanwhile is already in the strip.
+  const browserUsed = useRef(false);
+  if (pane.view === "browser" || pane.browser) browserUsed.current = true;
   // Bumped on every switch back to the terminal so it reclaims keyboard focus
   // (it is hidden, not unmounted, so nothing else would).
   const [focusToken, setFocusToken] = useState(0);
@@ -115,7 +121,8 @@ function TerminalPage() {
                 ["terminal", "Terminal"],
                 ["editor", "Editor"],
                 ["diff", "Diff"],
-              ] as Array<["terminal" | "editor" | "diff", string]>
+                ["browser", "Browser"],
+              ] as Array<["terminal" | "editor" | "diff" | "browser", string]>
             ).map(([mode, label]) => (
               <button
                 key={mode}
@@ -141,7 +148,9 @@ function TerminalPage() {
                     ? "Show the editor in this pane (the terminal keeps running)"
                     : mode === "diff"
                       ? "Show the git diff in this pane (the terminal keeps running)"
-                      : "Show the terminal"
+                      : mode === "browser"
+                        ? "Show the project's browser in this pane (the terminal keeps running)"
+                        : "Show the terminal"
                 }
               >
                 {label}
@@ -193,6 +202,16 @@ function TerminalPage() {
           {diffUsed.current && (
             <div className={`h-full ${pane.view === "diff" ? "" : "hidden"}`}>
               <DiffPane
+                key={`${project}/${term}`}
+                project={project}
+                term={term}
+                onShowTerminal={showTerminal}
+              />
+            </div>
+          )}
+          {browserUsed.current && (
+            <div className={`h-full ${pane.view === "browser" ? "" : "hidden"}`}>
+              <BrowserPane
                 key={`${project}/${term}`}
                 project={project}
                 term={term}

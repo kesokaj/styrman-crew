@@ -552,6 +552,16 @@ export const api = {
   notifications: () =>
     request<{ notifications: AppNotification[] }>("/api/notifications"),
 
+  // Browser view (ADR-068): owner-only status/start/stop of the project's
+  // in-guest Chromium. start answers 409 (project not running), 503 +
+  // Retry-After (fresh bridge attach — retry once) or 502 with the
+  // launcher's log tail; the pane surfaces the message as is.
+  browserStatus: (project: string) =>
+    request<BrowserStatus>(u`/api/projects/${project}/browser`),
+  browserStart: (project: string) =>
+    request<BrowserStatus>(u`/api/projects/${project}/browser/start`, { method: "POST" }),
+  browserStop: (project: string) =>
+    request<void>(u`/api/projects/${project}/browser/stop`, { method: "POST" }),
   listPorts: (project: string) =>
     request<{ ports: PortInfo[] }>(u`/api/projects/${project}/ports`),
 
@@ -857,6 +867,18 @@ export const api = {
 /** Shareable link to a port exposed inside a project's microVM. */
 export const portUrl = (project: string, term: string, port: number) =>
   `/p/${project}/${term}/port/${port}/`;
+
+/** The project browser's status (ADR-068): what the in-guest launcher reports. */
+export type BrowserStatus = { running: boolean; version?: string };
+
+/**
+ * Browser relay WebSocket URL (ADR-068). Owner only on the server side; the
+ * id is encoded through `u` like the terminal socket's, for the same reason.
+ */
+export function browserSocketUrl(project: string): string {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${location.host}` + u`/ws/browser/${project}`;
+}
 
 /** Terminal WebSocket URL. */
 export function termSocketUrl(

@@ -42,17 +42,15 @@ type browserStatus struct {
 // running — the REST routes answer 409 and the relay closes 4002.
 var errProjectNotRunning = errors.New("project is not running")
 
-// errBrowserPort is the refusal every preview-shaped route gives the
-// browser's DevTools port: a DevTools client controls the whole browser
-// (including file:// reads inside the guest), so it is owner-only through
-// the relay and never previewable, shareable or linkable.
-var errBrowserPort = fmt.Errorf("port %d is the project's browser and cannot be previewed or shared", config.BrowserPort)
-
 // previewPortAllowed is the one place the preview proxy, the share list and
-// the link mint ask whether a port may leave the owner's hands.
+// the link mint ask whether a port may leave the owner's hands. The
+// browser's two ports are refused, naming the port asked for: a DevTools
+// client controls the whole browser (including file:// reads inside the
+// guest), so they are owner-only through the relay and never previewable,
+// shareable or linkable.
 func previewPortAllowed(port int) error {
 	if port == config.BrowserPort || port == config.BrowserChromePort {
-		return errBrowserPort
+		return fmt.Errorf("port %d is the project's browser and cannot be previewed or shared", port)
 	}
 	return nil
 }
@@ -71,10 +69,18 @@ func (s *Server) browserExec(ctx context.Context, user, project, guestUser, verb
 	if st.State != "running" {
 		return -1, "", errProjectNotRunning
 	}
+	env := []string{"HOME=/home/" + guestUser, "USER=" + guestUser}
+	if verb == "start" {
+		// The forwarder admits exactly this address (ADR-068 amendment); an
+		// unknown peer means no forwarder — the launcher fails closed.
+		if peer := s.browserPeer(ctx, project); peer != "" {
+			env = append(env, "STYRMAN_BROWSER_PEER="+peer)
+		}
+	}
 	code, out, err := s.guest.Exec(ctx, st.ContainerID, orchestrator.ExecSpec{
 		Cmd:  []string{browserLauncher, verb},
 		User: guestUser,
-		Env:  []string{"HOME=/home/" + guestUser, "USER=" + guestUser},
+		Env:  env,
 	})
 	if err != nil || code != 0 {
 		if now, err2 := s.guest.Status(ctx, user, project); err2 == nil &&
@@ -210,6 +216,15 @@ func (s *Server) stopBrowser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// browserPeer is the server's own address on the project bridge, the one
+// source the guest's forwarder admits. Tests override it.
+func (s *Server) browserPeer(ctx context.Context, project string) string {
+	if s.browserPeerFn != nil {
+		return s.browserPeerFn(ctx, project)
+	}
+	return s.orch.BrowserPeer(ctx, project)
+}
+
 // browserUpstream resolves where the project's DevTools endpoint answers —
 // "<guest-ip>:9222" on the project bridge — after making sure this server is
 // attached to that bridge. fresh reports an attach that happened just now,
@@ -230,10 +245,38 @@ func (s *Server) browserUpstream(ctx context.Context, user, project string) (hos
 // browserRelayReadLimit bounds a frame from the guest: a screencast frame is
 // a base64 JPEG inside JSON — ~100–200 KiB at 1280×800 — and 16 MiB is the
 // same ceiling the terminal bridge uses. The pane's own frames are tiny.
+// browserRelayMax caps concurrent relays server-wide: each one costs a docker
+// exec, two goroutines and up to 17 MiB of frame buffers (security review).
 const (
 	browserRelayReadLimit = 16 << 20
 	browserPaneReadLimit  = 1 << 20
+	browserRelayMax       = 32
 )
+
+// browserHTTPClient talks to the guest's DevTools HTTP server and dials its
+// WebSocket. It follows NO redirect: what answers on the guest's port is the
+// project user's to control, and this server sits on every project bridge —
+// a followed redirect would let one project steer a connection into another
+// (R12; security review 2026-09-11).
+var browserHTTPClient = &http.Client{
+	Timeout: 10 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+// sameOriginOrAbsent is the Origin check the relay applies BEFORE any side
+// effect (bridge attach, docker exec, guest dial): websocket.Accept does the
+// same check, but only at the end. A browser always sends Origin on a
+// WebSocket handshake; a non-browser client may omit it.
+func sameOriginOrAbsent(r *http.Request) bool {
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return true
+	}
+	u, err := url.Parse(o)
+	return err == nil && strings.EqualFold(u.Host, r.Host)
+}
 
 // GET /ws/browser/{project} — the CDP relay, owner only (authGuard resolves
 // the identity; getProjectFor is the ownership check, never previewAccess).
@@ -244,11 +287,22 @@ const (
 // the socket is accepted, every close the relay sends is a config.Close*
 // code or a standard 1000/1009/1011.
 func (s *Server) browserSocket(w http.ResponseWriter, r *http.Request) {
+	if !sameOriginOrAbsent(r) {
+		writeErr(w, http.StatusForbidden, fmt.Errorf("cross-origin request refused"))
+		return
+	}
 	u, sp, p, err := s.getProjectFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
+	if n := s.browserRelays.Add(1); n > browserRelayMax {
+		s.browserRelays.Add(-1)
+		w.Header().Set("Retry-After", "5")
+		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("too many browser connections"))
+		return
+	}
+	defer s.browserRelays.Add(-1)
 	host, fresh, err := s.browserUpstream(r.Context(), u.Username, p.ID)
 	if err != nil {
 		s.logger.Warn("browser: upstream lookup failed", "project", p.ID, "error", err)
@@ -289,7 +343,7 @@ func (s *Server) browserSocket(w http.ResponseWriter, r *http.Request) {
 	// --remote-allow-origins), so a page inside the browser can never open
 	// this socket. Host = the guest IP, an IP literal Chromium accepts.
 	dialCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	upstream, _, err := websocket.Dial(dialCtx, wsURL, nil)
+	upstream, _, err := websocket.Dial(dialCtx, wsURL, &websocket.DialOptions{HTTPClient: browserHTTPClient})
 	cancel()
 	if err != nil {
 		s.logger.Warn("browser: upstream dial failed", "project", p.ID, "error", err)
@@ -357,7 +411,7 @@ func browserEndpoint(ctx context.Context, host string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := browserHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
