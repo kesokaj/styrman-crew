@@ -16,7 +16,13 @@ syntax checkers the editor's Check feature runs inside the guest —
 `shellcheck` (apt) and `hadolint` (GitHub release binary, same pattern as
 `yq`) round out the set alongside `gofmt`/`python3`/`node`/`jq`/`yq`/`tofu`
 that were already here for other tools; full checker table in
-`../.agents/docs/specs/styrman/runtime-image.md`.
+`../.agents/docs/specs/styrman/runtime-image.md`. Since ADR-068 it also
+carries the project browser: Debian's headless `chromium`, the pinned
+`chrome-devtools-mcp`, and `configs/styrman-browser` (installed to
+`/styrman/bin`), one Chromium per project that the operator watches from the
+SPA's Browser view and the agents drive through an MCP server the entrypoint
+registers for `claude` and `agy` — the "Browser" section of the spec has the
+ports, sandbox and registration details.
 
 ```bash
 docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> .

@@ -84,7 +84,7 @@ Decisions taken with the operator on 2026-09-11 (scope confirmation):
 
 | Layer | Path | Change |
 |---|---|---|
-| image | `image/Dockerfile` | `apt-get install chromium fonts-liberation` in the apt-repo step (pinned to the Debian archive's current `152.0.7977.82-1~deb13u1`; Debian security updates move it, like `docker-ce`); `npm install -g chrome-devtools-mcp@1.9.0` next to `@anthropic-ai/claude-code`; copy `configs/styrman-browser` to `/styrman/bin/styrman-browser` (0755) |
+| image | `image/Dockerfile` | one RUN after the agents step and BEFORE the base-package snapshot: `apt-get install chromium fonts-liberation socat` (pinned to the Debian archive's current `152.0.7977.82-1~deb13u1`; Debian security updates move it, like `docker-ce`) + `npm install -g chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}` (ARG, 1.9.0); `install` `configs/styrman-browser` to `/styrman/bin/styrman-browser` (0755) in the final RUN |
 | image | `image/configs/styrman-browser` (new) | launcher: `start`, `stop`, `status`, `mcp` |
 | image | `image/entrypoint.sh` | MCP registration for both agents inside the stamped harness block (third step, same timeout and success gating) |
 | image | `image/README.md`, `.agents/docs/specs/styrman/runtime-image.md` | document the package, the launcher, the port, the MCP registration |
@@ -148,12 +148,17 @@ styrman-browser mcp      # `start` (quiet) then `exec chrome-devtools-mcp --brow
 
 - State dir `${HOME}/.styrman/browser/` (mode 0700): `profile/` (the
   Chromium user data dir), `pid`, `chromium.log`.
-- Launch line (one process, detached with `setsid -f`, stdio to the log):
-  `chromium --headless=new --remote-debugging-address=0.0.0.0
-  --remote-debugging-port=9222 --remote-allow-origins=*
+- Launch (one process GROUP under `setsid -f`, stdio to the log; the lock
+  fd is closed in the child with `9>&-`, or Chromium would hold the start
+  lock for life): `socat TCP-LISTEN:9222,fork,reuseaddr,bind=0.0.0.0
+  TCP:127.0.0.1:9229 &` then `exec chromium --headless=new
+  --remote-debugging-port=9229 --remote-allow-origins=*
   --user-data-dir=${HOME}/.styrman/browser/profile --window-size=1280,800
   --no-first-run --no-default-browser-check --disable-gpu
-  --disable-dev-shm-usage about:blank`.
+  --disable-dev-shm-usage about:blank`. Why the forwarder: new-headless
+  Chromium IGNORES `--remote-debugging-address` and binds loopback only
+  (verified 2026-09-11 with `ss` in the Kata guest), and the server reaches
+  the guest over the bridge. `stop` signals the group, so both die together.
   No `--no-sandbox`: probed 2026-09-11 inside a real Kata `mvm` container
   of `styrman-runtime:1.27.1` (guest kernel 6.18.28, user namespaces
   enabled) — the launch above, as an unprivileged user, answered
@@ -162,12 +167,17 @@ styrman-browser mcp      # `start` (quiet) then `exec chrome-devtools-mcp --brow
   fails loudly (the log tail reaches the pane) rather than silently
   weakening it.
 - `start` is safe to call concurrently (the SPA relay and the MCP server may
-  race): it takes `flock` on `${HOME}/.styrman/browser/lock` around the
-  probe-then-launch.
+  race): it takes `flock -w 20` on `${HOME}/.styrman/browser/lock` around
+  the probe-then-launch (bounded, so a stuck holder is a failure, not a hang
+  under the server's 30 s exec cap). A failed launch calls `stop` on its own
+  group before returning 1.
 - Readiness probe: `curl -fsS http://127.0.0.1:9222/json/version`.
 - Chromium's DevTools HTTP server rejects a `Host` header that is neither
   `localhost` nor an IP literal (verified: `Host: example.test` → 500;
-  `Host: 127.0.0.1:9222` → 200). Every caller uses an IP or `localhost`.
+  `Host: 127.0.0.1:9222` → 200; through the forwarder from the host,
+  `Host: <guest-ip>:9222` → 200 and the reported `webSocketDebuggerUrl`
+  carries that guest IP; a raw WebSocket upgrade to it answered 101 —
+  2026-09-11 Kata probe). Every caller uses an IP or `localhost`.
 
 ### MCP registration — `image/entrypoint.sh`, inside the stamped harness block
 
@@ -380,10 +390,13 @@ What "works" means per tier:
   `browserInput.test.ts` proves coordinate scaling and the key/mouse/wheel
   mappings; `editorPane.test.ts` proves `openInBrowser` sets the view and url;
   `api.encoding.test.ts` covers the four new call sites.
-- **Integration** (`integration.sh`, +4 checks): in-guest `styrman-browser
-  start` answers `/json/version`; `claude mcp list` and `agy mcp list` both
-  name `styrman-browser`; `GET /api/projects/{id}/ports` omits 9222 while it
-  listens; `GET /proxy/{id}/9222/` is a 400.
+- **Integration** (`integration.sh`, +5 checks — three in Phase 1, two in
+  Phase 2): in-guest `styrman-browser start` answers `/json/version` with
+  no `--no-sandbox` in the live cmdline; the MCP entry is present in both
+  tools' registries (read from the files, not `mcp list`, whose health
+  probe would spawn the server); `stop` leaves `status` not running; then,
+  once the server knows the port (Phase 2): `GET /api/projects/{id}/ports`
+  omits 9222 while it listens and `GET /proxy/{id}/9222/` is a 400.
 - **E2E** (`run.mjs`, +4 checks): "Browser pill opens the browser view and a
   frame arrives" (`[data-frames]` on the canvas becomes > 0 within 20 s);
   "typing a localhost URL renders the fixture app" (the run already serves a
@@ -394,6 +407,17 @@ What "works" means per tier:
 - **Manual (operator)**: in a project terminal run `claude`, ask it to open
   `http://localhost:<port>` and describe the page; watch the tab appear in
   the Browser view. Same with `agy`. Logged in `testing/`.
+
+Host-firewall caveat (learned from the Phase 1 integration run, 2026-09-11):
+on this hardened host the three preview checks auto-SKIP because a server
+running ON THE HOST cannot reach a sandbox project's `sdb-*` bridge — the
+firewall drops guest→host replies. The browser relay has the same shape, so
+the Phase 4 e2e browser checks run INSIDE the existing end-of-run LAN window
+(after "enabling flips the record and shows the LAN badge", before
+"disabling returns it to sandbox"), where the fixture project's `lan-*`
+bridge is matched by no rule; Phase 2's manual curl/WS test uses a LAN
+project or the containerized deploy the same way. Production is unaffected:
+the compose server sits on the bridge itself.
 
 E2E criteria — golden path: open a project, click Browser, see the page,
 type a URL of a site served inside the project, see it render, click a link
@@ -406,18 +430,18 @@ brings the browser back with a fresh tab.
 
 ### Phase 1 — Guest image: Chromium, launcher, MCP registration, ADR
 - [x] Operator approves the exact R4 sentence above; edit `REQUIREMENTS.md` R4 and write ADR-068 in `DECISIONS.md` in ONE commit with `ROADMAP.md` "Now" — verify: the diff touches those three files only; who: user (approval) + AI — DONE 2026-09-11, commit `a9ae789` (approval: "approve the R4 sentence, go ahead")
-- [ ] `image/Dockerfile`: `chromium fonts-liberation` in the apt step, `chrome-devtools-mcp@1.9.0` in the npm step, copy the launcher — verify: `docker build` of `image/` succeeds; image size delta recorded (expect ≈ +400 MB); `docker run --rm <img> chromium --version` and `chrome-devtools-mcp --help` print; who: AI
-- [ ] `image/configs/styrman-browser` with `start|stop|status|mcp`, `flock`, pid, log, profile dir 0700 — verify: `shellcheck` clean; in a `docker run` of the built image as a non-root user, `start` → `/json/version` 200, `status` → running, `stop` → not running, `start` twice → one process; who: AI
-- [ ] Re-run the sandbox probe with the BUILT image and the real launcher under `docker run --runtime mvm` (the 2026-09-11 probe used an apt install into the old image) — verify: `status` reports running, no `--no-sandbox` in the launch line; who: AI
-- [ ] `image/entrypoint.sh`: the third seeding step; check that `harness-migrate.sh` moves neither registry file — verify: boot a project from the new image with a NEW home: `claude mcp list` and `agy mcp list` name `styrman-browser`; the stamp equals the image version; boot time still under R1's 15 s (integration.sh's existing bound); who: AI
-- [ ] `integration.sh`: the four new checks; README counts updated — verify: green run against the new image, `passed=` up by 4; who: AI
-- [ ] `runtime-image.md`, `image/README.md`: package, launcher, port, registration paths, sandbox outcome — verify: `documentation` agent; who: AI
+- [x] `image/Dockerfile`: `chromium fonts-liberation socat` + `chrome-devtools-mcp@1.9.0` in one RUN before the base snapshot, launcher installed — verified 2026-09-11: build green; 3.56 GB → 4.32 GB (+760 MB, more than the ≈400 MB estimate: chromium's own dependency set); `chromium --version` = 152.0.7977.82; `chrome-devtools-mcp --help` lists `--browserUrl`; who: AI
+- [x] `image/configs/styrman-browser` with `start|stop|status|mcp`, `flock -w 20`, pid, log, profile dir 0700, socat forwarder — verified 2026-09-11 (shellcheck clean; under Kata as an unprivileged user: `start` 0, `status` running with version, second `start` returns at once, `stop` closes 9222 and 9229 with no live chromium/socat left; under plain runc the launch fails LOUDLY with "No usable sandbox" and cleans its group — expected, runc is not the target). Two defects found and fixed on the way: the lock fd was inherited by chromium (second start hung forever → `9>&-` + bounded flock), and `stop` skipped the group kill when the leader had died; who: AI
+- [x] Re-run the sandbox probe with the BUILT image and the real launcher under `docker run --runtime mvm` — verified 2026-09-11: running, `--no-sandbox` absent from the live cmdline; from the host over the bridge: `/json/version` 200 with `Host: <ip>:9222`, 500 with `Host: example.test`, a raw WebSocket upgrade to the reported `webSocketDebuggerUrl` answered 101; who: AI
+- [x] `image/entrypoint.sh`: the third seeding step (`HR_OK`, graded as one unit) — verified 2026-09-11 by the integration run: both registries carry `styrman-browser` in a fresh project home; boot→ready 2.75 s with the registration inside (soft target 5 s); `harness-migrate.sh` and `sh-agent install` touch neither file (read); who: AI
+- [x] `integration.sh`: the three guest-side checks; README counts updated — verified 2026-09-11: `passed=87 failed=0 skipped=3` (was 84/0/3), log `testing/2026-09-11-verify-browser-phase1.md`; who: AI
+- [x] `runtime-image.md` ("Browser" section), `image/README.md`: package, launcher, ports and forwarder, registration paths, sandbox outcome — written by main 2026-09-11 alongside the code (the `documentation` agent is dispatched over the whole feature in Phase 4); who: AI
 - [ ] Phase checkpoint: `changes/` entry, commit, push — who: AI
 
 ### Phase 2 — Server: orchestrator verbs, REST, WS relay, port-9222 refusals
 - [ ] `internal/config`: `BrowserPort`, `CloseBrowserUnavailable = 4004` (document beside the other codes and in `terminal-protocol.md`) — verify: `go vet`; who: AI
 - [ ] `internal/orchestrator/browser.go` + tests via the fake Docker client (`fakedocker_test.go` style): the three verbs, `ErrNotRunning`, the log-tail error — verify: `go test -race ./internal/orchestrator/`; who: AI
-- [ ] `ListeningPorts` drops `BrowserPort` — verify: unit test with a scripted `ss` output containing 9222; who: AI
+- [ ] `ListeningPorts` drops `BrowserPort` — verify: unit test with a scripted `ss` output containing 9222; plus the two server-side integration checks (ports list omits 9222 while it listens; `/proxy/{id}/9222/` is a 400) and the README count; who: AI
 - [ ] `internal/httpapi/browser.go`: three REST handlers + the relay; `previewPortAllowed` in `proxyPort`, `setShares`, `createLink`; routes registered — verify: `go test -race ./internal/httpapi/` with an `httptest` fake CDP upstream (frames both ways; the 503-on-fresh-attach path for REST and WS; 4002 / 4004 / 1011 closes; 403 for a non-owner; 400 for 9222 on the three refusing routes); who: AI
 - [ ] `api.md`: the routes and the WS — verify: `documentation` agent; who: AI
 - [ ] Manual curl against a local run (`STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/`): start → 200, status → running, `websocat`/`curl --include --no-buffer` upgrade on `/ws/browser/{id}` receives the `Target.getTargets` reply to a hand-typed request — verify: recorded in the phase change entry; who: AI

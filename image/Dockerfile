@@ -98,6 +98,25 @@ RUN npm install -g @anthropic-ai/claude-code && \
     { mv /root/.local/bin/agy /usr/local/bin/agy 2>/dev/null || true; } && \
     claude --version && agy --version
 
+# Browser view (ADR-068): one headless Chromium per project, driven by the
+# operator through the SPA's screencast and by the agents through
+# chrome-devtools-mcp (pinned by exact npm version; it attaches to the RUNNING
+# Chromium over CDP and downloads no browser of its own). Debian's own
+# chromium package: its version moves with the archive's security updates,
+# exactly like docker-ce above, so it is pinned by the archive, not by a
+# sha256. fonts-liberation gives pages metric-compatible Arial/Times/Courier
+# instead of boxes. socat publishes DevTools on the guest's bridge address:
+# new-headless Chromium ignores --remote-debugging-address and binds loopback
+# only (verified 2026-09-11), and the styrman server reaches the guest over the
+# bridge, never through loopback. Sits BEFORE the base-package snapshot below so apt
+# persistence (ADR-028) never records chromium as a user install. Launcher:
+# configs/styrman-browser → /styrman/bin (installed with the others below).
+ARG CHROME_DEVTOOLS_MCP_VERSION=1.9.0
+RUN apt-get update && apt-get install --no-install-recommends -y chromium fonts-liberation socat \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g "chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}" \
+    && chromium --version
+
 # In-guest defaults: DNS template (Kata has no embedded Docker DNS) and a
 # package snapshot for drift debugging.
 RUN printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > /etc/resolv.conf.styrman && \
@@ -119,7 +138,8 @@ ARG STYRMAN_VERSION=0.0.0
 RUN echo "${STYRMAN_VERSION}" > /styrman/VERSION && chmod +x /styrman/entrypoint.sh && \
     chmod -R go-w /styrman/harness && \
     install -m 755 /styrman/configs/styrman-setup /usr/local/bin/styrman-setup && \
-    install -m 755 /styrman/configs/styrman-git-credential /usr/local/bin/styrman-git-credential
+    install -m 755 /styrman/configs/styrman-git-credential /usr/local/bin/styrman-git-credential && \
+    install -m 755 /styrman/configs/styrman-browser /styrman/bin/styrman-browser
 
 # Credential broker git helper (ADR-030): a SYSTEM gitconfig makes every
 # project use the broker for HTTPS credentials — no per-home setup, no stored

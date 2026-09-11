@@ -44,6 +44,14 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> image/
   (Dockerfile/Containerfile/`*.dockerfile`)
 - Go (latest stable at build time), Node 22
 - Agents: `claude` (npm `@anthropic-ai/claude-code`), `agy` (official installer → `/usr/local/bin/agy`)
+- Browser (ADR-068, 2026-09-11): Debian's `chromium` (headless; pinned by the
+  archive like `docker-ce`, so security updates move its version),
+  `fonts-liberation`, `socat`, and the npm package `chrome-devtools-mcp`
+  pinned by exact version (`ARG CHROME_DEVTOOLS_MCP_VERSION`). The launcher
+  `configs/styrman-browser` is installed to `/styrman/bin/styrman-browser`.
+  Installed BEFORE the base-package snapshot so apt persistence never
+  records chromium as a user install. Image size 3.56 GB → 4.32 GB.
+  Details in "Browser" below.
 - dbus, gnome-keyring, libsecret-tools — originally installed for agy's Secret
   Service (spike S4, ADR-032a); **removed from the image with ADR-040**:
   agy's real build never touched the keyring, and the broker's keyring tier
@@ -52,6 +60,54 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> image/
   daemon is started at login (no `profile-keyring.sh` step remains)
 - e2fsprogs (project docker.img), tini (PID-1 reaper)
 - `/etc/styrman-base-packages`: dpkg snapshot — the DIFF BASE for apt persistence (ADR-028: user-installed packages are captured vs this at shutdown and replayed on boot), and still useful for drift debugging
+
+## Browser (`/styrman/bin/styrman-browser`, ADR-068)
+
+One headless Chromium per project, run AS THE PROJECT USER, profile in
+`~/.styrman/browser/profile` (per project, R3), started on demand — by the
+server when the SPA's Browser view connects (Phase 2) or by the agent's MCP
+server — and stopped with the project. Verbs: `start` (idempotent, `flock`ed
+so the SPA relay and an MCP start cannot race, `-w 20` so a stuck lock is a
+failure not a hang; exit 0 once `/json/version` answers within 15 s, else 1
+with the log tail — and a failed launch takes its own process group down),
+`stop` (signals the process GROUP, so children outlive no crashed leader),
+`status` (`{"running":true,"version":"Chrome/…"}` or `{"running":false}`),
+`mcp` (quiet `start`, then `exec chrome-devtools-mcp --browserUrl
+http://127.0.0.1:9222` on stdio).
+
+Ports: Chromium's own DevTools listener binds LOOPBACK ONLY on 9229 —
+new-headless Chromium ignores `--remote-debugging-address` (verified
+2026-09-11: `ss` shows `127.0.0.1:9229` whatever the flag says). A `socat`
+forwarder in the same process group publishes it as `0.0.0.0:9222`, so the
+styrman server (over the project bridge) and in-guest clients (loopback) use
+ONE port number, 9222. Chromium refuses a `Host` header that is neither
+`localhost` nor an IP literal (`Host: example.test` → 500), which every
+caller satisfies: the server dials the guest IP, in-guest clients use
+`127.0.0.1`. 9222 is one trust domain with the project user and the
+project's inner containers; the server never lists, proxies or shares it
+(Phase 2 refusals in `internal/httpapi`).
+
+Sandbox: ON. Probed 2026-09-11 in a real Kata `mvm` guest (kernel 6.18,
+user namespaces on): the launch as an unprivileged user works with
+Chromium's own sandbox; `--no-sandbox` is NOT passed and `integration.sh`
+fails if it ever appears in the live cmdline. Under plain runc (the default
+seccomp profile blocks unprivileged user namespaces) the same launch fails
+loudly with "No usable sandbox" — a plain `docker run` of this image is not
+the target, the microVM is. Memory: a fresh headless Chromium on
+`about:blank` costs ≈250 MB in the guest.
+
+MCP registration (`entrypoint.sh`, third step of the stamped harness block):
+`claude mcp remove --scope user styrman-browser || true; claude mcp add
+--scope user styrman-browser -- /styrman/bin/styrman-browser mcp` (writes
+`~/.claude.json`, refuses a duplicate, hence the remove) and `agy mcp add
+styrman-browser /styrman/bin/styrman-browser mcp` (writes
+`~/.gemini/config/mcp_config.json`, add-or-update). Graded as one unit
+(`HR_OK`) beside `HM_OK`/`HI_OK`: the `~/.styrman/.harness-version` stamp
+is written only when all three pass, so a half-registered home is retried
+next boot and never reads as done. Neither file is a `settings.json`
+(ADR-062 D8 holds); neither is on `harness-migrate.sh`'s move list nor
+managed by `sh-agent install`. Both commands work in a fresh, unauthenticated
+home (verified 2026-09-11).
 
 ## Entrypoint contract (`entrypoint.sh`, runs as root)
 

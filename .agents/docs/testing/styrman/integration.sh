@@ -106,6 +106,18 @@ check "28 skills and 7 agy agents seeded" \
 check "no previous-harness artifacts (shell gates, GEMINI.md, settings.json)" \
     "! docker exec ${CN} sh -c 'test -e ${GH}/.agents/bin || test -e ${GH}/.gemini/GEMINI.md || test -e ${GH}/.claude/settings.json'"
 
+say "browser (ADR-068: one headless Chromium per project, MCP-registered for both agents)"
+# The registration is the seeding block's third step; both files are the
+# tools' OWN MCP registries, not settings.json (ADR-062 D8 still holds).
+check "browser MCP server registered for claude and agy" \
+    "docker exec ${CN} sh -c 'jq -e \".mcpServers[\\\"styrman-browser\\\"].command == \\\"/styrman/bin/styrman-browser\\\"\" ${GH}/.claude.json >/dev/null && grep -q styrman-browser ${GH}/.gemini/config/mcp_config.json'"
+# As the project user with its HOME, exactly how the server (Phase 2) and the
+# MCP verb invoke it. Chromium's own sandbox stays on (no --no-sandbox).
+check "styrman-browser start answers /json/version with the sandbox on" \
+    "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser start >/dev/null && docker exec ${CN} curl -fsS http://127.0.0.1:9222/json/version | grep -q '\"Browser\": \"Chrome/' && ! docker exec ${CN} sh -c 'tr \"\\0\" \" \" < /proc/\$(cat ${GH}/.styrman/browser/pid)/cmdline' | grep -q -- --no-sandbox"
+check "styrman-browser stop ends it (status reports not running)" \
+    "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser stop && docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser status | grep -q '\"running\":false'"
+
 say "shell skel (v1.22.0: GOPATH is \$HOME/.go, seeded write-once per file)"
 check "seeded .bash_exports carries the new GOPATH" \
     "docker exec ${CN} grep -qx 'export GOPATH=\"\$HOME/.go\"' ${GH}/.bash_exports"

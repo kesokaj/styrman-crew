@@ -1,0 +1,142 @@
+#!/usr/bin/env bash
+# styrman-browser — ONE headless Chromium per project microVM (ADR-068).
+#
+# Runs as the project user. The operator drives it from the SPA's Browser
+# view (a CDP screencast relayed by the styrman server); the agents drive the
+# SAME browser through chrome-devtools-mcp (the `mcp` verb, registered for
+# claude and agy at harness seeding). DevTools is reachable on the guest's
+# bridge address, port 9222: by the styrman server and by this project's own
+# processes and inner containers — one trust domain — never published, never
+# proxied, never shareable (internal/httpapi refuses the port). Chromium
+# itself listens on loopback only (new-headless ignores
+# --remote-debugging-address, verified 2026-09-11), on CHROME_PORT; a socat
+# forwarder in the same process group publishes it as :9222 on every
+# address, loopback included, so in-guest clients and the server share one
+# port number.
+#
+#   styrman-browser start    idempotent; 0 once /json/version answers (≤ 15 s), else 1 + the log tail
+#   styrman-browser stop     kills the process group; 0 even when nothing runs
+#   styrman-browser status   {"running":true,"version":"Chrome/…"} | {"running":false}
+#   styrman-browser mcp      start (quiet), then exec chrome-devtools-mcp on this browser (stdio)
+#
+# Why no --no-sandbox: probed 2026-09-11 inside a real Kata mvm guest
+# (kernel 6.18, user namespaces on) — Chromium's own sandbox works there. If a
+# future image or kernel breaks it, `start` fails LOUDLY (the log tail reaches
+# the pane) rather than silently weakening the sandbox.
+set -euo pipefail
+
+PORT=9222        # what everyone connects to (socat, all addresses)
+CHROME_PORT=9229 # Chromium's own loopback-only DevTools listener
+HOME="${HOME:-$(getent passwd "$(id -u)" | cut -d: -f6)}"
+DIR="${HOME}/.styrman/browser"
+PROFILE="${DIR}/profile"
+PIDFILE="${DIR}/pid"
+LOG="${DIR}/chromium.log"
+LOCK="${DIR}/lock"
+VERSION_URL="http://127.0.0.1:${PORT}/json/version"
+
+# /json/version's body, or failure. Chromium refuses a Host header that is
+# not localhost or an IP literal, which 127.0.0.1 satisfies.
+probe() { curl -fsS --max-time 2 "${VERSION_URL}" 2>/dev/null; }
+version_of() { probe | jq -r '.Browser // empty' 2>/dev/null || true; }
+
+launch() {
+    mkdir -p "${DIR}" "${PROFILE}"
+    chmod 700 "${DIR}"
+    # A crashed run leaves the profile's singleton lock behind; Chromium then
+    # refuses the profile and exits. Only safe when nothing answers — which
+    # the caller has just checked under the lock.
+    rm -f "${PROFILE}/SingletonLock" "${PROFILE}/SingletonSocket" "${PROFILE}/SingletonCookie" "${PIDFILE}"
+    : > "${LOG}"
+    # setsid: its own session and process group, so `stop` can kill the whole
+    # tree by group; -f forks so this script returns. The pid file holds the
+    # group leader (bash's $$ becomes chromium's pid through exec); socat is
+    # that bash's child, so it shares the group and dies with it. 9>&-
+    # closes the lock descriptor in the child: inherited, chromium would hold
+    # the start lock for its whole life and the NEXT start would block on it
+    # forever (seen 2026-09-11 in the Kata probe).
+    # shellcheck disable=SC2016  # the $-expressions belong to the inner bash
+    setsid -f bash -c 'echo $$ > "$1"; \
+        socat "TCP-LISTEN:$3,fork,reuseaddr,bind=0.0.0.0" "TCP:127.0.0.1:$4" & \
+        exec chromium \
+        --headless=new \
+        --remote-debugging-port="$4" \
+        --remote-allow-origins=* \
+        --user-data-dir="$2" \
+        --window-size=1280,800 \
+        --no-first-run --no-default-browser-check \
+        --disable-gpu --disable-dev-shm-usage \
+        about:blank' _ "${PIDFILE}" "${PROFILE}" "${PORT}" "${CHROME_PORT}" 9>&- >"${LOG}" 2>&1
+}
+
+do_start() {
+    mkdir -p "${DIR}"
+    chmod 700 "${DIR}"
+    # The SPA relay and the agent's MCP server may start it at the same
+    # moment: serialize probe-then-launch.
+    exec 9>"${LOCK}"
+    # Bounded: a holder that never releases (a bug like the one above) must
+    # surface as a failure, not a hang the server's 30 s exec cap has to cut.
+    flock -w 20 9 || { echo "another start is holding ${LOCK} for over 20 s"; return 1; }
+    if probe >/dev/null; then
+        return 0
+    fi
+    launch
+    for _ in $(seq 1 30); do
+        sleep 0.5
+        if probe >/dev/null; then
+            return 0
+        fi
+    done
+    echo "chromium did not answer on :${PORT} within 15 s; last log lines:"
+    # dbus is absent in the guest by design (ADR-040); its errors are noise.
+    grep -v dbus "${LOG}" | tail -20 || true
+    # A failed launch can leave orphaned renderer/zygote children behind
+    # (seen when the sandbox is refused): take the whole group down.
+    do_stop
+    return 1
+}
+
+do_stop() {
+    if [ -f "${PIDFILE}" ]; then
+        pid="$(cat "${PIDFILE}" 2>/dev/null || true)"
+        # Signal the GROUP, not the leader: chromium's children share the
+        # group setsid created, and they outlive a leader that crashed.
+        if [ -n "${pid}" ]; then
+            kill -TERM -- "-${pid}" 2>/dev/null || true
+            for _ in $(seq 1 10); do
+                pgrep -g "${pid}" >/dev/null 2>&1 || break
+                sleep 0.5
+            done
+            kill -KILL -- "-${pid}" 2>/dev/null || true
+        fi
+        rm -f "${PIDFILE}"
+    fi
+    return 0
+}
+
+do_status() {
+    v="$(version_of)"
+    if [ -n "${v}" ]; then
+        jq -cn --arg v "${v}" '{running:true,version:$v}'
+    else
+        echo '{"running":false}'
+    fi
+}
+
+do_mcp() {
+    # stdout is the MCP stdio channel: nothing but the server may write to it.
+    if ! do_start >&2; then
+        echo "styrman-browser: the browser did not start" >&2
+        exit 1
+    fi
+    exec chrome-devtools-mcp --browserUrl "http://127.0.0.1:${PORT}"
+}
+
+case "${1:-}" in
+    start)  do_start ;;
+    stop)   do_stop ;;
+    status) do_status ;;
+    mcp)    do_mcp ;;
+    *) echo "usage: styrman-browser start|stop|status|mcp" >&2; exit 2 ;;
+esac

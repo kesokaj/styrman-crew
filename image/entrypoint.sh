@@ -140,16 +140,32 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
         # 20 s each: both finish in well under a second; the cap only bounds a
         # stall, and it must stay inside R1's 15 s soft budget as far as possible
         # and the server's 90 s ready wait in any case (security review round 2).
-        HM_OK=1; HI_OK=1
+        HM_OK=1; HI_OK=1; HR_OK=1; HR_FAIL=""
         timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" bash /styrman/configs/harness-migrate.sh || HM_OK=0
         timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
             /styrman/bin/sh-agent install --repo /styrman/harness --home "${HOME_DIR}" >/dev/null || HI_OK=0
-        if [ "${HM_OK}" = 1 ] && [ "${HI_OK}" = 1 ]; then
+        # Third step (ADR-068 D4): register the project's browser as an MCP
+        # server with each agent's OWN command — the tools' MCP registries
+        # (~/.claude.json, ~/.gemini/config/mcp_config.json), still no
+        # settings.json, hooks or scripts. `claude mcp add` refuses a duplicate
+        # (exit 1), so the entry is removed first; `agy mcp add` is add-or-
+        # update. Graded as ONE unit: either tool failing keeps the stamp
+        # unwritten, so a half-registered home is retried next boot and never
+        # reads as done (the BUG-035 rule: a gate names every condition it
+        # guards). Neither command needs a login (verified 2026-09-11).
+        timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" sh -c \
+            'claude mcp remove --scope user styrman-browser >/dev/null 2>&1 || true; claude mcp add --scope user styrman-browser -- /styrman/bin/styrman-browser mcp >/dev/null 2>&1' \
+            || { HR_OK=0; HR_FAIL="claude"; }
+        timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" \
+            agy mcp add styrman-browser /styrman/bin/styrman-browser mcp >/dev/null 2>&1 \
+            || { HR_OK=0; HR_FAIL="${HR_FAIL:+both}"; HR_FAIL="${HR_FAIL:-agy}"; }
+        if [ "${HM_OK}" = 1 ] && [ "${HI_OK}" = 1 ] && [ "${HR_OK}" = 1 ]; then
             runuser -u "${USERNAME}" -- sh -c "printf '%s' '${HARNESS_VER}' > '${HARNESS_STAMP}'" 2>/dev/null || true
-            log "agent harness deployed (version ${HARNESS_VER}, styrman-harness $(cut -c1-7 /styrman/harness/COMMIT 2>/dev/null || echo '?'))"
+            log "agent harness deployed (version ${HARNESS_VER}, styrman-harness $(cut -c1-7 /styrman/harness/COMMIT 2>/dev/null || echo '?'); browser MCP registered for claude and agy)"
         else
             [ "${HM_OK}" = 1 ] || log "WARN: previous-harness migration reported errors or timed out (see the [harness-migrate] lines above)"
             [ "${HI_OK}" = 1 ] || log "WARN: sh-agent install reported errors or timed out — harness not deployed this boot (continuing)"
+            [ "${HR_OK}" = 1 ] || log "WARN: browser MCP registration failed for ${HR_FAIL} — retried next boot (continuing)"
         fi
     fi
 fi
