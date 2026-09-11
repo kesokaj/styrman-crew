@@ -33,6 +33,36 @@ project microVMs cannot reach.
 
 ## Production mode (Google OAuth, HTTPS, survives reboots)
 
+### styrman-ctl (one front door)
+
+`sudo deploy/styrman-ctl` (plan
+`.agents/docs/plans/2026-09-11-installer-ctl.md`) wraps every command in
+this section instead of replacing any of them — every side effect goes
+through the script's `run()`, so `--dry-run` prints the exact plan and
+executes nothing.
+
+| Verb | Wraps |
+|---|---|
+| `install` | `host-setup.sh --user <operator>`; prompts for the six must-fill `.env` keys (validated) with `--env-file` supplying defaults unattended; `resolve_version` (`--version`, else the checkout's newest reachable release tag, never a bare commit sha, ADR-053); `docker build -t styrman-runtime:${V} --build-arg STYRMAN_VERSION=${V} image/`; `STYRMAN_VERSION=${V} docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build`; waits up to 120s for `styrman-server` to report healthy; then offers auto-update setup |
+| `update --setup` | the "Setup" steps below, as prompts: GitHub token → `/etc/styrman/gh-token` (600); clone-or-fetch `/opt/styrman` under a one-shot `GIT_ASKPASS`; `chown -R root:root` the clone; copy `deploy/.env` into it; write `/etc/styrman/allowed_signers`; `styrman-update --check` with `STYRMAN_UPDATE_STATE_DIR`/`STYRMAN_DEPLOY_DIR`/`STYRMAN_GH_TOKEN_FILE`/`STYRMAN_ALLOWED_SIGNERS` all named explicitly; `systemctl enable --now styrman-update.timer`; `systemctl start styrman-update.service` for the first tick |
+| `update` | `systemctl start styrman-update.service` (one tick now) + `journalctl -u styrman-update.service -n 20` |
+| `update --redeploy` | `styrman-update --force` (clears a latched failed-version, rebuilds the current tag) |
+| `edit` | `env_set` on both `.env` copies (checkout's and the clone's, when it exists), then `docker compose -f <dir>/deploy/docker-compose.yml --env-file <dir>/.env up -d` at the currently deployed version — no `--build`, images are immutable per version |
+| `uninstall --level 1` | `docker compose … down --remove-orphans`; `docker rm -f` of every container labeled `styrman.managed=true` (project microVMs AND the hidden per-user setup VMs alike); `docker network rm` of every `sdb-*`/`lan-*` network; `systemctl disable --now` the four units |
+| `uninstall --level 2` | level 1, then: the IPv4 AND IPv6 firewall chains (`STYRMAN-FWD`/`STYRMAN-IN` and, when `ip6tables` exists, `STYRMAN-FWD6`/`STYRMAN-IN6`); the unit files + `daemon-reload`; `/usr/local/bin/styrman-update`; `/usr/local/sbin/styrman-firewall.sh`; `/etc/tmpfiles.d/styrman-ksm.conf`; `/etc/styrman`; `/opt/styrman`; the `styrman-runtime`/`styrman-server`/`styrman-caddy` images; `deploy/.env` moved to `deploy/.env.removed-<ts>` |
+| `uninstall --level 3` | level 2, then `/var/lib/styrman` |
+
+`status [--json]` reads the same state this section describes
+(`/etc/styrman/update/{deployed-version,deployed-sha,failed-version}`, unit
+`is-enabled`/`is-active`, the firewall chains, the updater clone's commit)
+without changing any of it.
+
+The wrapper deliberately does **not**: run compose against the clone by
+hand (the break-glass command below stays a documented command, not a
+verb — `versioning.md`); remove Docker or Kata; edit `daemon.json`. "Clean
+reinstall (virgin state)" below is `uninstall --level 3` followed by
+`install`.
+
 Deploy/upgrade: `STYRMAN_VERSION=<x.y.z> docker compose -f
 deploy/docker-compose.yml up -d --build` (the version stamps the binary, the
 Settings page, and every image tag). **Compose refuses to run at all with

@@ -171,7 +171,9 @@ validate() {
         STYRMAN_PUBLIC_DOMAIN|STYRMAN_PRIVATE_DOMAIN) { [ -z "${v}" ] || is_hostname "${v}"; } && ok=0 ;;
         STYRMAN_HOSTNAME) is_label "${v}" && ok=0 ;;
         AUTH_DOMAIN|SHELL_DOMAIN|APPS_DOMAIN) { [ -z "${v}" ] || is_label "${v}"; } && ok=0 ;;
-        GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|CLOUDFLARE_API_TOKEN) [[ "${v}" =~ ^[^[:space:]]+$ ]] && ok=0 ;;
+        # No $ { } or backslash: compose INTERPOLATES the env file, so a
+        # secret carrying "${" would be rewritten before the server saw it.
+        GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|CLOUDFLARE_API_TOKEN) [[ "${v}" =~ ^[^[:space:]\$\{\}\\]+$ ]] && ok=0 ;;
         ADMIN_EMAIL) is_email "${v}" && ok=0 ;;
         STYRMAN_ALLOWED_EMAILS) is_email_list "${v}" && ok=0 ;;
         SUPERADMINS) { [ "${v}" = "${SUPERADMINS_REF}" ] || is_email_list "${v}"; } && ok=0 ;;
@@ -187,7 +189,7 @@ validate() {
         case "${key}" in
             BASE_DOMAIN|STYRMAN_PUBLIC_DOMAIN|STYRMAN_PRIVATE_DOMAIN) echo "${key}: not a hostname (labels of a-z 0-9 -, dots)" >&2 ;;
             STYRMAN_HOSTNAME|AUTH_DOMAIN|SHELL_DOMAIN|APPS_DOMAIN) echo "${key}: one DNS label (a-z 0-9 -, up to 63)" >&2 ;;
-            GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|CLOUDFLARE_API_TOKEN) echo "${key}: must be non-empty without whitespace" >&2 ;;
+            GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|CLOUDFLARE_API_TOKEN) echo "${key}: must be non-empty, without whitespace, \$, {, } or backslash (compose interpolates the env file)" >&2 ;;
             ADMIN_EMAIL) echo "${key}: one e-mail address" >&2 ;;
             STYRMAN_ALLOWED_EMAILS|SUPERADMINS) echo "${key}: comma-separated e-mail addresses" >&2 ;;
             STYRMAN_IDLE_TIMEOUT|STYRMAN_TRANSCRIPT_TTL) echo "${key}: a Go duration such as 8h or 720h" >&2 ;;
@@ -385,11 +387,15 @@ resolve_version() {
 
 # https_origin: this checkout's origin as an https URL (an ssh form is
 # rewritten; the updater clones over https with a token).
+to_https() { printf '%s' "$1" | sed -E 's#^git@([^:]+):#https://\1/#; s#^ssh://git@([^/]+)/#https://\1/#'; }
 https_origin() {
     local o
     o="$(git -C "${REPO}" remote get-url origin 2>/dev/null || true)"
     [ -n "${o}" ] || die "this checkout has no git remote 'origin' — the deploy clone needs one"
-    o="$(printf '%s' "${o}" | sed -E 's#^git@([^:]+):#https://\1/#; s#^ssh://git@([^/]+)/#https://\1/#')"
+    o="$(to_https "${o}")"
+    # Only a plain https origin reaches a root `git clone`: no other
+    # transport (ext::, file://), no option-shaped value (security review).
+    [[ "${o}" =~ ^https://[a-z0-9.-]+/[A-Za-z0-9._/-]+$ ]] || die "origin ${o} is not a plain https URL — the deploy clone needs one"
     printf '%s' "${o}"
 }
 
@@ -458,7 +464,12 @@ cmd_install() {
 # the last two default to /etc/styrman inside the updater, which is only
 # right when ETC_DIR is /etc/styrman (review finding, Phase 2).
 UPDATER_ENV=("STYRMAN_UPDATE_STATE_DIR=${ETC_DIR}/update" "STYRMAN_DEPLOY_DIR=${DEPLOY_DIR}" "STYRMAN_GH_TOKEN_FILE=${ETC_DIR}/gh-token" "STYRMAN_ALLOWED_SIGNERS=${ETC_DIR}/allowed_signers")
-is_signers_line() { [[ "$1" =~ ^[^[:space:]]+\ (ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)\ [A-Za-z0-9+/=]+ ]]; }
+is_signers_line() { [[ "$1" =~ ^[^[:space:]]+\ (ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)\ [A-Za-z0-9+/=]+(\ [^[:space:]]+)?$ ]]; }
+# private_file PATH: a secret handed in by path must be nobody else's to read.
+private_file() {
+    local mode; mode="$(stat -c %a "$1" 2>/dev/null || echo 777)"
+    [ "$(( 8#${mode} & 8#077 ))" = 0 ] || die "$1 is readable by group or others (mode ${mode}); chmod 600 it first"
+}
 
 # setup_auto_update [TOKEN_FILE] [SIGNERS_FILE]
 setup_auto_update() {
@@ -466,6 +477,7 @@ setup_auto_update() {
     [ -x "${BIN_DIR}/styrman-update" ] || [ "${DRY}" = 1 ] || die "${BIN_DIR}/styrman-update is not installed — run install first"
     if [ -n "${token_file}" ]; then
         [ -f "${token_file}" ] || die "--gh-token-file ${token_file}: no such file"
+        private_file "${token_file}"
         token="$(tr -d '\n' < "${token_file}")"
     else
         ask token "GitHub fine-grained token for this repository (Contents: read-only; never echoed)" "" secret
@@ -473,6 +485,7 @@ setup_auto_update() {
     [ -n "${token}" ] || die "empty GitHub token"
     if [ -n "${signers_file}" ]; then
         [ -f "${signers_file}" ] || die "--allowed-signers-file ${signers_file}: no such file"
+        [ "$(wc -l < "${signers_file}")" -le 1 ] || die "--allowed-signers-file ${signers_file}: one line expected (one signer); more would be silently dropped"
         signers="$(head -1 "${signers_file}")"
     else
         ask signers "allowed_signers line: <your-git-email> <key type> <public key> (from ~/.ssh/id_ed25519.pub)" ""
@@ -486,26 +499,35 @@ setup_auto_update() {
         tmpd="<tmpdir>"
     else
         tmpd="$(mktemp -d)"; chmod 700 "${tmpd}"
-        trap 'rm -rf "${tmpd}"' EXIT
+        # EXIT alone misses an interrupted multi-minute clone (review finding).
+        trap 'rm -rf "${tmpd}"' EXIT INT TERM HUP
         # Secrets travel through root-only temp files, never argv or the plan.
         (umask 077; printf '%s' "${token}" > "${tmpd}/gh-token"; printf '%s\n' "${signers}" > "${tmpd}/allowed_signers")
-        # One-shot askpass: git asks for a username, then a password; nothing
-        # is stored in any git config (the updater has its own helper reading
-        # the root-only token file, host-setup.sh 8c).
-        # shellcheck disable=SC2016  # $1 belongs to the helper script being written
-        printf '#!/usr/bin/env bash\ncase "$1" in *sername*) echo x-access-token ;; *) cat "%s" ;; esac\n' "${ETC_DIR}/gh-token" > "${tmpd}/askpass"
-        chmod 700 "${tmpd}/askpass"
     fi
+    # The token reaches git the way host-setup.sh 8c and the updater do it:
+    # an inline credential helper SCOPED to the origin's host, reading the
+    # root-only token file, with every inherited helper cleared first — never
+    # an askpass that would answer any host's prompt (security review).
+    local origin_host helper
+    origin_host="${origin#https://}"; origin_host="https://${origin_host%%/*}"
+    helper="credential.${origin_host}.helper=!f() { echo username=x-access-token; printf 'password=%s\\n' \"\$(cat ${ETC_DIR}/gh-token)\"; }; f"
 
     log "auto-update: token → ${ETC_DIR}/gh-token (root, 600)"
     run install -d -m 700 -o root -g root "${ETC_DIR}"
     run install -m 600 -o root -g root "${tmpd}/gh-token" "${ETC_DIR}/gh-token"
     if [ -d "${DEPLOY_DIR}/.git" ]; then
+        # The token is offered only to the origin we expect: a clone that
+        # points elsewhere is not ours to update (review finding).
+        local have_origin
+        have_origin="$(to_https "$(git -C "${DEPLOY_DIR}" remote get-url origin 2>/dev/null || true)")"
+        if [ "${have_origin}" != "${origin}" ]; then
+            die "the clone at ${DEPLOY_DIR} points at ${have_origin:-no origin}, not ${origin} — remove it or fix its remote first"
+        fi
         log "auto-update: clone exists at ${DEPLOY_DIR} — fetching tags"
-        run env "GIT_ASKPASS=${tmpd}/askpass" GIT_TERMINAL_PROMPT=0 git -C "${DEPLOY_DIR}" fetch --tags
+        run env GIT_TERMINAL_PROMPT=0 git -C "${DEPLOY_DIR}" -c credential.helper= -c "${helper}" fetch --tags
     else
         log "auto-update: cloning ${origin} → ${DEPLOY_DIR} (https, token via a one-shot askpass)"
-        run env "GIT_ASKPASS=${tmpd}/askpass" GIT_TERMINAL_PROMPT=0 git clone "${origin}" "${DEPLOY_DIR}"
+        run env GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c "${helper}" clone -- "${origin}" "${DEPLOY_DIR}"
     fi
     run chown -R root:root "${DEPLOY_DIR}"
     if [ -f "${CLONE_ENV}" ] && [ -f "${ENV_FILE}" ] && ! cmp -s "${CLONE_ENV}" "${ENV_FILE}"; then
@@ -637,6 +659,97 @@ cmd_edit() {
     cmd_status || true
 }
 
+# ─── uninstall: three levels, the plan printed before the word is asked ────
+compose_dir() { # the dir whose compose file and .env the stack was brought up from
+    if [ -f "${CLONE_ENV}" ]; then printf '%s' "${DEPLOY_DIR}"; else printf '%s' "${REPO}"; fi
+}
+# rm_tree PATH: every recursive delete goes through guard_path first.
+rm_tree() {
+    local p="$1"
+    [ -e "${p}" ] || [ -L "${p}" ] || { log "uninstall: ${p} already absent"; return 0; }
+    guard_path "${p}" || die "refusing to delete ${p}"
+    run rm -rf -- "${p}"
+}
+uninstall_level() { # uninstall_level N — executes (or, under DRY=1, prints) that level's plan
+    local level="$1" ver dir u ids n ref
+    # 1. the stack, the microVMs, their networks, the units
+    ver="$(deployed_version)"; ver="${ver#v}"; [[ "${ver}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || ver=0.0.0
+    dir="$(compose_dir)"
+    if [ -f "${dir}/deploy/.env" ]; then
+        run env "STYRMAN_VERSION=${ver}" docker compose -f "${dir}/deploy/docker-compose.yml" --env-file "${dir}/deploy/.env" down --remove-orphans
+    else
+        for u in styrman-server styrman-caddy; do run docker rm -f "${u}"; done
+    fi
+    # Every styrman-managed container: project microVMs AND the hidden setup
+    # VMs (label styrman.system=setup, no project label) alike.
+    ids="$(docker ps -aq --filter label=styrman.managed=true 2>/dev/null | tr '\n' ' ' || true)"
+    # shellcheck disable=SC2086  # ids is a space-separated list on purpose
+    [ -z "${ids// /}" ] || run docker rm -f ${ids}
+    for n in $(docker network ls --format '{{.Name}}' 2>/dev/null | grep -E '^(sdb|lan)-' || true); do run docker network rm "${n}"; done
+    for u in "${UNITS[@]}"; do [ -f "${UNIT_DIR}/${u}" ] && run systemctl disable --now "${u}"; done
+    [ "${level}" -ge 2 ] || return 0
+    # 2. host config: firewall chains (v4 and v6), unit files, binaries, the
+    #    KSM tmpfiles entry, /etc/styrman, the deploy clone, the images, .env
+    if have iptables; then
+        run iptables -D DOCKER-USER -j STYRMAN-FWD; run iptables -F STYRMAN-FWD; run iptables -X STYRMAN-FWD
+        run iptables -D INPUT -j STYRMAN-IN; run iptables -F STYRMAN-IN; run iptables -X STYRMAN-IN
+    fi
+    if have ip6tables; then
+        run ip6tables -D FORWARD -j STYRMAN-FWD6; run ip6tables -F STYRMAN-FWD6; run ip6tables -X STYRMAN-FWD6
+        run ip6tables -D INPUT -j STYRMAN-IN6; run ip6tables -F STYRMAN-IN6; run ip6tables -X STYRMAN-IN6
+    fi
+    for u in "${UNITS[@]}"; do [ -f "${UNIT_DIR}/${u}" ] && run rm -f -- "${UNIT_DIR}/${u}"; done
+    run systemctl daemon-reload
+    [ -e "${BIN_DIR}/styrman-update" ] && run rm -f -- "${BIN_DIR}/styrman-update"
+    [ -e "${SBIN_DIR}/styrman-firewall.sh" ] && run rm -f -- "${SBIN_DIR}/styrman-firewall.sh"
+    [ -e "${TMPFILES_DIR}/styrman-ksm.conf" ] && run rm -f -- "${TMPFILES_DIR}/styrman-ksm.conf"
+    rm_tree "${ETC_DIR}"
+    rm_tree "${DEPLOY_DIR}"
+    for ref in $(docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -E '^styrman-(runtime|server|caddy):' || true); do run docker image rm "${ref}"; done
+    [ -f "${ENV_FILE}" ] && run mv -- "${ENV_FILE}" "${ENV_FILE}.removed-$(date +%Y%m%d-%H%M%S)"
+    [ "${level}" -ge 3 ] || return 0
+    # 3. every project home, workspace, user store, credential store, transcript
+    du -sh "${STATE_DIR}" 2>/dev/null || true
+    rm_tree "${STATE_DIR}"
+}
+cmd_uninstall() {
+    local level=""
+    while [ $# -gt 0 ]; do
+        case "$1" in --level) level="$2"; shift 2 ;; *) die "uninstall: unknown flag $1" ;; esac
+    done
+    need_root
+    if [ -z "${level}" ]; then
+        has_tty || die "uninstall: pass --level 1|2|3 (no terminal for the menu)"
+        echo "uninstall levels:"
+        echo "  1) stack        — stop and remove the stack, every project microVM and network, disable the units; keeps data, host config, images, Docker and Kata"
+        echo "  2) + host config — level 1, then the firewall chains, units, binaries, /etc/styrman (updater state, token, signers), the deploy clone, the images, deploy/.env (backed up)"
+        echo "  3) + everything — level 2, then ${STATE_DIR}: every home, workspace, user store and transcript. IRREVERSIBLE (durability is git, R13)"
+        read -r -p "level [1/2/3, empty = abort]: " level < /dev/tty
+    fi
+    [[ "${level}" =~ ^[123]$ ]] || die "uninstall: level must be 1, 2 or 3 — aborted, nothing changed"
+    local word why
+    case "${level}" in
+        1) word=stop; why="This stops the stack and every project microVM on this host (data kept)." ;;
+        2) word=uninstall; why="This removes the stack, the host configuration, the deploy clone and the images (project data kept)." ;;
+        3) word="$(printable "$(hostname 2>/dev/null || uname -n)")"; why="This deletes EVERYTHING including ${STATE_DIR} — every project home and workspace on host ${word}. There is no backup layer (ADR-055)." ;;
+    esac
+    echo "plan for uninstall --level ${level}:"
+    # The subshell's DRY=1 is deliberately local: it prints the plan, the
+    # caller's DRY decides what happens after the word.
+    # shellcheck disable=SC2030,SC2031
+    ( DRY=1; uninstall_level "${level}" ) | sed 's/^/  /'
+    # shellcheck disable=SC2031
+    if [ "${DRY}" = 1 ] && [ -z "${CONFIRM_GIVEN}" ]; then
+        log "uninstall: dry run — nothing executed (the word to type for level ${level} is: ${word})"
+        return 0
+    fi
+    confirm_word "${word}" "${why}"
+    # shellcheck disable=SC2031
+    [ "${DRY}" = 1 ] && { log "uninstall: dry run — confirmation accepted, nothing executed"; return 0; }
+    uninstall_level "${level}"
+    log "uninstall --level ${level}: done"
+}
+
 # ─── Internal test hooks (used by the Go test; not for operators) ───────────
 # Gated: `__env-set` can rewrite any file as root, so the hooks exist only
 # when the test harness says so (security review).
@@ -660,7 +773,7 @@ styrman-ctl — install, update, edit, uninstall and inspect a styrman host
   sudo deploy/styrman-ctl install [--user U] [--version X.Y.Z] [--env-file F] [--gh-token-file F] [--allowed-signers-file F] [--skip-auto-update]
   sudo deploy/styrman-ctl update [--redeploy] | --setup [--gh-token-file F] [--allowed-signers-file F]
   sudo deploy/styrman-ctl edit [KEY=VALUE ...] [--no-apply]
-  sudo deploy/styrman-ctl uninstall …    (not yet: plan phase 4)
+  sudo deploy/styrman-ctl uninstall [--level 1|2|3] [--confirm WORD]
   deploy/styrman-ctl help
 
 Global flags: --dry-run (print every command, run nothing), --yes (take
@@ -704,7 +817,7 @@ main() {
         install) cmd_install "$@" ;;
         update) cmd_update "$@" ;;
         edit) cmd_edit "$@" ;;
-        uninstall) die "${verb}: not implemented yet (plan .agents/docs/plans/2026-09-11-installer-ctl.md)" ;;
+        uninstall) cmd_uninstall "$@" ;;
         __*) cmd_internal "${verb}" "$@" ;;
         *) die "unknown verb ${verb} (try: help)" ;;
     esac

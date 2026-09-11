@@ -15,6 +15,9 @@ Production is one self-hosted Debian 13 host (baremetal on the operator's networ
 | Services | vendored Caddy ingress (Google OAuth, TLS, Cloudflare DNS) + containerized server (`deploy/Dockerfile.server`) via `deploy/docker-compose.yml` |
 | Secrets | `deploy/.env` on the host only |
 
+The host is provisioned and operated with `sudo deploy/styrman-ctl`
+(`install`/`status`/`edit`/`update`/`uninstall` — `deploy/README.md`, `.agents/docs/specs/styrman/deploy.md` "styrman-ctl (one front door)"); the older per-script commands below remain valid underneath it.
+
 ## Prerequisites on the target
 
 `sudo bash deploy/host-setup.sh --user $USER` (Docker, Kata `mvm`, tuning, state dirs, runtime image, `.env` scaffold — idempotent). Bring-up and production mode: `.agents/docs/specs/styrman/deploy.md` "Production mode" and "Bring-up".

@@ -118,9 +118,6 @@ func TestStyrmanCtlHelpAndUnknownVerb(t *testing.T) {
 	if out, code := ctl(t, e, "frobnicate"); code == 0 || !strings.Contains(out, "unknown verb") {
 		t.Fatalf("unknown verb: %d %s", code, out)
 	}
-	if out, code := ctl(t, e, "uninstall", "--dry-run"); code == 0 || !strings.Contains(out, "not implemented") {
-		t.Fatalf("uninstall stub: %d %s", code, out)
-	}
 }
 
 func TestStyrmanCtlStatusJSON(t *testing.T) {
@@ -207,6 +204,7 @@ func TestStyrmanCtlValidate(t *testing.T) {
 		{"BASE_DOMAIN", "not a host"}, {"BASE_DOMAIN", ""}, {"STYRMAN_HOSTNAME", "a.b"}, {"ADMIN_EMAIL", "nope"},
 		{"STYRMAN_ALLOWED_EMAILS", ""}, {"STYRMAN_ALLOWED_EMAILS", "a@b.co,,"}, {"STYRMAN_IDLE_TIMEOUT", "8 hours"},
 		{"STYRMAN_BROKER_ADDR", "8091"}, {"DEFAULT_RPS", "ten"}, {"CADDY_ADMIN", "localhost:2019"},
+		{"GOOGLE_CLIENT_SECRET", "abc${HOME}"}, {"CLOUDFLARE_API_TOKEN", `a\b`},
 		{"CADDY_ADMIN", "0.0.0.0:2019"}, {"CADDY_ADMIN", "127.0.0.1:70000"}, {"CADDY_ADMIN", "127.0.0.999:2019"}, {"STYRMAN_IMAGE", "styrman-runtime:dev"}, {"GOOGLE_CLIENT_SECRET", "has space"},
 		{"STYRMAN_UID", "1000"}, {"STYRMAN_JWT_KEY", "abc"}, {"NOT_A_KEY", "x"},
 	}
@@ -413,7 +411,14 @@ func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	tok := filepath.Join(e.root, "tok")
-	if err := os.WriteFile(tok, []byte("ghp_SECRETTOKEN\n"), 0o600); err != nil {
+	if err := os.WriteFile(tok, []byte("ghp_SECRETTOKEN\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A world-readable token file is refused before anything is planned.
+	if out, code := ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", filepath.Join(e.root, "signers")); code == 0 || !strings.Contains(out, "chmod 600") {
+		t.Fatalf("world-readable token accepted: %d %s", code, out)
+	}
+	if err := os.Chmod(tok, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	signers := filepath.Join(e.root, "signers")
@@ -440,7 +445,7 @@ func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
 	want := []string{
 		"install -d -m 700 -o root -g root " + filepath.Join(e.root, "etc"),
 		"install -m 600 -o root -g root", // gh-token from the temp file
-		"git clone https://github.com/owner/repo.git " + filepath.Join(e.root, "deploy"),
+		"clone -- https://github.com/owner/repo.git " + filepath.Join(e.root, "deploy"),
 		"chown -R root:root " + filepath.Join(e.root, "deploy"),
 		"install -m 600 -o root -g root " + envFile + " " + filepath.Join(e.root, "deploy", "deploy", ".env"),
 		"install -m 644 -o root -g root", // allowed_signers from the temp file
@@ -471,20 +476,48 @@ func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
 	if !strings.Contains(out, "<tmpdir>/gh-token") {
 		t.Fatalf("dry run should plan with a placeholder temp dir:\n%s", out)
 	}
-	clone := lines[indexOf(lines, "git clone")]
-	if !strings.Contains(clone, "GIT_ASKPASS=") || !strings.Contains(clone, "GIT_TERMINAL_PROMPT=0") {
-		t.Fatalf("clone runs without the one-shot askpass: %s", clone)
+	clone := lines[indexOf(lines, "clone -- https://github.com/owner/repo.git")]
+	// The token reaches git through a helper SCOPED to the origin's host,
+	// with inherited helpers cleared, and the origin sits after `--`.
+	for _, w := range []string{"-c credential.helper= ", "credential.https://github.com.helper=", "gh-token", "GIT_TERMINAL_PROMPT=0"} {
+		if !strings.Contains(clone, w) {
+			t.Fatalf("clone line lacks %q: %s", w, clone)
+		}
 	}
-	if strings.Contains(out, "credential.helper") {
-		t.Fatalf("a credential helper reached git config:\n%s", out)
+	if strings.Contains(out, "GIT_ASKPASS") || strings.Contains(out, "SECRETTOKEN") {
+		t.Fatalf("an askpass or the token reached the plan:\n%s", out)
 	}
-	// An existing clone is fetched, not re-cloned.
+	// An existing clone is fetched, not re-cloned — under the same scoped
+	// helper, and only when its origin is the one we expect.
 	if err := os.MkdirAll(filepath.Join(e.root, "deploy", ".git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	out, _ = ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", signers)
-	if !strings.Contains(out, "fetch --tags") || strings.Contains(out, "git clone") {
-		t.Fatalf("existing clone not fetched:\n%s", out)
+	fetch := indexOf(planLines(out), "fetch --tags")
+	if fetch < 0 || strings.Contains(out, "clone --") || !strings.Contains(planLines(out)[fetch], "credential.https://github.com.helper=") {
+		t.Fatalf("existing clone not fetched under the scoped helper:\n%s", out)
+	}
+	other := "#!/usr/bin/env bash\ncase \"$*\" in \"-C " + filepath.Join(e.root, "deploy") + " remote get-url origin\") echo https://github.com/someone/else.git ;; *get-url*) echo git@github.com:owner/repo.git ;; *) echo v1.27.1 ;; esac\n"
+	if err := os.WriteFile(filepath.Join(e.bin, "git"), []byte(other), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", signers); code == 0 || !strings.Contains(out, "points at https://github.com/someone/else.git") {
+		t.Fatalf("a clone with another origin was fetched with our token: %d %s", code, out)
+	}
+	if err := os.WriteFile(filepath.Join(e.bin, "git"), []byte(gitFake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A non-https or option-shaped origin never reaches a root git clone.
+	for _, bad := range []string{"ext::sh -c evil", "file:///srv/repo", "--upload-pack=evil"} {
+		if err := os.WriteFile(filepath.Join(e.bin, "git"), []byte("#!/usr/bin/env bash\ncase \"$*\" in *get-url*) echo '"+bad+"' ;; *) echo v1.27.1 ;; esac\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if out, code := ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", signers); code == 0 || !strings.Contains(out, "not a plain https URL") {
+			t.Fatalf("origin %q accepted: %d %s", bad, code, out)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(e.bin, "git"), []byte(gitFake), 0o755); err != nil {
+		t.Fatal(err)
 	}
 	// A malformed signers line is refused before anything is planned.
 	if err := os.WriteFile(signers, []byte("not a signers line\n"), 0o600); err != nil {
@@ -578,5 +611,145 @@ func TestStyrmanCtlUpdatePlan(t *testing.T) {
 	}
 	if out, code := ctl(t, e, "update"); code == 0 || !strings.Contains(out, "run as root") {
 		t.Fatalf("update as non-root: %d %s", code, out)
+	}
+}
+
+// ── Phase 4: uninstall, as dry-run plans ────────────────────────────────────
+
+func uninstallSetup(t *testing.T) ctlEnv {
+	t.Helper()
+	e := ctlSetup(t, true)
+	docker := `#!/usr/bin/env bash
+echo "docker $*" >> "` + e.calls + `"
+case "$1 $2" in
+  "inspect -f") case "$3" in *Config.Image*) echo styrman-server:1.27.1 ;; *Id*) echo abc ;; *) echo healthy ;; esac ;;
+  "ps -aq") printf 'c1\nc2\n' ;;
+  "ps -q") printf 'c1\n' ;;
+  "network ls") printf 'bridge\nsdb-aaaa\nlan-bbbb\nhost\n' ;;
+  "images --format") printf 'styrman-runtime:1.27.1\nstyrman-server:1.27.1\nstyrman-caddy:1.27.1\nnginx:latest\n' ;;
+  "version --format") echo 29.7.2 ;;
+esac`
+	if err := os.WriteFile(filepath.Join(e.bin, "docker"), []byte(docker), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"bin/styrman-update", "sbin/styrman-firewall.sh", "tmpfiles/styrman-ksm.conf", "units/styrman-firewall.timer", "units/styrman-update.timer"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(e.root, f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(e.root, f), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	envFile := filepath.Join(e.root, "checkout.env")
+	if err := os.WriteFile(envFile, []byte("BASE_DOMAIN=example.test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.env = append(e.env, "STYRMAN_ENV_FILE="+envFile)
+	if err := os.WriteFile(filepath.Join(e.bin, "ip6tables"), []byte("#!/usr/bin/env bash\necho \"ip6tables $*\" >> \""+e.calls+"\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func TestStyrmanCtlUninstallPlans(t *testing.T) {
+	e := uninstallSetup(t)
+	root := e.root
+	// Level 1: the stack, the managed containers, the styrman networks, the units — and nothing more.
+	out, code := ctl(t, e, "uninstall", "--level", "1", "--dry-run")
+	if code != 0 {
+		t.Fatalf("level 1: %d\n%s", code, out)
+	}
+	l1 := planLines(strings.ReplaceAll(out, "\n  + ", "\n+ "))
+	for _, w := range []string{
+		"docker compose -f " + filepath.Join(root, "deploy", "deploy", "docker-compose.yml") + " --env-file " + filepath.Join(root, "deploy", "deploy", ".env") + " down --remove-orphans",
+		"docker rm -f c1 c2", "docker network rm sdb-aaaa", "docker network rm lan-bbbb",
+		"systemctl disable --now styrman-firewall.timer", "systemctl disable --now styrman-update.timer",
+	} {
+		if indexOf(l1, w) < 0 {
+			t.Fatalf("level 1 lacks %q:\n%s", w, out)
+		}
+	}
+	for _, bad := range []string{"network rm bridge", "network rm host", "iptables", "rm -rf", "image rm", "mv "} {
+		if indexOf(l1, bad) >= 0 {
+			t.Fatalf("level 1 must not contain %q:\n%s", bad, out)
+		}
+	}
+	if !strings.Contains(out, "the word to type for level 1 is: stop") {
+		t.Fatalf("level 1 word:\n%s", out)
+	}
+	// Level 2 adds host config; never the data tree, never a foreign image or network.
+	out, code = ctl(t, e, "uninstall", "--level", "2", "--dry-run")
+	if code != 0 {
+		t.Fatalf("level 2: %d\n%s", code, out)
+	}
+	l2 := planLines(strings.ReplaceAll(out, "\n  + ", "\n+ "))
+	for _, w := range []string{
+		"iptables -D DOCKER-USER -j STYRMAN-FWD", "iptables -X STYRMAN-IN", "ip6tables -X STYRMAN-FWD6", "ip6tables -D INPUT -j STYRMAN-IN6",
+		"rm -f -- " + filepath.Join(root, "units", "styrman-firewall.timer"), "systemctl daemon-reload",
+		"rm -f -- " + filepath.Join(root, "bin", "styrman-update"), "rm -f -- " + filepath.Join(root, "sbin", "styrman-firewall.sh"),
+		"rm -f -- " + filepath.Join(root, "tmpfiles", "styrman-ksm.conf"),
+		"rm -rf -- " + filepath.Join(root, "etc"), "rm -rf -- " + filepath.Join(root, "deploy"),
+		"docker image rm styrman-runtime:1.27.1", "docker image rm styrman-caddy:1.27.1",
+		"mv -- " + filepath.Join(root, "checkout.env") + " " + filepath.Join(root, "checkout.env") + ".removed-",
+	} {
+		if indexOf(l2, w) < 0 {
+			t.Fatalf("level 2 lacks %q:\n%s", w, out)
+		}
+	}
+	for _, bad := range []string{"image rm nginx", "rm -rf -- " + filepath.Join(root, "state")} {
+		if indexOf(l2, bad) >= 0 {
+			t.Fatalf("level 2 must not contain %q:\n%s", bad, out)
+		}
+	}
+	// Level 3 adds the data tree, after a du; every rm -rf stays under the scratch root.
+	out, code = ctl(t, e, "uninstall", "--level", "3", "--dry-run")
+	if code != 0 {
+		t.Fatalf("level 3: %d\n%s", code, out)
+	}
+	l3 := planLines(strings.ReplaceAll(out, "\n  + ", "\n+ "))
+	if indexOf(l3, "rm -rf -- "+filepath.Join(root, "state")) < 0 || !strings.Contains(out, "the word to type for level 3 is: testhost") {
+		t.Fatalf("level 3:\n%s", out)
+	}
+	for _, l := range l3 {
+		if strings.Contains(l, "rm -rf") && !strings.Contains(l, "rm -rf -- "+root+"/") {
+			t.Fatalf("a delete outside the scratch root: %s", l)
+		}
+	}
+	// Nothing executed by any dry run: the fakes saw only reads.
+	calls, _ := os.ReadFile(e.calls)
+	for _, bad := range []string{"docker rm", "network rm", "image rm", "compose", "ip6tables -X", "docker compose"} {
+		if strings.Contains(string(calls), bad) {
+			t.Fatalf("dry run executed %q:\n%s", bad, calls)
+		}
+	}
+}
+
+func TestStyrmanCtlUninstallConfirmations(t *testing.T) {
+	e := uninstallSetup(t)
+	if out, code := ctl(t, e, "uninstall", "--level", "1", "--dry-run", "--confirm", "nope"); code == 0 || !strings.Contains(out, "does not match") {
+		t.Fatalf("wrong word accepted: %d %s", code, out)
+	}
+	if out, code := ctl(t, e, "uninstall", "--level", "1", "--dry-run", "--confirm", "stop"); code != 0 || !strings.Contains(out, "confirmation accepted, nothing executed") {
+		t.Fatalf("right word: %d %s", code, out)
+	}
+	if out, code := ctl(t, e, "uninstall", "--level", "3", "--dry-run", "--confirm", "uninstall"); code == 0 || !strings.Contains(out, "does not match") {
+		t.Fatalf("level-2 word accepted for level 3: %d %s", code, out)
+	}
+	if out, code := ctl(t, e, "uninstall", "--level", "4", "--dry-run"); code == 0 || !strings.Contains(out, "must be 1, 2 or 3") {
+		t.Fatalf("level 4 accepted: %d %s", code, out)
+	}
+	if out, code := ctl(t, e, "uninstall", "--dry-run"); code == 0 || !strings.Contains(out, "--level 1|2|3") {
+		t.Fatalf("no level, no tty: %d %s", code, out)
+	}
+	// A symlinked tree is refused by the guard before any delete is planned.
+	if err := os.RemoveAll(filepath.Join(e.root, "etc")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(e.root, "state"), filepath.Join(e.root, "etc")); err != nil {
+		t.Fatal(err)
+	}
+	out, code := ctl(t, e, "uninstall", "--level", "2", "--dry-run")
+	if code == 0 || !strings.Contains(out, "refusing to delete") || strings.Contains(out, "rm -rf -- "+filepath.Join(e.root, "etc")) {
+		t.Fatalf("symlinked etc: %d\n%s", code, out)
 	}
 }

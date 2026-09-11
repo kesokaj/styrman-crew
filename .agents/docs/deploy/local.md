@@ -7,6 +7,8 @@ target: local
 
 How to build and run styrman on the machine in front of you. Filled at the harness migration (2026-09-03) from `AGENTS.md` Setup Commands; the `documentation` agent keeps it current whenever the build, run, or configuration path changes.
 
+`deploy/styrman-ctl` is for the production host, not this loopback dev run — `STYRMAN_IMAGE=… go run ./cmd/styrman/` below stays the local path.
+
 ## Prerequisites
 
 Go (version pinned in `go.mod`), Docker with the Kata `mvm` runtime for real project microVMs (`deploy/host-setup.sh` converges a Debian 13 host; loopback dev mode runs without auth), Node for `web/`. Full dev-mode walkthrough: `.agents/docs/specs/styrman/deploy.md` "Dev mode".

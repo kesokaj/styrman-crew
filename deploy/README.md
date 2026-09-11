@@ -1,10 +1,14 @@
 # deploy/ — production deployment
 
-`host-setup.sh` converges a fresh Debian 13 host (Docker, Kata `mvm`,
-tuning, state dirs, runtime image, `.env` scaffold) — idempotent, R11.
-`docker-compose.yml` runs the vendored Caddy ingress (Google OAuth, TLS,
-Cloudflare DNS — `caddy/`) in front of the containerized server
-(`Dockerfile.server`).
+## Quick start
+
+```bash
+sudo deploy/styrman-ctl install
+```
+
+`styrman-ctl` (plan `../.agents/docs/plans/2026-09-11-installer-ctl.md`) is
+the one front door: it wraps the scripts below and never reimplements them.
+Underneath, `install` runs exactly this:
 
 ```bash
 sudo bash host-setup.sh --user $USER
@@ -12,21 +16,43 @@ vi .env   # secrets: OAuth client, Cloudflare token, allowed emails
 STYRMAN_VERSION=<x.y.z> docker compose up -d --build
 ```
 
-`styrman-ctl` — one front door over the scripts above (plan
-`../.agents/docs/plans/2026-09-11-installer-ctl.md`): `sudo deploy/styrman-ctl
-status [--json]` reports what is installed, deployed and running (exit 0 ok,
-1 degraded, 2 nothing installed); `sudo deploy/styrman-ctl install` runs
-`host-setup.sh`, asks for the six must-fill `.env` keys (validated), builds
-the runtime image and brings the stack up at the checkout's release tag (or
-`--version`), then offers to set up auto-update; `sudo deploy/styrman-ctl
-update --setup` does that setup on its own (token, clone, `.env` copy,
-`allowed_signers`, timer) — the 8c prose above as prompts; `sudo
-deploy/styrman-ctl update` runs one updater tick now (`--redeploy` forces
-the current tag and clears a latched failure); `sudo deploy/styrman-ctl edit
-[KEY=VALUE …]` edits `.env` (both copies, validated) and recreates the stack
-at the deployed version. `uninstall` arrives with the plan's last phase. `--dry-run`
-prints every command a verb would run and runs nothing; `--yes` with
-`--env-file`, `--gh-token-file` and `--allowed-signers-file` runs unattended.
+`host-setup.sh` converges a fresh Debian 13 host (Docker, Kata `mvm`,
+tuning, state dirs, runtime image, `.env` scaffold) — idempotent, R11.
+`docker-compose.yml` runs the vendored Caddy ingress (Google OAuth, TLS,
+Cloudflare DNS — `caddy/`) in front of the containerized server
+(`Dockerfile.server`).
+
+### Verbs
+
+| Verb | Does |
+|---|---|
+| `status [--json]` | what is installed, deployed and running; exit 0 ok, 1 degraded, 2 nothing installed |
+| `install [--user U] [--version X.Y.Z] [--env-file F] [--gh-token-file F] [--allowed-signers-file F] [--skip-auto-update]` | `host-setup.sh`, the six must-fill `.env` keys (validated), build the runtime image, bring the stack up at the checkout's release tag (or `--version`), offer auto-update setup |
+| `update` / `update --redeploy` / `update --setup […]` | run one updater tick now; `--redeploy` forces the current tag and clears a latched failure; `--setup` performs the auto-update setup on its own (token, clone, `.env` copy, `allowed_signers`, timer) — the 8c prose below, as prompts |
+| `edit [KEY=VALUE …] [--no-apply]` | edits `.env` (both copies when the clone exists, validated) and recreates the stack at the deployed version |
+| `uninstall [--level 1|2|3] [--confirm WORD]` | tears down at one of three levels (below); prints the exact plan before asking |
+
+Global flags: `--dry-run` prints every command a verb would run, as `+ cmd`,
+and runs nothing; `--yes` takes defaults and skips non-destructive
+confirmations; `--confirm WORD` satisfies a destructive confirmation
+unattended.
+
+### Uninstall levels
+
+| Level | Confirmation word | Removes | Keeps |
+|---|---|---|---|
+| 1 — stack | `stop` | the stack, every project microVM + network, disables the units | everything else (data, host config, images) |
+| 2 — + host config | `uninstall` | level 1, plus firewall chains, unit files, binaries, `/etc/styrman`, the deploy clone, the images, `deploy/.env` (backed up first) | `/var/lib/styrman`, Docker, Kata |
+| 3 — everything | the host's name | level 2, plus `/var/lib/styrman` (every home, workspace, user store, transcript) — irreversible | nothing |
+
+### Path env overrides (test seams, ADR-052)
+
+`STYRMAN_STATE_DIR`, `STYRMAN_DEPLOY_DIR`, `STYRMAN_ETC_DIR`,
+`STYRMAN_UNIT_DIR`, `STYRMAN_BIN_DIR`, `STYRMAN_SBIN_DIR`,
+`STYRMAN_TMPFILES_DIR`, `STYRMAN_KATA_DIR`, `STYRMAN_ENV_FILE` — the
+defaults are the production locations `host-setup.sh` and the units already
+pin; a test (or a dry run against a scratch tree) overrides every one of
+them instead of aliasing `/var/lib/styrman`/`/etc/styrman`.
 
 Full walkthrough: `../.agents/docs/specs/styrman/deploy.md` (including the
 credential broker's bridge-only listener). There is no backup layer —
