@@ -44,6 +44,12 @@ func (s *Server) proxyPort(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("invalid port"))
 		return
 	}
+	// The browser's DevTools port is owner-only through its own relay, never
+	// through the (shareable, CSP-sandboxed) preview path (ADR-068).
+	if err := previewPortAllowed(port); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
 	u := identity.FromContext(r.Context())
 	// Resolve the project across owners (a shared guest doesn't own it) and
 	// enforce the per-project share list: the owner always has access, a

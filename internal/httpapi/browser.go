@@ -1,0 +1,396 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/coder/websocket"
+
+	"github.com/kesokaj/styrman-crew/internal/config"
+	"github.com/kesokaj/styrman-crew/internal/orchestrator"
+)
+
+// Browser view (ADR-068): one headless Chromium per project microVM, started
+// on demand by the in-guest launcher /styrman/bin/styrman-browser, watched by
+// the operator through a DevTools-protocol (CDP) screencast the Browser pane
+// draws, and driven by the agents through an MCP server registered at
+// seeding. This file is the server's whole share of it: three owner-only REST
+// verbs over the guestRuntime seam (Status first, then a docker exec of the
+// launcher — never a classification of an exec error's text), and a relay
+// that pumps text frames between the pane's WebSocket and the guest's
+// browser-level DevTools endpoint on the project bridge, knowing nothing of
+// the protocol itself.
+
+// browserLauncher is the in-guest launcher's path (image/configs/styrman-browser).
+const browserLauncher = "/styrman/bin/styrman-browser"
+
+// browserStatus is what the launcher's `status` verb prints and what the REST
+// status route returns.
+type browserStatus struct {
+	Running bool   `json:"running"`
+	Version string `json:"version,omitempty"`
+}
+
+// errProjectNotRunning: the verbs refuse to exec into a project that is not
+// running — the REST routes answer 409 and the relay closes 4002.
+var errProjectNotRunning = errors.New("project is not running")
+
+// errBrowserPort is the refusal every preview-shaped route gives the
+// browser's DevTools port: a DevTools client controls the whole browser
+// (including file:// reads inside the guest), so it is owner-only through
+// the relay and never previewable, shareable or linkable.
+var errBrowserPort = fmt.Errorf("port %d is the project's browser and cannot be previewed or shared", config.BrowserPort)
+
+// previewPortAllowed is the one place the preview proxy, the share list and
+// the link mint ask whether a port may leave the owner's hands.
+func previewPortAllowed(port int) error {
+	if port == config.BrowserPort || port == config.BrowserChromePort {
+		return errBrowserPort
+	}
+	return nil
+}
+
+// browserExec runs one launcher verb as the project user. Status comes
+// FIRST, exactly as ListeningPorts does: a project that is not running is
+// errProjectNotRunning before any exec, and an exec that fails against a
+// container that has since vanished is re-asked through Status rather than
+// read off the error text — a real Docker failure against the container we
+// are still looking at stays a real error.
+func (s *Server) browserExec(ctx context.Context, user, project, guestUser, verb string) (int, string, error) {
+	st, err := s.guest.Status(ctx, user, project)
+	if err != nil {
+		return -1, "", err
+	}
+	if st.State != "running" {
+		return -1, "", errProjectNotRunning
+	}
+	code, out, err := s.guest.Exec(ctx, st.ContainerID, orchestrator.ExecSpec{
+		Cmd:  []string{browserLauncher, verb},
+		User: guestUser,
+		Env:  []string{"HOME=/home/" + guestUser, "USER=" + guestUser},
+	})
+	if err != nil || code != 0 {
+		if now, err2 := s.guest.Status(ctx, user, project); err2 == nil &&
+			(now.State != "running" || now.ContainerID != st.ContainerID) {
+			return -1, "", errProjectNotRunning
+		}
+	}
+	return code, out, err
+}
+
+// browserStatusOf asks the launcher; a not-running project is reported as
+// not running rather than as an error, since that is the honest answer.
+func (s *Server) browserStatusOf(ctx context.Context, user, project, guestUser string) (browserStatus, error) {
+	code, out, err := s.browserExec(ctx, user, project, guestUser, "status")
+	if errors.Is(err, errProjectNotRunning) {
+		return browserStatus{}, nil
+	}
+	if err != nil {
+		return browserStatus{}, err
+	}
+	if code != 0 {
+		return browserStatus{}, fmt.Errorf("browser status exited %d: %s", code, tail(out, 2048))
+	}
+	var st browserStatus
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &st); err != nil {
+		return browserStatus{}, fmt.Errorf("browser status: unreadable reply: %s", tail(out, 256))
+	}
+	return st, nil
+}
+
+// browserStart starts the browser (idempotent in the launcher) and returns
+// its status. A failed launch surfaces the launcher's log tail verbatim: it
+// is the only diagnostic there is, and it reaches the pane.
+func (s *Server) browserStart(ctx context.Context, user, project, guestUser string) (browserStatus, error) {
+	code, out, err := s.browserExec(ctx, user, project, guestUser, "start")
+	if err != nil {
+		return browserStatus{}, err
+	}
+	if code != 0 {
+		return browserStatus{}, fmt.Errorf("browser did not start: %s", tail(out, 2048))
+	}
+	return s.browserStatusOf(ctx, user, project, guestUser)
+}
+
+func (s *Server) browserStop(ctx context.Context, user, project, guestUser string) error {
+	code, out, err := s.browserExec(ctx, user, project, guestUser, "stop")
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("browser stop exited %d: %s", code, tail(out, 2048))
+	}
+	return nil
+}
+
+// tail keeps the last max bytes of a launcher's output — the log tail is at
+// the end, and a runaway log must not become a runaway error body.
+func tail(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return "…" + s[len(s)-max:]
+}
+
+// GET /api/projects/{project}/browser — owner only.
+func (s *Server) getBrowser(w http.ResponseWriter, r *http.Request) {
+	u, sp, p, err := s.getProjectFor(r)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	st, err := s.browserStatusOf(r.Context(), u.Username, p.ID, sp.profile.GuestUser())
+	if err != nil {
+		s.logger.Warn("browser status failed", "project", p.ID, "error", err)
+		writeErr(w, http.StatusInternalServerError, fmt.Errorf("browser status is not available right now"))
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// POST /api/projects/{project}/browser/start — owner only. 409 when the
+// project is not running, 503 + Retry-After on a fresh bridge attach (the
+// reply may never arrive through a netns that was just reconfigured, so the
+// client's one retry is the contract), 502 with the launcher's log tail
+// when Chromium does not come up.
+func (s *Server) startBrowser(w http.ResponseWriter, r *http.Request) {
+	u, sp, p, err := s.getProjectFor(r)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	if _, fresh, err := s.browserUpstream(r.Context(), u.Username, p.ID); err != nil {
+		s.logger.Warn("browser: upstream lookup failed", "project", p.ID, "error", err)
+		writeErr(w, http.StatusBadGateway, fmt.Errorf("browser is not available right now"))
+		return
+	} else if fresh {
+		w.Header().Set("Retry-After", "1")
+		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("attaching to the project network — retry"))
+		return
+	}
+	st, err := s.browserStart(r.Context(), u.Username, p.ID, sp.profile.GuestUser())
+	if errors.Is(err, errProjectNotRunning) {
+		writeErr(w, http.StatusConflict, errProjectNotRunning)
+		return
+	}
+	if err != nil {
+		s.logger.Warn("browser start failed", "project", p.ID, "error", err)
+		writeErr(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, st)
+}
+
+// POST /api/projects/{project}/browser/stop — owner only; 204, or 409 when
+// the project is not running.
+func (s *Server) stopBrowser(w http.ResponseWriter, r *http.Request) {
+	u, sp, p, err := s.getProjectFor(r)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	err = s.browserStop(r.Context(), u.Username, p.ID, sp.profile.GuestUser())
+	if errors.Is(err, errProjectNotRunning) {
+		writeErr(w, http.StatusConflict, errProjectNotRunning)
+		return
+	}
+	if err != nil {
+		s.logger.Warn("browser stop failed", "project", p.ID, "error", err)
+		writeErr(w, http.StatusBadGateway, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// browserUpstream resolves where the project's DevTools endpoint answers —
+// "<guest-ip>:9222" on the project bridge — after making sure this server is
+// attached to that bridge. fresh reports an attach that happened just now,
+// which may have doomed the current connection (see EnsureSelfAttached).
+// host is "" when the project is not running. A test may replace it.
+func (s *Server) browserUpstream(ctx context.Context, user, project string) (host string, fresh bool, err error) {
+	if s.browserUpstreamFn != nil {
+		return s.browserUpstreamFn(ctx, user, project)
+	}
+	fresh = s.orch.EnsureSelfAttached(user, project)
+	ip, err := s.orch.IPAddress(ctx, project)
+	if err != nil || ip == "" {
+		return "", fresh, err
+	}
+	return fmt.Sprintf("%s:%d", ip, config.BrowserPort), fresh, nil
+}
+
+// browserRelayReadLimit bounds a frame from the guest: a screencast frame is
+// a base64 JPEG inside JSON — ~100–200 KiB at 1280×800 — and 16 MiB is the
+// same ceiling the terminal bridge uses. The pane's own frames are tiny.
+const (
+	browserRelayReadLimit = 16 << 20
+	browserPaneReadLimit  = 1 << 20
+)
+
+// GET /ws/browser/{project} — the CDP relay, owner only (authGuard resolves
+// the identity; getProjectFor is the ownership check, never previewAccess).
+//
+// Order matters: everything that may fail as plain HTTP fails BEFORE the
+// upgrade, because a browser follows no redirect and reads no body on a
+// WebSocket handshake — a failed handshake is what the pane retries. Once
+// the socket is accepted, every close the relay sends is a config.Close*
+// code or a standard 1000/1009/1011.
+func (s *Server) browserSocket(w http.ResponseWriter, r *http.Request) {
+	u, sp, p, err := s.getProjectFor(r)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	host, fresh, err := s.browserUpstream(r.Context(), u.Username, p.ID)
+	if err != nil {
+		s.logger.Warn("browser: upstream lookup failed", "project", p.ID, "error", err)
+		writeErr(w, http.StatusBadGateway, fmt.Errorf("browser is not available right now"))
+		return
+	}
+	if fresh {
+		w.Header().Set("Retry-After", "1")
+		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("attaching to the project network — retry"))
+		return
+	}
+	closeWith := func(code int, reason string) {
+		if conn, err := websocket.Accept(w, r, nil); err == nil {
+			conn.Close(websocket.StatusCode(code), reason)
+		}
+	}
+	if host == "" {
+		closeWith(config.CloseProjectStopped, "project stopped")
+		return
+	}
+	if _, err := s.browserStart(r.Context(), u.Username, p.ID, sp.profile.GuestUser()); err != nil {
+		if errors.Is(err, errProjectNotRunning) {
+			closeWith(config.CloseProjectStopped, "project stopped")
+			return
+		}
+		s.logger.Warn("browser start failed", "project", p.ID, "error", err)
+		closeWith(config.CloseBrowserUnavailable, closeReason(err.Error()))
+		return
+	}
+	wsURL, err := browserEndpoint(r.Context(), host)
+	if err != nil {
+		s.logger.Warn("browser: endpoint discovery failed", "project", p.ID, "error", err)
+		closeWith(config.CloseBrowserUnavailable, "browser endpoint unreachable")
+		return
+	}
+	// The upstream dial carries NO Origin header — that is what admits it:
+	// Chromium's DevTools server refuses any Origin (the launcher sets no
+	// --remote-allow-origins), so a page inside the browser can never open
+	// this socket. Host = the guest IP, an IP literal Chromium accepts.
+	dialCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	upstream, _, err := websocket.Dial(dialCtx, wsURL, nil)
+	cancel()
+	if err != nil {
+		s.logger.Warn("browser: upstream dial failed", "project", p.ID, "error", err)
+		closeWith(config.CloseBrowserUnavailable, "browser endpoint unreachable")
+		return
+	}
+	upstream.SetReadLimit(browserRelayReadLimit)
+	conn, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		upstream.Close(websocket.StatusNormalClosure, "")
+		return
+	}
+	conn.SetReadLimit(browserPaneReadLimit)
+	relayWebSockets(r.Context(), conn, upstream)
+}
+
+// relayWebSockets pumps frames both ways until either side ends. The pane
+// closing is normal (the upstream is closed 1000); the guest side dropping
+// (Chromium crashed, project stopped) closes the pane with 1011 so it shows
+// "Browser disconnected" and offers Reconnect.
+func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	pump := func(dst, src *websocket.Conn) error {
+		for {
+			typ, data, err := src.Read(ctx)
+			if err != nil {
+				return err
+			}
+			if err := dst.Write(ctx, typ, data); err != nil {
+				return err
+			}
+		}
+	}
+	paneErr := make(chan error, 1)
+	go func() { paneErr <- pump(upstream, pane) }()
+	upErr := make(chan error, 1)
+	go func() { upErr <- pump(pane, upstream) }()
+	select {
+	case <-paneErr:
+		upstream.Close(websocket.StatusNormalClosure, "")
+		pane.Close(websocket.StatusNormalClosure, "")
+	case err := <-upErr:
+		if websocket.CloseStatus(err) == websocket.StatusMessageTooBig {
+			pane.Close(websocket.StatusMessageTooBig, "frame too large")
+		} else {
+			pane.Close(websocket.StatusInternalError, "browser disconnected")
+		}
+		upstream.Close(websocket.StatusNormalClosure, "")
+	case <-ctx.Done():
+		upstream.Close(websocket.StatusNormalClosure, "")
+		pane.Close(websocket.StatusNormalClosure, "")
+	}
+}
+
+// browserEndpoint asks the guest's DevTools HTTP server for its
+// browser-level WebSocket URL and rewrites the host to the address we can
+// actually reach (Chromium reports whatever Host it was asked with; the
+// forwarder path keeps that our guest IP, but the rewrite costs nothing and
+// never trusts the guest's answer for WHERE to connect).
+func browserEndpoint(ctx context.Context, host string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+host+"/json/version", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("/json/version: %s", resp.Status)
+	}
+	var v struct {
+		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&v); err != nil {
+		return "", fmt.Errorf("/json/version: %w", err)
+	}
+	wu, err := url.Parse(v.WebSocketDebuggerURL)
+	if err != nil || !strings.HasPrefix(wu.Path, "/devtools/browser/") {
+		return "", fmt.Errorf("/json/version: no browser endpoint in reply")
+	}
+	return "ws://" + host + wu.Path, nil
+}
+
+// closeReason fits an error into a close frame's 123-byte reason budget.
+func closeReason(msg string) string {
+	const max = 120
+	if len(msg) <= max {
+		return msg
+	}
+	// Cut on a rune boundary: a split multi-byte sequence would make the
+	// close frame invalid UTF-8 and the browser would drop the reason.
+	cut := max
+	for cut > 0 && !utf8RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut]
+}
+
+func utf8RuneStart(b byte) bool { return b&0xC0 != 0x80 }

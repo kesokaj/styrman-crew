@@ -118,8 +118,20 @@ func (o *Orchestrator) ListeningPorts(ctx context.Context, user, project string)
 		}
 	}
 
+	return parseListeningPorts(out, images), nil
+}
+
+// parseListeningPorts turns portScanScript's "<port> <comm>" lines into the
+// port list, attributing inner-docker published ports to their image. Pure,
+// so the filtering rules are unit-testable without a guest.
+//
+// The project's browser ports (ADR-068) are dropped: a DevTools client
+// controls the whole browser, so the port must never be previewed, shared or
+// linked — and the Ports panel is where every one of those starts. The
+// Browser pane reaches it through its own owner-only relay instead.
+func parseListeningPorts(out string, images map[int]string) []Port {
 	seen := map[int]bool{}
-	var ports []Port
+	ports := []Port{}
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
 		portStr, comm, ok := strings.Cut(strings.TrimSpace(line), " ")
 		if !ok {
@@ -128,6 +140,9 @@ func (o *Orchestrator) ListeningPorts(ctx context.Context, user, project string)
 		p64, err := strconv.ParseInt(portStr, 10, 32)
 		p := int(p64)
 		if err != nil || p < 1024 || p > 65535 || seen[p] {
+			continue
+		}
+		if p == config.BrowserPort || p == config.BrowserChromePort {
 			continue
 		}
 		seen[p] = true
@@ -143,8 +158,5 @@ func (o *Orchestrator) ListeningPorts(ctx context.Context, user, project string)
 		}
 		ports = append(ports, port)
 	}
-	if ports == nil {
-		ports = []Port{}
-	}
-	return ports, nil
+	return ports
 }

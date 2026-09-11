@@ -111,11 +111,18 @@ RUN npm install -g @anthropic-ai/claude-code && \
 # bridge, never through loopback. Sits BEFORE the base-package snapshot below so apt
 # persistence (ADR-028) never records chromium as a user install. Launcher:
 # configs/styrman-browser → /styrman/bin (installed with the others below).
+# --ignore-scripts: no transitive package runs a lifecycle script as root at
+# build time (security review 2026-09-11; the package needs none — proven by
+# the --help run). The resolved GLOBAL tree (claude-code included) is
+# recorded at /styrman/npm-global.tree.json so two builds of one version can
+# be diffed: only the top-level versions are pinned, the rest resolves by
+# semver.
 ARG CHROME_DEVTOOLS_MCP_VERSION=1.9.0
-RUN apt-get update && apt-get install --no-install-recommends -y chromium fonts-liberation socat \
+RUN mkdir -p /styrman && apt-get update && apt-get install --no-install-recommends -y chromium fonts-liberation socat \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g "chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}" \
-    && chromium --version
+    && npm install -g --ignore-scripts "chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}" \
+    && npm ls -g --all --json > /styrman/npm-global.tree.json \
+    && chromium --version && chrome-devtools-mcp --help >/dev/null
 
 # In-guest defaults: DNS template (Kata has no embedded Docker DNS) and a
 # package snapshot for drift debugging.

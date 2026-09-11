@@ -77,15 +77,30 @@ http://127.0.0.1:9222` on stdio).
 
 Ports: Chromium's own DevTools listener binds LOOPBACK ONLY on 9229 —
 new-headless Chromium ignores `--remote-debugging-address` (verified
-2026-09-11: `ss` shows `127.0.0.1:9229` whatever the flag says). A `socat`
-forwarder in the same process group publishes it as `0.0.0.0:9222`, so the
-styrman server (over the project bridge) and in-guest clients (loopback) use
-ONE port number, 9222. Chromium refuses a `Host` header that is neither
-`localhost` nor an IP literal (`Host: example.test` → 500), which every
-caller satisfies: the server dials the guest IP, in-guest clients use
-`127.0.0.1`. 9222 is one trust domain with the project user and the
-project's inner containers; the server never lists, proxies or shares it
-(Phase 2 refusals in `internal/httpapi`).
+2026-09-11: `ss` shows `127.0.0.1:9229` whatever the flag says) — and that
+is what in-guest clients use (`mcp` → `--browserUrl http://127.0.0.1:9229`).
+For the styrman server, which reaches the guest over the project bridge, a
+`socat` forwarder in the same process group publishes it as `0.0.0.0:9222`
+with `range=<peer>/32,max-children=4`: the ONE admitted source is the
+server's own address on this bridge — the credential broker's, parsed from
+`STYRMAN_CRED_BROKER` in a containerized deploy, or the bridge gateway when
+the server runs on the host and sets no broker URL; with neither, no
+forwarder runs and the browser stays loopback-only. A container the user
+runs inside the project's dockerd can reach the guest's bridge IP but is
+refused by `range=` — a DevTools client reads `file://` inside the guest,
+i.e. the brokered credentials, and an image the user merely runs must not
+gain that (security review 2026-09-11; verified under Kata: with a foreign
+`STYRMAN_CRED_BROKER` the host is refused, with none the gateway is
+admitted). Chromium refuses a `Host` header that is neither `localhost` nor
+an IP literal (`Host: example.test` → 500), which every caller satisfies.
+The server never lists, proxies or shares 9222/9229 (`internal/httpapi`).
+
+Origins: no `--remote-allow-origins`. Chromium's DevTools server admits a
+WebSocket upgrade that carries NO Origin header (the styrman relay and
+chrome-devtools-mcp) and refuses one that does with 403 — every page rendered
+inside the browser sends one, so no page can seize its own browser through
+the port (verified 2026-09-11 under Kata: no Origin → 101,
+`Origin: http://evil.example` and `Origin: http://localhost:9222` → 403).
 
 Sandbox: ON. Probed 2026-09-11 in a real Kata `mvm` guest (kernel 6.18,
 user namespaces on): the launch as an unprivileged user works with

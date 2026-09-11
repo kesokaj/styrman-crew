@@ -112,6 +112,11 @@ func sharePort(r *http.Request) (int, error) {
 	if err != nil || port < 1024 || port > 65535 {
 		return 0, fmt.Errorf("invalid port")
 	}
+	// The project's browser is never shareable or linkable (ADR-068): every
+	// share and link route parses its port here.
+	if err := previewPortAllowed(port); err != nil {
+		return 0, err
+	}
 	return port, nil
 }
 

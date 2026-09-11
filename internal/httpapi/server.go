@@ -107,6 +107,9 @@ type Server struct {
 	// same instance in production — see New.
 	orch   *orchestrator.Orchestrator
 	guest  guestRuntime
+	// browserUpstreamFn, when set, replaces browserUpstream's orchestrator
+	// lookup — tests point the CDP relay at an httptest server.
+	browserUpstreamFn func(ctx context.Context, user, project string) (host string, fresh bool, err error)
 	mode   modeRuntime
 	tmux   *conversation.Manager
 	bridge *terminal.Bridge
@@ -374,6 +377,12 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("POST /api/projects/{project}/terminals/{term}/pause", s.pauseTerminal)
 	mux.Handle("GET /ws/term/{project}/{term}", s.bridge)
 	mux.HandleFunc("GET /ws/setup", s.bridge.ServeSetup)
+	// Browser view (ADR-068): owner-only status/start/stop of the project's
+	// in-guest Chromium, and the CDP relay the Browser pane speaks over.
+	mux.HandleFunc("GET /api/projects/{project}/browser", s.getBrowser)
+	mux.HandleFunc("POST /api/projects/{project}/browser/start", s.startBrowser)
+	mux.HandleFunc("POST /api/projects/{project}/browser/stop", s.stopBrowser)
+	mux.HandleFunc("GET /ws/browser/{project}", s.browserSocket)
 	// Ports + preview proxy. /p/... are the shareable links; /proxy/... is
 	// the terminal-independent form. Per-method registration: a method-less
 	// pattern conflicts with the "GET /" SPA catch-all.

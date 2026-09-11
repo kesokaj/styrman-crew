@@ -120,6 +120,7 @@ behavior — their panes idle at a shell, so reattaching is always safe.
 | 4001 | replaced | A newer WebSocket attached to this conversation (another tab). NEVER auto-reconnect — doing so death-spirals: each reconnect replaces the other tab, which reconnects, forever. |
 | 4002 | project stopped | The project VM was deliberately stopped (Stop button / idle reaper) and this connect carried no boot intent. NEVER auto-reconnect — a reconnect with `?boot=1` would boot the VM back up. The UI shows **Project stopped** with a **Start** action; that click (epoch bump → first connect → `?boot=1`) is the explicit intent that boots it (v1.11.0). |
 | 1000/1001/1006 | normal/going away/abnormal | Transient. Silently reconnect; tmux reattaches with scrollback and running processes intact. |
+| 4004 | browser unavailable | **Browser relay only** (`/ws/browser/{project}`, below): the project's Chromium could not be started or its DevTools endpoint could not be reached; the close reason carries the launcher's message (its log tail, cut to the 123-byte frame budget on a rune boundary). Do NOT auto-reconnect — a blind retry re-runs a launch that just failed; the pane shows the reason and a **Retry** button. |
 
 **Boot intent (`?boot=1`, v1.11.0):** the FIRST connect of a freshly opened
 or explicitly resumed pane carries `?boot=1` — a user action that may boot a
@@ -128,6 +129,42 @@ deliberately-stopped project the server answers them with close 4002 (before
 any VM boot) instead of resurrecting the VM. This is what makes the sidebar
 Stop stick while terminal tabs are open. Setup panes ignore `boot` (the
 setup VM has no stop marker).
+
+## Browser relay (`/ws/browser/{project}`, ADR-068)
+
+Not a terminal: the Browser pane speaks the Chrome DevTools Protocol (CDP)
+to the project's in-guest Chromium, and this endpoint is a dumb relay
+between the pane's WebSocket and the guest's browser-level DevTools socket
+(`ws://<guest-ip>:9222/devtools/browser/<id>`, discovered from
+`/json/version` and re-hosted to the guest IP we dial — the guest's own
+answer is never trusted for WHERE to connect). Text frames both ways, no
+protocol knowledge, no resize/control messages. Owner only: `authGuard`
+resolves the identity and `getProjectFor` is the ownership check;
+`previewAccess` is never consulted, so a share-list guest cannot reach it.
+
+Order on connect (`internal/httpapi/browser.go`, `browserSocket`):
+everything that can fail as plain HTTP fails BEFORE the upgrade — a browser
+follows no redirect and reads no body on a WebSocket handshake, so a failed
+handshake is what the pane retries. 404 (not the owner's project), 502
+(guest IP lookup failed), **503 + `Retry-After: 1`** (this server has just
+attached to the project bridge — the netns was reconfigured and this very
+connection may be doomed; the pane reconnects after 1 s). Then, accepted
+and closed at once: **4002** when the project is not running (no guest IP,
+or the launcher's Status says so); **4004** when `styrman-browser start`
+fails (reason = the launcher's tail) or the DevTools endpoint cannot be
+discovered or dialed. Then the pump: the pane closing closes the guest side
+1000; the guest side dropping (Chromium crashed, project stopped) closes
+the pane **1011 "browser disconnected"**; a guest frame over 16 MiB closes
+the pane 1009. Read limits: 16 MiB from the guest (a screencast frame is a
+base64 JPEG inside JSON, ~100–200 KiB at 1280×800), 1 MiB from the pane.
+The upstream dial sends NO Origin header, which is what Chromium's DevTools
+server admits — it refuses every Origin it sees, so a page inside the
+browser can never open this socket (the launcher sets no
+`--remote-allow-origins`).
+
+Each pane connection gets its own upstream socket (Chromium multiplexes
+clients); there is no 4001 replace semantics and no re-auth watch beyond
+the handshake — terminal revocation is terminal-only by design.
 
 ## Session semantics
 

@@ -143,7 +143,7 @@ no hooks, no scripts for either tool; (e) accepted costs (image size, RAM).
 styrman-browser start    # idempotent; exit 0 when /json/version answers (≤ 15 s), else 1 with the last 20 log lines on stdout
 styrman-browser stop     # kills the process group from ~/.styrman/browser/pid; exit 0 even if not running
 styrman-browser status   # prints JSON {"running":true|false,"version":"Chrome/152…"|""} ; exit 0
-styrman-browser mcp      # `start` (quiet) then `exec chrome-devtools-mcp --browserUrl http://127.0.0.1:9222`
+styrman-browser mcp      # `start` (quiet) then `exec chrome-devtools-mcp --browserUrl http://127.0.0.1:9229`
 ```
 
 - State dir `${HOME}/.styrman/browser/` (mode 0700): `profile/` (the
@@ -152,13 +152,18 @@ styrman-browser mcp      # `start` (quiet) then `exec chrome-devtools-mcp --brow
   fd is closed in the child with `9>&-`, or Chromium would hold the start
   lock for life): `socat TCP-LISTEN:9222,fork,reuseaddr,bind=0.0.0.0
   TCP:127.0.0.1:9229 &` then `exec chromium --headless=new
-  --remote-debugging-port=9229 --remote-allow-origins=*
+  --remote-debugging-port=9229
   --user-data-dir=${HOME}/.styrman/browser/profile --window-size=1280,800
   --no-first-run --no-default-browser-check --disable-gpu
   --disable-dev-shm-usage about:blank`. Why the forwarder: new-headless
   Chromium IGNORES `--remote-debugging-address` and binds loopback only
   (verified 2026-09-11 with `ss` in the Kata guest), and the server reaches
   the guest over the bridge. `stop` signals the group, so both die together.
+  Security review (2026-09-11) narrowed it: socat runs with
+  `range=<peer>/32,max-children=4` where the peer is the server's own
+  bridge address (parsed from `STYRMAN_CRED_BROKER`, else the default
+  gateway), so an inner container the user runs cannot reach DevTools; the
+  `mcp` verb uses Chromium's loopback port 9229 directly.
   No `--no-sandbox`: probed 2026-09-11 inside a real Kata `mvm` container
   of `styrman-runtime:1.27.1` (guest kernel 6.18.28, user namespaces
   enabled) — the launch above, as an unprivileged user, answered
@@ -268,8 +273,11 @@ WS relay (`coder/websocket`, the approved library):
    text as the reason (truncated to 120 bytes, the close-frame limit).
 4. `GET http://<ip>:9222/json/version` (Host = `<ip>:9222`, an IP literal,
    accepted by Chromium), read `webSocketDebuggerUrl`, replace its host with
-   `<ip>:9222`, dial it with `websocket.Dial` (no `Origin` header is sent;
-   `--remote-allow-origins=*` covers it anyway).
+   `<ip>:9222`, dial it with `websocket.Dial` (no `Origin` header is sent —
+   which is what admits it: there is NO `--remote-allow-origins`, so a page
+   rendered inside the browser, which always sends an Origin, is refused a
+   DevTools socket with 403 — verified 2026-09-11 under Kata; Phase 1
+   review finding).
 5. Pump text frames both ways until either side closes; close the other
    side with 1000. Read limit on the SPA side 1 MiB, on the guest side
    16 MiB (screencast frames arrive base64 inside JSON; a JPEG at
@@ -438,14 +446,14 @@ brings the browser back with a fresh tab.
 - [x] `runtime-image.md` ("Browser" section), `image/README.md`: package, launcher, ports and forwarder, registration paths, sandbox outcome — written by main 2026-09-11 alongside the code (the `documentation` agent is dispatched over the whole feature in Phase 4); who: AI
 - [ ] Phase checkpoint: `changes/` entry, commit, push — who: AI
 
-### Phase 2 — Server: orchestrator verbs, REST, WS relay, port-9222 refusals
-- [ ] `internal/config`: `BrowserPort`, `CloseBrowserUnavailable = 4004` (document beside the other codes and in `terminal-protocol.md`) — verify: `go vet`; who: AI
-- [ ] `internal/orchestrator/browser.go` + tests via the fake Docker client (`fakedocker_test.go` style): the three verbs, `ErrNotRunning`, the log-tail error — verify: `go test -race ./internal/orchestrator/`; who: AI
-- [ ] `ListeningPorts` drops `BrowserPort` — verify: unit test with a scripted `ss` output containing 9222; plus the two server-side integration checks (ports list omits 9222 while it listens; `/proxy/{id}/9222/` is a 400) and the README count; who: AI
-- [ ] `internal/httpapi/browser.go`: three REST handlers + the relay; `previewPortAllowed` in `proxyPort`, `setShares`, `createLink`; routes registered — verify: `go test -race ./internal/httpapi/` with an `httptest` fake CDP upstream (frames both ways; the 503-on-fresh-attach path for REST and WS; 4002 / 4004 / 1011 closes; 403 for a non-owner; 400 for 9222 on the three refusing routes); who: AI
-- [ ] `api.md`: the routes and the WS — verify: `documentation` agent; who: AI
-- [ ] Manual curl against a local run (`STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/`): start → 200, status → running, `websocat`/`curl --include --no-buffer` upgrade on `/ws/browser/{id}` receives the `Target.getTargets` reply to a hand-typed request — verify: recorded in the phase change entry; who: AI
-- [ ] Phase checkpoint — who: AI
+### Phase 2 — Server: verbs over the guest seam, REST, WS relay, port refusals
+- [x] `internal/config`: `BrowserPort`, `BrowserChromePort` (9229, Chromium's loopback listener), `CloseBrowserUnavailable = 4004`, documented beside the other codes and in `terminal-protocol.md` — `go vet` clean 2026-09-11; who: AI
+- [x] The three verbs — placed in `internal/httpapi/browser.go` over the existing `guestRuntime` seam (Status first, then Exec of the launcher as the guest user) rather than in the orchestrator: the seam is what makes them testable without Docker (`fakeGuest` scripts the launcher's replies; the orchestrator's fake Docker client cannot produce exec output). `errProjectNotRunning`, the log-tail error, and the vanished-container re-ask all covered — `go test -race ./internal/httpapi/` green 2026-09-11; who: AI
+- [x] `ListeningPorts` drops 9222 and 9229: parsing extracted into the pure `parseListeningPorts`, unit-tested with a scripted scan (`ports_browser_test.go`); three server-side integration checks (ports list omits both while the browser listens; `/proxy/{id}/9222/` and the share PUT are 400; status/start/stop round-trip for the owner) — `passed=90 failed=0 skipped=3` 2026-09-11, README count 93; who: AI
+- [x] `internal/httpapi/browser.go`: three REST handlers + the relay; `previewPortAllowed` in `proxyPort` and in `sharePort` (which `getShares`, `setShares` and `createLink` all parse through); routes registered — `browser_test.go` against an `httptest` fake DevTools server: frames both ways, the unsolicited event, 503 + Retry-After on a fresh attach for REST and WS with no exec attempted, 4002 / 4004 (reason carries the launcher's tail) / 1011 closes, 404 for a project the caller does not own (the same answer every owner-only route gives — the plan's earlier "403" was the wrong word), 400 for 9222 AND 9229 on all five refusing routes, and the fake refuses any Origin exactly as Chromium does. `go test -race` green 2026-09-11; who: AI
+- [x] `api.md` ("Browser (ADR-068)" section) and `terminal-protocol.md` ("Browser relay" section, the 4004 row) written by main 2026-09-11; the `documentation` agent runs over the whole feature in Phase 4; who: AI
+- [x] Live REST path: covered by the integration check "browser status/start/stop routes answer for the owner" against the self-hosted server and a real Kata project (start → `running:true`, status → `Chrome/…`, stop → 204, status → `running:false`). The live RELAY path cannot be driven from a host-run server on this firewall-hardened host (it cannot reach a sandbox bridge — the same reason the three preview checks auto-SKIP); its pieces are proven separately: the Go relay against the fake upstream, and a raw WebSocket upgrade to the guest's DevTools socket over the bridge (101) in the Phase 1/2 Kata probes. The end-to-end relay is exercised in Phase 4's e2e inside the LAN window; who: AI
+- [x] Phase checkpoint — committed 2026-09-11 (change entry `changes/2026-09-11-browser-phase2-server-and-review-fixes.md`, ADR-068 amendment); who: AI
 
 ### Phase 3 — SPA: CDP client, BrowserPane, toggle, Ports button
 - [ ] `editorPane.ts`: `"browser"` view + `browser.url` + `openInBrowser` + the guard's `browser` comparison; `openFileInPane` (`editorPane.ts:120-135`) and every other literal `PaneState` builder carry `browser` through (it is the one `set()` caller that does not spread `prev`); tests include the two-ports-in-a-row case — verify: `npm run check && npm test`; who: AI
@@ -478,9 +486,13 @@ brings the browser back with a fresh tab.
   in v1 (follow-up).
 - **Image size and build time**: +≈400 MB (3.56 GB → ≈4 GB), one more apt
   step; the auto-updater builds it at every release.
-- **The 9222 listener is reachable by the project's own inner containers**:
-  same trust domain as the project user (who can already do anything to that
-  browser); documented in ADR-068, not mitigated.
+- **The 9222 listener and the project's inner containers** — CLOSED by the
+  Phase 1 security review (2026-09-11): a container the user merely runs
+  would have read the home through `file://`. The forwarder now admits one
+  peer, the server's bridge address (`range=`), with `max-children=4`;
+  in-guest clients use Chromium's loopback port; `--remote-allow-origins`
+  is gone so no page inside the browser can open the socket. ADR-068 is
+  amended accordingly.
 - **Keyboard fidelity**: layouts, dead keys and IME are out of scope; the
   mapping is what CDP's `Input.dispatchKeyEvent` supports from a DOM
   `KeyboardEvent`. Good enough for testing apps, not for writing prose.

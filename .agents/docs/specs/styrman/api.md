@@ -127,6 +127,31 @@ live on the project record: `project.Project.SharedPorts` is
 entry is owner-only (`internal/project/store.go`). Public links live in a
 separate token store (`internal/links`), not on the project record.
 
+## Browser (ADR-068)
+
+One headless Chromium per project microVM, started on demand as the project
+user by `/styrman/bin/styrman-browser`, watched by the operator through the
+SPA's Browser view and driven by the agents through the `styrman-browser`
+MCP server. All routes are **owner only** (`getProjectFor`, never
+`previewAccess`): a shared guest gets the same 404 as for any other project
+route. Server side lives in `internal/httpapi/browser.go`.
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/projects/{id}/browser` | `{"running":bool,"version":"Chrome/…"}`; a project that is not running reports `{"running":false}` (an honest answer, not an error). 500 only when the launcher's reply is unreadable. |
+| `POST /api/projects/{id}/browser/start` | Starts the browser (idempotent in the launcher) and returns its status. **409** when the project is not running; **503 + `Retry-After: 1`** when this server has JUST attached to the project bridge (the reply may never arrive through a netns that was reconfigured — the client retries once); **502** with the launcher's log tail (`browser did not start: …`) when Chromium does not come up. |
+| `POST /api/projects/{id}/browser/stop` | **204**; 409 when the project is not running. |
+| `GET /ws/browser/{id}` | The CDP relay the Browser pane speaks over — see `terminal-protocol.md` "Browser relay". Plain-HTTP failures (404, 502, 503) happen BEFORE the upgrade; once accepted, closes are 4002 (project stopped), 4004 (browser unavailable, reason = the launcher's message), 1011 (guest side dropped), 1009 (a frame over 16 MiB). |
+
+The browser's ports — 9222 (the socat-published DevTools endpoint) and 9229
+(Chromium's loopback listener) — are **never** listed by `GET .../ports`,
+and `/proxy/…`, `/p/…/port/…`, `GET|PUT .../ports/{port}/shares` and
+`POST .../ports/{port}/links` all answer **400** `port 9222 is the project's
+browser and cannot be previewed or shared` for either: a DevTools client
+controls the whole browser (every tab, its cookies, `file://` inside the
+guest), so it stays behind the owner-only relay. `previewPortAllowed` in
+`browser.go` is the one gate; `sharePort` and `proxyPort` call it.
+
 ## Files (ADR-018)
 
 Scopes: the project workspace (`/api/projects/{id}/...`) or the project's OWN

@@ -69,7 +69,26 @@ const (
 	// CloseReplaced: a newer WebSocket attached to the same conversation.
 	// The frontend must NOT auto-reconnect on this code.
 	CloseReplaced = 4001
+	// CloseBrowserUnavailable: the project's browser (ADR-068) could not be
+	// started — the close reason carries the launcher's message. The Browser
+	// pane must NOT auto-reconnect: it shows the reason and a Retry button,
+	// since retrying blindly would re-run a launch that just failed.
+	CloseBrowserUnavailable = 4004
 )
+
+// BrowserPort is where a project's browser (ADR-068) answers the DevTools
+// protocol on the guest's bridge address — to THIS server only: the guest's
+// forwarder admits one peer, the server's own bridge address. The server
+// dials it for the Browser pane's relay and NEVER lists, proxies, shares or
+// links it: a DevTools client controls the whole browser, including file://
+// reads inside the guest, so the port is owner-only through the relay.
+const BrowserPort = 9222
+
+// BrowserChromePort is Chromium's own loopback-only DevTools listener inside
+// the guest, which the launcher's socat forwarder publishes as BrowserPort
+// (new-headless Chromium ignores --remote-debugging-address). Hidden from
+// the port list for the same reason as BrowserPort.
+const BrowserChromePort = 9229
 
 // Config holds runtime configuration resolved from the environment.
 type Config struct {

@@ -110,11 +110,23 @@ say "browser (ADR-068: one headless Chromium per project, MCP-registered for bot
 # The registration is the seeding block's third step; both files are the
 # tools' OWN MCP registries, not settings.json (ADR-062 D8 still holds).
 check "browser MCP server registered for claude and agy" \
-    "docker exec ${CN} sh -c 'jq -e \".mcpServers[\\\"styrman-browser\\\"].command == \\\"/styrman/bin/styrman-browser\\\"\" ${GH}/.claude.json >/dev/null && grep -q styrman-browser ${GH}/.gemini/config/mcp_config.json'"
+    "docker exec ${CN} sh -c 'jq -e \".mcpServers[\\\"styrman-browser\\\"].command == \\\"/styrman/bin/styrman-browser\\\"\" ${GH}/.claude.json >/dev/null && jq -e \".mcpServers[\\\"styrman-browser\\\"].command == \\\"/styrman/bin/styrman-browser\\\" and .mcpServers[\\\"styrman-browser\\\"].disabled == false\" ${GH}/.gemini/config/mcp_config.json >/dev/null'"
 # As the project user with its HOME, exactly how the server (Phase 2) and the
-# MCP verb invoke it. Chromium's own sandbox stays on (no --no-sandbox).
+# MCP verb invoke it. 9229 is Chromium's own loopback listener (what in-guest
+# clients use); the socat door on 9222 admits only the server's bridge
+# address, so loopback is refused there by design. Chromium's own sandbox
+# stays on (no --no-sandbox).
 check "styrman-browser start answers /json/version with the sandbox on" \
-    "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser start >/dev/null && docker exec ${CN} curl -fsS http://127.0.0.1:9222/json/version | grep -q '\"Browser\": \"Chrome/' && ! docker exec ${CN} sh -c 'tr \"\\0\" \" \" < /proc/\$(cat ${GH}/.styrman/browser/pid)/cmdline' | grep -q -- --no-sandbox"
+    "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser start >/dev/null && docker exec ${CN} curl -fsS http://127.0.0.1:9229/json/version | grep -q '\"Browser\": \"Chrome/' && ! docker exec ${CN} sh -c 'tr \"\\0\" \" \" < /proc/\$(cat ${GH}/.styrman/browser/pid)/cmdline' | grep -q -- --no-sandbox"
+# Server side (Phase 2): the DevTools port is owner-only through the relay —
+# never listed (the Ports panel is where every share/link starts), never
+# previewed. Start it first so 9222 really is listening during the scan.
+check "ports list omits the browser's 9222 while it listens" \
+    "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser start >/dev/null && docker exec ${CN} sh -c 'ss -ltnH | grep -q \":9222 \"' && ! curl -fsS ${API}/api/projects/${ID}/ports | jq -e '.ports[] | select(.port == 9222 or .port == 9229)' >/dev/null"
+check "preview proxy refuses the browser port with a 400" \
+    "[ \"\$(curl -s -o /dev/null -w '%{http_code}' ${API}/proxy/${ID}/9222/)\" = 400 ] && [ \"\$(curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' -d '{\"emails\":[]}' ${API}/api/projects/${ID}/ports/9222/shares)\" = 400 ]"
+check "browser status/start/stop routes answer for the owner" \
+    "curl -fsS -X POST ${API}/api/projects/${ID}/browser/start | grep -q '\"running\":true' && curl -fsS ${API}/api/projects/${ID}/browser | grep -q '\"version\":\"Chrome/' && [ \"\$(curl -s -o /dev/null -w '%{http_code}' -X POST ${API}/api/projects/${ID}/browser/stop)\" = 204 ] && curl -fsS ${API}/api/projects/${ID}/browser | grep -q '\"running\":false'"
 check "styrman-browser stop ends it (status reports not running)" \
     "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser stop && docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser status | grep -q '\"running\":false'"
 
