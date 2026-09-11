@@ -300,6 +300,26 @@ func TestStyrmanCtlGuardPath(t *testing.T) {
 	if out, code := ctl(t, e, "__guard-path", state); code != 0 {
 		t.Fatalf("state dir refused: %s", out)
 	}
+	// A knob pointed at a system root or at a tree without styrman's own
+	// structure is refused by rm_tree even though guard_path accepts the
+	// configured path (security review: STYRMAN_STATE_DIR=/var/lib).
+	bare := filepath.Join(e.root, "bare")
+	if err := os.MkdirAll(bare, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e3 := ctlSetup(t, true)
+	e3.env = append(e3.env, "STYRMAN_STATE_DIR="+bare)
+	if out, code := ctl(t, e3, "__rm-tree", bare); code == 0 || !strings.Contains(out, "not a styrman state tree") || strings.Contains(out, "rm -rf") {
+		t.Fatalf("bare dir deletable as the state tree: %d %s", code, out)
+	}
+	e3.env = append(e3.env, "STYRMAN_STATE_DIR=/var/lib")
+	if out, code := ctl(t, e3, "__rm-tree", "/var/lib", "--dry-run"); code == 0 || !strings.Contains(out, "system directory") || strings.Contains(out, "rm -rf") {
+		t.Fatalf("/var/lib deletable: %d %s", code, out)
+	}
+	// The real state tree (with homes/ or projects/ inside) is deletable — in dry-run only here.
+	if out, code := ctl(t, e, "__rm-tree", state, "--dry-run"); code != 0 || !strings.Contains(out, "+ rm -rf -- "+state) {
+		t.Fatalf("state tree not deletable: %d %s", code, out)
+	}
 	for _, bad := range []string{"/", "/tmp", filepath.Join(e.root, "state", ".."), filepath.Join(e.root, "elsewhere"), filepath.Join(e.root, "state/projects"), filepath.Join(e.root, "state") + "/", filepath.Join(e.root, "nonexistent")} {
 		if out, code := ctl(t, e, "__guard-path", bad); code == 0 {
 			t.Errorf("%s accepted: %s", bad, out)
@@ -520,6 +540,13 @@ func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
 	}
 	if err := os.WriteFile(filepath.Join(e.bin, "git"), []byte(gitFake), 0o755); err != nil {
 		t.Fatal(err)
+	}
+	// A second signer hidden behind a missing trailing newline is still refused.
+	if err := os.WriteFile(signers, []byte("me@example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\nevil@example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEvil"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", signers); code == 0 || !strings.Contains(out, "one line expected") {
+		t.Fatalf("two signers accepted: %d %s", code, out)
 	}
 	// A malformed signers line is refused before anything is planned.
 	if err := os.WriteFile(signers, []byte("not a signers line\n"), 0o600); err != nil {

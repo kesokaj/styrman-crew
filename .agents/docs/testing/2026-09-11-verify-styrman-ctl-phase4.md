@@ -51,3 +51,13 @@ After these: shellcheck clean; 15 tests green; the real `status` and `update --s
 
 - HIGH (the chain-jump deletes named `-D PARENT -j CHAIN`, but the firewall script installs the jumps with `-i sdb-+`, so `-D` could never match and, without `|| true`, would abort levels 2/3 mid-teardown — after the level-3 word, leaving the state tree untouched): FIXED — `drop_chain` lists the parent chain's jumps with `-S`, deletes each exactly as listed, then flushes and deletes the chain, every step best-effort; the fakes now list the jumps the real way and the tests assert the exact `-D DOCKER-USER -i sdb-+ -j STYRMAN-FWD` (and IPv6) lines; the real level-2 dry-run on this host now shows those exact lines.
 - LOW (`du -sh` ran for real during the plan preview): FIXED — wrapped in `run`; the plan lists it, the dry-run "nothing executed" test now checks it too.
+
+## Security, Phase 4 (`reviews/2026-09-11-security-styrman-ctl-phase4.md`) — dispositions
+
+- S1 (high, the chain-jump deletes): already FIXED at `becbd6b` (the report confirms).
+- S2 (medium, `STYRMAN_STATE_DIR`/`STYRMAN_DEPLOY_DIR` could point level 3's delete at `/var/lib`): FIXED — `rm_tree` now also requires `looks_like_ours`: a state tree must contain `homes/`, `projects/` or `users/`, a deploy clone `.git` + `deploy/docker-compose.yml`, the etc dir `update/`, `allowed_signers` or `gh-token`, and a list of system roots (`/`, `/etc`, `/var`, `/var/lib`, `/opt`, `/usr`, `/home`, …) is refused outright; tests: a bare directory as the state tree and `/var/lib` are refused before any plan, the real state tree is planned.
+- S3/S4 (medium, the signers file's line count missed a file without a trailing newline; no symlink check on the secret files): FIXED — `grep -c ''` counts the last line, a symlinked `--allowed-signers-file` or `--gh-token-file` is refused; test plants a second signer behind a missing newline.
+- S8 (low, `-F` on a chain whose jump delete failed): accepted — every step is best-effort and the flush of a still-referenced chain is harmless; `-X` then fails loudly in the plan's own words.
+- F4/F6/F8 partials: F6's owner check is the mode check plus the symlink refusal above (owner is the operator's own file by construction); F4's origin check is in; F8's anchor is in. F10 (info) accepted.
+
+After these: shellcheck clean; 15 tests green; the real `uninstall --level 3 --dry-run` on this host still plans the three trees (they carry the markers) and nothing else changed.

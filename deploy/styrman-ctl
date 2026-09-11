@@ -488,6 +488,7 @@ setup_auto_update() {
     [ -x "${BIN_DIR}/styrman-update" ] || [ "${DRY}" = 1 ] || die "${BIN_DIR}/styrman-update is not installed — run install first"
     if [ -n "${token_file}" ]; then
         [ -f "${token_file}" ] || die "--gh-token-file ${token_file}: no such file"
+        [ -L "${token_file}" ] && die "--gh-token-file ${token_file}: a symlink is refused"
         private_file "${token_file}"
         token="$(tr -d '\n' < "${token_file}")"
     else
@@ -496,7 +497,9 @@ setup_auto_update() {
     [ -n "${token}" ] || die "empty GitHub token"
     if [ -n "${signers_file}" ]; then
         [ -f "${signers_file}" ] || die "--allowed-signers-file ${signers_file}: no such file"
-        [ "$(wc -l < "${signers_file}")" -le 1 ] || die "--allowed-signers-file ${signers_file}: one line expected (one signer); more would be silently dropped"
+        [ -L "${signers_file}" ] && die "--allowed-signers-file ${signers_file}: a symlink is refused (this file becomes the updater's release-trust root)"
+        # grep -c '' counts a last line without a trailing newline; wc -l does not.
+        [ "$(grep -c '' "${signers_file}")" -le 1 ] || die "--allowed-signers-file ${signers_file}: one line expected (one signer); more would be silently dropped"
         signers="$(head -1 "${signers_file}")"
     else
         ask signers "allowed_signers line: <your-git-email> <key type> <public key> (from ~/.ssh/id_ed25519.pub)" ""
@@ -702,11 +705,33 @@ drop_chain() {
     run "${ipt}" -F "${chain}" || true
     run "${ipt}" -X "${chain}" || true
 }
-# rm_tree PATH: every recursive delete goes through guard_path first.
+# looks_like_ours PATH: a tree is deleted only if it carries styrman's own
+# structure — STYRMAN_STATE_DIR and STYRMAN_DEPLOY_DIR are documented knobs
+# an operator (or `sudo -E`) can point anywhere, and `guard_path` alone
+# would then bless `rm -rf /var/lib` (security review). Well-known system
+# roots are refused outright whatever they contain.
+looks_like_ours() {
+    local p="$1"
+    case "${p}" in
+        /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var|/var/lib|/var/log|/var/tmp|/usr/local)
+            echo "refusing ${p}: a system directory" >&2; return 1 ;;
+    esac
+    if [ "${p}" = "${STATE_DIR}" ]; then
+        [ -d "${p}/homes" ] || [ -d "${p}/projects" ] || [ -d "${p}/users" ] || { echo "refusing ${p}: no homes/, projects/ or users/ inside — not a styrman state tree" >&2; return 1; }
+    elif [ "${p}" = "${DEPLOY_DIR}" ]; then
+        if ! { [ -d "${p}/.git" ] && [ -f "${p}/deploy/docker-compose.yml" ]; }; then echo "refusing ${p}: not a styrman deploy clone (no .git + deploy/docker-compose.yml)" >&2; return 1; fi
+    elif [ "${p}" = "${ETC_DIR}" ]; then
+        [ -d "${p}/update" ] || [ -f "${p}/allowed_signers" ] || [ -f "${p}/gh-token" ] || { echo "refusing ${p}: no update/, allowed_signers or gh-token inside — not styrman's etc dir" >&2; return 1; }
+    fi
+    return 0
+}
+# rm_tree PATH: every recursive delete goes through guard_path and
+# looks_like_ours first.
 rm_tree() {
     local p="$1"
     [ -e "${p}" ] || [ -L "${p}" ] || { log "uninstall: ${p} already absent"; return 0; }
     guard_path "${p}" || die "refusing to delete ${p}"
+    looks_like_ours "${p}" || die "refusing to delete ${p}"
     run rm -rf -- "${p}"
 }
 uninstall_level() { # uninstall_level N — executes (or, under DRY=1, prints) that level's plan
@@ -795,6 +820,7 @@ cmd_internal() {
         __env-set)   env_set "$2" "$3" "$4" ;;
         __env-get)   env_get "$2" "$3" ;;
         __guard-path) guard_path "$2" ;;
+        __rm-tree)   rm_tree "$2" ;;
         *) die "unknown internal verb ${1:-}" ;;
     esac
 }
