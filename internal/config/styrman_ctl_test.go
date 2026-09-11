@@ -665,7 +665,7 @@ esac`
 	if err := os.WriteFile(filepath.Join(e.bin, "docker"), []byte(docker), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"bin/styrman-update", "sbin/styrman-firewall.sh", "tmpfiles/styrman-ksm.conf", "units/styrman-firewall.timer", "units/styrman-update.timer"} {
+	for _, f := range []string{"bin/styrman-update", "sbin/styrman-firewall.sh", "tmpfiles/styrman-ksm.conf", "units/styrman-firewall.timer", "units/styrman-update.timer", "deploy/deploy/docker-compose.yml"} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(e.root, f)), 0o755); err != nil {
 			t.Fatal(err)
 		}
