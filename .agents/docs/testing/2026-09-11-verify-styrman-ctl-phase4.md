@@ -36,3 +36,13 @@ item (`docker image prune` does not touch tagged images).
 - F10 (info, `docker logs` tail on a failed bring-up): accepted — it is the operator's terminal; a unit-driven install is not a supported path.
 
 After these: shellcheck clean; 13 tests green; the real `update --setup --dry-run` on this host still prints its nine-line plan (the clone's origin matched the checkout's).
+
+## Security round 3 (Phase 3 report, `reviews/2026-09-11-security-styrman-ctl-phase3.md`, no high) — dispositions in the follow-up commit
+
+- Medium (values from `.env` reached the edit table and the status URL unstripped): FIXED — `masked()` and the URL go through `printable`; test plants an escape sequence in `BASE_DOMAIN` and asserts the byte is gone from `status --json`.
+- Medium (`$`/`{`/`}` accepted in the three secrets that compose interpolates): already FIXED in the Phase 4 commit (refused; tests).
+- Medium (the table showed `SUPERADMINS`'s `${STYRMAN_ALLOWED_EMAILS}` reference, not the effective admin roster): FIXED — the row resolves the reference and says these are the admins; the `STYRMAN_ALLOWED_EMAILS` row says it also decides the admins while the reference stands.
+- Open items closed too: root's `git` on the operator's checkout names it `safe.directory` (as the updater does); the path overrides other than `STYRMAN_STATE_DIR`/`STYRMAN_DEPLOY_DIR` are refused unless `STYRMAN_CTL_TEST=1` (the `sudo -E` lever the report named; test); the `__` hooks stay gated.
+- Accepted: `is_email_list` does not normalize (the server's userstore does); argv flag placement is bash's usual.
+
+After these: shellcheck clean; 15 tests green; the real `status` and `update --setup --dry-run` on this host unchanged in behaviour.

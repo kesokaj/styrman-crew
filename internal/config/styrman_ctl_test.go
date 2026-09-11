@@ -268,7 +268,9 @@ func TestStyrmanCtlEnvSet(t *testing.T) {
 		}
 	}
 	e2.env = without
-	if out, code := ctl(t, e2, "__env-set", f, "A", "2"); code == 0 || !strings.Contains(out, "disabled") {
+	// (Outside the harness the path-override gate refuses first; either
+	// message means the same thing: nothing ran.)
+	if out, code := ctl(t, e2, "__env-set", f, "A", "2"); code == 0 || !(strings.Contains(out, "disabled") || strings.Contains(out, "test seam")) {
 		t.Fatalf("hooks usable without the harness variable: %d %s", code, out)
 	}
 	if _, code := ctl(t, e, "__env-set", f, "lower", "x"); code == 0 {
@@ -755,5 +757,40 @@ func TestStyrmanCtlUninstallConfirmations(t *testing.T) {
 	out, code := ctl(t, e, "uninstall", "--level", "2", "--dry-run")
 	if code == 0 || !strings.Contains(out, "refusing to delete") || strings.Contains(out, "rm -rf -- "+filepath.Join(e.root, "etc")) {
 		t.Fatalf("symlinked etc: %d\n%s", code, out)
+	}
+}
+
+// Path overrides beyond the two documented knobs are test seams: outside the
+// harness they must be refused, or `sudo -E` could point root's deletes and
+// binaries anywhere (security review).
+func TestStyrmanCtlOverridesGatedOutsideHarness(t *testing.T) {
+	e := ctlSetup(t, true)
+	var without []string
+	for _, kv := range e.env {
+		if !strings.HasPrefix(kv, "STYRMAN_CTL_TEST=") {
+			without = append(without, kv)
+		}
+	}
+	e.env = without
+	if out, code := ctl(t, e, "help"); code == 0 || !strings.Contains(out, "test seam") {
+		t.Fatalf("overrides accepted outside the harness: %d %s", code, out)
+	}
+}
+
+// What the operator reads in the edit table is stripped of control bytes and
+// resolves the SUPERADMINS reference to the effective roster. Exercised
+// through status (the same env_get path) and the masked/printable helpers,
+// since the table itself needs a terminal.
+func TestStyrmanCtlDisplayValuesArePrintable(t *testing.T) {
+	e := ctlSetup(t, true)
+	envFile := filepath.Join(e.root, "checkout.env")
+	if err := os.WriteFile(envFile, []byte("BASE_DOMAIN=exam\x1b[31mple.test\nSTYRMAN_HOSTNAME=crew\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.env = append(e.env, "STYRMAN_ENV_FILE="+envFile)
+	out, _ := ctl(t, e, "status", "--json", "--dry-run")
+	// The escape byte is gone; its (harmless) parameter text stays.
+	if strings.Contains(out, "\x1b") || strings.Contains(out, "\\u001b") || !strings.Contains(out, "https://crew.exam[31mple.test") {
+		t.Fatalf("control bytes reached the status output:\n%q", out)
 	}
 }

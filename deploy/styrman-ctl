@@ -31,6 +31,15 @@ SBIN_DIR="${STYRMAN_SBIN_DIR:-/usr/local/sbin}"
 # shellcheck disable=SC2034
 TMPFILES_DIR="${STYRMAN_TMPFILES_DIR:-/etc/tmpfiles.d}"
 KATA_DIR="${STYRMAN_KATA_DIR:-/opt/kata}"
+# STYRMAN_STATE_DIR and STYRMAN_DEPLOY_DIR are documented knobs (host-setup.sh
+# reads them too). Every other path override exists for the Go test only:
+# under sudo -E it would otherwise choose which binaries root runs and which
+# trees root deletes (security review), so outside the harness it is refused.
+if [ "${STYRMAN_CTL_TEST:-}" != 1 ]; then
+    for _ov in STYRMAN_ETC_DIR STYRMAN_UNIT_DIR STYRMAN_BIN_DIR STYRMAN_SBIN_DIR STYRMAN_TMPFILES_DIR STYRMAN_KATA_DIR STYRMAN_ENV_FILE; do
+        [ -z "${!_ov:-}" ] || { echo "styrman-ctl: ERROR ${_ov} is a test seam, not a production knob (unset it)" >&2; exit 1; }
+    done
+fi
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # The checkout's .env (host-setup.sh 5b scaffolds it beside docker-compose.yml);
 # overridable so the tests never write into the real checkout.
@@ -276,7 +285,7 @@ cmd_status() {
     # The checkout may carry no .env at all (production deploys from the
     # clone): read whichever copy exists, the checkout's first.
     local envsrc="${ENV_FILE}"; [ -f "${envsrc}" ] || envsrc="${CLONE_ENV}"
-    base="$(env_get "${envsrc}" BASE_DOMAIN)"; hn="$(env_get "${envsrc}" STYRMAN_HOSTNAME)"
+    base="$(printable "$(env_get "${envsrc}" BASE_DOMAIN)")"; hn="$(printable "$(env_get "${envsrc}" STYRMAN_HOSTNAME)")"
     url=""; [ -n "${base}" ] && url="https://${hn:-styrman}.${base}"
     # deployed
     local dver dsha fver
@@ -378,7 +387,7 @@ ask_env_key() {
 resolve_version() {
     local v="$1"
     if [ -z "${v}" ]; then
-        v="$(git -C "${REPO}" describe --tags --abbrev=0 2>/dev/null || true)"
+        v="$(git -c safe.directory="${REPO}" -C "${REPO}" describe --tags --abbrev=0 2>/dev/null || true)"
         v="${v#v}"
     fi
     [[ "${v}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "no release version: pass --version X.Y.Z (the checkout has no reachable vX.Y.Z tag; a commit sha is never a version, ADR-053)"
@@ -390,7 +399,9 @@ resolve_version() {
 to_https() { printf '%s' "$1" | sed -E 's#^git@([^:]+):#https://\1/#; s#^ssh://git@([^/]+)/#https://\1/#'; }
 https_origin() {
     local o
-    o="$(git -C "${REPO}" remote get-url origin 2>/dev/null || true)"
+    # Root reading the operator's checkout: name it safe explicitly (git
+    # refuses a differently-owned tree otherwise), as the updater does.
+    o="$(git -c safe.directory="${REPO}" -C "${REPO}" remote get-url origin 2>/dev/null || true)"
     [ -n "${o}" ] || die "this checkout has no git remote 'origin' — the deploy clone needs one"
     o="$(to_https "${o}")"
     # Only a plain https origin reaches a root `git clone`: no other
@@ -591,7 +602,7 @@ cmd_update() {
 # The keys `edit` understands, in .env.example order; everything else is
 # "edit the file by hand". Computed keys are listed read-only.
 EDIT_KEYS="BASE_DOMAIN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET CLOUDFLARE_API_TOKEN ADMIN_EMAIL STYRMAN_ALLOWED_EMAILS SUPERADMINS STYRMAN_HOSTNAME STYRMAN_PUBLIC_DOMAIN STYRMAN_PRIVATE_DOMAIN STYRMAN_IMAGE STYRMAN_IDLE_TIMEOUT STYRMAN_TRANSCRIPT_TTL STYRMAN_BROKER_ADDR AUTH_DOMAIN SHELL_DOMAIN APPS_DOMAIN DEFAULT_RPS CADDY_ADMIN"
-masked() { case " ${SECRET_KEYS} " in *" $1 "*) [ -n "$2" ] && echo "********" || echo "" ;; *) echo "$2" ;; esac; }
+masked() { case " ${SECRET_KEYS} " in *" $1 "*) [ -n "$2" ] && echo "********" || echo "" ;; *) printable "$2" ;; esac; }
 
 cmd_edit() {
     local apply=1 kv changes=() targets=() src
@@ -620,6 +631,13 @@ cmd_edit() {
                 i=$((i + 1)); cur="$(env_get "${src}" "${k}")"
                 local note=""
                 case " ${COMPUTED_KEYS} " in *" ${k} "*) note="  (computed by host-setup.sh)" ;; esac
+                # The roster keys decide who is admin (userstore) and who the
+                # ingress lets in: show what a reference RESOLVES to, so the
+                # operator reads the effective list, not a variable name.
+                case "${k}" in
+                    SUPERADMINS) [ "${cur}" = "${SUPERADMINS_REF}" ] && note="  = STYRMAN_ALLOWED_EMAILS → $(printable "$(env_get "${src}" STYRMAN_ALLOWED_EMAILS)")  (these are the admins)" ;;
+                    STYRMAN_ALLOWED_EMAILS) note="  (who may sign in; also the admins while SUPERADMINS refers to it)" ;;
+                esac
                 printf '  %2d. %-24s %s%s\n' "${i}" "${k}" "$(masked "${k}" "${cur}")" "${note}"
             done
             read -r -p "number to change, or done: " choice < /dev/tty
