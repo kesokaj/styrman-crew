@@ -12,6 +12,8 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
+**Active plan: `.agents/docs/plans/2026-09-11-browser-view.md`** — Browser view (in-guest Chromium shared by the operator and the agents). Status: plan written 2026-09-11, cold-reader check pending; no code yet. Queued after it: an interactive installer (install / update / edit / uninstall) wrapping `deploy/host-setup.sh` — plan not yet written.
+
 **v1.27.1 shipped 2026-09-10** (PATCH) — tag on release commit `4686792`,
 deployed by the auto-updater at 14:38, server healthy at 14:39:03. One fix:
 the updater enables the boot-time firewall unit on every converge tick

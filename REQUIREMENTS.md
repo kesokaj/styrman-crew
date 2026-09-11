@@ -41,6 +41,9 @@
    container's runtime state.
 4. **R4 — Terminal-first, no embedded IDE**: the agent CLI is the primary interface.
    No code-server / VS Code embed. A lightweight file viewer is the ceiling.
+   A Browser view showing the project's own in-guest Chromium, shared with the
+   agents for testing what they build, is a testing surface and not an IDE
+   (ADR-068, operator approval 2026-09-11).
 5. **R5 — Agents**: `claude` (Claude Code) and `agy` (Antigravity CLI), selected per
    project at creation. The agent harness (a mirror of `styrman-harness` at
    `image/harness/COMMIT`, installed by `sh-agent`; no hooks, scripts, or settings files —
