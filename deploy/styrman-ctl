@@ -102,7 +102,7 @@ env_get() { # env_get FILE KEY → value ('' if absent); the LAST assignment win
     # The key travels as an awk VARIABLE and is matched literally — never
     # interpolated into a program (security review: a key with a slash
     # changed a sed program; with GNU sed's e flag that is command execution).
-    awk -v k="${key}" 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { if (v != "") print v; else if (found) print ""; }' "${file}"
+    awk -v k="${key}" 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { if (v != "") print v }' "${file}"
 }
 # env_set FILE KEY VALUE: replaces the key's line or appends one; atomic
 # (temp + mv in the same directory), mode 600, owner kept; refuses a
@@ -571,15 +571,20 @@ cmd_update() {
     # by hand — the break-glass command stays a documented command.
     [ "$(systemctl is-enabled styrman-update.timer 2>/dev/null || true)" = enabled ] || [ "${DRY}" = 1 ] \
         || die "auto-update is not set up on this host — run \`styrman-ctl update --setup\` first"
+    # The tick's failure must not end the script before the diagnostics
+    # (review finding): capture its status, print the journal and the
+    # status, then exit with it.
+    local rc=0
     if [ "${redeploy}" = 1 ]; then
         log "update: forced redeploy of the current tag (clears a latched failed-version)"
-        run env "${UPDATER_ENV[@]}" "${BIN_DIR}/styrman-update" --force
+        run env "${UPDATER_ENV[@]}" "${BIN_DIR}/styrman-update" --force || rc=$?
     else
         log "update: running one updater tick now (deploys the newest signed release tag, if newer)"
-        run systemctl start styrman-update.service
+        run systemctl start styrman-update.service || rc=$?
     fi
-    run journalctl -u styrman-update.service -n 20 --no-pager
+    run journalctl -u styrman-update.service -n 20 --no-pager || true
     cmd_status || true
+    [ "${rc}" = 0 ] || die "the updater tick failed (exit ${rc}) — see the journal above; \`styrman-ctl update --redeploy\` clears a latched failed-version"
 }
 
 # ─── edit: the .env editor that re-applies ─────────────────────────────────

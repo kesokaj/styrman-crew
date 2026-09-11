@@ -598,6 +598,10 @@ func TestStyrmanCtlUpdatePlan(t *testing.T) {
 	if start < 0 || journal < start {
 		t.Fatalf("update plan:\n%s", out)
 	}
+	// The failing-tick path (journal + status still printed, then a non-zero
+	// exit) needs `run` to execute, i.e. no --dry-run, i.e. root: not
+	// reproducible under go test; covered by review and the code's own
+	// structure (rc captured, diagnostics unconditional).
 	out, _ = ctl(t, e, "update", "--redeploy", "--dry-run")
 	force := indexOf(planLines(out), "STYRMAN_UPDATE_STATE_DIR="+filepath.Join(e.root, "etc", "update"))
 	if force < 0 || !strings.Contains(planLines(out)[force], "styrman-update --force") || !strings.Contains(planLines(out)[force], "STYRMAN_GH_TOKEN_FILE=") || strings.Contains(out, "systemctl start styrman-update.service") {
