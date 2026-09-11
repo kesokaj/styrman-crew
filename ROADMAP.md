@@ -12,17 +12,21 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**v1.28.0 — release in progress 2026-09-11** (MINOR): the Browser view
-(ADR-068: one headless Chromium per project microVM, shown in a fourth
-main-pane view and driven by `claude`/`agy` through the `styrman-browser`
-MCP server; plan `.agents/docs/plans/2026-09-11-browser-view.md`, all four
-phases committed) and `deploy/styrman-ctl` (one front door: status /
-install / update / edit / uninstall; plan
-`.agents/docs/plans/2026-09-11-installer-ctl.md`, all four phases committed).
-Gate: `.agents/docs/reviews/2026-09-11-preflight-v1.28.0.md`; the handoff
-that follows records the signed tag and the live check. Two steps stay the
-operator's, not blocking the release: the manual agent walk in the Browser
-view (instructions at the end of
+**v1.28.0 shipped 2026-09-11** (MINOR) — the Browser view (ADR-068: one
+headless Chromium per project microVM, shown in a fourth main-pane view and
+driven by `claude`/`agy` through the `styrman-browser` MCP server; plan
+`.agents/docs/plans/2026-09-11-browser-view.md`, all four phases committed)
+and `deploy/styrman-ctl` (one front door: status / install / update / edit /
+uninstall; plan `.agents/docs/plans/2026-09-11-installer-ctl.md`, all four
+phases committed). Tag `v1.28.0` on release commit `eb7b883`, SSH-signed and
+verified against `/etc/styrman/allowed_signers`; deployed by the
+auto-updater at 15:37, `styrman-ctl status` verdict OK, server/caddy/runtime
+images all at 1.28.0. Gate:
+`.agents/docs/reviews/2026-09-11-preflight-v1.28.0.md`; release entry:
+`.agents/docs/changes/2026-09-11-v1.28.0-release.md`; handoff:
+`.agents/docs/handoffs/2026-09-11-session-end-v1.28.0-retro-applied.md`. Two
+steps stay the operator's, not blocking: the manual agent walk in the
+Browser view (instructions at the end of
 `.agents/docs/testing/2026-09-11-verify-browser-phase4.md`) and a fresh-host
 `styrman-ctl install` on a Debian 13 VM when one is available (never on the
 production host). Follow-ups listed in both plans; nothing else queued.

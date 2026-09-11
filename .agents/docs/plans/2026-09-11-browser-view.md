@@ -468,7 +468,7 @@ this feature's.)
 - [x] `image/entrypoint.sh`: the third seeding step (`HR_OK`, graded as one unit) — verified 2026-09-11 by the integration run: both registries carry `styrman-browser` in a fresh project home; boot→ready 2.75 s with the registration inside (soft target 5 s); `harness-migrate.sh` and `sh-agent install` touch neither file (read); who: AI
 - [x] `integration.sh`: the three guest-side checks; README counts updated — verified 2026-09-11: `passed=87 failed=0 skipped=3` (was 84/0/3), log `testing/2026-09-11-verify-browser-phase1.md`; who: AI
 - [x] `runtime-image.md` ("Browser" section), `image/README.md`: package, launcher, ports and forwarder, registration paths, sandbox outcome — written by main 2026-09-11 alongside the code (the `documentation` agent is dispatched over the whole feature in Phase 4); who: AI
-- [ ] Phase checkpoint: `changes/` entry, commit, push — who: AI
+- [x] Phase checkpoint: `changes/` entry, commit, push — who: AI (release commit `eb7b883`, 2026-09-11)
 
 ### Phase 2 — Server: verbs over the guest seam, REST, WS relay, port refusals
 - [x] `internal/config`: `BrowserPort`, `BrowserChromePort` (9229, Chromium's loopback listener), `CloseBrowserUnavailable = 4004`, documented beside the other codes and in `terminal-protocol.md` — `go vet` clean 2026-09-11; who: AI
