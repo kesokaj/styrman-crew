@@ -1,0 +1,359 @@
+#!/usr/bin/env bash
+# styrman-ctl — the one front door to a styrman host (plan
+# .agents/docs/plans/2026-09-11-installer-ctl.md).
+#
+#   sudo deploy/styrman-ctl                 menu
+#   sudo deploy/styrman-ctl status [--json] what is installed, deployed, running
+#   sudo deploy/styrman-ctl install …       (Phase 2)  host-setup.sh + guided .env + bring-up + auto-update offer
+#   sudo deploy/styrman-ctl update …        (Phase 3)  one auto-updater tick; --setup; --redeploy
+#   sudo deploy/styrman-ctl edit …          (Phase 3)  .env editor that re-applies
+#   sudo deploy/styrman-ctl uninstall …     (Phase 4)  three levels, typed confirmations
+#   deploy/styrman-ctl help
+#
+# WRAPS the existing scripts — deploy/host-setup.sh, deploy/firewall/install.sh,
+# deploy/update/styrman-update, deploy/docker-compose.yml — and never re-implements
+# them. Every side effect goes through run(), so --dry-run prints the exact
+# plan ("+ cmd" lines) and executes nothing; that plan is what the Go test
+# (internal/config/styrman_ctl_test.go) asserts, with every path below pointed
+# at a scratch prefix (ADR-052) and fake tools on PATH.
+set -euo pipefail
+shopt -s inherit_errexit
+
+# ─── Paths (env-overridable for tests; the defaults are what host-setup.sh and the units pin) ───
+STATE_DIR="${STYRMAN_STATE_DIR:-/var/lib/styrman}"
+DEPLOY_DIR="${STYRMAN_DEPLOY_DIR:-/opt/styrman}"
+ETC_DIR="${STYRMAN_ETC_DIR:-/etc/styrman}"
+UNIT_DIR="${STYRMAN_UNIT_DIR:-/etc/systemd/system}"
+# shellcheck disable=SC2034  # used by uninstall (plan phase 4)
+BIN_DIR="${STYRMAN_BIN_DIR:-/usr/local/bin}"
+# shellcheck disable=SC2034
+SBIN_DIR="${STYRMAN_SBIN_DIR:-/usr/local/sbin}"
+# shellcheck disable=SC2034
+TMPFILES_DIR="${STYRMAN_TMPFILES_DIR:-/etc/tmpfiles.d}"
+KATA_DIR="${STYRMAN_KATA_DIR:-/opt/kata}"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_FILE="${REPO}/deploy/.env"
+CLONE_ENV="${DEPLOY_DIR}/deploy/.env"
+# shellcheck disable=SC2034  # used by uninstall (plan phase 4)
+UNITS=(styrman-firewall.service styrman-firewall.timer styrman-update.service styrman-update.timer)
+DRY=0
+YES=0
+
+log()  { echo "==> $*"; }
+warn() { echo "==> WARNING: $*" >&2; }
+die()  { echo "styrman-ctl: ERROR $*" >&2; exit 1; }
+# Every side effect goes through run(): --dry-run prints and does nothing.
+run()  { if [ "${DRY}" = 1 ]; then echo "+ $*"; else "$@"; fi; }
+need_root() { [ "${DRY}" = 1 ] || [ "$(id -u)" = 0 ] || die "run as root (sudo), or pass --dry-run"; }
+
+# ─── Prompts ────────────────────────────────────────────────────────────────
+# ask VAR "prompt" "default" [secret]: reads from the terminal, never from a
+# pipe; under --yes (or with no terminal) the default is taken, and an empty
+# default is an error rather than a hang.
+ask() {
+    local var="$1" prompt="$2" default="${3:-}" secret="${4:-}" v=""
+    if [ "${YES}" = 1 ] || [ ! -t 0 ] && [ ! -r /dev/tty ]; then
+        [ -n "${default}" ] || die "no value for ${var} (non-interactive; pass it explicitly)"
+        printf -v "${var}" '%s' "${default}"
+        return 0
+    fi
+    local shown="${default}"
+    [ -n "${secret}" ] && [ -n "${default}" ] && shown="********"
+    if [ -n "${secret}" ]; then
+        read -rs -p "${prompt}${shown:+ [${shown}]}: " v < /dev/tty; echo
+    else
+        read -r -p "${prompt}${shown:+ [${shown}]}: " v < /dev/tty
+    fi
+    [ -n "${v}" ] || v="${default}"
+    printf -v "${var}" '%s' "${v}"
+}
+
+# confirm_word WORD "why": the operator types the exact word; --confirm WORD
+# satisfies it unattended. Anything else aborts with nothing changed.
+CONFIRM_GIVEN=""
+confirm_word() {
+    local word="$1" why="$2" typed=""
+    if [ -n "${CONFIRM_GIVEN}" ]; then
+        [ "${CONFIRM_GIVEN}" = "${word}" ] || die "--confirm ${CONFIRM_GIVEN} does not match the required word — aborted, nothing changed"
+        return 0
+    fi
+    [ -r /dev/tty ] || die "no terminal to confirm on; pass --confirm ${word} to proceed unattended"
+    echo "${why}"
+    read -r -p "Type ${word} to continue: " typed < /dev/tty
+    [ "${typed}" = "${word}" ] || die "aborted, nothing changed"
+}
+
+# ─── .env helpers ───────────────────────────────────────────────────────────
+env_get() { # env_get FILE KEY → value ('' if absent); the LAST assignment wins, like compose
+    local file="$1" key="$2"
+    [ -f "${file}" ] || return 0
+    sed -n "s/^${key}=//p" "${file}" | tail -1
+}
+# env_set FILE KEY VALUE: replaces the key's line or appends one; atomic
+# (temp + mv in the same directory), mode 600, owner kept; refuses a
+# symlinked file and a value with a newline (it would smuggle a second key).
+env_set() {
+    local file="$1" key="$2" value="$3" tmp dir
+    [ -L "${file}" ] && die "refusing to write ${file}: it is a symlink"
+    [ -f "${file}" ] || die "no such file: ${file}"
+    case "${value}" in *$'\n'*) die "refusing a value with a newline for ${key}" ;; esac
+    [[ "${key}" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "not a key: ${key}"
+    dir="$(dirname "${file}")"
+    tmp="$(mktemp "${dir}/.env.XXXXXX")"
+    if grep -q "^${key}=" "${file}"; then
+        # Replace every assignment of the key with one line, keep the rest.
+        awk -v k="${key}" -v v="${value}" 'BEGIN{done=0} index($0,k"=")==1 {if(!done){print k"="v; done=1}; next} {print}' "${file}" > "${tmp}"
+    else
+        cat "${file}" > "${tmp}"
+        printf '%s=%s\n' "${key}" "${value}" >> "${tmp}"
+    fi
+    chmod 600 "${tmp}"
+    chown --reference="${file}" "${tmp}" 2>/dev/null || true
+    run mv -f "${tmp}" "${file}"
+    [ "${DRY}" = 1 ] && rm -f "${tmp}"
+    return 0
+}
+
+# ─── Validation: one rule per key of .env.example ───────────────────────────
+COMPUTED_KEYS="STYRMAN_UID STYRMAN_GID DOCKER_GID STYRMAN_USER STYRMAN_INGRESS_TOKEN STYRMAN_JWT_KEY"
+# shellcheck disable=SC2034  # masked by edit (plan phase 3)
+SECRET_KEYS="GOOGLE_CLIENT_SECRET CLOUDFLARE_API_TOKEN STYRMAN_INGRESS_TOKEN STYRMAN_JWT_KEY"
+# The literal reference .env.example's scaffold writes for SUPERADMINS.
+# shellcheck disable=SC2016
+SUPERADMINS_REF='${STYRMAN_ALLOWED_EMAILS}'
+is_hostname() { [[ "$1" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] && [ "${#1}" -le 253 ]; }
+is_label()    { [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; }
+is_email()    { [[ "$1" =~ ^[^[:space:]@,]+@[^[:space:]@,]+\.[^[:space:]@,]+$ ]]; }
+is_email_list() { local IFS=, e; for e in $1; do e="${e// /}"; [ -n "${e}" ] || return 1; is_email "${e}" || return 1; done; [ -n "$1" ]; }
+is_duration() { [[ "$1" =~ ^([0-9]+(ns|us|ms|s|m|h))+$ ]]; }
+is_loopback_addr() { [[ "$1" =~ ^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]{1,5}$ ]] || [[ "$1" =~ ^\[::1\]:[0-9]{1,5}$ ]]; }
+# validate KEY VALUE → 0, or 1 with the rule on stderr.
+validate() {
+    local key="$1" v="$2" ok=1
+    case " ${COMPUTED_KEYS} " in *" ${key} "*) echo "${key} is computed by host-setup.sh — re-run install" >&2; return 1 ;; esac
+    case "${key}" in
+        BASE_DOMAIN) is_hostname "${v}" && ok=0 ;;
+        STYRMAN_PUBLIC_DOMAIN|STYRMAN_PRIVATE_DOMAIN) { [ -z "${v}" ] || is_hostname "${v}"; } && ok=0 ;;
+        STYRMAN_HOSTNAME) is_label "${v}" && ok=0 ;;
+        AUTH_DOMAIN|SHELL_DOMAIN|APPS_DOMAIN) { [ -z "${v}" ] || is_label "${v}"; } && ok=0 ;;
+        GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|CLOUDFLARE_API_TOKEN) [[ "${v}" =~ ^[^[:space:]]+$ ]] && ok=0 ;;
+        ADMIN_EMAIL) is_email "${v}" && ok=0 ;;
+        STYRMAN_ALLOWED_EMAILS) is_email_list "${v}" && ok=0 ;;
+        SUPERADMINS) { [ "${v}" = "${SUPERADMINS_REF}" ] || is_email_list "${v}"; } && ok=0 ;;
+        STYRMAN_IDLE_TIMEOUT) is_duration "${v}" && ok=0 ;;
+        STYRMAN_TRANSCRIPT_TTL) { [ "${v}" = 0 ] || is_duration "${v}"; } && ok=0 ;;
+        STYRMAN_BROKER_ADDR) { [ -z "${v}" ] || [[ "${v}" =~ ^(:|[a-z0-9.-]+:)[0-9]{1,5}$ ]]; } && ok=0 ;;
+        DEFAULT_RPS) { [ -z "${v}" ] || [[ "${v}" =~ ^[0-9]+$ ]]; } && ok=0 ;;
+        CADDY_ADMIN) { [ -z "${v}" ] || is_loopback_addr "${v}"; } && ok=0 ;;
+        STYRMAN_IMAGE) [ -z "${v}" ] && ok=0 ;;
+        *) echo "unknown key ${key}: edit the file by hand" >&2; return 1 ;;
+    esac
+    if [ "${ok}" != 0 ]; then
+        case "${key}" in
+            BASE_DOMAIN|STYRMAN_PUBLIC_DOMAIN|STYRMAN_PRIVATE_DOMAIN) echo "${key}: not a hostname (labels of a-z 0-9 -, dots)" >&2 ;;
+            STYRMAN_HOSTNAME|AUTH_DOMAIN|SHELL_DOMAIN|APPS_DOMAIN) echo "${key}: one DNS label (a-z 0-9 -, up to 63)" >&2 ;;
+            GOOGLE_CLIENT_ID|GOOGLE_CLIENT_SECRET|CLOUDFLARE_API_TOKEN) echo "${key}: must be non-empty without whitespace" >&2 ;;
+            ADMIN_EMAIL) echo "${key}: one e-mail address" >&2 ;;
+            STYRMAN_ALLOWED_EMAILS|SUPERADMINS) echo "${key}: comma-separated e-mail addresses" >&2 ;;
+            STYRMAN_IDLE_TIMEOUT|STYRMAN_TRANSCRIPT_TTL) echo "${key}: a Go duration such as 8h or 720h" >&2 ;;
+            STYRMAN_BROKER_ADDR) echo "${key}: ':8091' or host:port, or empty" >&2 ;;
+            DEFAULT_RPS) echo "${key}: an integer, or empty" >&2 ;;
+            CADDY_ADMIN) echo "${key}: empty, or a LOOPBACK IP literal with a port (a name makes caddy refuse to start)" >&2 ;;
+            STYRMAN_IMAGE) echo "${key}: must stay empty in production (a mutable tag would re-pin every project)" >&2 ;;
+        esac
+        return 1
+    fi
+    return 0
+}
+
+# ─── Path guard: the ONLY way a delete target is accepted ───────────────────
+# guard_path PATH: canonical, absolute, at least two components, not a
+# symlink, and exactly one of the configured trees. Everything that deletes
+# goes through it (ADR-052; the firewall installer's BUG-009 rule).
+guard_path() {
+    local p="$1" real
+    real="$(realpath -m -- "${p}")"
+    [ "${real}" = "/" ] && { echo "refusing ${p}: it is /" >&2; return 1; }
+    [[ "${real}" =~ ^/[^/]+/[^/]+ ]] || { echo "refusing ${p}: a single path component" >&2; return 1; }
+    [ -L "${p}" ] && { echo "refusing ${p}: it is a symlink" >&2; return 1; }
+    local allowed
+    for allowed in "${STATE_DIR}" "${DEPLOY_DIR}" "${ETC_DIR}"; do
+        [ "${real}" = "$(realpath -m -- "${allowed}")" ] && return 0
+    done
+    echo "refusing ${p}: not one of the configured styrman trees" >&2
+    return 1
+}
+
+# ─── Status ─────────────────────────────────────────────────────────────────
+have() { command -v "$1" >/dev/null 2>&1; }
+container_field() { docker inspect -f "$2" "$1" 2>/dev/null || true; }
+unit_state() { # unit_state NAME → "enabled/active" style words
+    local en ac
+    en="$(systemctl is-enabled "$1" 2>/dev/null || true)"; ac="$(systemctl is-active "$1" 2>/dev/null || true)"
+    echo "${en:-absent}/${ac:-inactive}"
+}
+chain_rules() { # chain_rules CHAIN → number of -A rules, or "absent"
+    local n
+    if have iptables && iptables -S "$1" >/dev/null 2>&1; then n="$(iptables -S "$1" 2>/dev/null | grep -c '^-A' || true)"; echo "${n:-0}"; else echo absent; fi
+}
+deployed_version() { # from the updater's state, else the running server image tag
+    local v=""
+    [ -f "${ETC_DIR}/update/deployed-version" ] && v="$(cat "${ETC_DIR}/update/deployed-version" 2>/dev/null || true)"
+    if [ -z "${v}" ]; then v="$(container_field styrman-server '{{.Config.Image}}')"; v="${v##*:}"; fi
+    printf '%s' "${v}"
+}
+json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+
+cmd_status() {
+    local as_json=0
+    while [ $# -gt 0 ]; do case "$1" in --json) as_json=1; shift ;; *) die "status: unknown flag $1" ;; esac; done
+    need_root
+    local host; host="$(hostname 2>/dev/null || uname -n)"
+    local installed=0
+    # An `if`, not a bare `a || b && c` list: under set -e a list whose last
+    # command fails ends the script.
+    if [ -f "${UNIT_DIR}/styrman-update.service" ] || [ -f "${UNIT_DIR}/styrman-firewall.service" ] || [ -n "$(container_field styrman-server '{{.Id}}')" ]; then
+        installed=1
+    fi
+    # server
+    local health server_img caddy_img running url base hn
+    health="$(container_field styrman-server '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}')"
+    server_img="$(container_field styrman-server '{{.Config.Image}}')"
+    caddy_img="$(container_field styrman-caddy '{{.Config.Image}}')"
+    running="$(container_field styrman-server '{{.State.Running}}')"
+    # The checkout may carry no .env at all (production deploys from the
+    # clone): read whichever copy exists, the checkout's first.
+    local envsrc="${ENV_FILE}"; [ -f "${envsrc}" ] || envsrc="${CLONE_ENV}"
+    base="$(env_get "${envsrc}" BASE_DOMAIN)"; hn="$(env_get "${envsrc}" STYRMAN_HOSTNAME)"
+    url=""; [ -n "${base}" ] && url="https://${hn:-styrman}.${base}"
+    # deployed
+    local dver dsha fver
+    dver="$(deployed_version)"
+    dsha="$(cat "${ETC_DIR}/update/deployed-sha" 2>/dev/null || true)"
+    fver="$(cat "${ETC_DIR}/update/failed-version" 2>/dev/null || true)"
+    # updater + clone
+    local clone_sha="" clone_tag="" envs_differ=0
+    if [ -d "${DEPLOY_DIR}/.git" ]; then
+        clone_sha="$(git -C "${DEPLOY_DIR}" rev-parse --short HEAD 2>/dev/null || true)"
+        clone_tag="$(git -C "${DEPLOY_DIR}" describe --tags --exact-match 2>/dev/null || true)"
+        if [ -f "${CLONE_ENV}" ] && [ -f "${ENV_FILE}" ] && ! cmp -s "${CLONE_ENV}" "${ENV_FILE}"; then envs_differ=1; fi
+    fi
+    # units + firewall
+    local u_fw_s u_fw_t u_up_s u_up_t fwd in4
+    u_fw_s="$(unit_state styrman-firewall.service)"; u_fw_t="$(unit_state styrman-firewall.timer)"
+    u_up_s="$(unit_state styrman-update.service)";   u_up_t="$(unit_state styrman-update.timer)"
+    fwd="$(chain_rules STYRMAN-FWD)"; in4="$(chain_rules STYRMAN-IN)"
+    # projects + host
+    local vms dirs disk dockerv katav operator
+    # `|| true` on each pipeline: under pipefail a failing docker/find (no
+    # daemon, no dir) would otherwise end the script via set -e.
+    vms="$(docker ps -q --filter label=styrman.managed=true 2>/dev/null | wc -l | tr -d ' ' || true)"
+    dirs="$(find "${STATE_DIR}/projects" -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l | tr -d ' ' || true)"
+    disk="$(timeout 20 du -sh "${STATE_DIR}" 2>/dev/null | cut -f1 || true)"; disk="${disk:-?}"
+    dockerv="$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)"
+    katav="$("${KATA_DIR}/bin/kata-runtime" --version 2>/dev/null | head -1 | awk '{print $NF}' || true)"
+    operator="$(stat -c %U "${STATE_DIR}" 2>/dev/null || true)"
+    # verdict: 0 green, 1 degraded, 2 not installed
+    local rc=0
+    [ "${installed}" = 1 ] || rc=2
+    if [ "${rc}" = 0 ]; then
+        [ "${health}" = healthy ] || rc=1
+        [ -z "${fver}" ] || rc=1
+        [[ "${u_fw_s}" == enabled/* ]] || rc=1
+        [[ "${u_fw_t}" == enabled/* ]] || rc=1
+        [ "${fwd}" != absent ] || rc=1
+    fi
+    if [ "${as_json}" = 1 ]; then
+        printf '{"host":%s,"installed":%s,"server":{"health":%s,"image":%s,"caddy":%s,"running":%s,"url":%s},"deployed":{"version":%s,"sha":%s,"failed":%s},"updater":{"service":%s,"timer":%s,"clone_sha":%s,"clone_tag":%s,"env_copies_differ":%s},"firewall":{"service":%s,"timer":%s,"fwd_rules":%s,"in_rules":%s},"projects":{"running":%s,"dirs":%s,"disk":%s},"host_tools":{"docker":%s,"kata":%s,"operator":%s},"exit":%s}\n' \
+            "$(json_str "${host}")" "$([ "${installed}" = 1 ] && echo true || echo false)" \
+            "$(json_str "${health}")" "$(json_str "${server_img}")" "$(json_str "${caddy_img}")" "$([ "${running}" = true ] && echo true || echo false)" "$(json_str "${url}")" \
+            "$(json_str "${dver}")" "$(json_str "${dsha}")" "$(json_str "${fver}")" \
+            "$(json_str "${u_up_s}")" "$(json_str "${u_up_t}")" "$(json_str "${clone_sha}")" "$(json_str "${clone_tag}")" "$([ "${envs_differ}" = 1 ] && echo true || echo false)" \
+            "$(json_str "${u_fw_s}")" "$(json_str "${u_fw_t}")" "$(json_str "${fwd}")" "$(json_str "${in4}")" \
+            "${vms:-0}" "${dirs:-0}" "$(json_str "${disk}")" \
+            "$(json_str "${dockerv}")" "$(json_str "${katav}")" "$(json_str "${operator}")" "${rc}"
+        return "${rc}"
+    fi
+    echo "styrman-ctl status  (host ${host}, $(date '+%F %H:%M'))"
+    if [ "${installed}" != 1 ]; then echo "  nothing installed: no styrman units, no styrman-server container"; return "${rc}"; fi
+    echo "  server     ${health:-absent}   ${server_img:-no styrman-server container} (${caddy_img:-no caddy})   ${url}"
+    echo "  deployed   ${dver:-unknown}    ${ETC_DIR}/update/deployed-version${dsha:+, sha ${dsha}}${fver:+ ; FAILED-VERSION LATCHED: ${fver}}"
+    if [ -n "${clone_sha}" ]; then
+        echo "  updater    ${u_up_t} (timer), ${u_up_s} (service)   clone ${DEPLOY_DIR} at ${clone_sha}${clone_tag:+ (${clone_tag})}$([ "${envs_differ}" = 1 ] && echo '   WARNING: deploy/.env differs between the checkout and the clone')"
+    else
+        echo "  updater    ${u_up_t} (timer)   no clone at ${DEPLOY_DIR} — auto-update not set up"
+    fi
+    echo "  firewall   ${u_fw_s} (service), ${u_fw_t} (timer)   chains STYRMAN-FWD (${fwd} rules) STYRMAN-IN (${in4})"
+    echo "  projects   ${vms:-0} running microVMs, ${dirs:-0} project dirs, ${STATE_DIR} ${disk}"
+    echo "  host       Docker ${dockerv:-?}, Kata ${katav:-?} (mvm), operator ${operator:-?}"
+    case "${rc}" in 1) echo "  verdict    DEGRADED";; 0) echo "  verdict    OK";; esac
+    return "${rc}"
+}
+
+# ─── Internal test hooks (used by the Go test; not for operators) ───────────
+cmd_internal() {
+    case "${1:-}" in
+        __validate)  validate "$2" "$3" ;;
+        __env-set)   env_set "$2" "$3" "$4" ;;
+        __env-get)   env_get "$2" "$3" ;;
+        __guard-path) guard_path "$2" ;;
+        *) die "unknown internal verb ${1:-}" ;;
+    esac
+}
+
+cmd_help() {
+    cat <<H
+styrman-ctl — install, update, edit, uninstall and inspect a styrman host
+
+  sudo deploy/styrman-ctl                menu
+  sudo deploy/styrman-ctl status [--json]
+  sudo deploy/styrman-ctl install …      (not yet: plan phase 2)
+  sudo deploy/styrman-ctl update …       (not yet: plan phase 3)
+  sudo deploy/styrman-ctl edit …         (not yet: plan phase 3)
+  sudo deploy/styrman-ctl uninstall …    (not yet: plan phase 4)
+  deploy/styrman-ctl help
+
+Global flags: --dry-run (print every command, run nothing), --yes (take
+defaults, skip non-destructive confirmations), --confirm WORD (satisfy a
+destructive confirmation unattended).
+Paths: STYRMAN_STATE_DIR, STYRMAN_DEPLOY_DIR, STYRMAN_ETC_DIR, STYRMAN_UNIT_DIR,
+STYRMAN_BIN_DIR, STYRMAN_SBIN_DIR, STYRMAN_TMPFILES_DIR (defaults: the
+production locations host-setup.sh and the units pin).
+H
+}
+
+cmd_menu() {
+    [ -r /dev/tty ] || { cmd_help; exit 2; }
+    local choice
+    echo "styrman-ctl"
+    echo "  1) install    2) update    3) edit    4) uninstall    5) status    q) quit"
+    read -r -p "> " choice < /dev/tty
+    case "${choice}" in
+        1) main install ;; 2) main update ;; 3) main edit ;; 4) main uninstall ;; 5) main status ;;
+        q|Q|"") exit 0 ;; *) die "no such choice: ${choice}" ;;
+    esac
+}
+
+main() {
+    local verb="${1:-}"; [ $# -gt 0 ] && shift
+    # Global flags may sit anywhere; verbs get the rest.
+    local rest=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run) DRY=1; shift ;;
+            --yes) YES=1; shift ;;
+            --confirm) CONFIRM_GIVEN="$2"; shift 2 ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    set -- "${rest[@]+"${rest[@]}"}"
+    case "${verb}" in
+        "") cmd_menu ;;
+        status) cmd_status "$@" ;;
+        help|-h|--help) cmd_help ;;
+        install|update|edit|uninstall) die "${verb}: not implemented yet (plan .agents/docs/plans/2026-09-11-installer-ctl.md)" ;;
+        __*) cmd_internal "${verb}" "$@" ;;
+        *) die "unknown verb ${verb} (try: help)" ;;
+    esac
+}
+main "$@"

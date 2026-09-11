@@ -376,10 +376,10 @@ criterion and stays the operator's (or a VM's) step — recorded when run.
 ## Phases
 
 ### Phase 1 — Skeleton, `status`, dry-run harness, tests
-- [ ] `deploy/styrman-ctl`: arg parsing, menu, helpers (`run`, `ask`, `confirm_word`, `env_get/set`, `validate`, path guard), `help`, `status` (human + `--json`) — verify: shellcheck; `sudo deploy/styrman-ctl status` on this host matches `docker compose ps`, `systemctl is-enabled`, the version files; who: AI
-- [ ] `internal/config/styrman_ctl_test.go`: harness (scratch prefix, fake tools on PATH), tests for `help`, `status --json` shape against the fakes, `env_set`/`validate` tables, the path guard — verify: `go test -race ./internal/config/`; who: AI
-- [ ] Docs stub in `deploy/README.md` (one line: the tool exists, verbs coming) — who: AI
-- [ ] Phase checkpoint — who: AI
+- [x] `deploy/styrman-ctl`: arg parsing, menu, helpers (`run`, `ask`, `confirm_word`, `env_get/set`, `validate`, `guard_path`), `help`, `status` (human + `--json`, exit 0/1/2), the `__` test hooks — shellcheck clean; `sudo deploy/styrman-ctl status` on this host 2026-09-11: server healthy 1.27.1, deployed v1.27.1 sha 4686792, updater timer enabled with the clone at v1.27.1, firewall enabled with 7+1 rules, 0 running microVMs / 1 project dir / 174M, Docker 29.7.2, Kata 3.31.0 — all matching `docker inspect`, `systemctl is-enabled` and the state files; verdict OK. Two `set -e` traps found by the tests and fixed (a bare `a || b && c` list; pipelines under pipefail); who: AI
+- [x] `internal/config/styrman_ctl_test.go`: harness (scratch prefix for every path, fake docker/systemctl/iptables/git/du/hostname/kata-runtime on PATH, a production path in any output fails the test); 6 tests: help + unknown/unimplemented verbs, `status --json` fields + degraded (unhealthy, latched failed-version) + nothing-installed exit 2, the validate table (19 good / 16 bad), `env_set` (replace-all-then-one, append, mode 600, symlink/newline/non-key refusals, dry-run leaves the file), `guard_path` (/, single component, outside, a child, a symlink at the root) — `go test -race ./internal/config/` green 2026-09-11; who: AI
+- [x] Docs stub in `deploy/README.md` — who: AI
+- [x] Phase checkpoint — committed 2026-09-11 (`changes/2026-09-11-styrman-ctl-phase1-skeleton-status.md`, `testing/2026-09-11-verify-styrman-ctl-phase1.md`); who: AI
 
 ### Phase 2 — `install` and `update --setup`
 - [ ] `install`: preconditions, host-setup call, the `.env` prompts and validation, version resolution, bring-up with `--env-file` and healthy wait, summary — verify: dry-run plan test asserts the exact ordered commands and the refusals; `sudo deploy/styrman-ctl install --dry-run` on this host prints a plan and changes nothing; who: AI

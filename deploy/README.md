@@ -12,6 +12,13 @@ vi .env   # secrets: OAuth client, Cloudflare token, allowed emails
 STYRMAN_VERSION=<x.y.z> docker compose up -d --build
 ```
 
+`styrman-ctl` — one front door over the scripts above (plan
+`../.agents/docs/plans/2026-09-11-installer-ctl.md`): `sudo deploy/styrman-ctl
+status [--json]` reports what is installed, deployed and running (exit 0 ok,
+1 degraded, 2 nothing installed); `install`, `update`, `edit` and
+`uninstall` arrive with the plan's later phases. `--dry-run` prints every
+command a verb would run and runs nothing.
+
 Full walkthrough: `../.agents/docs/specs/styrman/deploy.md` (including the
 credential broker's bridge-only listener). There is no backup layer —
 durability is git: commit and push, and rebuild a lost host from this
