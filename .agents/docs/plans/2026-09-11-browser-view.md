@@ -405,7 +405,7 @@ brings the browser back with a fresh tab.
 ## Phases
 
 ### Phase 1 — Guest image: Chromium, launcher, MCP registration, ADR
-- [ ] Operator approves the exact R4 sentence above; edit `REQUIREMENTS.md` R4 and write ADR-068 in `DECISIONS.md` in ONE commit with `ROADMAP.md` "Now" — verify: the diff touches those three files only; who: user (approval) + AI
+- [x] Operator approves the exact R4 sentence above; edit `REQUIREMENTS.md` R4 and write ADR-068 in `DECISIONS.md` in ONE commit with `ROADMAP.md` "Now" — verify: the diff touches those three files only; who: user (approval) + AI — DONE 2026-09-11, commit `a9ae789` (approval: "approve the R4 sentence, go ahead")
 - [ ] `image/Dockerfile`: `chromium fonts-liberation` in the apt step, `chrome-devtools-mcp@1.9.0` in the npm step, copy the launcher — verify: `docker build` of `image/` succeeds; image size delta recorded (expect ≈ +400 MB); `docker run --rm <img> chromium --version` and `chrome-devtools-mcp --help` print; who: AI
 - [ ] `image/configs/styrman-browser` with `start|stop|status|mcp`, `flock`, pid, log, profile dir 0700 — verify: `shellcheck` clean; in a `docker run` of the built image as a non-root user, `start` → `/json/version` 200, `status` → running, `stop` → not running, `start` twice → one process; who: AI
 - [ ] Re-run the sandbox probe with the BUILT image and the real launcher under `docker run --runtime mvm` (the 2026-09-11 probe used an apt install into the old image) — verify: `status` reports running, no `--no-sandbox` in the launch line; who: AI
@@ -424,7 +424,7 @@ brings the browser back with a fresh tab.
 - [ ] Phase checkpoint — who: AI
 
 ### Phase 3 — SPA: CDP client, BrowserPane, toggle, Ports button
-- [ ] `editorPane.ts`: `"browser"` view + `browser.url` + `openInBrowser` + the guard's `browser` comparison; tests include the two-ports-in-a-row case — verify: `npm test`; who: AI
+- [ ] `editorPane.ts`: `"browser"` view + `browser.url` + `openInBrowser` + the guard's `browser` comparison; `openFileInPane` (`editorPane.ts:120-135`) and every other literal `PaneState` builder carry `browser` through (it is the one `set()` caller that does not spread `prev`); tests include the two-ports-in-a-row case — verify: `npm run check && npm test`; who: AI
 - [ ] `cdp.ts` + tests — verify: `npm test`; who: AI
 - [ ] `browserInput.ts` + tests — verify: `npm test`; who: AI
 - [ ] `api.ts` four calls + encoding tests — verify: `npm test`; who: AI
