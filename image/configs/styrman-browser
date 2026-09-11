@@ -18,7 +18,12 @@
 # runs inside this project's dockerd can reach the guest's bridge IP but is
 # refused by socat's `range=` — a DevTools client reads file:// inside the
 # guest, i.e. the brokered credentials, and an image the user merely runs
-# must not gain that. The server never lists, proxies or shares the port.
+# must not gain that. KNOWN BOUNDARY: a container run with --network=host
+# shares the guest's network namespace and reaches Chromium's loopback
+# listener directly; that is the project user's own choice inside their own
+# VM, documented in runtime-image.md, not something this launcher can
+# refuse (a pipe transport would; follow-up in the plan). The server never
+# lists, proxies or shares the port.
 #
 #   styrman-browser start    idempotent; 0 once /json/version answers (≤ 15 s), else 1 + the log tail
 #   styrman-browser stop     kills the process group; 0 even when nothing runs
@@ -46,6 +51,7 @@ DIR="${HOME}/.styrman/browser"
 PROFILE="${DIR}/profile"
 PIDFILE="${DIR}/pid"
 SOCATPID="${DIR}/socat.pid"
+SOCATRANGE="${DIR}/socat.range" # the peer the running forwarder admits
 LOG="${DIR}/chromium.log"
 LOCK="${DIR}/lock"
 VERSION_URL="http://127.0.0.1:${CHROME_PORT}/json/version"
@@ -69,7 +75,9 @@ peer_range() {
         host="${host%%/*}"
         host="${host%%:*}"
     fi
-    if printf '%s' "${host}" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+    # A bash regex matches the WHOLE value (grep would match any one line of
+    # a multi-line value and then emit all of it into socat's options).
+    if [[ "${host}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
         printf '%s/32' "${host}"
     fi
     return 0
@@ -88,7 +96,15 @@ ensure_forwarder() {
         echo "no peer address for :${PORT} (STYRMAN_BROWSER_PEER unset): browser stays loopback-only" >&2
         return 0
     fi
-    forwarder_up && return 0
+    if forwarder_up; then
+        # Same peer as before: nothing to do. A DIFFERENT peer (the server's
+        # address on this bridge changed while Chromium lived on) means the
+        # running forwarder would refuse the server forever: replace it
+        # (review finding, Phase 3).
+        [ "$(cat "${SOCATRANGE}" 2>/dev/null || true)" = "${range}" ] && return 0
+        kill_group_file "${SOCATPID}"
+    fi
+    printf '%s' "${range}" > "${SOCATRANGE}"
     # shellcheck disable=SC2016  # the $-expressions belong to the inner bash
     setsid -f bash -c 'echo $$ > "$1"; exec socat "TCP-LISTEN:$2,fork,reuseaddr,bind=0.0.0.0,range=$3,max-children=4" "TCP:127.0.0.1:$4"' \
         _ "${SOCATPID}" "${PORT}" "${range}" "${CHROME_PORT}" 9>&- >>"${LOG}" 2>&1
@@ -109,7 +125,7 @@ ensure_forwarder() {
 # BEFORE anything is created, ~/.styrman included.
 refuse_links() {
     local p
-    for p in "${HOME}/.styrman" "${DIR}" "${PROFILE}" "${LOG}" "${PIDFILE}" "${SOCATPID}" "${LOCK}"; do
+    for p in "${HOME}/.styrman" "${DIR}" "${PROFILE}" "${LOG}" "${PIDFILE}" "${SOCATPID}" "${SOCATRANGE}" "${LOCK}"; do
         if [ -L "${p}" ]; then
             echo "refusing to use ${p}: it is a symlink"
             return 1
@@ -195,6 +211,7 @@ kill_group_file() {
 
 do_stop() {
     kill_group_file "${SOCATPID}"
+    rm -f "${SOCATRANGE}"
     kill_group_file "${PIDFILE}"
     return 0
 }

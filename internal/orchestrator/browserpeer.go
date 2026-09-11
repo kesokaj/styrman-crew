@@ -24,13 +24,17 @@ import (
 func (o *Orchestrator) BrowserPeer(ctx context.Context, project string) string {
 	netName := config.NetworkName(project)
 	if o.cfg.SelfContainer != "" {
+		// The LIVE address only: naming the broker's intended static address
+		// when the inspect fails could admit an address this server does not
+		// hold (security review, round 3) — an unknown peer fails closed.
 		insp, err := o.docker.ContainerInspect(ctx, o.cfg.SelfContainer)
-		if err == nil && insp.NetworkSettings != nil {
-			if ep, ok := insp.NetworkSettings.Networks[netName]; ok && net.ParseIP(ep.IPAddress) != nil {
-				return ep.IPAddress
-			}
+		if err != nil || insp.NetworkSettings == nil {
+			return ""
 		}
-		return o.brokerIPOnBridge(ctx, netName)
+		if ep, ok := insp.NetworkSettings.Networks[netName]; ok && net.ParseIP(ep.IPAddress) != nil {
+			return ep.IPAddress
+		}
+		return ""
 	}
 	insp, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{})
 	if err != nil {

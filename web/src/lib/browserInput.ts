@@ -165,16 +165,23 @@ export function keyParams(e: KeyEventLike): InputKeyParams {
 }
 
 /**
- * What the URL bar's input means, or null for nothing. Shortcuts for the
- * common in-guest case: `:3000` and `localhost:3000/x` become http URLs; a
- * bare host gets `http://`; anything with a scheme is taken as typed.
+ * What the URL bar's input means: an http(s) URL, `about:blank`, or null for
+ * nothing / a refused scheme. Shortcuts for the common in-guest case:
+ * `:3000` and `localhost:3000/x` become http URLs; a bare host gets
+ * `http://`. Only `http:`, `https:` and `about:blank` pass: `javascript:`,
+ * `data:`, `file:` and friends navigate the guest's browser, which the
+ * agents share, and a pasted `javascript://…` would run in whatever page is
+ * open there (security review, round 3). The agents' MCP tools are not
+ * bound by this bar; this is the operator's guard rail, not a sandbox.
  */
 export function normalizeUrl(input: string): string | null {
   const s = input.trim();
   if (s === "") return null;
   if (/^:\d{1,5}(\/.*)?$/.test(s)) return `http://localhost${s}`;
-  // A scheme is `xxx://` (hierarchical) or one of the few schemes a page can
-  // sensibly be — NOT `localhost:8080`, whose "scheme" is a host and port.
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s) || /^(about|data|blob|file|view-source):/i.test(s)) return s;
+  if (/^about:blank$/i.test(s)) return "about:blank";
+  if (/^https?:\/\//i.test(s)) return s;
+  // Any other scheme (`javascript:`, `data:`, `file:`, `ftp://`…) is refused;
+  // `localhost:8080` is NOT a scheme, its "scheme" is a host and port.
+  if (/^[a-z][a-z0-9+.-]*:(?![0-9]{1,5}(\/|$))/i.test(s)) return null;
   return `http://${s}`;
 }

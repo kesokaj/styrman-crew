@@ -74,6 +74,19 @@ Decisions taken with the operator on 2026-09-11 (scope confirmation):
   preview proxy.
 
 **Follow-ups noted, not built**
+- A pipe transport (`--remote-debugging-pipe`) so that even a container run
+  with `--network=host` inside the project cannot reach Chromium's loopback
+  DevTools listener (security review round 3, accepted boundary for v1:
+  host networking is the project user's own choice inside their own VM).
+- A separate profile (or a target allowlist in the relay) so the agents and
+  the operator do not share cookies (security review round 1, accepted per
+  ADR-068 D1; the guide carries the warning).
+- A sweep of stale link/share records for the browser ports (they 404 but
+  still show in the owner's UI).
+- A lockfile-based install of `chrome-devtools-mcp` (the resolved tree is
+  recorded for diffing).
+- A cap on consecutive harness re-seed attempts when a home keeps breaking
+  its own registration (the WARN now says why).
 - Idle stop of the browser after N minutes without a SPA or MCP client.
 - A "follow the agent" mode that switches the visible tab to whatever tab
   the agent last activated (v1 shows the tab strip and lets the operator
@@ -477,9 +490,9 @@ this feature's.)
 - [x] Phase checkpoint — committed 2026-09-11 (change entry `changes/2026-09-11-browser-phase3-spa-and-security-round2.md`; integration `passed=90 failed=0 skipped=3` on the corrected checks); who: AI
 
 ### Phase 4 — E2E, docs, done
-- [ ] `run.mjs`: the four checks; README Tier 4 count — verify: `bash web/e2e/run.sh` green, `passed=` up by 4; who: AI
-- [ ] `guide.md` (§1 what it is, §2 architecture: the browser and its trust boundary, §4 operating: how the agents use it), `terminal-protocol.md` (the browser WS), `ROADMAP.md` — verify: `documentation` agent; who: AI
-- [ ] Definition of Done: `verifier` log over every tier, `reviewer` over the whole diff, `security` (new WS route, new in-guest listener, MCP registration), `changelog`, `bugs` for anything that went wrong — who: AI
+- [x] `run.mjs`: the four checks inside the LAN window; README Tier 4 count 87→91 — `bash web/e2e/run.sh` solo: `passed=91 failed=0 skipped=2`, client-error gate green (2026-09-11; two earlier runs failed for a load blip, a `!` history expansion in the typed fixture, and BUG-039's 500 — all recorded in `testing/2026-09-11-verify-browser-phase4.md`); who: AI
+- [x] `guide.md` (§1, §2 "Browser view", §4 "Using the browser" with the shared-profile warning verbatim), `README.md`, `ROADMAP.md` — `documentation` agent 2026-09-11, text read back against the plan (no unmeasured claims); `terminal-protocol.md` was written in Phase 2; who: AI
+- [x] Definition of Done: `verifier` (Phases 1–2 and 1–3 logs, PASS; over the Phase 4 commit right after it), `reviewer` and `security` per phase (three rounds, every finding fixed or rebutted in the change entries; the Phase 4 commit gets its own pass), `changelog` per phase, `bugs` BUG-039/040 — who: AI
 - [ ] Manual agent walk by the operator (above), logged in `testing/` — who: user
 - [ ] Release: `/preflight` as a MINOR (new behaviour for a user) — who: user says ship
 

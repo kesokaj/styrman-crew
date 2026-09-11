@@ -22,7 +22,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -113,8 +112,8 @@ type Server struct {
 	browserUpstreamFn func(ctx context.Context, user, project string) (host string, fresh bool, err error)
 	// browserPeerFn likewise replaces the orchestrator's BrowserPeer in tests.
 	browserPeerFn func(ctx context.Context, project string) string
-	// browserRelays counts live CDP relays (capped at browserRelayMax).
-	browserRelays atomic.Int32
+	// browserRelays counts live CDP relays (capped globally and per user).
+	browserRelays relayCounter
 	mode          modeRuntime
 	tmux          *conversation.Manager
 	bridge        *terminal.Bridge
@@ -1138,8 +1137,15 @@ func (s *Server) listTerminals(w http.ResponseWriter, r *http.Request) {
 	}
 	live, err := s.tmux.Live(r.Context(), u.Username, p.ID, s.guestUserFor(u.Username))
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
+		// The RECORDS are the durable truth (R6); liveness is a best-effort
+		// scan of the guest. While a container is going down (a stop, a
+		// network-mode rebuild) that scan fails for 30–50 s, and a 500 here
+		// made every terminal in the sidebar vanish behind an error for the
+		// whole window (seen 2026-09-11 in the browser-view hand-walk and its
+		// e2e gate). Report the records with nothing live instead, and say
+		// why in the log.
+		s.logger.Warn("terminals: live scan failed, reporting none live", "project", p.ID, "error", err)
+		live = nil
 	}
 	out := []terminalView{}
 	for _, rec := range sp.terms.List(p.ID) {

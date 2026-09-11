@@ -112,4 +112,21 @@ describe("normalizeUrl", () => {
     expect(normalizeUrl(" https://example.com/a?b=c ")).toBe("https://example.com/a?b=c");
     expect(normalizeUrl("about:blank")).toBe("about:blank");
   });
+
+  it("refuses every scheme but http, https and about:blank", () => {
+    for (const bad of [
+      "javascript:alert(1)",
+      "javascript://%0aalert(1)",
+      "data:text/html,<b>x</b>",
+      "file:///etc/passwd",
+      "view-source:http://localhost:3000/",
+      "blob:http://x/y",
+      "ftp://example.com/",
+      "about:settings",
+    ]) {
+      expect(normalizeUrl(bad), bad).toBeNull();
+    }
+    // Host:port shapes are still hosts.
+    expect(normalizeUrl("127.0.0.1:9000/x")).toBe("http://127.0.0.1:9000/x");
+  });
 });

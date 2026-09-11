@@ -12,6 +12,8 @@ isolated projects. Sign in with Google, create a project, and get browser
 terminals inside a dedicated **Kata Containers microVM** — its own kernel,
 its own Docker daemon, its own network. Both agents (`claude`, `agy`) are
 preinstalled; run whichever you want, in as many terminals as you want.
+Every project also has its own browser — a headless Chromium inside the
+microVM, shown in the Browser view and shared with the agents (ADR-068).
 Live at https://crew.styrman.xyz.
 
 Load-bearing ideas:
@@ -387,6 +389,28 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
 - **Sessions survive redeploys**: caddy-security's JWT signing key is
   pinned via `STYRMAN_JWT_KEY` (`host-setup.sh` generates it) instead of
   rotating per boot, so restarting Caddy doesn't log everyone out.
+- **Browser view** (ADR-068): one headless Chromium per project, started on
+  demand as the project user by `/styrman/bin/styrman-browser` and stopped
+  with the project. The SPA's Browser pane draws a CDP screencast over an
+  owner-only relay, `GET /ws/browser/{project}` (never `previewAccess`, so a
+  share-list guest gets the same 404 as any other project route); the agents
+  drive the SAME browser through the `styrman-browser` MCP server, registered
+  for both `claude` and `agy` at harness seeding (the narrow ADR-062
+  exception: each tool's own `mcp add` command writes its own MCP registry,
+  no `settings.json`, no hooks). Trust boundary: Chromium's own DevTools
+  listener is loopback-only inside the guest (port 9229); a `socat` forwarder
+  republishes it on the project bridge (port 9222) but admits only the
+  styrman server's own bridge address as a peer, so a container the user
+  merely runs inside the project cannot reach it. Port 9222 is never listed,
+  previewed, shared, or linked. No Origin is admitted on the DevTools socket
+  (no `--remote-allow-origins`), so a page rendered inside the browser can
+  never open a DevTools connection to seize its own browser. This is the
+  first long-running in-guest daemon since ADR-002 — Chromium is a tool the
+  project user runs, not a server the styrman server depends on: the server
+  still only reaches the guest through `docker exec` (start/stop/status) and
+  the project bridge (the CDP relay), exactly as the port-preview proxy
+  reaches a dev server. Full detail: runtime-image.md's "Browser" section,
+  api.md's "Browser (ADR-068)", terminal-protocol.md's "Browser relay".
 
 ## 3. Install from scratch (R11)
 
@@ -508,6 +532,38 @@ rotated token, or a tool signed into inside a project instead of at setup).
   credential broker no longer withholds the SSH key from LAN projects —
   see "Credential broker" above — so unlike ADR-065/066 there is nothing to
   show under Settings for this feature; that panel is gone.
+- **Using the browser** (ADR-068): a **Browser** pill sits next to
+  Terminal/Editor/Diff in the terminal header. The address bar accepts a
+  full URL, a bare `:3000` or `localhost:3000` shortcut, or a click of
+  "browser" on a Ports row (opens that port) — `localhost` inside this
+  browser IS the project's own microVM, no proxy or share link involved.
+  The tab strip shows every open page, including tabs the agent opened.
+  Ctrl/Cmd+L focuses the address bar; Ctrl/Cmd+R reloads. States: "Project
+  is stopped" (start it from the terminal, then Reconnect); "Browser
+  unavailable" showing the launcher's own failure message with a Retry
+  button; "Browser disconnected" with a Reconnect button (the guest's
+  Chromium went away — the project stopped, or it crashed). The browser
+  stops when the project does; its profile — cookies, logins, everything
+  Chromium would normally remember — lives in the project home at
+  `~/.styrman/browser/profile` and is per project, like everything else
+  under ADR-031.
+
+  The agents drive the same browser and the same profile. Do not sign in to
+  anything in the Browser pane you would not hand the agent — a page the
+  agent is asked to test can instruct it, and it can then read every
+  signed-in session in that profile.
+
+  From a project terminal, `claude` or `agy` already has the
+  `styrman-browser` MCP server registered (tools to navigate, click, type,
+  and screenshot the SAME browser the pane shows) — no setup step, it was
+  seeded into the project home with the rest of the agent harness. A tab the
+  agent opens appears in the pane's tab strip.
+
+  Known limits (v1): no clipboard between the page and your machine, no
+  IME/dead-key composition, no downloads, file chooser, or print;
+  JavaScript dialogs (`alert`/`confirm`/`prompt`) are accepted automatically
+  with a one-line notice rather than shown; the browser is not stopped for
+  idleness — it runs until the project does.
 - **Terminals**: sidebar, per project; generated friendly names; ⏸ pause /
   ✕ delete / close all; per-terminal autostart command (pencil → dialog;
   set the autostart to `claude --continue` / `agy --continue` and the

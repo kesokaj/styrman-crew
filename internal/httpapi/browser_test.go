@@ -416,11 +416,26 @@ func TestBrowserRelayOriginAndCap(t *testing.T) {
 	if w.Code != http.StatusForbidden || len(f.calls) != 0 {
 		t.Fatalf("cross-origin: %d, execs %v", w.Code, f.calls)
 	}
-	s.browserRelays.Store(browserRelayMax)
-	if w := do(t, h, http.MethodGet, "/ws/browser/"+pid, ""); w.Code != http.StatusServiceUnavailable || len(f.calls) != 0 {
-		t.Fatalf("over the cap: %d, execs %v", w.Code, f.calls)
+	for i := 0; i < browserRelayPerUser; i++ {
+		if ok, _ := s.browserRelays.acquire("tester"); !ok {
+			t.Fatalf("slot %d refused below the per-user cap", i)
+		}
 	}
-	s.browserRelays.Store(0)
+	if w := do(t, h, http.MethodGet, "/ws/browser/"+pid, ""); w.Code != http.StatusServiceUnavailable || len(f.calls) != 0 {
+		t.Fatalf("over the per-user cap: %d, execs %v", w.Code, f.calls)
+	}
+	// Another user is not locked out by this one's panes.
+	if ok, why := s.browserRelays.acquire("someone-else"); !ok {
+		t.Fatalf("another user refused by the %s cap", why)
+	}
+	s.browserRelays.release("someone-else")
+	for i := 0; i < browserRelayPerUser; i++ {
+		s.browserRelays.release("tester")
+	}
+	if ok, _ := s.browserRelays.acquire("tester"); !ok {
+		t.Fatal("slot not freed after release")
+	}
+	s.browserRelays.release("tester")
 }
 
 // The launcher learns the server's own bridge address on every start and

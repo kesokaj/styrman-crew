@@ -18,7 +18,16 @@ set -euo pipefail
 IMAGE="${1:-styrman-runtime:test}"
 # A stale image is rebuilt before the first check (BUG-026); FATAL on failure.
 bash "$(dirname "${BASH_SOURCE[0]}")/ensure-test-image.sh" "${IMAGE}"
-PORT=18080
+# Overridable, and REFUSED when already bound: on 2026-09-11 a hand-walk's
+# local server sat on 18080, this suite's own server could not bind, and the
+# readiness probe below was answered by the OTHER server — 90 checks ran
+# green against the wrong target (BUG-040). A green run against the wrong
+# server is worse than a red one.
+PORT="${STYRMAN_ITEST_PORT:-18080}"
+if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${PORT}$"; then
+    echo "FATAL: port ${PORT} is already bound — another server would answer this suite's health probe (set STYRMAN_ITEST_PORT to pick another)" >&2
+    exit 1
+fi
 ME="$(id -un)"        # auth-none mode acts as the OS user
 ID=""                 # project UUID, captured after create
 CN=""                 # container name styrman-<uuid>

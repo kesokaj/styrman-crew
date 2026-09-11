@@ -23,6 +23,9 @@ containers disposable always.
   file explorer has Back/Forward/Up navigation (`Alt+←`/`Alt+→` too) and a
   breadcrumb bar, with a collapsible, resizable Recent-files strip above
   it; Settings → Appearance sets terminal and editor font size and family.
+  A **Browser** view shows each project's own headless Chromium, driven by
+  the operator and by the agents alike through the `styrman-browser` MCP
+  server (ADR-068).
 - **Every project is a git repo, always.** Initialized (or cloned) at
   creation, no exceptions. The **Git tab is a real client**: status, stage/
   unstage, commit (author auto-injected), a Fast commit button for a

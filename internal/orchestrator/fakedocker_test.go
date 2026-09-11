@@ -48,10 +48,14 @@ type fakeContainer struct {
 	running         bool
 	binds           []string
 	netName         string
+	// ips: the container's address per network, as ContainerInspect reports
+	// it (BrowserPeer reads the server's own).
+	ips map[string]string
 }
 
 type fakeNetwork struct {
 	name, bridge string
+	gateway      string // IPAM gateway, as NetworkInspect reports it
 }
 
 func newFakeDocker() *fakeDocker {
@@ -112,10 +116,17 @@ func (f *fakeDocker) ContainerInspect(_ context.Context, id string) (container.I
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
+	resp := container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
 		ID: c.id, Image: c.image, State: &container.State{Running: c.running},
 		HostConfig: &container.HostConfig{Binds: append([]string(nil), c.binds...)},
-	}}, nil
+	}}
+	if len(c.ips) > 0 {
+		resp.NetworkSettings = &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{}}
+		for n, ip := range c.ips {
+			resp.NetworkSettings.Networks[n] = &network.EndpointSettings{IPAddress: ip}
+		}
+	}
+	return resp, nil
 }
 
 func (f *fakeDocker) ContainerCreate(_ context.Context, cfg *container.Config, hc *container.HostConfig, nc *network.NetworkingConfig, _ *ocispec.Platform, name string) (container.CreateResponse, error) {
@@ -248,7 +259,11 @@ func (f *fakeDocker) NetworkInspect(_ context.Context, name string, _ network.In
 	if !ok {
 		return network.Inspect{}, notFound("network")
 	}
-	return network.Inspect{Name: n.name, ID: "net-" + n.name, Options: map[string]string{"com.docker.network.bridge.name": n.bridge}}, nil
+	insp := network.Inspect{Name: n.name, ID: "net-" + n.name, Options: map[string]string{"com.docker.network.bridge.name": n.bridge}}
+	if n.gateway != "" {
+		insp.IPAM.Config = []network.IPAMConfig{{Gateway: n.gateway}}
+	}
+	return insp, nil
 }
 
 func (f *fakeDocker) NetworkRemove(_ context.Context, name string) error {

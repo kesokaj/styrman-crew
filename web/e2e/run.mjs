@@ -1228,6 +1228,92 @@ try {
     await page.locator('[data-lan="on"]').first().waitFor({ timeout: 20000 });
   });
 
+  // ── Browser view (ADR-068) — deliberately INSIDE the LAN window. A server
+  // running on the host cannot reach a sandbox project's bridge on a
+  // firewall-hardened host (the same reason the preview checks auto-SKIP),
+  // and the relay to the in-guest Chromium has exactly that shape; the LAN
+  // rebuild just handed us a fresh container with a reachable bridge. The
+  // rebuild also killed the :4321 fixture, so the browser gets its own.
+  const browserFramesOf = async () =>
+    Number(await page.locator("canvas[data-frames]").getAttribute("data-frames"));
+  const waitBrowserFrames = async (min, timeout = 30000) => {
+    const t = Date.now();
+    for (;;) {
+      if ((await page.locator("canvas[data-frames]").count()) && (await browserFramesOf()) >= min) {
+        return browserFramesOf();
+      }
+      if (Date.now() - t > timeout) {
+        const phase = await page.locator("[data-phase]").getAttribute("data-phase");
+        throw new Error(`no screencast frame >= ${min} within ${timeout} ms (pane phase ${phase})`);
+      }
+      await page.waitForTimeout(250);
+    }
+  };
+  // The reload above reconnects the terminal into the REBUILT container:
+  // wait for a shell prompt before typing, or the command lands nowhere
+  // (first e2e run of these checks, 2026-09-11).
+  await page.getByRole("button", { name: "Terminal", exact: true }).click();
+  await page.waitForFunction(
+    () => /[$❯]/.test(document.querySelector(".xterm-rows")?.textContent ?? ""),
+    null,
+    { timeout: 60000 },
+  );
+  await page.locator(".xterm textarea").first().focus();
+  await page.keyboard.type(
+    // No "!" anywhere in this line: the terminal is an INTERACTIVE bash, and
+    // "<!doctype" is a history expansion ("event not found") that silently
+    // killed the fixture on the first two runs (2026-09-11).
+    'mkdir -p /tmp/bx && cd /tmp/bx && printf "<title>Browser fixture</title><h1>hello from the guest</h1>" > index.html && python3 -m http.server 4100 >/dev/null 2>&1 &',
+    { delay: 5 },
+  );
+  await page.keyboard.press("Enter");
+  await mainContains("/tmp/bx");
+
+  await check("Browser pill opens the browser view and a frame arrives", async () => {
+    await page.getByRole("button", { name: "Browser", exact: true }).click();
+    await waitBrowserFrames(1);
+  });
+
+  await check("typing a localhost URL renders the fixture app", async () => {
+    const before = await browserFramesOf();
+    await page.getByLabel("Address").fill("localhost:4100");
+    await page.getByLabel("Address").press("Enter");
+    await page.waitForFunction(
+      () => (document.querySelector('input[aria-label="Address"]')?.value ?? "").includes("localhost:4100"),
+      null,
+      { timeout: 20000 },
+    );
+    // The tab strip carries the page's TITLE, refreshed after the load.
+    await page.getByRole("tab", { name: /Browser fixture/ }).waitFor({ timeout: 20000 });
+    await waitBrowserFrames(before + 1);
+    await shot("browser-fixture");
+  });
+
+  await check("Open in Browser from the Ports panel switches the view and navigates", async () => {
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await panel().getByText("Ports", { exact: true }).click();
+    await page.waitForSelector("aside >> text=:4100", { timeout: 25000 });
+    await panel().getByRole("button", { name: "browser", exact: true }).first().click();
+    await page.waitForFunction(
+      () => document.querySelector('button[aria-label="Browser"]')?.getAttribute("aria-pressed") === "true",
+      null,
+      { timeout: 10000 },
+    );
+    await page.waitForFunction(
+      () => (document.querySelector('input[aria-label="Address"]')?.value ?? "").startsWith("http://localhost:4100/"),
+      null,
+      { timeout: 20000 },
+    );
+  });
+
+  await check("terminal session survived the browser round-trip", async () => {
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.locator(".xterm textarea").first().focus();
+    await page.keyboard.type("echo browser-rt-$((40+2))", { delay: 5 });
+    await page.keyboard.press("Enter");
+    await mainContains("browser-rt-42");
+  });
+
   await check("disabling returns it to sandbox", async () => {
     const res = await page.request.put(`${BASE}/api/projects/${PID}/network`, {
       data: { lanAccess: false },

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -245,13 +246,55 @@ func (s *Server) browserUpstream(ctx context.Context, user, project string) (hos
 // browserRelayReadLimit bounds a frame from the guest: a screencast frame is
 // a base64 JPEG inside JSON — ~100–200 KiB at 1280×800 — and 16 MiB is the
 // same ceiling the terminal bridge uses. The pane's own frames are tiny.
-// browserRelayMax caps concurrent relays server-wide: each one costs a docker
-// exec, two goroutines and up to 17 MiB of frame buffers (security review).
+// browserRelayMax caps concurrent relays server-wide and browserRelayPerUser
+// per user: each relay costs a docker exec, two goroutines and up to 17 MiB
+// of frame buffers, and a global cap alone would let one user's abandoned
+// panes lock every other user out (security review, rounds 2 and 3). Slots
+// free themselves: the pane side is pinged every browserRelayPing and a
+// pane that stops answering is closed.
 const (
 	browserRelayReadLimit = 16 << 20
 	browserPaneReadLimit  = 1 << 20
 	browserRelayMax       = 32
+	browserRelayPerUser   = 8
+	browserRelayPing      = 30 * time.Second
 )
+
+// relayCounter tracks live relays globally and per user.
+type relayCounter struct {
+	mu    sync.Mutex
+	total int
+	byUsr map[string]int
+}
+
+// acquire takes a slot for user, or reports which cap refused it.
+func (c *relayCounter) acquire(user string) (ok bool, why string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byUsr == nil {
+		c.byUsr = map[string]int{}
+	}
+	if c.total >= browserRelayMax {
+		return false, "server-wide"
+	}
+	if c.byUsr[user] >= browserRelayPerUser {
+		return false, "per-user"
+	}
+	c.total++
+	c.byUsr[user]++
+	return true, ""
+}
+
+func (c *relayCounter) release(user string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.total--
+	if c.byUsr[user] <= 1 {
+		delete(c.byUsr, user)
+	} else {
+		c.byUsr[user]--
+	}
+}
 
 // browserHTTPClient talks to the guest's DevTools HTTP server and dials its
 // WebSocket. It follows NO redirect: what answers on the guest's port is the
@@ -296,13 +339,13 @@ func (s *Server) browserSocket(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	if n := s.browserRelays.Add(1); n > browserRelayMax {
-		s.browserRelays.Add(-1)
+	if ok, why := s.browserRelays.acquire(u.Username); !ok {
+		s.logger.Warn("browser: relay cap reached", "user", u.Username, "project", p.ID, "cap", why)
 		w.Header().Set("Retry-After", "5")
 		writeErr(w, http.StatusServiceUnavailable, fmt.Errorf("too many browser connections"))
 		return
 	}
-	defer s.browserRelays.Add(-1)
+	defer s.browserRelays.release(u.Username)
 	host, fresh, err := s.browserUpstream(r.Context(), u.Username, p.ID)
 	if err != nil {
 		s.logger.Warn("browser: upstream lookup failed", "project", p.ID, "error", err)
@@ -382,7 +425,33 @@ func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn) {
 	go func() { paneErr <- pump(upstream, pane) }()
 	upErr := make(chan error, 1)
 	go func() { upErr <- pump(pane, upstream) }()
+	// Heartbeat toward the pane: a tab that went away without a close frame
+	// (laptop lid, network drop) must not hold its slot and its guest exec
+	// forever — r.Context() is no longer cancelled once the socket is
+	// hijacked. Same shape as the terminal bridge's ping loop.
+	pingErr := make(chan error, 1)
+	go func() {
+		t := time.NewTicker(browserRelayPing)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				pctx, pc := context.WithTimeout(ctx, 10*time.Second)
+				err := pane.Ping(pctx)
+				pc()
+				if err != nil {
+					pingErr <- err
+					return
+				}
+			}
+		}
+	}()
 	select {
+	case <-pingErr:
+		upstream.Close(websocket.StatusNormalClosure, "")
+		pane.Close(websocket.StatusGoingAway, "no heartbeat")
 	case <-paneErr:
 		upstream.Close(websocket.StatusNormalClosure, "")
 		pane.Close(websocket.StatusNormalClosure, "")

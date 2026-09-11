@@ -96,6 +96,13 @@ door to the already-running Chromium. A container the user runs inside the
 project's dockerd can reach the guest's bridge IP but is refused by
 `range=` — a DevTools client reads `file://` inside the guest, i.e. the
 brokered credentials, and an image the user merely runs must not gain that.
+Known boundary, accepted: a container the user starts with `--network=host`
+inside the project's dockerd shares the guest's network namespace and can
+reach Chromium's loopback listener on 9229 directly (and from there
+`file://` inside the guest). Host networking is the project user's own
+choice inside their own microVM — the same user could read the home
+directly — so it is documented, not refused; a pipe transport
+(`--remote-debugging-pipe`) would close it and is a follow-up in the plan.
 Nothing guesses a peer: an unknown one fails CLOSED (security review
 2026-09-11, two rounds; verified under Kata: no env → 9222 not listening;
 `STYRMAN_BROWSER_PEER=<gateway>` → forwarder up and the host admitted;

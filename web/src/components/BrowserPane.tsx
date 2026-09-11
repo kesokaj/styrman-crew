@@ -199,30 +199,34 @@ export function BrowserPane({
     };
 
     client.on("Page.screencastFrame", (params, sid) => {
-      const p = params as {
-        data: string;
-        sessionId: number;
-        metadata: { deviceWidth: number; deviceHeight: number };
-      };
-      if (sid) client.send("Page.screencastFrameAck", { sessionId: p.sessionId }, sid).catch(() => {});
+      // Shapes are checked, not cast: a frame the guest's browser sends is
+      // guest-controlled input (security review, round 3).
+      const p = params as { data?: unknown; sessionId?: unknown; metadata?: { deviceWidth?: unknown; deviceHeight?: unknown } } | null;
+      if (!p || typeof p !== "object") return;
+      if (sid && typeof p.sessionId === "number") {
+        client.send("Page.screencastFrameAck", { sessionId: p.sessionId }, sid).catch(() => {});
+      }
       if (!sid || sid !== sessionRef.current) return;
-      const f = {
-        data: p.data,
-        sid,
-        geom: { deviceWidth: p.metadata.deviceWidth, deviceHeight: p.metadata.deviceHeight },
-      };
+      const w = p.metadata?.deviceWidth;
+      const hgt = p.metadata?.deviceHeight;
+      if (typeof p.data !== "string" || typeof w !== "number" || typeof hgt !== "number") return;
+      const f = { data: p.data, sid, geom: { deviceWidth: w, deviceHeight: hgt } };
       if (decoding) pending = f;
       else draw(f);
     });
 
     client.on("Page.javascriptDialogOpening", (params, sid) => {
-      const p = params as { type: string; message: string };
+      const p = params as { type?: unknown; message?: unknown } | null;
       if (sid) client.send("Page.handleJavaScriptDialog", { accept: true, promptText: "" }, sid).catch(() => {});
-      say(`Page ${p.type}: ${p.message}`);
+      // Rendered as text by React, never as HTML; cut so a page cannot turn
+      // the notice line into a wall.
+      const type = typeof p?.type === "string" ? p.type : "dialog";
+      const msg = typeof p?.message === "string" ? p.message.slice(0, 200) : "";
+      say(`Page ${type}: ${msg}`);
     });
 
     const upsert = (t: TargetInfo) => {
-      if (t.type !== "page") return;
+      if (!t || typeof t !== "object" || t.type !== "page" || typeof t.targetId !== "string") return;
       const cur = tabsRef.current;
       const i = cur.findIndex((x) => x.targetId === t.targetId);
       const tab = { targetId: t.targetId, url: t.url, title: t.title };
@@ -356,7 +360,11 @@ export function BrowserPane({
       const url = normalizeUrl(raw);
       const c = clientRef.current;
       const sid = sessionRef.current;
-      if (!url || !c || !sid) return;
+      if (!url) {
+        if (raw.trim() !== "") say("Only http, https and about:blank can be typed here.");
+        return;
+      }
+      if (!c || !sid) return;
       setEditingUrl(false);
       c.send("Page.navigate", { url }, sid).catch((e: Error) => say(e.message));
     },
