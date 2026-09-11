@@ -494,7 +494,7 @@ this feature's.)
 - [x] `guide.md` (§1, §2 "Browser view", §4 "Using the browser" with the shared-profile warning verbatim), `README.md`, `ROADMAP.md` — `documentation` agent 2026-09-11, text read back against the plan (no unmeasured claims); `terminal-protocol.md` was written in Phase 2; who: AI
 - [x] Definition of Done: `verifier` (Phases 1–2 and 1–3 logs, PASS; over the Phase 4 commit right after it), `reviewer` and `security` per phase (three rounds, every finding fixed or rebutted in the change entries; the Phase 4 commit gets its own pass), `changelog` per phase, `bugs` BUG-039/040 — who: AI
 - [ ] Manual agent walk by the operator (above), logged in `testing/` — who: user
-- [ ] Release: `/preflight` as a MINOR (new behaviour for a user) — who: user says ship
+- [x] Release: v1.28.0, MINOR, together with styrman-ctl — the operator said "ship it" 2026-09-11; gate `reviews/2026-09-11-preflight-v1.28.0.md`; who: user + AI
 
 ## Risks
 

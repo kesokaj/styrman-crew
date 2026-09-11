@@ -12,7 +12,20 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**Active plan: `.agents/docs/plans/2026-09-11-browser-view.md`** — Browser view (in-guest Chromium shared by the operator and the agents). Status: Phases 1–3 committed (guest image + MCP registration; server routes and relay; SPA pane). Phase 4 in progress: e2e checks, docs, the operator's manual agent walk, and release. Second active plan: `.agents/docs/plans/2026-09-11-installer-ctl.md` — `deploy/styrman-ctl`, one interactive entry point (install / update / edit / uninstall / status) wrapping the existing deploy scripts; plan written 2026-09-11, cold-reader check pending, no code yet.
+**v1.28.0 — release in progress 2026-09-11** (MINOR): the Browser view
+(ADR-068: one headless Chromium per project microVM, shown in a fourth
+main-pane view and driven by `claude`/`agy` through the `styrman-browser`
+MCP server; plan `.agents/docs/plans/2026-09-11-browser-view.md`, all four
+phases committed) and `deploy/styrman-ctl` (one front door: status /
+install / update / edit / uninstall; plan
+`.agents/docs/plans/2026-09-11-installer-ctl.md`, all four phases committed).
+Gate: `.agents/docs/reviews/2026-09-11-preflight-v1.28.0.md`; the handoff
+that follows records the signed tag and the live check. Two steps stay the
+operator's, not blocking the release: the manual agent walk in the Browser
+view (instructions at the end of
+`.agents/docs/testing/2026-09-11-verify-browser-phase4.md`) and a fresh-host
+`styrman-ctl install` on a Debian 13 VM when one is available (never on the
+production host). Follow-ups listed in both plans; nothing else queued.
 
 **v1.27.1 shipped 2026-09-10** (PATCH) — tag on release commit `4686792`,
 deployed by the auto-updater at 14:38, server healthy at 14:39:03. One fix:
