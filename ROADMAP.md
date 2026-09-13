@@ -2,7 +2,7 @@
 
 <!-- Division of labor: ROADMAP.md = where the project is going; TODO.md = small deferred items; .agents/docs/plans/ = how. -->
 
-Last reviewed: 2026-09-10
+Last reviewed: 2026-09-13
 
 Empty by design past "Now" (operator directive 2026-08-30: "I want nothing
 in todo and roadmap — start fresh with new things"). See `TODO.md` for the
@@ -12,10 +12,11 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**Heading for v1.29.0 (MINOR), not yet cut.** A `/code-review` of the Browser
-view returned 15 findings plus below-the-cut items; all four phases of plan
-`.agents/docs/plans/2026-09-13-browser-review-fixes.md` are committed
-(`c4128f5`) with every code box ticked — the guest launcher (MCP lock
+**v1.29.0 shipped 2026-09-13** (MINOR) — the Browser view review fixes: a
+`/code-review` of the Browser view returned 15 findings plus below-the-cut
+items, resolved across all four phases of plan
+`.agents/docs/plans/2026-09-13-browser-review-fixes.md` (every box ticked)
+plus six review rounds on the fix diff — the guest launcher (MCP lock
 release, pid-file predicate, forwarder up-check, `max-children=16`), the
 server relay (4003 revocation watch, one-exec start path, rune-safe
 close-reason tail, pooled frame copy, 1009 on oversize frames, a single
@@ -23,9 +24,17 @@ sentinel-split ports scan), the SPA (AltGr typing, per-terminal pane
 mounting, hidden-pane screencast pause, serialized attach, pointer capture,
 imperative frame counter, Retry through the REST start), and ops scripts
 (`styrman-ctl` flags before the verb, the integration runner's fail-closed
-`ss` guard). Definition of Done still open: reviewer/security passes over
-the diff, `documentation`/`changelog`/`bugs` records, then `/preflight
-v1.29.0`.
+`ss` guard). Tag `v1.29.0` on release commit `b6bc2bf`, SSH-signed and
+verified against `/etc/styrman/allowed_signers`; deployed by the
+auto-updater at 10:24 ("OK — v1.29.0 is live"), `styrman-ctl status` verdict
+OK, server/caddy/runtime images all at 1.29.0. Gate:
+`.agents/docs/reviews/2026-09-13-preflight-v1.29.0.md`; release entry:
+`.agents/docs/changes/2026-09-13-v1.29.0-release.md`; handoff:
+`.agents/docs/handoffs/2026-09-13-session-end-v1.29.0.md`. Two checks stay
+the operator's, not blocking: the Settings page showing 1.29.0 after a fresh
+sign-in, and opening a project to see it boot on `styrman-runtime:1.29.0`
+(the integration and e2e tiers booted projects on the same tree's image, but
+production's OAuth front door is the operator's session).
 
 **v1.28.0 shipped 2026-09-11** (MINOR) — the Browser view (ADR-068: one
 headless Chromium per project microVM, shown in a fourth main-pane view and
