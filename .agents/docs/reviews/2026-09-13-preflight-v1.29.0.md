@@ -127,3 +127,12 @@ affected; accepted by the reviewer in round 3.
   written (its result is recorded in the release entry, not here).
 - The auto-updater's deploy of the tag (recorded in the release entry and
   the handoff once observed).
+
+## Release commit gate (appended after the release commit)
+
+`deploy/verify-commit.sh b6bc2bf` — exit 0: "OK: commit b6bc2bf18786 builds
+and tests clean in isolation — safe to tag" (go build/vet/test -race, the
+ingress module, gofmt, web/dist freshness, frontend check/lint/unit tests,
+the server image build, the runtime image build seeding 28 skills and 7
+subagents at styrman-harness 6893e22). Log: `.agents/scratch/verify-commit-v1.29.0.log`
+(scratch; the OK line is quoted here). Tag `v1.29.0` signed on b6bc2bf.
