@@ -15,7 +15,12 @@ portal refuses off-domain redirects) and nothing an existing deployment
 must react to. Requested by the operator: "Now a full /audit of there are
 plenty of fixes create a minor and use /preflight then commit and push."
 
-## VERDICT: <pending — the security pass and the final-tree tier run>
+## VERDICT: SHIP
+
+Every tier is green on the release tree, every review round's findings are
+fixed or rebutted in writing (table below), and the one finding that is live
+in production (BUG-054) is closed by a change pinned by unit tests and a
+rebuilt image; its production proof follows the deploy.
 
 ## Findings (FAIL-first)
 
@@ -92,7 +97,8 @@ names none of the changed interfaces. PASS.
   skipped=2` rc=0 (`.agents/scratch/e2e-audit.log`); at e6ce8c4's tree,
   integration `passed=91 failed=0 skipped=3` rc=0
   (`.agents/docs/testing/2026-09-13-integration-v1.30.0.log.md`) and e2e
-  <pending — `.agents/scratch/e2e-release-v1.30.0.log`>. The security-round
+  `passed=92 failed=0 skipped=2` rc=0
+  (`.agents/docs/testing/2026-09-13-e2e-v1.30.0.log.md`). The security-round
   commit that follows e6ce8c4 changes no path the tiers exercise differently
   (a NotFound guard on a recovery branch, a log predicate, one more
   Caddyfile line of the same shape validated earlier, a regex class, the
