@@ -40,6 +40,7 @@ cd -
 
 # Build runtime image (AMD64, local only)
 docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/  # the version keys harness re-seeding
+bash image/bump-pins.sh [--apply]   # refresh the image's pinned Go/Node/claude-code versions + base digests from the publishers (ADR-069)
 
 # Run locally (loopback, no auth) / deploy production
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/
