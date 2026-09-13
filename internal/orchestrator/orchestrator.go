@@ -1475,8 +1475,11 @@ func (o *Orchestrator) RunIdleReaper(ctx context.Context) {
 // Returns true if it recreated (the caller re-runs ensureRunningLocked).
 // Best effort — false on any failure.
 func (o *Orchestrator) recreateMissingNetwork(ctx context.Context, containerID, netName string, lan bool) bool {
-	if _, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{}); err == nil {
-		return false // network exists; the start failure was something else
+	// Only a MISSING network (NotFound) earns a recreate: any other inspect
+	// error (a daemon hiccup) must not turn into a forced container remove
+	// (security review, 2026-09-13) — the start error surfaces as is.
+	if _, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{}); !errdefs.IsNotFound(err) {
+		return false // network exists (or cannot be told); the start failure is something else
 	}
 	o.logger.Warn("project network missing — recreating it and the container", "network", netName, "lan", lan)
 	// Container FIRST: if the network came first and the remove then failed,

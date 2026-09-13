@@ -66,6 +66,8 @@ func TestGenerateCaddyfile_PublicApp(t *testing.T) {
 	assertContains(t, result, "request_header -X-Caddy-Email")
 	assertContains(t, result, "request_header -X-Styrman-Ingress")
 	assertNotContains(t, result, `X-Caddy-Email "{`)
+	// And the portal's session cookie never reaches a public app.
+	assertContains(t, result, `request_header Cookie "(?:^|;\s*)`+AuthCookieName+`=[^;]*" ""`)
 
 	// No auth portal needed (all apps are public)
 	assertNotContains(t, result, "security {")

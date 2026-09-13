@@ -74,3 +74,119 @@ Linux 6.12.107+deb13-amd64 (host, not the Kata guest). Go/Node versions not sepa
 - Integration (`integration.sh`) and e2e (`web/e2e/run.sh`) tiers were explicitly out of scope for this verifier per dispatch; their logs were read but were incomplete at write time (see Background tiers above) — re-check after they finish.
 - Did not independently rebuild or inspect `image/Dockerfile`'s content diff beyond citing the rebuild log; did not run `go version`/`node --version`/`claude --version`/`agy --version` myself inside the image.
 - Did not exercise the `crypto/rand` failure path for `NewUUID`, the credstore chmod-on-preexisting-dir path, the credbroker non-ENOENT log-warn path, or a literal `/link/../` HTTP request against `authGuard` — all four are named above as coverage gaps (FAIL lines), not silently passed.
+
+---
+
+## Extension to e6ce8c4 (2026-09-13)
+
+Range reviewed: v1.29.0..e6ce8c4
+
+### Status: PASS
+
+Scope: extends the batch above to the two commits that followed it —
+25bdae8 (docs, records, two new coverage tests: `TestNewTightensAPreexistingDirMode`
+in internal/credstore, the cleaned-path case in `TestRouting` in internal/httpapi)
+and e6ce8c4 (review-round audit fixes: format.go's exclude line now matched with
+`grep -F` instead of a regex that never matched; orchestrator now removes the
+stale container before recreating its network; a leftover block deleted from
+credentials.go; api.timeout.test.ts gains a spy proving no `AbortSignal.any`
+composite is built). Same command set as the base log, run bare per
+`.agents/rules/verify-bare.md`, against the current working tree at e6ce8c4.
+Integration and e2e tiers not run here by design; see Background tiers below.
+
+### Commands
+
+- `go build ./...` → rc=0
+- `go vet ./...` → rc=0
+- `gofmt -l ./cmd ./internal` → printed nothing, rc=0
+- `go test -race -count=1 ./...` → rc=0, all 15 packages `ok`
+  (cmd/styrman 1.0s, internal/config 5.4s, internal/conversation 1.0s,
+  internal/credbroker 1.1s, internal/credstore 1.0s, internal/files 1.0s,
+  internal/gitrepo 1.0s, internal/history 1.0s, internal/httpapi 1.9s,
+  internal/identity 1.0s, internal/links 1.0s, internal/orchestrator 21.7s,
+  internal/project 1.0s, internal/terminal 1.1s, internal/userstore 1.0s);
+  cmd/wsprobe and web have no test files (expected)
+  - Individually re-run with `-run` + `-race -count=1`, all PASS:
+    - `TestNewTightensAPreexistingDirMode` — internal/credstore → rc=0
+    - `TestRouting` — internal/httpapi (includes the cleaned-path case) → rc=0
+    - `TestFormatScriptPlacesTheTempFileBesideTheEditedFile` — internal/httpapi → rc=0
+    - `TestEnsureRunningRecreatesTheContainerWhenItsNetworkVanished` — internal/orchestrator → rc=0
+- `(cd deploy/caddy/ingress && go test ./...)` → rc=0, `ok` (cached from
+  identical source since e18d62c; no ingress files changed in 25bdae8/e6ce8c4
+  per `git diff --stat`)
+- `(cd web && npm run check)` → `tsc -b`, rc=0
+- `(cd web && npm run lint)` → `oxlint`, rc=0, no findings
+- `(cd web && npm test)` → bare, rc=0; `Test Files 15 passed (15)`,
+  `Tests 177 passed (177)` (same count as the base log — e6ce8c4's
+  api.timeout.test.ts change adds a spy assertion inside an existing test,
+  not a new test case)
+- `bash -n` on the six named scripts:
+  - `deploy/update` is a directory; the real file is
+    `deploy/update/styrman-update` → rc=0
+  - `deploy/host-setup.sh` → rc=0
+  - `deploy/styrman-ctl` → rc=0
+  - `image/configs/styrman-credentials.sh` → rc=0
+  - `image/configs/profile-motd.sh` → rc=0
+- `shellcheck -S warning` on the same five real paths → rc=0 for all, no warnings
+- `node --check web/e2e/run.mjs` → rc=0
+
+### Coverage of changed code (25bdae8, e6ce8c4 only — base commits already mapped above)
+
+- internal/credstore/credstore.go (chmod-on-preexisting-dir branch, flagged
+  as a gap in the base log) — now covered:
+  `TestNewTightensAPreexistingDirMode` (internal/credstore/credstore_test.go),
+  confirmed PASS individually. Closes the base log's credstore FAIL line.
+- internal/httpapi/auth.go (`path.Clean` before `isLinkPath`, flagged as a
+  gap in the base log) — now covered: `TestRouting`'s cleaned-path case
+  (internal/httpapi), confirmed PASS individually. Closes the base log's
+  auth.go FAIL line.
+- internal/httpapi/format.go (exclude line now matched with `grep -F`) —
+  covered by the existing `TestFormatScriptPlacesTheTempFileBesideTheEditedFile`
+  and `TestFormatDirConfinesToTheWorkspace`, both still PASS; no dedicated
+  new test asserts the literal-vs-regex distinction by name, but the existing
+  test exercises the same code path end to end.
+- internal/orchestrator/orchestrator.go (remove-before-create ordering) —
+  covered by `TestEnsureRunningRecreatesTheContainerWhenItsNetworkVanished`,
+  confirmed PASS individually (same test as the base log; e6ce8c4 changes
+  the implementation this test already exercises).
+- internal/httpapi/credentials.go (leftover block deleted) — deletion only;
+  `internal/httpapi/*_test.go` package tests still build and pass (see full
+  `go test` run above); no new test needed for a pure deletion, consistent
+  with `.agents/rules/writing-files.md`'s framing of a deletion diff.
+- web/src/lib/api.timeout.test.ts (spy proving no `AbortSignal.any`
+  composite) — covered: file is part of the 177-passing vitest run; the new
+  assertion lives inside the existing timeout-test file, not a separate count.
+- Docs-only changes in 25bdae8 (ADR-069, ADR-030 amendment, changelog,
+  TODO, testing README, deploy README, guide) — no code coverage applies.
+
+### Background tiers (not run by verifier; cited only)
+
+- `.agents/scratch/integration-audit.log` (e18d62c's tree, pinned image):
+  `passed=91 failed=0 skipped=3`, rc=0.
+- `.agents/scratch/e2e-audit.log` (e18d62c's tree, pinned image):
+  `passed=92 failed=0 skipped=2`.
+- A second run on the final e6ce8c4 tree is in progress at time of writing:
+  `.agents/scratch/integration-release-v1.30.0.log` (confirmed live —
+  `integration.sh` process observed running under pid 1720971 at the time
+  this section was written) and `.agents/scratch/e2e-release-v1.30.0.log`
+  (queued to start after integration finishes, per the background shell's
+  own command line). Neither log carries a final `passed=`/`rc=` line yet —
+  **not cited as PASS here**; re-check both files for their closing lines
+  before treating v1.30.0's release tiers as verified.
+
+### Environment
+
+Linux 6.12.107+deb13-amd64 (host). shellcheck 0.10.0. Same toolchain as the
+base log; not re-queried.
+
+### Not examined
+
+- The live integration/e2e release-tier run on the e6ce8c4 tree
+  (`integration-release-v1.30.0.log`, `e2e-release-v1.30.0.log`) had not
+  finished by the time this extension was written — no final `passed=`/`rc=`
+  lines to cite. Whoever closes the v1.30.0 gate must read those two files'
+  final lines before calling the release tiers green.
+- Did not independently re-verify the base-log's remaining open gaps
+  (credbroker non-ENOENT log-warn path, `NewUUID`/`crypto/rand` failure
+  quarantine path) — unaffected by 25bdae8/e6ce8c4, still open per the base
+  log.

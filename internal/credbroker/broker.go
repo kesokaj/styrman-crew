@@ -92,7 +92,7 @@ func (b *Broker) git(w http.ResponseWriter, r *http.Request) {
 		// falls through rather than erroring the operation. A read FAULT is
 		// still 404 to git (it must not error the operation) but is logged,
 		// so an unreadable store is diagnosable (audit 2026-09-13).
-		if !os.IsNotExist(err) && !errors.Is(err, os.ErrNotExist) {
+		if !errors.Is(err, credstore.ErrNotFound) && !errors.Is(err, os.ErrNotExist) {
 			b.logger.Warn("cred broker: git credential read failed", "user", user, "host", host, "error", err)
 		}
 		http.Error(w, "no credential", http.StatusNotFound)

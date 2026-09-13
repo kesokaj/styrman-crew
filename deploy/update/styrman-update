@@ -125,9 +125,12 @@ verify_tag() {
         log "    git config gpg.format ssh && git config user.signingkey ~/.ssh/id_ed25519.pub"
         return 1
     fi
-    # Owned by the user running this script — root in production (the unit
-    # and the root check), the test user under the __verify-tag hook.
-    if [ -r "${ALLOWED_SIGNERS}" ] && { [ "$(stat -c %u "${ALLOWED_SIGNERS}")" != "$(id -u)" ] ||
+    # Root-owned, literally — the file decides whose tags run as root. Only
+    # the gated __verify-tag test hook, which runs unelevated, may accept its
+    # own user's file instead (security review, 2026-09-13).
+    local want_owner=0
+    [ "${STYRMAN_UPDATE_TEST:-}" = 1 ] && want_owner="$(id -u)"
+    if [ -r "${ALLOWED_SIGNERS}" ] && { [ "$(stat -c %u "${ALLOWED_SIGNERS}")" != "${want_owner}" ] ||
          [ -n "$(find "${ALLOWED_SIGNERS}" -perm /022 2>/dev/null)" ]; }; then
         log "REFUSED: ${ALLOWED_SIGNERS} must be root-owned and not group/world-writable —"
         log "  it decides whose tags this host will build and run as root."
@@ -144,11 +147,13 @@ verify_tag() {
     # "good" signature — the timer's ProtectHome=yes gave that by accident,
     # a hand-run `sudo styrman-update` did not (audit 2026-09-13). The
     # RETURN trap removes the dir on every exit path of this function.
-    local gh
-    gh="$(mktemp -d)" || { log "REFUSED: cannot create a scratch GNUPGHOME"; return 1; }
-    # shellcheck disable=SC2064  # expand now: the trap must name THIS dir
-    trap "rm -rf '${gh}'" RETURN
-    if ! GNUPGHOME="${gh}" git -c gpg.ssh.allowedSignersFile="${ALLOWED_SIGNERS}" verify-tag "${tag}" 2>&1; then
+    # Script-scope (not local) so the RETURN trap reads it when it fires —
+    # never expanded into the trap string, where a quote in TMPDIR would be
+    # evaluated as root (security review, 2026-09-13).
+    VERIFY_GNUPGHOME="$(mktemp -d)" || { log "REFUSED: cannot create a scratch GNUPGHOME"; return 1; }
+    # shellcheck disable=SC2016  # single quotes on purpose: expanded at fire time
+    trap 'rm -rf "${VERIFY_GNUPGHOME}"' RETURN
+    if ! GNUPGHOME="${VERIFY_GNUPGHOME}" git -c gpg.ssh.allowedSignersFile="${ALLOWED_SIGNERS}" verify-tag "${tag}" 2>&1; then
         log "REFUSED: ${tag} is not signed by an allowed signer — will not build and run it as root."
         return 1
     fi

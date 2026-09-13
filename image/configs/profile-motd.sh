@@ -10,7 +10,9 @@ if [ "$(id -u)" != "0" ] && [ -z "${STYRMAN_MOTD_SHOWN:-}" ] && [ -t 1 ]; then
     # did not answer: brokered tokens, gcloud ADC and the ssh key are then
     # missing from THIS shell — say so instead of letting git fail later
     # (BUG-054: this outage was silent for three days).
+    # The marker is guest-written: printable bytes only, bounded, so a planted
+    # file cannot push terminal control sequences at the operator.
     if [ -f "$HOME/.styrman/broker-unreachable" ]; then
-        echo "· credentials: the broker did not answer ($(cat "$HOME/.styrman/broker-unreachable" 2>/dev/null)) — brokered tokens, gcloud ADC and the ssh key are not in this shell; open a new terminal to retry."
+        echo "· credentials: the broker did not answer ($(tr -cd '[:print:]' < "$HOME/.styrman/broker-unreachable" 2>/dev/null | cut -c1-200)) — brokered tokens, gcloud ADC and the ssh key are not in this shell; open a new terminal to retry."
     fi
 fi

@@ -304,3 +304,19 @@ func TestEnsureRunningRecreatesTheContainerWhenItsNetworkVanished(t *testing.T) 
 		t.Fatalf("starts = %d, want the failed one and the fresh container's", starts)
 	}
 }
+
+// A network inspect that FAILS (a daemon hiccup, not NotFound) must not be
+// read as "network missing": the container is left alone and the start error
+// surfaces (security review of the audit fixes, 2026-09-13).
+func TestEnsureRunningLeavesTheContainerWhenTheNetworkCannotBeInspectedAfterAFailedStart(t *testing.T) {
+	o, fd, cfg := seamOrch(t)
+	plant(fd, cfg, false, false)
+	fd.fail["ContainerStart"] = errors.New("start failed")
+	fd.fail["NetworkInspect"] = errors.New("daemon hiccup")
+	if _, err := o.EnsureRunning(context.Background(), tUser, tProj, opts(false)); err == nil {
+		t.Fatal("EnsureRunning succeeded past a failed start")
+	}
+	if fd.callsTo("ContainerRemove") != 0 || fd.callsTo("NetworkCreate") != 0 {
+		t.Fatalf("a non-NotFound inspect error removed or recreated: %v", fd.calls)
+	}
+}

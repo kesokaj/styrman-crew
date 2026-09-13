@@ -31,6 +31,11 @@ describe("reveal", () => {
       expect(reveal(`x${c}y`)).not.toBe(`x${c}y`);
   });
 
+  it("reveals the zero-width family and the soft hyphen (audit 2026-09-13)", () => {
+    for (const c of ["\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u00ad"])
+      expect(reveal(`ab${c}cd`)).toMatch(/^ab<U\+[0-9A-F]{4}>cd$/);
+  });
+
   it("reveals invisible directional marks", () => {
     expect(reveal("a\u200eb")).toBe("a<U+200E>b");
     expect(reveal("a\u200fb")).toBe("a<U+200F>b");

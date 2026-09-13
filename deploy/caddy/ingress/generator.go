@@ -422,6 +422,10 @@ func writeAppBlock(b *strings.Builder, app App, cfg GeneratorConfig) {
 		for _, h := range []string{HeaderEmail, HeaderUser, HeaderRole, HeaderSubject, HeaderIngress} {
 			fmt.Fprintf(b, "    request_header -%s\n", h)
 		}
+		// A public app is someone's container on the base domain, where the
+		// portal's session cookie is sent too: cut that one cookie out before
+		// proxying, as the preview block does (security review, 2026-09-13).
+		fmt.Fprintf(b, "    request_header Cookie \"(?:^|;\\s*)%s=[^;]*\" \"\"\n", AuthCookieName)
 		fmt.Fprintf(b, "    request_header %s \"%s\"\n", HeaderRole, RolePublic)
 		fmt.Fprintf(b, "    reverse_proxy %s:%d\n", app.ContainerIP, app.Port)
 	} else {
