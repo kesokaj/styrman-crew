@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -480,8 +481,22 @@ func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn, stillA
 	upErr := make(chan error, 1)
 	go func() { upErr <- pump(pane, upstream) }()
 	revoked := make(chan struct{}, 1)
+	var revokedFlag atomic.Bool
 	if stillAuthorized != nil {
-		go terminal.RevocationWatch(ctx, reauthEvery, stillAuthorized, func() { revoked <- struct{}{} })
+		go terminal.RevocationWatch(ctx, reauthEvery, stillAuthorized, func() {
+			revokedFlag.Store(true)
+			revoked <- struct{}{}
+		})
+	}
+	// A revocation that lands in the same instant as another arm (the select
+	// picks a ready case at random) still reaches the pane as 4003, the one
+	// code it must not mistake for a reconnectable drop (security review,
+	// 2026-09-13).
+	closePane := func(code websocket.StatusCode, reason string) {
+		if revokedFlag.Load() {
+			code, reason = websocket.StatusCode(config.CloseAccessRevoked), "access revoked"
+		}
+		pane.Close(code, reason)
 	}
 	// Heartbeat toward BOTH sides: a tab that went away without a close
 	// frame (laptop lid, network drop) or a guest whose TCP half-died must
@@ -514,26 +529,26 @@ func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn, stillA
 	select {
 	case <-revoked:
 		upstream.Close(websocket.StatusNormalClosure, "")
-		pane.Close(websocket.StatusCode(config.CloseAccessRevoked), "access revoked")
+		closePane(websocket.StatusCode(config.CloseAccessRevoked), "access revoked")
 	case <-pingErr:
 		upstream.Close(websocket.StatusNormalClosure, "")
-		pane.Close(websocket.StatusGoingAway, "no heartbeat")
+		closePane(websocket.StatusGoingAway, "no heartbeat")
 	case <-paneErr:
 		upstream.Close(websocket.StatusNormalClosure, "")
-		pane.Close(websocket.StatusNormalClosure, "")
+		closePane(websocket.StatusNormalClosure, "")
 	case err := <-upErr:
 		// A limit breach is reported as a wrapped ErrMessageTooBig, not as a
 		// close status (the library closes the UPSTREAM 1009 itself); the
 		// old CloseStatus comparison could never match.
 		if errors.Is(err, websocket.ErrMessageTooBig) {
-			pane.Close(websocket.StatusMessageTooBig, "frame too large")
+			closePane(websocket.StatusMessageTooBig, "frame too large")
 		} else {
-			pane.Close(websocket.StatusInternalError, "browser disconnected")
+			closePane(websocket.StatusInternalError, "browser disconnected")
 		}
 		upstream.Close(websocket.StatusNormalClosure, "")
 	case <-ctx.Done():
 		upstream.Close(websocket.StatusNormalClosure, "")
-		pane.Close(websocket.StatusNormalClosure, "")
+		closePane(websocket.StatusNormalClosure, "")
 	}
 }
 

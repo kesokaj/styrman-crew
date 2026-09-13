@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -112,14 +113,16 @@ func TestLauncherKillGroupFile(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the launcher's functions run in the Linux guest")
 	}
-	if _, err := exec.LookPath("setsid"); err != nil {
-		t.Skip("no setsid on this host")
-	}
 	home := t.TempDir()
 	pidfile := filepath.Join(home, "pid")
+	// startLeader starts a session leader that exec's sleep and returns ITS
+	// pid from the process handle — never from the pid file, which is the
+	// input under test (security review, round 2). The file is still
+	// written by the leader for kill_group_file to read.
 	startLeader := func() string {
 		t.Helper()
-		leader := exec.Command("setsid", "bash", "-c", `echo $$ > "$1"; exec sleep 300`, "_", pidfile)
+		leader := exec.Command("bash", "-c", `echo $$ > "$1"; exec sleep 300`, "_", pidfile)
+		leader.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 		if err := leader.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -127,15 +130,14 @@ func TestLauncherKillGroupFile(t *testing.T) {
 		// lists and /proc still shows (the guest's launcher double-forks
 		// with `setsid -f`, so init reaps there).
 		go func() { _ = leader.Wait() }()
-		var pid string
-		for i := 0; i < 50 && pid == ""; i++ {
-			b, _ := os.ReadFile(pidfile)
-			pid = strings.TrimSpace(string(b))
+		pid := strconv.Itoa(leader.Process.Pid)
+		for i := 0; i < 50; i++ {
+			if b, err := os.ReadFile(pidfile); err == nil && strings.TrimSpace(string(b)) == pid {
+				return pid
+			}
 			time.Sleep(20 * time.Millisecond)
 		}
-		if pid == "" {
-			t.Fatal("leader never wrote its pid")
-		}
+		t.Fatalf("leader %s never wrote its pid file", pid)
 		return pid
 	}
 	// A recycled pid: a live process with another name (here a sleep we
