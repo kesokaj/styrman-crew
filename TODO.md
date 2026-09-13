@@ -337,28 +337,4 @@ Add new items below as they arise.
   convention the new `provisionError` badge was copied from. The new badge got e2e coverage in this
   release; the older one did not. (verifier 2026-09-02) **DONE 2026-09-10** — `projectBadge` + vitest (Phase 2; demoted from e2e, the error is in-memory only).
 
-- [ ] A Stop control in the pane to terminate the browser and drop the relay. Deferred: `do_stop` signals the Chromium process GROUP (all renderer/zygote/GPU children), affecting every pane in the project (all terminals share one browser). A Stop button on one pane kills the shared browser and severs all other panes' relays — a destructive user-facing verb needing (1) scope confirmation, (2) explicit confirmation dialog naming the agents, (3) distinct close code (intentional stop vs disconnection), (4) no Reconnect on client. This is a feature, not a review fix; the REST operator verb `POST /browser/stop` remains. Scope decision and confirmation UI deferred (added 2026-09-13).
-
-- [ ] A `liveUnknown` flag on the terminals listing when the liveness scan fails (added 2026-09-13).
-
-- [ ] Cap on consecutive harness re-seed attempts to prevent runaway loops (added 2026-09-13).
-
-- [ ] Split `internal/httpapi/explorer.go` (grab-bag: explorer + settings + admin + credential import + notifications) into separate handlers (audit low; reason: cosmetic, no blocking change; added 2026-09-13).
-
-- [ ] `internal/credstore/credstore.go:459` `safe()` not injective (hosts collide onto one file) — needs a store migration to re-key by-host (audit low; reason: requires credstore format change; added 2026-09-13).
-
-- [ ] WebSocket session validity re-check on open connections — needs the ingress to expose JWT expiry time so `internal/terminal/bridge.go` can close sessions on logout without a 60 s timer (audit low; reason: ingress dependency; added 2026-09-13).
-
-- [ ] `REQUIREMENTS.md` approved-deps list missing `golang.org/x/sys/unix` (audit low; reason: operator approval required; added 2026-09-13).
-
-- [ ] `deploy/host-setup.sh` low-priority items: Docker installation method (from distro vs pinned upstream), Kata checksum verification, `.env` file permissions (audit low; reason: cosmetic improvements, no blocking change; added 2026-09-13).
-
-- [ ] `deploy/firewall/styrman-firewall.sh` line 69 (audit low — see report; added 2026-09-13).
-
-- [ ] `image/entrypoint.sh` line 165 (audit low — see report; added 2026-09-13).
-
-- [ ] `web/package.json` `js-yaml@4.3.1` high in `npm audit` (dev/build-time) — bump when upstream ships fix (audit low; reason: upstream dependency; added 2026-09-13).
-
-- [ ] `web/src/components/FileExplorer.tsx` ad-hoc polling beside `usePolled` — migrate to `usePolled` (audit low; reason: behavioural change, needs own review; added 2026-09-13).
-
-- [ ] `internal/httpapi/server.go` provisioning-map key shape consistency and orchestrator mismatch helper duplication — one helper (audit low; reason: cosmetic; added 2026-09-13).
+Empty — the 2026-09-13 audit lows and v1.29.0 follow-ups were struck or fixed, reasons in ADR-070.
