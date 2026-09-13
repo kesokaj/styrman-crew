@@ -12,6 +12,21 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
+**Heading for v1.29.0 (MINOR), not yet cut.** A `/code-review` of the Browser
+view returned 15 findings plus below-the-cut items; all four phases of plan
+`.agents/docs/plans/2026-09-13-browser-review-fixes.md` are committed
+(`c4128f5`) with every code box ticked — the guest launcher (MCP lock
+release, pid-file predicate, forwarder up-check, `max-children=16`), the
+server relay (4003 revocation watch, one-exec start path, rune-safe
+close-reason tail, pooled frame copy, 1009 on oversize frames, a single
+sentinel-split ports scan), the SPA (AltGr typing, per-terminal pane
+mounting, hidden-pane screencast pause, serialized attach, pointer capture,
+imperative frame counter, Retry through the REST start), and ops scripts
+(`styrman-ctl` flags before the verb, the integration runner's fail-closed
+`ss` guard). Definition of Done still open: reviewer/security passes over
+the diff, `documentation`/`changelog`/`bugs` records, then `/preflight
+v1.29.0`.
+
 **v1.28.0 shipped 2026-09-11** (MINOR) — the Browser view (ADR-068: one
 headless Chromium per project microVM, shown in a fourth main-pane view and
 driven by `claude`/`agy` through the `styrman-browser` MCP server; plan

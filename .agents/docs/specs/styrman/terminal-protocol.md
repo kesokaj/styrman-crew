@@ -120,7 +120,9 @@ behavior — their panes idle at a shell, so reattaching is always safe.
 | 4001 | replaced | A newer WebSocket attached to this conversation (another tab). NEVER auto-reconnect — doing so death-spirals: each reconnect replaces the other tab, which reconnects, forever. |
 | 4002 | project stopped | The project VM was deliberately stopped (Stop button / idle reaper) and this connect carried no boot intent. NEVER auto-reconnect — a reconnect with `?boot=1` would boot the VM back up. The UI shows **Project stopped** with a **Start** action; that click (epoch bump → first connect → `?boot=1`) is the explicit intent that boots it (v1.11.0). |
 | 1000/1001/1006 | normal/going away/abnormal | Transient. Silently reconnect; tmux reattaches with scrollback and running processes intact. |
-| 4004 | browser unavailable | **Browser relay only** (`/ws/browser/{project}`, below): the project's Chromium could not be started or its DevTools endpoint could not be reached; the close reason carries the launcher's message (its log tail, cut to the 123-byte frame budget on a rune boundary). Do NOT auto-reconnect — a blind retry re-runs a launch that just failed; the pane shows the reason and a **Retry** button. |
+| 4004 | browser unavailable | **Browser relay only** (`/ws/browser/{project}`, below): the project's Chromium could not be started or its DevTools endpoint could not be reached; the close reason carries the END of the launcher's log tail (cut to the 120-byte frame budget on a rune boundary, prefixed `"…"` — the "browser did not start: " head is dropped since the pane's own heading already says so). Do NOT auto-reconnect — a blind retry re-runs a launch that just failed; the pane shows the reason and a **Retry** button, which calls `POST /api/projects/{id}/browser/start` FIRST (its 502 body is the launcher's full 2 KiB log tail, shown in full) before reconnecting the relay — three guest execs total, intended: Retry only runs after an explicit click on a failed launch. |
+| 4003 | access revoked | **Browser relay only**: the same allowlist re-check the bridge already runs, on the same 60 s interval, applied to the relay too — the caller was removed from the allowlist while the pane was open. Do NOT auto-reconnect; Reconnect fails the handshake (403) as today. |
+| 1009 | frame too large | **Browser relay only**: a guest CDP frame (screencast or otherwise) over the 16 MiB read limit. The pane treats it exactly like a disconnect — phase `disconnected` with a **Reconnect** action. |
 
 **Boot intent (`?boot=1`, v1.11.0):** the FIRST connect of a freshly opened
 or explicitly resumed pane carries `?boot=1` — a user action that may boot a
@@ -151,20 +153,33 @@ attached to the project bridge — the netns was reconfigured and this very
 connection may be doomed; the pane reconnects after 1 s). Then, accepted
 and closed at once: **4002** when the project is not running (no guest IP,
 or the launcher's Status says so); **4004** when `styrman-browser start`
-fails (reason = the launcher's tail) or the DevTools endpoint cannot be
-discovered or dialed. Then the pump: the pane closing closes the guest side
-1000; the guest side dropping (Chromium crashed, project stopped) closes
-the pane **1011 "browser disconnected"**; a guest frame over 16 MiB closes
-the pane 1009. Read limits: 16 MiB from the guest (a screencast frame is a
-base64 JPEG inside JSON, ~100–200 KiB at 1280×800), 1 MiB from the pane.
+fails (reason = the END of the launcher's tail, cut on a rune boundary and
+prefixed "…") or the DevTools endpoint cannot be discovered or dialed —
+including when the server cannot learn its own bridge address to hand the
+launcher as the forwarder's peer (`socat range=<peer>/32`): "no usable peer
+address for :9222 (`STYRMAN_BROWSER_PEER` is set but not an IPv4 address)",
+the same failure `POST .../browser/start` reports as 502 — fail closed
+rather than starting a browser the pane can never reach. Once accepted, a
+revocation watch (the same allowlist check the bridge already runs, every
+60 s) closes the pane **4003 "access revoked"**. Then the pump: the pane
+closing closes the guest side 1000; the guest side dropping (Chromium
+crashed, project stopped) closes the pane **1011 "browser disconnected"**;
+a guest frame over 16 MiB closes the pane **1009 "frame too large"** (the
+pane treats it as a disconnect, Reconnect only — no partial frame is ever
+delivered, since the relay copies one WebSocket message at a time and
+abandons the pump on any read error). Read limits: 16 MiB from the guest (a
+screencast frame is a base64 JPEG inside JSON, ~100–200 KiB at 1280×800),
+1 MiB from the pane.
 The upstream dial sends NO Origin header, which is what Chromium's DevTools
 server admits — it refuses every Origin it sees, so a page inside the
 browser can never open this socket (the launcher sets no
 `--remote-allow-origins`).
 
 Each pane connection gets its own upstream socket (Chromium multiplexes
-clients); there is no 4001 replace semantics and no re-auth watch beyond
-the handshake — terminal revocation is terminal-only by design.
+clients); there is no 4001 replace semantics, but the relay DOES carry a
+revocation watch (4003, above) — the same allowlist check the terminal
+bridge already runs, on the same 60 s interval, so a removed user's open
+Browser pane closes within the same window as their open terminals.
 
 ## Session semantics
 

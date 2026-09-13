@@ -338,6 +338,11 @@ func TestCloseReasonFitsAndKeepsRunes(t *testing.T) {
 	if short := closeReason("No usable sandbox!"); short != "No usable sandbox!" {
 		t.Fatalf("short reason changed: %q", short)
 	}
+	// Guest bytes that are not UTF-8 are dropped, never forwarded: the
+	// browser would turn an invalid reason into a bare 1006.
+	if got := closeReason("bad \xff byte"); got != "bad  byte" || !utf8.ValidString(got) {
+		t.Fatalf("invalid utf-8 kept: %q", got)
+	}
 	if tail("abc", 5) != "abc" || tail(strings.Repeat("x", 10)+"END", 3) != "…END" {
 		t.Fatal("tail keeps the wrong end")
 	}

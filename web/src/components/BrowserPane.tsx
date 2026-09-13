@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, ApiError, browserSocketUrl } from "../lib/api";
+import { api, ApiError, browserSocketUrl, CLOSE_REVOKED } from "../lib/api";
 import {
   isChord,
   keyParams,
@@ -25,8 +25,9 @@ import { ChevronLeftIcon, ChevronRightIcon, PlusIcon, RefreshIcon, XIcon } from 
  * Close codes (terminal-protocol.md): 4002 = project stopped (no auto-
  * reconnect; the terminal boots it), 4004 = the browser could not start (the
  * reason is the launcher's log tail; Retry re-runs the launch through the
- * REST start, whose reply carries the FULL tail), 4003 = access revoked,
- * 1009 = a frame over the relay's limit, anything else = disconnected
+ * REST start, whose reply carries the FULL tail), 4003 = access revoked
+ * (no Reconnect: the handshake would be refused, as TerminalPane's revoked
+ * state), anything else — 1009 "frame too large" included — = disconnected
  * (Reconnect). A FAILED HANDSHAKE (the server answered 503 while attaching
  * to the project bridge) is retried once after a second, as the API contract
  * says.
@@ -37,7 +38,7 @@ import { ChevronLeftIcon, ChevronRightIcon, PlusIcon, RefreshIcon, XIcon } from 
  * browser the agents share would shrink THEIR page (review, 2026-09-13).
  */
 
-type Phase = "connecting" | "ready" | "stopped" | "unavailable" | "disconnected";
+type Phase = "connecting" | "ready" | "stopped" | "unavailable" | "disconnected" | "revoked";
 
 type Tab = { targetId: string; url: string; title: string };
 
@@ -212,6 +213,15 @@ export function BrowserPane({
             activeRef.current = null;
             setActive(null);
           }
+          // A session created before the failure (Page.enable or the
+          // metrics threw) is half-attached: drop it, or the toolbar would
+          // keep sending to a session whose Page domain never came up.
+          const half = sessionRef.current;
+          if (half) {
+            sessionRef.current = null;
+            screencastRef.current = null;
+            c.send("Target.detachFromTarget", { sessionId: half }).catch(() => {});
+          }
           throw e;
         }
       };
@@ -369,6 +379,8 @@ export function BrowserPane({
       screencastRef.current = null;
       if (code === 4002) {
         setPhase("stopped");
+      } else if (code === CLOSE_REVOKED) {
+        setPhase("revoked");
       } else if (code === 4004) {
         setReason(closeReason || "the browser could not be started");
         setPhase("unavailable");
@@ -773,6 +785,9 @@ export function BrowserPane({
                   Reconnect
                 </Button>
               </>
+            )}
+            {phase === "revoked" && (
+              <p className="text-danger">Access revoked. Sign in again if this is unexpected.</p>
             )}
           </div>
         )}

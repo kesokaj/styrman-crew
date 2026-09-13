@@ -70,10 +70,18 @@ server — and stopped with the project. Verbs: `start` (idempotent, `flock`ed
 so the SPA relay and an MCP start cannot race, `-w 20` so a stuck lock is a
 failure not a hang; exit 0 once `/json/version` answers within 15 s, else 1
 with the log tail — and a failed launch takes its own process group down),
-`stop` (signals the process GROUP, so children outlive no crashed leader),
-`status` (`{"running":true,"version":"Chrome/…"}` or `{"running":false}`),
-`mcp` (quiet `start`, then `exec chrome-devtools-mcp --browserUrl
-http://127.0.0.1:9222` on stdio).
+`stop` (signals the process GROUP, so children outlive no crashed leader —
+each group kill is gated by `kill_group_file`'s predicate: signal only when
+the group has members AND the leader's `/proc/<pid>/comm` matches the
+expected prefix — `chrom*` for the browser, `socat` for the forwarder — OR
+the leader is already gone; a stale pid file naming a recycled, unrelated
+process is dropped without a signal, never killed), `status`
+(`{"running":true,"version":"Chrome/…"}` or `{"running":false}`), `mcp`
+(quiet `start`, then `exec chrome-devtools-mcp --browserUrl
+http://127.0.0.1:9222 9>&-` on stdio — the `9>&-` closes the `start` lock's
+fd before the exec, so the long-lived MCP server never holds it and a
+later pane `start` is never blocked behind an MCP session; the `mcp` verb
+no longer inherits the start lock at all).
 
 Ports: Chromium's own DevTools listener binds LOOPBACK ONLY on 9229 —
 new-headless Chromium ignores `--remote-debugging-address` (verified
@@ -81,21 +89,34 @@ new-headless Chromium ignores `--remote-debugging-address` (verified
 is what in-guest clients use (`mcp` → `--browserUrl http://127.0.0.1:9229`).
 For the styrman server, which reaches the guest over the project bridge, a
 `socat` forwarder in its own process group (`socat.pid`) publishes it as
-`0.0.0.0:9222` with `range=<peer>/32,max-children=4`: the ONE admitted
-source is the server's own address on this bridge, which the server passes
-as `STYRMAN_BROWSER_PEER` on every `start` it runs (a containerized server
-reads its live address on that network from its own container; a host-run
-dev server is the bridge gateway, from the network's IPAM config —
-`Orchestrator.BrowserPeer`), falling back to the host of
+`0.0.0.0:9222` with `range=<peer>/32,max-children=16` (≥ 2× the server's
+`browserRelayPerUser` cap, so the discovery GET and every concurrent pane
+relay fit; the discovery request also sends `Connection: close` on the
+dial, so it is never pooled and cannot itself park a socat child): the ONE
+admitted source is the server's own address on this bridge, which the
+server passes as `STYRMAN_BROWSER_PEER` on every `start` it runs (a
+containerized server reads its live address on that network from its own
+container; a host-run dev server is the bridge gateway, from the network's
+IPAM config — `Orchestrator.BrowserPeer`), falling back to the host of
 `STYRMAN_CRED_BROKER` (the same address in a containerized deploy). Only an
-IPv4 literal is accepted, since the value lands inside socat's option list.
-With NO peer — a browser the agent's MCP server started, which has neither
-variable — no forwarder runs and the browser stays loopback-only; the pane's
-first `start` then arrives with the peer and `ensure_forwarder` adds the
-door to the already-running Chromium. A container the user runs inside the
-project's dockerd can reach the guest's bridge IP but is refused by
-`range=` — a DevTools client reads `file://` inside the guest, i.e. the
-brokered credentials, and an image the user merely runs must not gain that.
+IPv4 literal is accepted, since the value lands inside socat's option list;
+a peer that is SET but not an IPv4 literal makes `start` fail closed with
+its own message ("no usable peer address for :9222…") instead of silently
+running loopback-only — the same failure the server's REST `start` and the
+relay both report (502 / 4004) when their own bridge address is unknown.
+With NO peer at all — a browser the agent's MCP server started, which sets
+neither variable — no forwarder runs and the browser stays loopback-only;
+the pane's first `start` then arrives with the peer and `ensure_forwarder`
+adds the door to the already-running Chromium. `forwarder_up` (the check
+`ensure_forwarder` runs before deciding to spawn) trusts only a `socat.pid`
+naming a LIVE process whose comm is `socat` AND a live listener on `:9222`
+— not "something answers `:9222`" — so a stranger already bound to the
+port fails `start` with its own message instead of a silent bind attempt,
+and the peer range is written to `socat.pid`'s state only after the
+listener is confirmed up. A container the user runs inside the project's
+dockerd can reach the guest's bridge IP but is refused by `range=` — a
+DevTools client reads `file://` inside the guest, i.e. the brokered
+credentials, and an image the user merely runs must not gain that.
 Known boundary, accepted: a container the user starts with `--network=host`
 inside the project's dockerd shares the guest's network namespace and can
 reach Chromium's loopback listener on 9229 directly (and from there

@@ -35,7 +35,10 @@ Cloudflare DNS — `caddy/`) in front of the containerized server
 Global flags: `--dry-run` prints every command a verb would run, as `+ cmd`,
 and runs nothing; `--yes` takes defaults and skips non-destructive
 confirmations; `--confirm WORD` satisfies a destructive confirmation
-unattended.
+unattended. Any of the three may come BEFORE the verb as well as after
+(`styrman-ctl --dry-run status` ≡ `styrman-ctl status --dry-run`, 2026-09-13)
+— flags are collected from the whole argv; the first non-flag token is
+still the verb.
 
 ### Uninstall levels
 

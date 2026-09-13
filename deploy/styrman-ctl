@@ -539,7 +539,10 @@ setup_auto_update() {
     else
         CTL_TMPD="$(mktemp -d)"; chmod 700 "${CTL_TMPD}"; tmpd="${CTL_TMPD}"
         # EXIT alone misses an interrupted multi-minute clone (review finding).
-        trap '[ -n "${CTL_TMPD}" ] && rm -rf "${CTL_TMPD}"' EXIT INT TERM HUP
+        trap '[ -n "${CTL_TMPD}" ] && rm -rf "${CTL_TMPD}"' EXIT
+        # A signal must END the run, not resume the function over a removed
+        # temp dir (review, 2026-09-13).
+        trap '[ -n "${CTL_TMPD}" ] && rm -rf "${CTL_TMPD}"; exit 130' INT TERM HUP
         # Secrets travel through root-only temp files, never argv or the plan.
         (umask 077; printf '%s' "${token}" > "${tmpd}/gh-token"; printf '%s\n' "${signers}" > "${tmpd}/allowed_signers")
     fi
@@ -937,7 +940,7 @@ main() {
         case "$1" in
             --dry-run) DRY=1; shift ;;
             --yes) YES=1; shift ;;
-            --confirm) CONFIRM_GIVEN="${2:-}"; shift 2 ;;
+            --confirm) [ $# -ge 2 ] || die "--confirm needs a value"; CONFIRM_GIVEN="$2"; shift 2 ;;
             *) rest+=("$1"); shift ;;
         esac
     done

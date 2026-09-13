@@ -498,12 +498,12 @@ func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn, stillA
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				pctx, pc := context.WithTimeout(ctx, browserRelayPing/2)
-				err := pane.Ping(pctx)
+				// A fresh deadline per side: a slow-but-alive pane must not
+				// spend the budget the guest's pong then fails.
+				err := pingWithin(ctx, pane, browserRelayPing/2)
 				if err == nil {
-					err = upstream.Ping(pctx)
+					err = pingWithin(ctx, upstream, browserRelayPing/2)
 				}
-				pc()
 				if err != nil {
 					pingErr <- err
 					return
@@ -535,6 +535,12 @@ func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn, stillA
 		upstream.Close(websocket.StatusNormalClosure, "")
 		pane.Close(websocket.StatusNormalClosure, "")
 	}
+}
+
+func pingWithin(ctx context.Context, c *websocket.Conn, d time.Duration) error {
+	pctx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	return c.Ping(pctx)
 }
 
 // browserEndpoint asks the guest's DevTools HTTP server for its
@@ -583,6 +589,9 @@ func browserEndpoint(ctx context.Context, host string) (string, error) {
 // UTF-8 and the browser would drop the reason.
 func closeReason(msg string) string {
 	const max = 120
+	// The launcher's log is guest-controlled bytes; a close frame's reason
+	// must be valid UTF-8 or the browser reports 1006 instead of 4004.
+	msg = strings.ToValidUTF8(msg, "")
 	if len(msg) <= max {
 		return msg
 	}

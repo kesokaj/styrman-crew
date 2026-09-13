@@ -117,10 +117,32 @@ func TestLauncherKillGroupFile(t *testing.T) {
 	}
 	home := t.TempDir()
 	pidfile := filepath.Join(home, "pid")
-	// A recycled pid: pid 1 is never chromium.
-	if err := os.WriteFile(pidfile, []byte("1\n"), 0o600); err != nil {
-		t.Fatal(err)
+	startLeader := func() string {
+		t.Helper()
+		leader := exec.Command("setsid", "bash", "-c", `echo $$ > "$1"; exec sleep 300`, "_", pidfile)
+		if err := leader.Start(); err != nil {
+			t.Fatal(err)
+		}
+		// Reap it: a child nobody waits for stays a zombie that pgrep still
+		// lists and /proc still shows (the guest's launcher double-forks
+		// with `setsid -f`, so init reaps there).
+		go func() { _ = leader.Wait() }()
+		var pid string
+		for i := 0; i < 50 && pid == ""; i++ {
+			b, _ := os.ReadFile(pidfile)
+			pid = strings.TrimSpace(string(b))
+			time.Sleep(20 * time.Millisecond)
+		}
+		if pid == "" {
+			t.Fatal("leader never wrote its pid")
+		}
+		return pid
 	}
+	// A recycled pid: a live process with another name (here a sleep we
+	// own, never pid 1 — a regressed check must not be able to signal the
+	// machine) is dropped and left alone.
+	stranger := startLeader()
+	t.Cleanup(func() { _ = exec.Command("kill", "-9", "--", "-"+stranger).Run() })
 	out, err := launcherFunctions(t, home, `kill_group_file "$HOME/pid" chrom`)
 	if err != nil || !strings.Contains(out, "stale, not signalled") {
 		t.Fatalf("recycled pid: out %q err %v", out, err)
@@ -128,8 +150,12 @@ func TestLauncherKillGroupFile(t *testing.T) {
 	if _, err := os.Stat(pidfile); !os.IsNotExist(err) {
 		t.Fatal("stale pid file kept")
 	}
-	// A pid that does not exist (and a corrupt file) are dropped quietly.
-	for _, content := range []string{"4000000000\n", "not-a-pid\n"} {
+	if _, err := os.Stat("/proc/" + stranger); err != nil {
+		t.Fatalf("the stranger (pid %s) was signalled", stranger)
+	}
+	// Pids below 2 (0 = the caller's own group to pgrep/kill), a pid that
+	// does not exist, and a corrupt file are dropped quietly.
+	for _, content := range []string{"0\n", "1\n", "4000000000\n", "not-a-pid\n"} {
 		if err := os.WriteFile(pidfile, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -138,23 +164,7 @@ func TestLauncherKillGroupFile(t *testing.T) {
 		}
 	}
 	// A group we started (a session leader that exec'd sleep) is taken down.
-	// Reap it: a child nobody waits for stays a zombie that pgrep still
-	// lists and /proc still shows (the guest's launcher double-forks with
-	// `setsid -f`, so init reaps there).
-	leader := exec.Command("setsid", "bash", "-c", `echo $$ > "$1"; exec sleep 300`, "_", pidfile)
-	if err := leader.Start(); err != nil {
-		t.Fatal(err)
-	}
-	go func() { _ = leader.Wait() }()
-	var pid string
-	for i := 0; i < 50 && pid == ""; i++ {
-		b, _ := os.ReadFile(pidfile)
-		pid = strings.TrimSpace(string(b))
-		time.Sleep(20 * time.Millisecond)
-	}
-	if pid == "" {
-		t.Fatal("leader never wrote its pid")
-	}
+	pid := startLeader()
 	if out, err := launcherFunctions(t, home, `kill_group_file "$HOME/pid" sleep`); err != nil {
 		t.Fatalf("kill: out %q err %v", out, err)
 	}

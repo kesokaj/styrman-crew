@@ -409,8 +409,21 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   project user runs, not a server the styrman server depends on: the server
   still only reaches the guest through `docker exec` (start/stop/status) and
   the project bridge (the CDP relay), exactly as the port-preview proxy
-  reaches a dev server. Full detail: runtime-image.md's "Browser" section,
-  api.md's "Browser (ADR-068)", terminal-protocol.md's "Browser relay".
+  reaches a dev server. The pane is mounted per terminal, keyed on
+  `${project}/${terminal}`: a terminal that never opened the Browser view
+  holds no relay and no launcher exec at all. Switching to another view
+  (Terminal, Editor, Diff) keeps the relay open but hides the pane — the
+  screencast STOPS and no viewport is pushed to the guest, so a hidden 0×0
+  pane can neither resize the agents' shared browser nor keep streaming
+  frames nobody sees; switching back resumes the screencast. AltGr
+  (Ctrl+Alt) characters type into the page rather than triggering a
+  shortcut — the pane treats only Ctrl/Cmd-without-Alt as a chord. A
+  **Retry** button (shown only after a failed launch) re-runs the start
+  through the REST endpoint (`POST .../browser/start`) first, so it can
+  show the launcher's FULL log tail instead of the 120-byte close-reason
+  budget the relay itself carries. Full detail: runtime-image.md's
+  "Browser" section, api.md's "Browser (ADR-068)",
+  terminal-protocol.md's "Browser relay".
 
 ## 3. Install from scratch (R11)
 
@@ -538,14 +551,23 @@ rotated token, or a tool signed into inside a project instead of at setup).
   "browser" on a Ports row (opens that port) — `localhost` inside this
   browser IS the project's own microVM, no proxy or share link involved.
   The tab strip shows every open page, including tabs the agent opened.
-  Ctrl/Cmd+L focuses the address bar; Ctrl/Cmd+R reloads. States: "Project
-  is stopped" (start it from the terminal, then Reconnect); "Browser
-  unavailable" showing the launcher's own failure message with a Retry
-  button; "Browser disconnected" with a Reconnect button (the guest's
-  Chromium went away — the project stopped, or it crashed). The browser
-  stops when the project does; its profile — cookies, logins, everything
-  Chromium would normally remember — lives in the project home at
-  `~/.styrman/browser/profile` and is per project, like everything else
+  Ctrl/Cmd+L focuses the address bar; Ctrl/Cmd+R reloads; AltGr (Ctrl+Alt)
+  characters type into the page rather than triggering a shortcut. States:
+  "Project is stopped" (start it from the terminal, then Reconnect);
+  "Browser unavailable" with a Retry button — Retry re-runs the launch
+  through `POST .../browser/start` first, so the pane can show the
+  launcher's FULL log tail instead of the shorter reason a failed relay
+  handshake carries; "Browser disconnected" with a Reconnect button (the
+  guest's Chromium went away — the project stopped, or it crashed, or the
+  frame budget was exceeded); "Access revoked" (a user removed from the
+  project while the pane was open — checked on the same 60 s interval as a
+  terminal's own re-authorization). The pane is mounted only for a terminal
+  that has opened the Browser view at least once — switching to Terminal,
+  Editor or Diff keeps the connection but pauses the screencast (no frames,
+  no viewport pushed to the guest) until the Browser view is shown again.
+  The browser stops when the project does; its profile — cookies, logins,
+  everything Chromium would normally remember — lives in the project home
+  at `~/.styrman/browser/profile` and is per project, like everything else
   under ADR-031.
 
   The agents drive the same browser and the same profile. Do not sign in to

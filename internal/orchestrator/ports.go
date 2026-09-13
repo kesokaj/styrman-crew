@@ -56,7 +56,10 @@ type Port struct {
 // single most frequent exec the server ran (review finding, 2026-09-13).
 // `|| true` keeps the script's status 0 whether or not dockerd exists (system
 // VMs have none); the vanished-container guard in ListeningPorts rests on
-// the DOCKER exec's own code and error, not on the script's.
+// the DOCKER exec's own code and error, not on the script's. `timeout 3`
+// keeps a wedged or still-booting inner dockerd from spending the exec's
+// whole 30 s budget and taking the socket listing down with it — the
+// annotation degrades, the rows stay (BUG-039's rule; review, 2026-09-13).
 const portScanScript = `
 if command -v ss >/dev/null 2>&1; then
   ss -ltnH 2>/dev/null | awk '
@@ -67,7 +70,7 @@ else
   awk '$4=="0A" {split($2,a,":"); print strtonum("0x" a[2]), "?"}' /proc/net/tcp /proc/net/tcp6 2>/dev/null | sort -u
 fi
 printf '%s\n' '` + portScanSentinel + `'
-docker ps --format '{{.Image}}|{{.Ports}}' 2>/dev/null || true`
+timeout 3 docker ps --format '{{.Image}}|{{.Ports}}' 2>/dev/null || true`
 
 // portScanSentinel separates the socket lines from the docker lines in
 // portScanScript's output. Both halves are guest-controlled text (a process

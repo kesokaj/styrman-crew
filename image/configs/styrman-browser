@@ -254,7 +254,10 @@ kill_group_file() {
     [ -f "${f}" ] || return 0
     pid="$(cat "${f}" 2>/dev/null || true)"
     rm -f "${f}"
-    [[ "${pid}" =~ ^[0-9]+$ ]] || return 0
+    # Numeric and ≥ 2: the file is guest-writable, and "0" would skip the
+    # comm check (/proc/0 never exists) while `pgrep -g 0` / `kill -- -0`
+    # mean the CALLER's own group (security review, 2026-09-13).
+    [[ "${pid}" =~ ^[0-9]+$ ]] && [ "${pid}" -ge 2 ] || return 0
     if [ -d "/proc/${pid}" ] && ! comm_is "${pid}" "${want}"; then
         echo "${f} named pid ${pid}, which is not ${want}: stale, not signalled" >&2
         return 0
