@@ -118,3 +118,13 @@ names none of the changed interfaces. PASS.
 - `deploy/verify-commit.sh` runs on the RELEASE commit after this report;
   result appended at the end.
 - The auto-updater's deploy of the tag (appended once observed).
+
+## Release commit gate (appended after the release commit)
+
+`deploy/verify-commit.sh 5393ef5` — exit 0: "OK: commit 5393ef587144 builds
+and tests clean in isolation — safe to tag" (go build/vet/test -race, the
+ingress module, gofmt, web/dist freshness, frontend check/lint/unit tests,
+the server image build with the digest-pinned base, the runtime image build
+with the pinned Go/Node/claude-code fetches seeding 28 skills and 7
+subagents at styrman-harness 6893e22). Log: `.agents/scratch/verify-commit-v1.30.0.log`
+(scratch; the OK line is quoted here). Tag `v1.30.0` signed on 5393ef5.
