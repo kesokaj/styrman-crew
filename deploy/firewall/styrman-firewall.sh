@@ -66,8 +66,13 @@ ensure_jump  INPUT sdb-+ STYRMAN-IN
 # 172.16/12 too, so cross-project stays blocked; public internet falls through.
 # The per-project LAN allowances (below) are inserted AHEAD of all of these.
 ensure_chain STYRMAN-FWD
+# Through warn(), not a bare echo: without xt_physdev the same-bridge RETURN
+# is missing and the private-range DROP below swallows the credential broker
+# and the port preview for EVERY sandbox project — a degraded state that must
+# reach the exit path like every other one here, not read as green in
+# systemd (audit 2026-09-13, BUG-034's family).
 ensure_rule  STYRMAN-FWD -m physdev --physdev-is-bridged -j RETURN 2>/dev/null \
-    || echo "styrman-firewall: WARN xt_physdev unavailable — broker may be blocked" >&2
+    || warn "xt_physdev unavailable — the same-bridge RETURN is missing, so the credential broker and port preview are blocked for sandbox projects"
 # 100.64.0.0/10 is CGNAT — where Tailscale/headscale put their tailnet, so a
 # project could otherwise reach the operator's whole private mesh; 198.18.0.0/15
 # is the benchmark range some VPNs and container fabrics route real traffic on.

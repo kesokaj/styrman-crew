@@ -42,6 +42,11 @@ func TestFirewallScriptMatchesBridgePrefixes(t *testing.T) {
 	for _, want := range []string{
 		"ensure_jump  INPUT " + wildcard + " STYRMAN-IN",
 		"ensure_jump  DOCKER-USER " + wildcard + " STYRMAN-FWD",
+		// A missing xt_physdev blocks the broker for every sandbox project:
+		// it must go through warn() into the exit path, not a bare echo the
+		// unit reads as success (audit 2026-09-13).
+		`--physdev-is-bridged -j RETURN 2>/dev/null \
+    || warn "xt_physdev unavailable`,
 	} {
 		if !strings.Contains(script, want) {
 			t.Errorf("styrman-firewall.sh does not carry %q — sandbox projects would not be confined", want)

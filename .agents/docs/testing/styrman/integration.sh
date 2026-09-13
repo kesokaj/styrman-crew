@@ -123,6 +123,12 @@ check "no previous-harness artifacts (shell gates, GEMINI.md, settings.json)" \
 say "browser (ADR-068: one headless Chromium per project, MCP-registered for both agents)"
 # The registration is the seeding block's third step; both files are the
 # tools' OWN MCP registries, not settings.json (ADR-062 D8 still holds).
+# The harness stamp is what makes the next boot skip re-seeding; its write
+# passes the version as an argument (audit 2026-09-13), so it must equal the
+# image's own VERSION file exactly — a quoting slip would show here as a
+# mismatch or a missing stamp.
+check "harness stamp equals the image version after boot" \
+    "[ \"\$(docker exec ${CN} cat ${GH}/.styrman/.harness-version)\" = \"\$(docker exec ${CN} cat /styrman/VERSION)\" ]"
 check "browser MCP server registered for claude and agy" \
     "docker exec ${CN} sh -c 'jq -e \".mcpServers[\\\"styrman-browser\\\"].command == \\\"/styrman/bin/styrman-browser\\\"\" ${GH}/.claude.json >/dev/null && jq -e \".mcpServers[\\\"styrman-browser\\\"].command == \\\"/styrman/bin/styrman-browser\\\" and .mcpServers[\\\"styrman-browser\\\"].disabled == false\" ${GH}/.gemini/config/mcp_config.json >/dev/null'"
 # As the project user with its HOME, exactly how the server (Phase 2) and the

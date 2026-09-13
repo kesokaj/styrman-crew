@@ -162,7 +162,10 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
             agy mcp add styrman-browser /styrman/bin/styrman-browser mcp 2>&1 >/dev/null)" \
             || { HR_OK=0; HR_FAIL="${HR_FAIL:+both}"; HR_FAIL="${HR_FAIL:-agy}"; log "  agy mcp add: $(printf '%s' "${HR_OUT}" | tail -1 | tr -cd '[:print:]' | cut -c1-200)"; }
         if [ "${HM_OK}" = 1 ] && [ "${HI_OK}" = 1 ] && [ "${HR_OK}" = 1 ]; then
-            runuser -u "${USERNAME}" -- sh -c "printf '%s' '${HARNESS_VER}' > '${HARNESS_STAMP}'" 2>/dev/null || true
+            # The version and the path travel as ARGUMENTS, never interpolated
+            # into the sh -c string: a quote in a hand-built STYRMAN_VERSION
+            # would otherwise run as the project user (audit 2026-09-13).
+            runuser -u "${USERNAME}" -- sh -c 'printf "%s" "$1" > "$2"' _ "${HARNESS_VER}" "${HARNESS_STAMP}" 2>/dev/null || true
             log "agent harness deployed (version ${HARNESS_VER}, styrman-harness $(cut -c1-7 /styrman/harness/COMMIT 2>/dev/null || echo '?'); browser MCP registered for claude and agy)"
         else
             [ "${HM_OK}" = 1 ] || log "WARN: previous-harness migration reported errors or timed out (see the [harness-migrate] lines above)"

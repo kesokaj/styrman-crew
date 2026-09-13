@@ -31,7 +31,11 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> image/
   sha256 against the publisher's OWN published checksum file/release page
   (never trust a sha256 computed only from the download itself), then update
   the matching `ARG …_SHA256` — version and checksum move together in one
-  commit.
+  commit. `bash image/bump-pins.sh` does the reading for Go, Node, Claude
+  Code and the base-image digests (publisher sources only) and prints what
+  would change; `--apply` rewrites the ARG lines and the `FROM …@sha256`
+  digests in both Dockerfiles, after which `docker build image/` proves the
+  new sums (operator, 2026-09-13: "if we pin stuff make it easy to upgrade").
 - `shellcheck` (apt) and `hadolint` (GitHub release binary, pinned as above)
   — the shell and Dockerfile syntax checkers backing the editor's Check
   feature (`internal/httpapi/check.go`, `POST /api/projects/{id}/check`),
