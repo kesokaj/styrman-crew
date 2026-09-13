@@ -126,3 +126,15 @@ window returned at 14:03 (`ratelimit-remaining=100`); second run — exit 0:
 "OK: commit 5a4dcdef0e76 builds and tests clean in isolation — safe to tag".
 Log: `.agents/scratch/verify-commit-v1.30.1.log`. Tag `v1.30.1` signed on
 5a4dcde.
+
+## Deploy (appended once observed)
+
+Tag pushed 14:04:40. Updater tick 14:07: "v1.30.1 signature OK (allowed
+signer)"; containers recreated 14:08:07; "[styrman-update] OK — v1.30.1 is
+live" 14:08:18. `styrman-ctl status` verdict OK at 14:08 (server healthy on
+1.30.1, deployed sha 5a4dcde, firewall enabled/inactive + timer active);
+in-container `/api/health` 200; the 1.30.1 runtime image answers
+`go1.27.1`, Node `v22.23.2`, Claude Code `2.1.270`, `agy 1.2.2` and carries
+the argument-form stamp write; the converged host firewall script carries
+the `warn` form and its post-deploy run left the unit `inactive` (a good
+oneshot run, not `failed`).
