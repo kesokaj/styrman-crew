@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -106,6 +108,66 @@ func TestLauncherPeerRange(t *testing.T) {
 	}
 }
 
+// port_inodes names the listening sockets on the launcher's port and
+// owns_socket ties a pid to one of them through /proc/<pid>/fd; forwarder_up
+// refuses a recorded pid that is not socat even when it IS the owner.
+func TestLauncherPortOwnership(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the launcher's functions run in the Linux guest")
+	}
+	if _, err := exec.LookPath("ss"); err != nil {
+		t.Skip("no ss on this host")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+	me := strconv.Itoa(os.Getpid())
+	// This process's own view of the listener's inode.
+	var ino string
+	raw, err := ln.(*net.TCPListener).SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Control(func(fd uintptr) {
+		link, _ := os.Readlink("/proc/self/fd/" + strconv.Itoa(int(fd)))
+		ino = strings.TrimSuffix(strings.TrimPrefix(link, "socket:["), "]")
+	}); err != nil || ino == "" {
+		t.Fatalf("listener inode: %q, %v", ino, err)
+	}
+	home := t.TempDir()
+	out, err := launcherFunctions(t, home, "PORT="+port+"; port_inodes")
+	if err != nil || !slices.Contains(strings.Fields(out), ino) {
+		t.Fatalf("port_inodes = %q (err %v), want to include %s", out, err, ino)
+	}
+	if out, err := launcherFunctions(t, home, "owns_socket "+me+" "+ino); err != nil {
+		t.Fatalf("owns_socket refused this process's own listener: %q %v", out, err)
+	}
+	if out, err := launcherFunctions(t, home, "owns_socket "+me+" 1"); err == nil {
+		t.Fatalf("owns_socket accepted a socket this process does not hold: %q", out)
+	}
+	// This test binary owns the listener but is not socat: not our forwarder.
+	dir := filepath.Join(home, ".styrman", "browser")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "socat.pid"), []byte(me+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := launcherFunctions(t, home, "PORT="+port+"; forwarder_up"); err == nil {
+		t.Fatalf("forwarder_up accepted a non-socat owner: %q", out)
+	}
+	// A zero-padded pid is refused before /proc is consulted.
+	if err := os.WriteFile(filepath.Join(dir, "socat.pid"), []byte("0"+me+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := launcherFunctions(t, home, "PORT="+port+"; forwarder_up"); err == nil {
+		t.Fatalf("forwarder_up accepted a zero-padded pid: %q", out)
+	}
+}
+
 // kill_group_file signals only OUR group: a pid file naming a live process
 // with another name (a recycled pid after a VM restart) or a pid that no
 // longer exists is dropped without a signal; a group we started goes down.
@@ -155,9 +217,9 @@ func TestLauncherKillGroupFile(t *testing.T) {
 	if _, err := os.Stat("/proc/" + stranger); err != nil {
 		t.Fatalf("the stranger (pid %s) was signalled", stranger)
 	}
-	// Pids below 2 (0 = the caller's own group to pgrep/kill), a pid that
-	// does not exist, and a corrupt file are dropped quietly.
-	for _, content := range []string{"0\n", "1\n", "4000000000\n", "not-a-pid\n"} {
+	// Pids below 2 (0 = the caller's own group to pgrep/kill), a zero-padded
+	// pid, a pid that does not exist, and a corrupt file are dropped quietly.
+	for _, content := range []string{"0\n", "1\n", "0" + stranger + "\n", "4000000000\n", "not-a-pid\n"} {
 		if err := os.WriteFile(pidfile, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}

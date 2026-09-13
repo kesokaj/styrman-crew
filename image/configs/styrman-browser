@@ -97,24 +97,41 @@ peer_range() {
 }
 
 port_listening() { ss -ltnH 2>/dev/null | grep -q ":${PORT} "; }
-# The pids holding the :9222 listener (socat's `fork` parent, plus any child
-# that inherited the socket), one per line; empty when nothing listens or
-# ss cannot name the owner (it can for the launcher's own uid).
-port_owners() { ss -ltnpH 2>/dev/null | grep ":${PORT} " | grep -o 'pid=[0-9]*' | cut -d= -f2; }
+# The socket inodes of the :9222 listeners, one per line (`ss -e` prints
+# `ino:<n>`; no `-p`, so no guest-chosen process NAME is on the line to be
+# mistaken for a field — security review, round 3).
+port_inodes() { ss -ltneH 2>/dev/null | grep ":${PORT} " | grep -o 'ino:[0-9]*' | cut -d: -f2; }
+# owns_socket <pid> <inode>: one of the process's fds is that socket.
+owns_socket() {
+    local fd
+    for fd in "/proc/$1/fd"/*; do
+        [ "$(readlink "${fd}" 2>/dev/null || true)" = "socket:[$2]" ] && return 0
+    done
+    return 1
+}
 # comm_is <pid> <prefix>: the process's comm (first 15 bytes of its
 # executable name) starts with the prefix.
 comm_is() { case "$(cat "/proc/$1/comm" 2>/dev/null || true)" in "$2"*) return 0 ;; *) return 1 ;; esac; }
 # The forwarder THIS launcher started: the recorded pid is alive, is socat,
-# and is the process holding the :9222 listener. "Anything listening on
-# :9222" used to count (review finding, 2026-09-13), so the user's own app
-# on that port read as "up" and the server was pointed at it; "a live socat
-# plus a listener" still tied the two only by coincidence (security review).
-# Pid files are guest-writable: 1–7 digits (pid_max) before any test that
-# would print a diagnostic into the launcher's output.
+# and holds the :9222 listening socket itself (the socket's inode is among
+# its fds — socat's `fork` parent keeps it). "Anything listening on :9222"
+# used to count (review finding, 2026-09-13), so the user's own app on that
+# port read as "up" and the server was pointed at it; "a live socat plus a
+# listener" still tied the two only by coincidence (security review). Pid
+# files are guest-writable: 1–7 digits, no leading zero (a zero-padded pid
+# has no /proc entry but still resolves for pgrep/kill), before any test
+# that would print a diagnostic into the launcher's output.
 forwarder_up() {
-    local pid
+    local pid ino
     pid="$(cat "${SOCATPID}" 2>/dev/null || true)"
-    [[ "${pid}" =~ ^[0-9]{1,7}$ ]] && [ -d "/proc/${pid}" ] && comm_is "${pid}" socat && port_owners | grep -qx "${pid}"
+    [[ "${pid}" =~ ^[1-9][0-9]{0,6}$ ]] && [ -d "/proc/${pid}" ] && comm_is "${pid}" socat || return 1
+    # Inodes captured first, then matched: a pipe into a consumer that quits
+    # early ends with SIGPIPE on the producer, which pipefail would read as
+    # "not ours" and ensure_forwarder as a hard failure (round-3 review).
+    for ino in $(port_inodes); do
+        owns_socket "${pid}" "${ino}" && return 0
+    done
+    return 1
 }
 
 # The forwarder is its own process group with its own pid file, so it can be
@@ -261,12 +278,13 @@ kill_group_file() {
     [ -f "${f}" ] || return 0
     pid="$(cat "${f}" 2>/dev/null || true)"
     rm -f "${f}"
-    # 1–7 digits (pid_max) and ≥ 2: the file is guest-writable; "0" would
-    # skip the comm check (/proc/0 never exists) while `pgrep -g 0` /
-    # `kill -- -0` mean the CALLER's own group, and a number wider than
-    # int64 would make `[` print a diagnostic into the launcher's output
-    # (security review and round-2 review, 2026-09-13).
-    [[ "${pid}" =~ ^[0-9]{1,7}$ ]] && [ "${pid}" -ge 2 ] || return 0
+    # 1–7 digits with no leading zero, and ≥ 2: the file is guest-writable;
+    # "0" would skip the comm check (/proc/0 never exists) while `pgrep -g 0`
+    # / `kill -- -0` mean the CALLER's own group, a zero-padded pid has no
+    # /proc entry yet resolves for pgrep/kill, and a number wider than int64
+    # would make `[` print a diagnostic into the launcher's output (security
+    # reviews and round-2 review, 2026-09-13).
+    [[ "${pid}" =~ ^[1-9][0-9]{0,6}$ ]] && [ "${pid}" -ge 2 ] || return 0
     if [ -d "/proc/${pid}" ] && ! comm_is "${pid}" "${want}"; then
         echo "${f} named pid ${pid}, which is not ${want}: stale, not signalled" >&2
         return 0
