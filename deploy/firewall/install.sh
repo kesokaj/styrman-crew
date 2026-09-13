@@ -106,7 +106,12 @@ fi
 
 # ─── 3. Activate ────────────────────────────────────────────────────────────
 run systemctl daemon-reload
-run systemctl start styrman-firewall.service
+# The oneshot exits 1 on a DEGRADED host (a missing xt_physdev, a tagged
+# DROP it refused to delete — every WARN reaches its exit path). That must
+# not abort this installer before the units are enabled (BUG-035's shape;
+# the updater's host_converge tolerates it the same way): log and go on.
+run systemctl start styrman-firewall.service \
+    || log "WARN: styrman-firewall.service reported a degraded state (journalctl -u styrman-firewall) — continuing so the units are enabled"
 # Enabled as a boot-time unit too: the base rules land once right after
 # docker.service instead of at the timer's first tick (the service's
 # [Install] section; ADR-065 follow-up (f), closed 2026-09-10).

@@ -52,7 +52,10 @@ ip link add "${LANIF}" type dummy; ip addr add 172.21.0.1/16 dev "${LANIF}"; ip 
 ip link set lo up
 iptables -N DOCKER-USER
 
-run() { bash "${SCRIPT}"; }
+# The script exits 1 whenever it has WARNS (a missing xt_physdev included);
+# the assertions below are the check, so a warning exit must not abort the
+# suite under set -e (review 2026-09-13).
+run() { bash "${SCRIPT}" || true; }
 rules() { iptables -S STYRMAN-FWD | grep '^-A'; }
 in_rules() { iptables -S STYRMAN-IN | grep '^-A'; }
 tagged_count() { { rules; in_rules; } | grep -c 'styrman-lan' || true; }

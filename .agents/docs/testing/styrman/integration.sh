@@ -128,7 +128,7 @@ say "browser (ADR-068: one headless Chromium per project, MCP-registered for bot
 # image's own VERSION file exactly — a quoting slip would show here as a
 # mismatch or a missing stamp.
 check "harness stamp equals the image version after boot" \
-    "[ \"\$(docker exec ${CN} cat ${GH}/.styrman/.harness-version)\" = \"\$(docker exec ${CN} cat /styrman/VERSION)\" ]"
+    "v=\"\$(docker exec ${CN} cat ${GH}/.styrman/.harness-version)\" && [ -n \"\$v\" ] && [ \"\$v\" = \"\$(docker exec ${CN} cat /styrman/VERSION)\" ]"
 check "browser MCP server registered for claude and agy" \
     "docker exec ${CN} sh -c 'jq -e \".mcpServers[\\\"styrman-browser\\\"].command == \\\"/styrman/bin/styrman-browser\\\"\" ${GH}/.claude.json >/dev/null && jq -e \".mcpServers[\\\"styrman-browser\\\"].command == \\\"/styrman/bin/styrman-browser\\\" and .mcpServers[\\\"styrman-browser\\\"].disabled == false\" ${GH}/.gemini/config/mcp_config.json >/dev/null'"
 # As the project user with its HOME, exactly how the server (Phase 2) and the

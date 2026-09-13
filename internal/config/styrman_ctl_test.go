@@ -187,6 +187,21 @@ func TestStyrmanCtlStatusJSON(t *testing.T) {
 	}
 }
 
+// A FAILED firewall oneshot (enabled/failed — a host without xt_physdev, where
+// the broker is blocked for every sandbox project) is DEGRADED, never OK;
+// enabled/inactive (a good run of a oneshot) stays OK (review 2026-09-13).
+func TestStyrmanCtlStatusFailedFirewallIsDegraded(t *testing.T) {
+	e := ctlSetup(t, true)
+	script := "#!/usr/bin/env bash\necho \"systemctl $*\" >> \"" + e.calls + "\"\n" +
+		`case "$1" in is-enabled) echo enabled ;; is-active) case "$2" in styrman-firewall.service) echo failed ;; styrman-update.service) echo inactive ;; *) echo active ;; esac ;; esac` + "\n"
+	if err := os.WriteFile(filepath.Join(e.bin, "systemctl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := ctl(t, e, "status", "--dry-run"); code != 1 || !strings.Contains(out, "DEGRADED") || !strings.Contains(out, "enabled/failed") {
+		t.Fatalf("failed firewall oneshot: code %d\n%s", code, out)
+	}
+}
+
 func TestStyrmanCtlStatusNothingInstalled(t *testing.T) {
 	e := ctlSetup(t, true)
 	for _, f := range []string{"units/styrman-update.service", "units/styrman-firewall.service"} {

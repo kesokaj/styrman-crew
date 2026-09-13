@@ -329,7 +329,10 @@ cmd_status() {
     if [ "${rc}" = 0 ]; then
         [ "${health}" = healthy ] || rc=1
         [ -z "${fver}" ] || rc=1
-        [[ "${u_fw_s}" == enabled/* ]] || rc=1
+        # The firewall service is a oneshot: enabled/inactive is a good run,
+        # enabled/failed is a degraded host (a missing xt_physdev blocks the
+        # broker for every sandbox project) — never "OK" (review 2026-09-13).
+        [[ "${u_fw_s}" == enabled/* ]] && [[ "${u_fw_s}" != */failed ]] || rc=1
         [[ "${u_fw_t}" == enabled/* ]] || rc=1
         [ "${fwd}" != absent ] || rc=1
     fi
