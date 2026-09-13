@@ -111,8 +111,9 @@ adds the door to the already-running Chromium. `forwarder_up` (the check
 `ensure_forwarder` runs before deciding to spawn) trusts only a `socat.pid`
 (1–7 digits, no leading zero) naming a LIVE process whose comm is `socat`
 AND that holds the `:9222` listening socket itself — the socket's inode
-(`ss -ltneH`'s `ino:` field, matched as a whole field on the row whose
-local-address column ends in `:9222`) is among `/proc/<pid>/fd`'s links —
+(column 10 of the kernel's `/proc/net/tcp{,6}` rows in state `0A` whose
+hex local address ends in `:240A`; no `ss` output is parsed) is among
+`/proc/<pid>/fd`'s links —
 not "something answers `:9222`", nor "a live socat plus a listener", nor a
 parse of process names — so a stranger
 already bound to the port fails `start` with its own message instead of a
