@@ -106,8 +106,31 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.22.0**, deployed: https://crew.styrman.xyz (Google sign-in).
+**v1.30.1**, deployed: https://crew.styrman.xyz (Google sign-in).
 
+Since v1.22.0, one line per release; the full entry for each is
+`.agents/docs/changes/<date>-vX.Y.Z-release.md`:
+
+- **v1.30.1** (2026-09-13): the firewall reports a degraded host (missing
+  `xt_physdev`) and `styrman-ctl status` shows it; the guest harness stamp
+  no longer interpolates the version; `image/bump-pins.sh` refreshes the
+  image pins.
+- **v1.30.0** (2026-09-13): audit fixes — brokered credentials reach login
+  shells again (BUG-054), long start/stop calls are no longer clipped to 20 s,
+  Go/Node/Claude Code pinned by publisher hash (ADR-069), auth-portal and
+  updater hardening.
+- **v1.29.0** (2026-09-13): Browser view review fixes (pane, relay,
+  launcher, Ports panel polling).
+- **v1.28.0** (2026-09-11): the Browser view (one headless Chromium per
+  project, ADR-068) and the operator's `styrman-ctl`.
+- **v1.27.x** (2026-09-10): provisioning state, user revocation, editor
+  polish, a Docker seam for tests; updater firewall idempotence.
+- **v1.26.0** (2026-09-10): durable network records; the ssh public key is
+  shown in Settings.
+- **v1.25.0** (2026-09-09): the network switch — a project's mode is its
+  Docker bridge prefix, matched by the root firewall (ADR-067).
+- **v1.23.0–v1.24.1** (2026-09-08): per-project LAN access (ADR-065/066,
+  since superseded by ADR-067) and the audit fixes behind it.
 - **v1.22.0** (2026-09-04): the Git tab grew from a status/stage/commit/push
   box into a fuller client — Fast commit, Fetch/Pull (`--ff-only`), a branch
   dropdown, a Commits list, and stash push/pop — and diffs now open
