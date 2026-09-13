@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -166,6 +168,58 @@ func TestLauncherPortOwnership(t *testing.T) {
 	if out, err := launcherFunctions(t, home, "PORT="+port+"; forwarder_up"); err == nil {
 		t.Fatalf("forwarder_up accepted a zero-padded pid: %q", out)
 	}
+	// The positive control: a process whose comm IS socat (this test binary
+	// re-exec'd through a symlink of that name) holding a listener on the
+	// port is our forwarder. Without this case a forwarder_up that always
+	// fails would stay green (security review, round 4).
+	ln.Close()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := filepath.Join(home, "socat")
+	if err := os.Symlink(exe, fake); err != nil {
+		t.Fatal(err)
+	}
+	helper := exec.Command(fake, "-test.run=TestHelperListener")
+	helper.Env = append(os.Environ(), "STYRMAN_HELPER_LISTEN="+port)
+	helperOut, err := helper.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := helper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = helper.Process.Kill(); _ = helper.Wait() })
+	ready := make([]byte, 6)
+	if _, err := io.ReadFull(helperOut, ready); err != nil || string(ready) != "ready\n" {
+		t.Fatalf("helper listener never became ready: %q %v", ready, err)
+	}
+	hp := strconv.Itoa(helper.Process.Pid)
+	if err := os.WriteFile(filepath.Join(dir, "socat.pid"), []byte(hp+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := launcherFunctions(t, home, "PORT="+port+"; forwarder_up"); err != nil {
+		comm, _ := os.ReadFile("/proc/" + hp + "/comm")
+		t.Fatalf("forwarder_up refused our own socat-named listener (pid %s, comm %q): %q %v", hp, comm, out, err)
+	}
+}
+
+// TestHelperListener is not a test: re-exec'd by TestLauncherPortOwnership
+// (through a symlink named socat) it listens on the given port, prints
+// "ready" and waits to be killed.
+func TestHelperListener(t *testing.T) {
+	port := os.Getenv("STYRMAN_HELPER_LISTEN")
+	if port == "" {
+		t.Skip("helper process only")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:"+port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	fmt.Println("ready")
+	select {}
 }
 
 // kill_group_file signals only OUR group: a pid file naming a live process

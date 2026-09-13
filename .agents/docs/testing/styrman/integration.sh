@@ -147,6 +147,13 @@ check "preview proxy refuses the browser port with a 400" \
 # the ports list.
 check "browser status/start/stop routes answer for the owner (9222 up, hidden)" \
     "curl -fsS -X POST ${API}/api/projects/${ID}/browser/start | grep -q '\"running\":true' && docker exec ${CN} sh -c 'ss -ltnH | grep -q \":9222 \"' && ! curl -fsS ${API}/api/projects/${ID}/ports | jq -e '.ports[] | select(.port == 9222)' >/dev/null && curl -fsS ${API}/api/projects/${ID}/browser | grep -q '\"version\":\"Chrome/' && [ \"\$(curl -s -o /dev/null -w '%{http_code}' -X POST ${API}/api/projects/${ID}/browser/stop)\" = 204 ] && curl -fsS ${API}/api/projects/${ID}/browser | grep -q '\"running\":false'"
+# `start` is what every relay connect runs, so it must be idempotent: a
+# second server-run start finds the forwarder it started (by the listening
+# socket's inode in the recorded pid's fds) and leaves it alone — the pid
+# file does not change. A regression to "never up" respawns socat on every
+# connect and drops the other panes (round-4 review, 2026-09-13).
+check "a second start keeps the running forwarder (socat pid unchanged)" \
+    "curl -fsS -X POST ${API}/api/projects/${ID}/browser/start >/dev/null && p1=\"\$(docker exec ${CN} cat ${GH}/.styrman/browser/socat.pid)\" && [ -n \"\$p1\" ] && curl -fsS -X POST ${API}/api/projects/${ID}/browser/start >/dev/null && [ \"\$(docker exec ${CN} cat ${GH}/.styrman/browser/socat.pid)\" = \"\$p1\" ] && [ \"\$(curl -s -o /dev/null -w '%{http_code}' -X POST ${API}/api/projects/${ID}/browser/stop)\" = 204 ]"
 check "styrman-browser stop ends it (status reports not running)" \
     "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser stop && docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/styrman-browser status | grep -q '\"running\":false'"
 

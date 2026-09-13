@@ -96,11 +96,17 @@ peer_range() {
     return 0
 }
 
-port_listening() { ss -ltnH 2>/dev/null | grep -q ":${PORT} "; }
+# Both readers match WHOLE fields of ss's output: the local address is
+# column 4 and must END in ":<port>" (a substring match on ":9222 " would
+# also hit `ino:9222 `), and an inode is a field that is exactly `ino:<n>`
+# (never a fragment of the `cgroup:` path) — round-4 reviews, 2026-09-13.
+port_listening() { ss -ltnH 2>/dev/null | awk -v p="${PORT}" '$4 ~ (":" p "$") { f = 1 } END { exit !f }'; }
 # The socket inodes of the :9222 listeners, one per line (`ss -e` prints
 # `ino:<n>`; no `-p`, so no guest-chosen process NAME is on the line to be
 # mistaken for a field — security review, round 3).
-port_inodes() { ss -ltneH 2>/dev/null | grep ":${PORT} " | grep -o 'ino:[0-9]*' | cut -d: -f2; }
+port_inodes() {
+    ss -ltneH 2>/dev/null | awk -v p="${PORT}" '$4 ~ (":" p "$") { for (i = 5; i <= NF; i++) if ($i ~ /^ino:[0-9]+$/) { sub(/^ino:/, "", $i); print $i } }'
+}
 # owns_socket <pid> <inode>: one of the process's fds is that socket.
 owns_socket() {
     local fd

@@ -109,11 +109,15 @@ neither variable — no forwarder runs and the browser stays loopback-only;
 the pane's first `start` then arrives with the peer and `ensure_forwarder`
 adds the door to the already-running Chromium. `forwarder_up` (the check
 `ensure_forwarder` runs before deciding to spawn) trusts only a `socat.pid`
-naming a LIVE process whose comm is `socat` AND a live listener on `:9222`
-— not "something answers `:9222`" — so a stranger already bound to the
-port fails `start` with its own message instead of a silent bind attempt,
-and the peer range is written to `socat.pid`'s state only after the
-listener is confirmed up. A container the user runs inside the project's
+(1–7 digits, no leading zero) naming a LIVE process whose comm is `socat`
+AND that holds the `:9222` listening socket itself — the socket's inode
+(`ss -ltneH`'s `ino:` field, matched as a whole field on the row whose
+local-address column ends in `:9222`) is among `/proc/<pid>/fd`'s links —
+not "something answers `:9222`", nor "a live socat plus a listener", nor a
+parse of process names — so a stranger
+already bound to the port fails `start` with its own message instead of a
+silent bind attempt, and the peer range is written to `socat.range` only
+after the listener is confirmed up. A container the user runs inside the project's
 dockerd can reach the guest's bridge IP but is refused by `range=` — a
 DevTools client reads `file://` inside the guest, i.e. the brokered
 credentials, and an image the user merely runs must not gain that.
