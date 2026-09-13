@@ -12,11 +12,21 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-**Heading for v1.30.0 (MINOR), not yet cut.** The 2026-09-13 whole-project
-audit (`.agents/docs/reviews/2026-09-13-audit-project.md`) found 2 high and
-14 medium findings; all are fixed in plan
-`.agents/docs/plans/2026-09-13-audit-fixes.md` (committed at `e18d62c`).
-`/preflight` is next.
+**v1.30.0 shipped 2026-09-13** (MINOR) — the whole-project audit's fixes (2
+high + 14 medium confirmed by a 31-agent workflow with adversarial
+refuters; plan `.agents/docs/plans/2026-09-13-audit-fixes.md`, all boxes
+ticked; BUG-054 — no brokered credentials in login shells since 2026-09-10
+— closed; runtime image pins Go/Node/claude-code and base digests,
+ADR-069). Tag `v1.30.0` on release commit `5393ef5`, SSH-signed and
+verified against `/etc/styrman/allowed_signers`; deployed by the
+auto-updater at 12:54 ("OK — v1.30.0 is live"). Gate:
+`.agents/docs/reviews/2026-09-13-preflight-v1.30.0.md`; release entry:
+`.agents/docs/changes/2026-09-13-v1.30.0-release.md`; audit:
+`.agents/docs/reviews/2026-09-13-audit-project.md`; handoff:
+`.agents/docs/handoffs/2026-09-13-session-end-v1.30.0.md`. Operator checks,
+not blocking: BUG-054's production proof (open a project on 1.30.0; `env |
+grep -c GH_TOKEN` in a terminal, or `gh auth status`), Settings showing
+1.30.0 after a fresh sign-in, a project booting on `styrman-runtime:1.30.0`.
 
 **v1.29.0 shipped 2026-09-13** (MINOR) — the Browser view review fixes: a
 `/code-review` of the Browser view returned 15 findings plus below-the-cut

@@ -128,3 +128,15 @@ the server image build with the digest-pinned base, the runtime image build
 with the pinned Go/Node/claude-code fetches seeding 28 skills and 7
 subagents at styrman-harness 6893e22). Log: `.agents/scratch/verify-commit-v1.30.0.log`
 (scratch; the OK line is quoted here). Tag `v1.30.0` signed on 5393ef5.
+
+## Deploy (appended once observed)
+
+Tag pushed 12:51:49. Updater tick 12:53: "v1.30.0 signature OK (allowed
+signer)"; `styrman-runtime:1.30.0` built 12:53:44, `styrman-caddy:1.30.0`
+and `styrman-server:1.30.0` built 12:54:27; containers recreated 12:54:37;
+"[styrman-update] OK — v1.30.0 is live" 12:54:43. `styrman-ctl status`
+verdict OK at 12:55 (server healthy on 1.30.0, deployed sha 5393ef5);
+in-container `/api/health` 200. The 1.30.0 runtime image answers
+`go1.27.1`, Node `v22.23.2`, Claude Code `2.1.270`, `agy 1.2.2`. BUG-054's
+production proof (a login shell in a project on this image) is the
+operator's, recorded in the handoff.
