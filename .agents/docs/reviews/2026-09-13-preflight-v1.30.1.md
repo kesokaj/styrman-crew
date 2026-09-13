@@ -93,18 +93,18 @@ user. PASS.
 
 ## Verification (tiers)
 
-- Unit/build/vet/fmt/shell/frontend: `2026-09-13-verify-v1.30.1.md` (PASS
+- Unit/build/vet/fmt/shell/frontend: `testing/2026-09-13-verify-v1.30.1.md` (PASS
   at 336a5d1; extension to 48d930b dispatched).
 - Image rebuilt from the close-out tree (`image/entrypoint.sh` changed);
   integration `passed=92 failed=0 skipped=3` rc=0 with the new
   "harness stamp equals the image version after boot" check PASS
-  (`2026-09-13-integration-v1.30.1.log.md`); e2e `passed=92 failed=0
-  skipped=2` rc=0 (`2026-09-13-e2e-v1.30.1.log.md`); the firewall script's
-  own suite under `unshare -Urnm`: `PASS=24 FAIL=0`
-  (`2026-09-13-firewall-test-v1.30.1.log.md`, at 48d930b's `test.sh`).
+  (`testing/2026-09-13-integration-v1.30.1.log.md`); e2e `passed=92 failed=0
+  skipped=2` rc=0 (`testing/2026-09-13-e2e-v1.30.1.log.md`); the firewall script's
+  own suite under `unshare -Urnm`: `PASS=26 FAIL=0`
+  (`testing/2026-09-13-firewall-test-v1.30.1.log.md`, at 48d930b's `test.sh`).
   Integration on the final tree (48d930b, the bound stamp check):
   `passed=92 failed=0 skipped=3` rc=0, stamp check PASS
-  (`2026-09-13-integration-v1.30.1-final.log.md`).
+  (`testing/2026-09-13-integration-v1.30.1-final.log.md`).
 
 ## What was not checked
 
