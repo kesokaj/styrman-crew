@@ -53,15 +53,20 @@ ip link set lo up
 iptables -N DOCKER-USER
 
 # The script exits 1 whenever it has WARNS (a missing xt_physdev included);
-# the assertions below are the check, so a warning exit must not abort the
-# suite under set -e (review 2026-09-13).
-run() { bash "${SCRIPT}" || true; }
+# the assertions are the check, so a warning exit must not abort the suite
+# under set -e — but the status is KEPT in RUNRC and asserted where it
+# matters (review 2026-09-13: `|| true` alone made the exit status
+# unobservable in both directions).
+RUNRC=0
+# shellcheck disable=SC2034  # read inside the check strings the helper evals
+run() { local rc=0; bash "${SCRIPT}" || rc=$?; RUNRC=${rc}; return 0; }
 rules() { iptables -S STYRMAN-FWD | grep '^-A'; }
 in_rules() { iptables -S STYRMAN-IN | grep '^-A'; }
 tagged_count() { { rules; in_rules; } | grep -c 'styrman-lan' || true; }
 
 echo "=== 1. base rules"
 run >/dev/null 2>&1
+check "a clean run exits 0 (no WARNS)" "[ \"\${RUNRC}\" = 0 ]"
 check "physdev RETURN present" "rules | grep -q -- '--physdev-is-bridged -j RETURN'"
 check "six private-range DROPs" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
 check "STYRMAN-IN is a bare DROP" "[ \"\$(in_rules)\" = '-A STYRMAN-IN -j DROP' ]"
@@ -103,13 +108,15 @@ run >/dev/null 2>&1
 check "all three are removed" "[ \$(tagged_count) -eq 0 ]"
 check "the six DROPs are intact" "[ \$(rules | grep -c -- '-j DROP') -eq 6 ]"
 check "STYRMAN-IN is a bare DROP again" "[ \"\$(in_rules)\" = '-A STYRMAN-IN -j DROP' ]"
-check "cleanup is idempotent" "run >/dev/null 2>&1 && [ \$(tagged_count) -eq 0 ]"
+run >/dev/null 2>&1
+check "cleanup is idempotent" "[ \"\${RUNRC}\" = 0 ] && [ \$(tagged_count) -eq 0 ]"
 
 echo "=== 5. the cleanup refuses to delete a DROP"
 # A tagged DROP would mean something has gone badly wrong; deleting rules by
 # content must still never remove one (BUG-013's neighbouring hazard).
 iptables -I STYRMAN-FWD 1 -d 10.0.0.0/8 -m comment --comment "styrman-lan:${U}" -j DROP
-run >/dev/null 2>&1 || true
+run >/dev/null 2>&1
+check "a run with a refused DROP exits 1 (the WARN reaches the exit path)" "[ \"\${RUNRC}\" = 1 ]"
 check "the tagged DROP survives" \
     "rules | grep -q -- '--comment \"styrman-lan:${U}\" -j DROP'"
 # `{ ...; } || true` before the pipe: the script deliberately exits 1 when it

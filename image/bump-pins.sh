@@ -58,19 +58,28 @@ is_version "${NODE_VERSION}" && is_sha256 "${NODE_SHA256}" || { echo "bump-pins:
 CLAUDE_CODE_VERSION="$(npm view @anthropic-ai/claude-code version 2>/dev/null || true)"
 is_version "${CLAUDE_CODE_VERSION}" || { echo "bump-pins: npm gave no usable @anthropic-ai/claude-code version" >&2; fail_read=1; }
 
-# Base images: the amd64 digest behind each FROM tag (the tag stays, the digest moves).
+# Base images: the amd64 digest behind each FROM tag (the tag stays, the
+# digest moves). `scratch` and --platform stages have no manifest to pin and
+# are skipped. A digest the registry will not serve right now (Docker Hub's
+# anonymous rate limit is the usual reason) is reported as unavailable: in
+# check mode that is information, under --apply it is fatal (review round 2).
 digest_of() { docker manifest inspect "$1" 2>/dev/null | jq -r '.manifests[]? | select(.platform.architecture=="amd64" and .platform.os=="linux") | .digest' 2>/dev/null | head -1; }
 declare -A DIGEST
+declare -A INFILE   # tag → space-separated files that carry it
+digest_missing=0
 for f in "${IMG}" "${SRV}"; do
-    while IFS= read -r ref; do
-        tag="${ref%%@*}"
+    while IFS= read -r line; do
+        case "${line}" in *--platform*|"FROM scratch"|"FROM scratch "*) continue ;; esac
+        ref="${line#FROM }"; ref="${ref%% *}"; tag="${ref%%@*}"
+        INFILE["${tag}"]="${INFILE[${tag}]:-} ${f}"
         [ -n "${DIGEST[${tag}]:-}" ] && continue
-        d="$(digest_of "${tag}")"
-        if is_digest "${d}"; then DIGEST["${tag}"]="${d}"; else echo "bump-pins: no amd64 digest for ${tag} (docker manifest inspect)" >&2; fail_read=1; fi
-    done < <(sed -n 's/^FROM \([^ ]*\).*$/\1/p' "${f}")
+        d="$(digest_of "${tag}" || true)"
+        if is_digest "${d}"; then DIGEST["${tag}"]="${d}"; else DIGEST["${tag}"]=""; echo "bump-pins: no amd64 digest for ${tag} right now (docker manifest inspect failed — rate limit or offline)" >&2; digest_missing=1; fi
+    done < <(grep -E '^FROM ' "${f}")
 done
 
 [ "${fail_read}" = 0 ] || { echo "bump-pins: could not read every publisher source — nothing changed" >&2; exit 1; }
+[ "${APPLY}" = 0 ] || [ "${digest_missing}" = 0 ] || { echo "bump-pins: a base-image digest could not be read — refusing to --apply a partial set" >&2; exit 1; }
 
 changed=0
 report() { # name current new
@@ -84,6 +93,7 @@ report NODE_SHA256 "$(current NODE_SHA256)" "${NODE_SHA256}"
 report CLAUDE_CODE_VERSION "$(current CLAUDE_CODE_VERSION)" "${CLAUDE_CODE_VERSION}"
 for tag in "${!DIGEST[@]}"; do
     cur="$(grep -ho "^FROM ${tag}@sha256:[0-9a-f]*" "${IMG}" "${SRV}" | head -1 | sed 's/.*@//')"
+    if [ -z "${DIGEST[${tag}]}" ]; then echo "  FROM ${tag}: ${cur:-<no digest>} (publisher digest unavailable)"; continue; fi
     report "FROM ${tag}" "${cur:-<no digest>}" "${DIGEST[${tag}]}"
 done
 
@@ -92,9 +102,12 @@ done
 
 # Rewrite temp copies, prove every expected line is present, then move both
 # into place together — never a half-rewritten tree (review 2026-09-13).
-tmp_img="$(mktemp)"; tmp_srv="$(mktemp)"
+# Temp copies BESIDE the files (same filesystem, so the mv is a rename) with
+# the originals' modes (review 2026-09-13: a /tmp copy carried mode 600 in).
+tmp_img="$(mktemp "${IMG}.XXXXXX")"; tmp_srv="$(mktemp "${SRV}.XXXXXX")"
 trap 'rm -f "${tmp_img}" "${tmp_srv}"' EXIT
 cp "${IMG}" "${tmp_img}"; cp "${SRV}" "${tmp_srv}"
+chmod --reference="${IMG}" "${tmp_img}"; chmod --reference="${SRV}" "${tmp_srv}"
 sed -i "s|^ARG GO_VERSION=.*|ARG GO_VERSION=${GO_VERSION}|; s|^ARG GO_SHA256=.*|ARG GO_SHA256=${GO_SHA256}|; s|^ARG NODE_VERSION=.*|ARG NODE_VERSION=${NODE_VERSION}|; s|^ARG NODE_SHA256=.*|ARG NODE_SHA256=${NODE_SHA256}|; s|^ARG CLAUDE_CODE_VERSION=.*|ARG CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}|" "${tmp_img}"
 for tag in "${!DIGEST[@]}"; do
     # A FROM with a digest gets it replaced; a bare FROM (tag only, optionally
@@ -104,8 +117,13 @@ done
 for want in "ARG GO_VERSION=${GO_VERSION}" "ARG GO_SHA256=${GO_SHA256}" "ARG NODE_VERSION=${NODE_VERSION}" "ARG NODE_SHA256=${NODE_SHA256}" "ARG CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}"; do
     grep -qxF -- "${want}" "${tmp_img}" || { echo "bump-pins: rewrite did not land: ${want} — nothing changed" >&2; exit 1; }
 done
+# Verified PER FILE that carries the tag (a match in one file must not
+# vouch for the other — security review round 2).
 for tag in "${!DIGEST[@]}"; do
-    grep -qsF -- "FROM ${tag}@${DIGEST[${tag}]}" "${tmp_img}" "${tmp_srv}" || { echo "bump-pins: digest rewrite did not land for ${tag} — nothing changed" >&2; exit 1; }
+    for f in ${INFILE[${tag}]}; do
+        t="${tmp_img}"; [ "${f}" = "${SRV}" ] && t="${tmp_srv}"
+        grep -qsF -- "FROM ${tag}@${DIGEST[${tag}]}" "${t}" || { echo "bump-pins: digest rewrite did not land for ${tag} in ${f} — nothing changed" >&2; exit 1; }
+    done
 done
 mv -f "${tmp_img}" "${IMG}"; mv -f "${tmp_srv}" "${SRV}"
 trap - EXIT

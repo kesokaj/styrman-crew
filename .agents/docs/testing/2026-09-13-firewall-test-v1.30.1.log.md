@@ -2,14 +2,15 @@
 owner: main
 date: 2026-09-13
 ---
-# Firewall script suite — v1.30.1 gate
+# Firewall script suite — v1.30.1 gate (final test.sh: run status kept in RUNRC and asserted both ways)
 
-Run by the main thread: `unshare -Urnm bash deploy/firewall/test.sh` (the suite refuses the host namespace). Verbatim output:
+Run by the main thread: `unshare -Urnm bash deploy/firewall/test.sh`. Verbatim output:
 
 ```
 PASS golden sandbox bridge name
 PASS golden lan bridge name
 === 1. base rules
+PASS a clean run exits 0 (no WARNS)
 PASS physdev RETURN present
 PASS six private-range DROPs
 PASS STYRMAN-IN is a bare DROP
@@ -31,6 +32,7 @@ PASS the six DROPs are intact
 PASS STYRMAN-IN is a bare DROP again
 PASS cleanup is idempotent
 === 5. the cleanup refuses to delete a DROP
+PASS a run with a refused DROP exits 1 (the WARN reaches the exit path)
 PASS the tagged DROP survives
 PASS and the run reports a warning
 === 6. IPv6 mirror
@@ -38,6 +40,6 @@ PASS STYRMAN-IN6 drops
 PASS INPUT6 jump on the sdb- wildcard
 PASS no ip6 rule names the lan- interface
 
-PASS=24 FAIL=0
+PASS=26 FAIL=0
 rc=0
 ```

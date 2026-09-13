@@ -34,8 +34,12 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> image/
   commit. `bash image/bump-pins.sh` does the reading for Go, Node, Claude
   Code and the base-image digests (publisher sources only) and prints what
   would change; `--apply` rewrites the ARG lines and the `FROM …@sha256`
-  digests in both Dockerfiles, after which `docker build image/` proves the
-  new sums (operator, 2026-09-13: "if we pin stuff make it easy to upgrade").
+  digests in both Dockerfiles, after which `docker build image/` checks the
+  fetched archives against the recorded sums (operator, 2026-09-13: "if we
+  pin stuff make it easy to upgrade"). Trust model, stated plainly: TLS to
+  each publisher plus the publisher's own published sums; no signature is
+  verified (Node's `SHASUMS256.txt.asc` is not checked), and npm publishes no
+  separate sum for Claude Code, so that one is a version pin only.
 - `shellcheck` (apt) and `hadolint` (GitHub release binary, pinned as above)
   — the shell and Dockerfile syntax checkers backing the editor's Check
   feature (`internal/httpapi/check.go`, `POST /api/projects/{id}/check`),
