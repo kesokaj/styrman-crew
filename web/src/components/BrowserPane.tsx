@@ -42,7 +42,7 @@ type Phase = "connecting" | "ready" | "stopped" | "unavailable" | "disconnected"
 
 type Tab = { targetId: string; url: string; title: string };
 
-type TargetInfo = { targetId: string; type: string; url: string; title: string; attached?: boolean };
+type TargetInfo = { targetId: string; type: string; url: string; title: string };
 
 /** Notice display time — long enough to read a dialog's message. */
 const NOTICE_MS = 5000;
@@ -325,7 +325,10 @@ export function BrowserPane({
     });
 
     const upsert = (t: TargetInfo) => {
+      // Every field is checked, not just the id: url and title are rendered
+      // (as text) and come from the guest's browser (audit 2026-09-13).
       if (!t || typeof t !== "object" || t.type !== "page" || typeof t.targetId !== "string") return;
+      if (typeof t.url !== "string" || typeof t.title !== "string") return;
       const cur = tabsRef.current;
       const i = cur.findIndex((x) => x.targetId === t.targetId);
       const tab = { targetId: t.targetId, url: t.url, title: t.title };

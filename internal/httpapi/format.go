@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -44,7 +45,12 @@ func formatInPlace(ext string) string {
 		"json", "css", "scss", "less",
 		"html", "htm", "md", "markdown",
 		"yaml", "yml", "vue", "graphql":
-		return `prettier --write "$F"`
+		// --ignore-path /dev/null: the temp file sits inside the project (for
+		// config discovery), where a .prettierignore matching dotfiles would
+		// make prettier skip it and the unchanged content come back as a
+		// "success" (audit 2026-09-13). The other formatters format an
+		// explicit path regardless of their excludes.
+		return `prettier --write --ignore-path /dev/null "$F"`
 	}
 	return ""
 }
@@ -81,17 +87,26 @@ func (s *Server) formatFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Temp file in the workspace (WorkDir=ws) so formatters discover repo config;
-	// content is read from stdin, so no size limit and no shell interpolation.
-	// ext is already allowlisted by formatInPlace's switch, but sanitize on the
-	// same path as check.go so the two cannot drift apart (defense in depth).
+	// The temp file goes BESIDE the edited file inside the workspace
+	// (WorkDir=ws), because formatters resolve their config from the file's
+	// own directory upward — a monorepo's web/.prettierrc as much as the
+	// root's. Its directory travels as an env var, never interpolated into
+	// the script, and the script confines it under $PWD. Content is read
+	// from stdin, so no size limit and no shell interpolation. ext is already
+	// allowlisted by formatInPlace's switch, but sanitize on the same path as
+	// check.go so the two cannot drift apart (defense in depth).
+	dir, err := formatDir(body.Path)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
 	script := formatScript(safeSuffix(ext), len(body.Content), cmd)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	_, out, err := s.guest.Exec(ctx, cid, orchestrator.ExecSpec{
 		User:    guest,
-		Env:     []string{"HOME=/home/" + guest, "USER=" + guest},
+		Env:     []string{"HOME=/home/" + guest, "USER=" + guest, "STYRMAN_FMT_DIR=" + dir},
 		WorkDir: ws,
 		Cmd:     []string{"bash", "-c", script},
 		Stdin:   []byte(body.Content),
@@ -113,12 +128,44 @@ func (s *Server) formatFile(w http.ResponseWriter, r *http.Request) {
 	writeErr(w, http.StatusUnprocessableEntity, errors.New(firstLine(msg)))
 }
 
+// formatDir is the workspace-relative directory of the file being formatted,
+// or an error for a path that would leave the workspace. Cleaned server-side;
+// the script re-confines it under $PWD anyway (belt and braces).
+func formatDir(p string) (string, error) {
+	p = strings.ReplaceAll(p, "\\", "/")
+	if strings.HasPrefix(p, "/") {
+		return "", errors.New("path must be workspace-relative")
+	}
+	// Clean RELATIVE to the workspace: a leading ".." survives cleaning and
+	// is the escape; cleaning against "/" would swallow it.
+	c := path.Clean(p)
+	if c == ".." || strings.HasPrefix(c, "../") {
+		return "", errors.New("path escapes the workspace")
+	}
+	return path.Dir(c), nil
+}
+
 // formatScript builds the guest script. Extracted so the stdin contract is
 // unit-testable (format_test.go): it MUST read an exact byte count rather than
 // waiting for stdin EOF — see the long comment in orchestrator.Exec.
+//
+// The temp file lives beside the edited file (STYRMAN_FMT_DIR under $PWD, the
+// workspace) so the formatter finds the project's config — this deliberately
+// reverses the 2026-09-01 move to ~/.styrman/tmp for FORMAT only (check keeps
+// it: a debounce tick, and checkers take the path). What made the workspace
+// temp a nuisance then is handled here: the name is a dotfile that
+// .git/info/exclude hides from status and "Stage all", the file explorer
+// drops it from listings, and a crash leftover is swept by the next format
+// (audit 2026-09-13). The sweep is scoped by depth AND name — never `find
+// "$D" -type f -delete` inside a workspace.
 func formatScript(ext string, n int, cmd string) string {
-	// Temp file outside the workspace, as in checkScript.
-	return fmt.Sprintf(`D="$HOME/.styrman/tmp"; mkdir -p "$D" && find "$D" -type f -mmin +60 -delete 2>/dev/null; F=$(mktemp -p "$D" --suffix=.%s) || { printf 'STYRMAN_ERR\ncannot create temp file'; exit 0; }
+	return fmt.Sprintf(`D="$PWD"
+if [ -n "${STYRMAN_FMT_DIR:-}" ] && [ -d "$PWD/${STYRMAN_FMT_DIR}" ]; then
+  case "$(realpath -m -- "$PWD/${STYRMAN_FMT_DIR}")" in "$PWD"|"$PWD"/*) D="$PWD/${STYRMAN_FMT_DIR}" ;; esac
+fi
+find "$D" -maxdepth 1 -name '.styrman-fmt-*' -mmin +60 -delete 2>/dev/null
+if [ -d "$PWD/.git" ] && ! grep -qsx '.styrman-fmt-*' "$PWD/.git/info/exclude"; then mkdir -p "$PWD/.git/info" && printf '%%s\n' '.styrman-fmt-*' >> "$PWD/.git/info/exclude"; fi 2>/dev/null
+F=$(mktemp -p "$D" .styrman-fmt-XXXXXX --suffix=.%s) || { printf 'STYRMAN_ERR\ncannot create temp file'; exit 0; }
 trap 'rm -f "$F" "${F}.err"' EXIT
 E="${F}.err"
 head -c %d > "$F"

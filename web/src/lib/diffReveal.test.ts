@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reveal } from "../components/DiffView";
+import { reveal } from "./diffReveal";
 
 // The diff pane exists so a change can be reviewed BEFORE it is committed.
 // A line that renders differently from how it applies defeats that entirely,

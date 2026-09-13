@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"net/http"
+	"path"
 
 	"github.com/kesokaj/styrman-crew/internal/identity"
 )
@@ -35,7 +36,11 @@ func (s *Server) authGuard(mode string, next http.Handler) http.Handler {
 		// hit /link/<token> on :8080 directly and be proxied into ANOTHER
 		// project's port, defeating R12. The ingress injects the token on the
 		// preview block; a direct VM request lacks it.
-		if isLinkPath(r.URL.Path) {
+		// Cleaned first: the guards wrap the mux, which cleans paths for
+		// routing; a raw "/link/../x" must not read as a link path here (no
+		// bypass was found — the mux 301s it — but the prefix must be judged
+		// on the path that routes; audit 2026-09-13).
+		if isLinkPath(path.Clean(r.URL.Path)) {
 			if s.cfg.IngressToken != "" &&
 				subtle.ConstantTimeCompare([]byte(r.Header.Get(HeaderIngress)), []byte(s.cfg.IngressToken)) != 1 {
 				writeErr(w, http.StatusForbidden, fmt.Errorf("request did not come through the ingress"))

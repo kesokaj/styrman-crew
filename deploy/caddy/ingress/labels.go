@@ -66,6 +66,11 @@ func ParseLabels(labels map[string]string, containerName string, exposedPorts []
 	} else {
 		app.Hostname = sanitizeHostname(containerName)
 	}
+	// A name made only of stripped characters sanitizes to "", which would
+	// emit a site block for ".<domain>" (audit 2026-09-13).
+	if app.Hostname == "" || strings.Trim(app.Hostname, ".-") == "" {
+		return nil, fmt.Errorf("hostname for %q sanitizes to nothing usable", containerName)
+	}
 
 	// Block reserved hostnames for non-infrastructure containers.
 	// Only styrman-* containers (infrastructure) may use reserved hostnames.

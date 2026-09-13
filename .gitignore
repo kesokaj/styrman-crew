@@ -24,3 +24,6 @@ web/.output/
 # Operator feedback screenshots (session input, not source)
 /screens/
 wsprobe
+
+# agent scratch notes an earlier accident committed (audit 2026-09-13, BUG-006 family)
+web/.claude/

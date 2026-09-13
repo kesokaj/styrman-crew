@@ -44,6 +44,8 @@ const (
 )
 
 // JWT cookie name set by caddy-security.
+// AuthCookieName is the portal's session cookie; the public preview block
+// strips exactly this cookie before tunnelling into a guest app.
 const AuthCookieName = "AUTHP_ACCESS_TOKEN"
 
 // Role strings used in X-Caddy-Role header values.

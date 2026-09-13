@@ -84,16 +84,16 @@ explorer.go grab-bag split; credstore `safe()` injectivity (store migration); se
 - [x] git panel finally/treeChanged — verify: check/lint (AI) — tsc + oxlint clean
 - [x] config bound + test; files Read/ContainedPath; history parity; uuid; credstore/broker logs; orchestrator recreate-not-reconnect + test — verify: go test -race (AI) — all seven packages ok
 ### Phase 2 — Server + ingress (M3, M8, M10, M11, M13, lows)
-- [ ] format temp back in the workspace + comments + test — verify: format_test, integration format check (AI)
-- [ ] updater marker regex + GNUPGHOME + fixture test — verify: new Go test (AI)
-- [ ] ingress suffix dot + AuthCookieName + sanitizeHostname + Cookie strip + path.Clean; tests — verify: ingress module tests (AI)
-- [ ] ServeSetup origin-first + test — verify: terminal/httpapi tests (AI)
-- [ ] projectenv/stats tests; server.go lows; browser.go join; orchestrator helper; config WARN — verify: go test -race (AI)
+- [x] format temp beside the edited file + confinement + exclude + explorer filter + comments + tests — verify: format_test (AI) — green
+- [x] updater: functions hoisted, gated `__verify-tag` verb, four-marker regex, GNUPGHOME + RETURN trap, owner check = running user — verify: `TestStyrmanUpdateVerifyTagMarkers` (AI) — green
+- [x] ingress: dotted redirect suffix, `cookie samesite lax`, portal-cookie strip on the public block (AuthCookieName now used), empty-hostname refusal; server: `path.Clean` before prefix exemptions; tests — verify: ingress module tests + a `caddy validate` of a generated Caddyfile (adapted; provisioning stopped only at the dummy Cloudflare token) (AI) — green
+- [x] `terminal.SameOriginOrAbsent` first statement in ServeHTTP and ServeSetup; browser relay uses it — verify: `origin_test.go` (AI) — green
+- [x] projectenv/stats handler tests; createProject workspace cleanup; credentials read faults 500+log; relay pumps joined; config WARNs — verify: go test -race ./... (AI) — green. Not done (recorded): the provisioning-map key shape and the orchestrator mismatch helper (cosmetic)
 ### Phase 3 — Image + scripts (M9, host-setup, styrman-ctl, digests)
-- [ ] Dockerfile pins + comment + base digests; Dockerfile.server digest — verify: local image build (ensure-test-image), styrman-runtime:test boots in integration (AI)
-- [ ] host-setup guard; styrman-ctl key validation + test — verify: bash -n, shellcheck, ctl test (AI)
+- [x] Dockerfile pins (Go 1.27.1, Node 22.23.2, claude-code 2.1.270; agy floats by design) + comment + base digests in both Dockerfiles — verify: `ensure-test-image` rebuilt, `go version`/`node --version`/`claude --version`/`agy --version` answer in the image (AI); integration boot below
+- [x] host-setup /etc/styrman guard; styrman-ctl edit key validation — verify: bash -n, shellcheck, ctl tests (AI) — green
 ### Phase 4 — Web lows, docs, records, release
-- [ ] BrowserPane/icons/settings/portUrl/diffReveal move/clips test/DiffView/agent-memory untracked — verify: check/lint/test, git status (AI)
+- [x] BrowserPane/icons/settings/portUrl/reveal→lib with zero-width family/clips test/agent-memory untracked — verify: check/lint/vitest 177 (AI) — green
 - [ ] documentation (api.md ADR-067, runtime-image.md, testing README), changelog (audit + fixes + ADR-030 amendment + image-pin ADR), bugs (BUG-054/055 done; any new), TODO records — then `/preflight v1.30.0`
 
 ## Cold-read trail

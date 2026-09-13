@@ -865,9 +865,11 @@ export const api = {
   setupDiscard: () => request<void>("/api/setup", { method: "DELETE" }),
 };
 
-/** Shareable link to a port exposed inside a project's microVM. */
+/** Shareable link to a port exposed inside a project's microVM (through the
+ *  same `u` tag as every other path, so a caller-supplied id can never
+ *  retarget it — audit 2026-09-13). */
 export const portUrl = (project: string, term: string, port: number) =>
-  `/p/${project}/${term}/port/${port}/`;
+  u`/p/${project}/${term}/port/${String(port)}/`;
 
 /** The project browser's status (ADR-068): what the in-guest launcher reports. */
 export type BrowserStatus = { running: boolean; version?: string };

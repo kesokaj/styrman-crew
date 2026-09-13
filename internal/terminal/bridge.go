@@ -112,6 +112,12 @@ func clientSize(r *http.Request) (cols, rows uint16) {
 // ServeHTTP attaches a project terminal: {project} and {term} path values
 // plus optional cols/rows query params.
 func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// First statement, before the store, the record and the VM: a forged
+	// cross-origin GET must boot nothing (audit 2026-09-13).
+	if !SameOriginOrAbsent(r) {
+		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+		return
+	}
 	id := identity.FromContext(r.Context())
 	user, email := id.Username, id.Email
 	projName := r.PathValue("project")
@@ -190,6 +196,10 @@ func (b *Bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // 4000 — the frontend finalizes setup and tears the VM down on that signal,
 // so the VM auto-closes on completion instead of idling at a shell prompt.
 func (b *Bridge) ServeSetup(w http.ResponseWriter, r *http.Request) {
+	if !SameOriginOrAbsent(r) {
+		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+		return
+	}
 	id := identity.FromContext(r.Context())
 	user, email := id.Username, id.Email
 	guest := b.guestFor(user)

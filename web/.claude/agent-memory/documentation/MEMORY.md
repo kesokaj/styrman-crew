@@ -1,1 +1,0 @@
-- [styrman docs structure](project_styrman_docs_structure.md) — docs root is `.agents/docs/`; UI behavior lives inline in guide.md §1 idea 4, not README

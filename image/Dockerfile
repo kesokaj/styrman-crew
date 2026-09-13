@@ -5,14 +5,14 @@
 # mirror (harness/, see harness/VENDORED.md) in a builder stage pinned to the
 # same Go toolchain as deploy/Dockerfile.server. Static binary; the runtime
 # stage only copies it (ADR-062).
-FROM golang:1.25.13-trixie AS harness-builder
+FROM golang:1.25.13-trixie@sha256:6be3daa12135c38c177e2fbbf38ef2ad000d09b34bfa9f73dd7ca785bff134a5 AS harness-builder
 WORKDIR /src
 COPY harness/ /src/
 # GOPROXY=off: the module has no requirements; make that a build failure,
 # not a network fetch, if it ever changes.
 RUN CGO_ENABLED=0 GOTOOLCHAIN=local GOPROXY=off go build -trimpath -ldflags='-s -w' -o /out/sh-agent ./cmd/sh-agent
 
-FROM debian:trixie
+FROM debian:trixie@sha256:6788062a1b42ac281f053ac876170b79a3eaed5d61383b8ed7eaca6c6965f3b1
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TERM=xterm-256color
@@ -52,14 +52,19 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 # auto-updater's rollback would not restore the image the old tag produced
 # (security review, 2026-09-01).
 #
-# Every remaining tool is pinned by version AND verified by sha256 (audit
-# 2026-09-02). OpenTofu was a `curl | bash` installer script — an
-# unauthenticated remote shell script running as root at build time, fetching
-# whatever version was current that day — and yq used
-# `releases/latest/download`. Every checksum
-# below was cross-checked against the publisher's own published sums, not just
-# computed from whatever the download returned. Bump these deliberately and
-# together (specs/styrman/runtime-image.md).
+# What is pinned, and how (audit 2026-09-02, completed 2026-09-13 — ADR-069):
+# OpenTofu, yq, hadolint, the Go toolchain and Node are fetched by VERSION and
+# verified against the publisher's own published sha256 (never a sum computed
+# from whatever the download returned); Claude Code is pinned by npm version
+# (its postinstall is what installs the CLI, so no --ignore-scripts);
+# chrome-devtools-mcp is pinned further down. The ONE thing that floats is
+# the Antigravity CLI (`agy`): Google publishes it as latest-only behind a
+# manifest whose sha512 the installer verifies, offers no versioned artifact,
+# and the CLI self-updates at run time anyway — a build-time pin would be
+# theatre, so the floating install is an accepted, recorded exception.
+# Before 2026-09-02, OpenTofu and Helm were `curl | bash` too; Helm was
+# removed, OpenTofu pinned. Bump the ARG pairs deliberately and together
+# (specs/styrman/runtime-image.md names the procedure).
 ARG TOFU_VERSION=1.12.6
 ARG TOFU_SHA256=5dc43da4f750f33873dc25e94587128709e819e544b7be9016b255316153c3a8
 ARG YQ_VERSION=4.53.6
@@ -85,17 +90,33 @@ RUN set -eux; \
     chmod 0755 /usr/local/bin/hadolint; \
     rm -rf /tmp/tofu.zip /tmp/tofu
 
-# Go (latest stable) + Node 22
-RUN GO_VERSION=$(curl -fsSL 'https://go.dev/dl/?mode=json' | jq -r '.[0].version') && \
-    curl -fsSL "https://go.dev/dl/${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz && \
-    ln -s /usr/local/go/bin/go /usr/local/bin/go && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install --no-install-recommends -y nodejs && rm -rf /var/lib/apt/lists/*
+# Go + Node, pinned (sums from go.dev/dl and nodejs.org/dist/vX/SHASUMS256.txt,
+# read 2026-09-13; these are the versions production already ran, now
+# explicit). A changed upstream tarball fails the build loudly.
+ARG GO_VERSION=1.27.1
+ARG GO_SHA256=63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445
+ARG NODE_VERSION=22.23.2
+ARG NODE_SHA256=d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307
+RUN set -eux; \
+    curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"; \
+    echo "${GO_SHA256}  /tmp/go.tgz" | sha256sum -c -; \
+    tar -C /usr/local -xzf /tmp/go.tgz; rm -f /tmp/go.tgz; \
+    ln -s /usr/local/go/bin/go /usr/local/bin/go && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt; \
+    curl -fsSL -o /tmp/node.txz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"; \
+    echo "${NODE_SHA256}  /tmp/node.txz" | sha256sum -c -; \
+    tar -C /usr/local --strip-components=1 -xJf /tmp/node.txz --exclude='*/CHANGELOG.md' --exclude='*/README.md' --exclude='*/LICENSE'; \
+    rm -f /tmp/node.txz; node --version; npm --version
 
-# The agents: Claude Code (npm) and Antigravity CLI (single Go binary).
-RUN npm install -g @anthropic-ai/claude-code && \
-    curl -fsSL https://antigravity.google/cli/install.sh | bash && \
-    { mv /root/.local/bin/agy /usr/local/bin/agy 2>/dev/null || true; } && \
+# The agents: Claude Code (npm, pinned; its postinstall installs the CLI) and
+# the Antigravity CLI (floats by upstream design — see the note above; the
+# installer downloads to a file first so a failed fetch cannot run a partial
+# script).
+ARG CLAUDE_CODE_VERSION=2.1.270
+RUN set -eux; \
+    npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
+    curl -fsSL -o /tmp/agy-install.sh https://antigravity.google/cli/install.sh; \
+    bash /tmp/agy-install.sh; rm -f /tmp/agy-install.sh; \
+    { mv /root/.local/bin/agy /usr/local/bin/agy 2>/dev/null || true; }; \
     claude --version && agy --version
 
 # Browser view (ADR-068): one headless Chromium per project, driven by the

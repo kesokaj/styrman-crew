@@ -319,20 +319,22 @@ func TestParseCheckOutputTofu(t *testing.T) {
 	}
 }
 
-// The guest temp file lives OUTSIDE the workspace (carried-over review low,
+// The CHECK temp file lives OUTSIDE the workspace (carried-over review low,
 // 2026-09-01): a regression back to `mktemp -p .` would put editor content
-// in the project tree on every debounce tick.
+// in the project tree on every debounce tick. FORMAT is the deliberate
+// opposite since the 2026-09-13 audit — formatters resolve config from the
+// file's path — with its own guards (format_test.go); it must never fall
+// back to ~/.styrman/tmp, where no project config is found.
 func TestScriptsKeepTempFilesOutOfTheWorkspace(t *testing.T) {
-	for name, s := range map[string]string{
-		"check":  checkScript("go", 1, "true"),
-		"format": formatScript("go", 1, "true"),
-	} {
-		if !strings.Contains(s, `mktemp -p "$D"`) || !strings.Contains(s, `D="$HOME/.styrman/tmp"`) {
-			t.Errorf("%s script does not use the ~/.styrman/tmp dir:\n%s", name, s)
-		}
-		if strings.Contains(s, "mktemp -p .") {
-			t.Errorf("%s script still creates its temp file in the workspace", name)
-		}
+	s := checkScript("go", 1, "true")
+	if !strings.Contains(s, `mktemp -p "$D"`) || !strings.Contains(s, `D="$HOME/.styrman/tmp"`) {
+		t.Errorf("check script does not use the ~/.styrman/tmp dir:\n%s", s)
+	}
+	if strings.Contains(s, "mktemp -p .") {
+		t.Errorf("check script still creates its temp file in the workspace")
+	}
+	if f := formatScript("go", 1, "true"); strings.Contains(f, `.styrman/tmp`) {
+		t.Errorf("format script fell back to ~/.styrman/tmp, where no project config is discovered:\n%s", f)
 	}
 	if s := checkScript("go", 1, "true"); strings.Contains(s, `${F}.err`) {
 		t.Error("check trap names a file it never creates")

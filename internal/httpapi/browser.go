@@ -320,19 +320,6 @@ var browserHTTPClient = &http.Client{
 	},
 }
 
-// sameOriginOrAbsent is the Origin check the relay applies BEFORE any side
-// effect (bridge attach, docker exec, guest dial): websocket.Accept does the
-// same check, but only at the end. A browser always sends Origin on a
-// WebSocket handshake; a non-browser client may omit it.
-func sameOriginOrAbsent(r *http.Request) bool {
-	o := r.Header.Get("Origin")
-	if o == "" {
-		return true
-	}
-	u, err := url.Parse(o)
-	return err == nil && strings.EqualFold(u.Host, r.Host)
-}
-
 // GET /ws/browser/{project} — the CDP relay, owner only (authGuard resolves
 // the identity; getProjectFor is the ownership check, never previewAccess).
 //
@@ -342,7 +329,7 @@ func sameOriginOrAbsent(r *http.Request) bool {
 // the socket is accepted, every close the relay sends is a config.Close*
 // code or a standard 1000/1009/1011.
 func (s *Server) browserSocket(w http.ResponseWriter, r *http.Request) {
-	if !sameOriginOrAbsent(r) {
+	if !terminal.SameOriginOrAbsent(r) {
 		writeErr(w, http.StatusForbidden, fmt.Errorf("cross-origin request refused"))
 		return
 	}
@@ -476,10 +463,17 @@ func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn, stillA
 			}
 		}
 	}
+	// Both pumps are joined before this function returns — the caller
+	// releases the relay slot on return, and a pump still copying a frame
+	// into a closing socket would otherwise outlive its slot (audit
+	// 2026-09-13).
+	var pumps sync.WaitGroup
+	defer pumps.Wait()
 	paneErr := make(chan error, 1)
-	go func() { paneErr <- pump(upstream, pane) }()
 	upErr := make(chan error, 1)
-	go func() { upErr <- pump(pane, upstream) }()
+	pumps.Add(2)
+	go func() { defer pumps.Done(); paneErr <- pump(upstream, pane) }()
+	go func() { defer pumps.Done(); upErr <- pump(pane, upstream) }()
 	revoked := make(chan struct{}, 1)
 	var revokedFlag atomic.Bool
 	if stillAuthorized != nil {

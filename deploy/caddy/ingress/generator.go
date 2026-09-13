@@ -137,6 +137,12 @@ func writePreviewWildcard(b *strings.Builder, app App, cfg GeneratorConfig) {
 	for _, h := range []string{HeaderEmail, HeaderUser, HeaderRole, HeaderSubject, HeaderIngress} {
 		fmt.Fprintf(b, "    request_header -%s\n", h)
 	}
+	// The portal's session cookie is scoped to the base domain, so a browser
+	// sends it to the public preview host too — and the preview tunnels the
+	// request into a guest app someone else runs. Cut that one cookie out of
+	// the header (the guest app's own cookies must survive, so the whole
+	// header cannot go) — audit 2026-09-13.
+	fmt.Fprintf(b, "    request_header Cookie \"(?:^|;\\s*)%s=[^;]*\" \"\"\n", AuthCookieName)
 	if cfg.IngressToken != "" {
 		fmt.Fprintf(b, "    request_header %s %q\n", HeaderIngress, cfg.IngressToken)
 	}
@@ -261,7 +267,16 @@ func writeSecurityBlock(b *strings.Builder, apps []App, cfg GeneratorConfig) {
 	fmt.Fprintf(b, "        authentication portal myportal {\n")
 	b.WriteString("            enable identity provider google\n")
 	fmt.Fprintf(b, "            cookie domain %s\n", cfg.BaseDomain)
-	fmt.Fprintf(b, "            trust login redirect uri domain suffix %s path prefix /\n", cfg.BaseDomain)
+	// Lax: a cross-SITE WebSocket handshake or fetch no longer carries the
+	// session (the server also refuses cross-origin sockets before any side
+	// effect; this closes the other half, audit 2026-09-13).
+	fmt.Fprintf(b, "            cookie samesite lax\n")
+	// Leading dot: go-authcrunch matches the redirect host with a bare
+	// HasSuffix, so a bare domain trusted "evil<base>" as a post-login
+	// redirect target — an open redirect on the portal (audit 2026-09-13).
+	// ".<base>" is label-bounded; the app host <name>.<base> and the auth
+	// host auth.<base> still match; the apex is not a served site.
+	fmt.Fprintf(b, "            trust login redirect uri domain suffix .%s path prefix /\n", cfg.BaseDomain)
 	// Session lifetime, set deliberately instead of inheriting the plugin's
 	// 900 s default (BUG-001 made expiry visible: a toast and a reload every
 	// 15 minutes of use). Eight hours — a working day. The lifetime is not

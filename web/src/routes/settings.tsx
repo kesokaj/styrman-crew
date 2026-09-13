@@ -960,13 +960,6 @@ function FontRows({
 
 /** Admin-editable runtime tunables. Disk applies to newly created project
  *  VMs; idle timeout applies to the reaper immediately. */
-/**
- * The operator's view of the host half of per-project LAN access (ADR-065):
- * whether root's firewall script is installed and current, when it last ran,
- * and what "local network" means on this host. Admin-only — the payload
- * itself is only sent to admins.
- */
-
 function RuntimeEditor({
   dockerDiskGB,
   idleTimeout,

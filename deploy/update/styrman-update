@@ -55,6 +55,121 @@ STATE_DIR="${STYRMAN_UPDATE_STATE_DIR:-}"
 # How long to wait for the new server to report its version before rolling back.
 HEALTH_TIMEOUT="${STYRMAN_UPDATE_HEALTH_TIMEOUT:-120}"
 
+# ─── Functions (defined before any top-level action so the test verb below
+# can reach verify_tag without the fetch/deploy flow) ────────────────────────
+log()  { echo "[styrman-update] $*"; }
+fail() { echo "[styrman-update] FATAL: $*" >&2; exit 1; }
+
+# trusted_dir <dir> — the same bar every other root-written path in this
+# script meets: exists, root-owned, not group/world-writable.
+trusted_dir() {
+    [ -d "$1" ] && [ "$(stat -c %u "$1")" = "0" ] && [ -z "$(find "$1" -maxdepth 0 -perm /022 2>/dev/null)" ]
+}
+
+
+# ALWAYS clear inherited credential helpers — with or without a token file —
+# so an ambient root credential store can never silently answer for a fetch
+# whose output is built and run as root (security review). The token block
+# below APPENDS its scoped helper to this.
+GIT_CRED_ARGS=(-c credential.helper=)
+git() { command git -c safe.directory="${DEPLOY_DIR}" "${GIT_CRED_ARGS[@]}" "$@"; }
+
+# verify_tag <tag> — refuse anything we cannot attribute to an ALLOWED signer.
+#
+# `git verify-tag` alone is NOT sufficient: with GPG it exits 0 for a
+# good-but-untrusted signature, so any key ever imported into root's keyring
+# passes, and git never compares signer to tagger (verified empirically —
+# security review). The SSH path DOES enforce an allowlist and fails closed
+# when unconfigured, so that is the supported path and we ASSERT it is
+# configured rather than relying on root's ambient gitconfig.
+# ALLOWED_SIGNERS is a PINNED path, deliberately not read from root's gitconfig:
+# the systemd unit sets ProtectHome=yes, so /root/.gitconfig is unreadable under
+# the timer and `git config --global --get` returns empty there. That failed
+# closed on every tick while a hand-run `sudo styrman-update` passed — the worst
+# shape of bug, since it only appears after the operator enables the timer
+# (review finding).
+ALLOWED_SIGNERS="${STYRMAN_ALLOWED_SIGNERS:-/etc/styrman/allowed_signers}"
+
+# verify_tag <tag> — returns non-zero rather than exiting, so callers inside an
+# `if` condition (deploy) can take their own failure path.
+verify_tag() {
+    local tag="$1"
+    [ "${REQUIRE_SIGNED}" = "1" ] || return 0
+    # A lightweight tag is just a ref — it cannot carry a signature at all.
+    if [ "$(git cat-file -t "${tag}" 2>/dev/null)" != "tag" ]; then
+        log "REFUSED: ${tag} is a lightweight tag and cannot be verified. Re-tag with \`git tag -s ${tag}\` (signed, annotated), or opt out in /etc/styrman/update.env."
+        return 1
+    fi
+    # REQUIRE an SSH signature. `-c gpg.format=ssh` does NOT force the SSH
+    # verifier: git picks it from the signature's own armor header, so a
+    # PGP-signed tag ignores the allowlist entirely and verifies against
+    # whatever is in root's keyring — good-but-untrusted included (measured).
+    # Only the SSH path consults gpg.ssh.allowedSignersFile, so anything else
+    # is refused rather than silently unpinned.
+    # Take the LAST armor header, matching git's own parse_signature: the tag
+    # MESSAGE is author-controlled and `git cat-file tag` prints it, so a decoy
+    # "-----BEGIN SSH SIGNATURE-----" line in the message passed a plain grep
+    # while the real PGP block appended at the end still won — verify-tag then
+    # exited 0 with the allowlist never consulted (security review reproduced
+    # it). Comparing the last header closes that.
+    # ALL FOUR of git's signature markers (gpg-interface.c: PGP SIGNATURE,
+    # PGP MESSAGE, SIGNED MESSAGE for x509, SSH SIGNATURE) — the grep used to
+    # know two, so an SSH block followed by a PGP MESSAGE block passed this
+    # check while git verified with gpg (audit 2026-09-13).
+    if [ "$(git cat-file tag "${tag}" 2>/dev/null |
+            grep -E '^-----BEGIN (SSH SIGNATURE|PGP SIGNATURE|PGP MESSAGE|SIGNED MESSAGE)-----' | tail -1)" \
+         != '-----BEGIN SSH SIGNATURE-----' ]; then
+        log "REFUSED: ${tag} is not SSH-signed. Only SSH signatures are checked against the"
+        log "  signer allowlist (${ALLOWED_SIGNERS}); a PGP signature would verify against any"
+        log "  key in root's keyring and pin nothing. Re-tag with SSH signing:"
+        log "    git config gpg.format ssh && git config user.signingkey ~/.ssh/id_ed25519.pub"
+        return 1
+    fi
+    # Owned by the user running this script — root in production (the unit
+    # and the root check), the test user under the __verify-tag hook.
+    if [ -r "${ALLOWED_SIGNERS}" ] && { [ "$(stat -c %u "${ALLOWED_SIGNERS}")" != "$(id -u)" ] ||
+         [ -n "$(find "${ALLOWED_SIGNERS}" -perm /022 2>/dev/null)" ]; }; then
+        log "REFUSED: ${ALLOWED_SIGNERS} must be root-owned and not group/world-writable —"
+        log "  it decides whose tags this host will build and run as root."
+        return 1
+    fi
+    if [ ! -r "${ALLOWED_SIGNERS}" ]; then
+        log "REFUSED: ${ALLOWED_SIGNERS} is missing or unreadable, so no signer allowlist exists."
+        log "  A bare \`git verify-tag\` accepts ANY key in root's keyring, so this is fatal by design."
+        log "  Create it:  printf '%s %s\\n' <your-git-email> \"\$(cat ~/.ssh/id_ed25519.pub)\" | sudo tee ${ALLOWED_SIGNERS}"
+        return 1
+    fi
+    # An EMPTY GNUPGHOME for the verification itself: should git ever
+    # dispatch to gpg/gpgsm despite the marker check, no keyring means no
+    # "good" signature — the timer's ProtectHome=yes gave that by accident,
+    # a hand-run `sudo styrman-update` did not (audit 2026-09-13). The
+    # RETURN trap removes the dir on every exit path of this function.
+    local gh
+    gh="$(mktemp -d)" || { log "REFUSED: cannot create a scratch GNUPGHOME"; return 1; }
+    # shellcheck disable=SC2064  # expand now: the trap must name THIS dir
+    trap "rm -rf '${gh}'" RETURN
+    if ! GNUPGHOME="${gh}" git -c gpg.ssh.allowedSignersFile="${ALLOWED_SIGNERS}" verify-tag "${tag}" 2>&1; then
+        log "REFUSED: ${tag} is not signed by an allowed signer — will not build and run it as root."
+        return 1
+    fi
+    log "${tag} signature OK (allowed signer)"
+}
+
+# ─── Test hook: styrman-update __verify-tag <tag> <allowed_signers> <repo> ──
+# Runs verify_tag against a scratch repo and allowed_signers, as a non-root
+# user, without the fetch/deploy flow — only under the Go test
+# (internal/config/styrman_update_test.go), which sets STYRMAN_UPDATE_TEST=1;
+# anything else is refused before it can bypass the root and state guards.
+if [ "${1:-}" = "__verify-tag" ]; then
+    [ "${STYRMAN_UPDATE_TEST:-}" = 1 ] || fail "internal test hooks are disabled (set STYRMAN_UPDATE_TEST=1 only under the Go test)"
+    [ $# -eq 4 ] || fail "usage: __verify-tag <tag> <allowed_signers> <repo>"
+    REQUIRE_SIGNED=1
+    ALLOWED_SIGNERS="$3"
+    DEPLOY_DIR="$4"
+    cd "$4" || fail "cannot cd to $4"
+    if verify_tag "$2"; then exit 0; else exit 1; fi
+fi
+
 CHECK_ONLY=false
 FORCE=false
 for arg in "$@"; do
@@ -65,14 +180,6 @@ for arg in "$@"; do
     esac
 done
 
-log()  { echo "[styrman-update] $*"; }
-fail() { echo "[styrman-update] FATAL: $*" >&2; exit 1; }
-
-# trusted_dir <dir> — the same bar every other root-written path in this
-# script meets: exists, root-owned, not group/world-writable.
-trusted_dir() {
-    [ -d "$1" ] && [ "$(stat -c %u "$1")" = "0" ] && [ -z "$(find "$1" -maxdepth 0 -perm /022 2>/dev/null)" ]
-}
 
 [ "$(id -u)" -eq 0 ] || fail "must run as root"
 # ADR-052: no production-path default outside the systemd unit. Production runs
@@ -209,10 +316,8 @@ GH_TOKEN_FILE="${STYRMAN_GH_TOKEN_FILE:-/etc/styrman/gh-token}"
 # unquoted interpolation made a path with spaces yield an empty password, and
 # operator-env paths are a root shell-injection surface).
 export GH_TOKEN_FILE
-# ALWAYS clear inherited credential helpers — with or without a token file —
-# so an ambient root credential store can never silently answer for a fetch
-# whose output is built and run as root (security review).
-GIT_CRED_ARGS=(-c credential.helper=)
+# GIT_CRED_ARGS starts as "no inherited helper" (see the functions block);
+# the scoped GitHub helper is appended here when a token file exists.
 if [ -f "${GH_TOKEN_FILE}" ]; then
     # Same trust bar as every other root input this script reads.
     [ "$(stat -c %u "${GH_TOKEN_FILE}")" = "0" ] \
@@ -226,7 +331,6 @@ if [ -f "${GH_TOKEN_FILE}" ]; then
     # shellcheck disable=SC2016
     GIT_CRED_ARGS+=(-c 'credential.https://github.com.helper=!f() { echo username=x-access-token; printf "password=%s\n" "$(cat "${GH_TOKEN_FILE}")"; }; f')
 fi
-git() { command git -c safe.directory="${DEPLOY_DIR}" "${GIT_CRED_ARGS[@]}" "$@"; }
 
 # ─── Find the newest STABLE tag ─────────────────────────────────────────────
 # --force so a re-tagged release is picked up; --prune-tags so a DELETED tag
@@ -272,71 +376,6 @@ if [ -f /etc/styrman/update.env ]; then
     fi
 fi
 
-# verify_tag <tag> — refuse anything we cannot attribute to an ALLOWED signer.
-#
-# `git verify-tag` alone is NOT sufficient: with GPG it exits 0 for a
-# good-but-untrusted signature, so any key ever imported into root's keyring
-# passes, and git never compares signer to tagger (verified empirically —
-# security review). The SSH path DOES enforce an allowlist and fails closed
-# when unconfigured, so that is the supported path and we ASSERT it is
-# configured rather than relying on root's ambient gitconfig.
-# ALLOWED_SIGNERS is a PINNED path, deliberately not read from root's gitconfig:
-# the systemd unit sets ProtectHome=yes, so /root/.gitconfig is unreadable under
-# the timer and `git config --global --get` returns empty there. That failed
-# closed on every tick while a hand-run `sudo styrman-update` passed — the worst
-# shape of bug, since it only appears after the operator enables the timer
-# (review finding).
-ALLOWED_SIGNERS="${STYRMAN_ALLOWED_SIGNERS:-/etc/styrman/allowed_signers}"
-
-# verify_tag <tag> — returns non-zero rather than exiting, so callers inside an
-# `if` condition (deploy) can take their own failure path.
-verify_tag() {
-    local tag="$1"
-    [ "${REQUIRE_SIGNED}" = "1" ] || return 0
-    # A lightweight tag is just a ref — it cannot carry a signature at all.
-    if [ "$(git cat-file -t "${tag}" 2>/dev/null)" != "tag" ]; then
-        log "REFUSED: ${tag} is a lightweight tag and cannot be verified. Re-tag with \`git tag -s ${tag}\` (signed, annotated), or opt out in /etc/styrman/update.env."
-        return 1
-    fi
-    # REQUIRE an SSH signature. `-c gpg.format=ssh` does NOT force the SSH
-    # verifier: git picks it from the signature's own armor header, so a
-    # PGP-signed tag ignores the allowlist entirely and verifies against
-    # whatever is in root's keyring — good-but-untrusted included (measured).
-    # Only the SSH path consults gpg.ssh.allowedSignersFile, so anything else
-    # is refused rather than silently unpinned.
-    # Take the LAST armor header, matching git's own parse_signature: the tag
-    # MESSAGE is author-controlled and `git cat-file tag` prints it, so a decoy
-    # "-----BEGIN SSH SIGNATURE-----" line in the message passed a plain grep
-    # while the real PGP block appended at the end still won — verify-tag then
-    # exited 0 with the allowlist never consulted (security review reproduced
-    # it). Comparing the last header closes that.
-    if [ "$(git cat-file tag "${tag}" 2>/dev/null |
-            grep -E '^-----BEGIN (SSH|PGP) SIGNATURE-----' | tail -1)" \
-         != '-----BEGIN SSH SIGNATURE-----' ]; then
-        log "REFUSED: ${tag} is not SSH-signed. Only SSH signatures are checked against the"
-        log "  signer allowlist (${ALLOWED_SIGNERS}); a PGP signature would verify against any"
-        log "  key in root's keyring and pin nothing. Re-tag with SSH signing:"
-        log "    git config gpg.format ssh && git config user.signingkey ~/.ssh/id_ed25519.pub"
-        return 1
-    fi
-    if [ -r "${ALLOWED_SIGNERS}" ] && { [ "$(stat -c %u "${ALLOWED_SIGNERS}")" != "0" ] ||
-         [ -n "$(find "${ALLOWED_SIGNERS}" -perm /022 2>/dev/null)" ]; }; then
-        log "REFUSED: ${ALLOWED_SIGNERS} must be root-owned and not group/world-writable —"
-        log "  it decides whose tags this host will build and run as root."
-        return 1
-    fi
-    if [ ! -r "${ALLOWED_SIGNERS}" ]; then
-        log "REFUSED: ${ALLOWED_SIGNERS} is missing or unreadable, so no signer allowlist exists."
-        log "  A bare \`git verify-tag\` accepts ANY key in root's keyring, so this is fatal by design."
-        log "  Create it:  printf '%s %s\\n' <your-git-email> \"\$(cat ~/.ssh/id_ed25519.pub)\" | sudo tee ${ALLOWED_SIGNERS}"
-        return 1
-    fi
-    if ! git -c gpg.ssh.allowedSignersFile="${ALLOWED_SIGNERS}" verify-tag "${tag}" 2>&1; then
-        log "REFUSED: ${tag} is not signed by an allowed signer — will not build and run it as root."
-        return 1
-    fi
-    log "${tag} signature OK (allowed signer)"
-}
 
 if [ "${REQUIRE_SIGNED}" != "1" ]; then
     log "WARNING: signature checking DISABLED — any pushed tag will be built and run as root"

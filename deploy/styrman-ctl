@@ -643,7 +643,13 @@ cmd_edit() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --no-apply) apply=0; shift ;;
-            *=*) changes+=("$1"); shift ;;
+            *=*)
+                # The key becomes a line in deploy/.env that compose and the
+                # server read as shell-style assignments: only an identifier
+                # can be a key (audit 2026-09-13 — "a b=c" used to be
+                # written as-is and break every later read).
+                [[ "${1%%=*}" =~ ^[A-Z][A-Z0-9_]*$ ]] || die "edit: invalid key in ${1%%=*}=… (KEY must match [A-Z][A-Z0-9_]*)"
+                changes+=("$1"); shift ;;
             *) die "edit: unknown argument $1 (KEY=VALUE, or --no-apply)" ;;
         esac
     done

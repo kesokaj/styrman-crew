@@ -3,6 +3,7 @@ package ingress
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -388,5 +389,42 @@ func TestGenerateCaddyfile_SessionLifetimeIsExplicit(t *testing.T) {
 	assertContains(t, result, "crypto default token lifetime 28800")
 	if SessionLifetimeSeconds != 8*60*60 {
 		t.Errorf("SessionLifetimeSeconds = %d, want a working day (28800)", SessionLifetimeSeconds)
+	}
+}
+
+// Audit 2026-09-13: the portal's redirect trust is label-bounded (a bare
+// suffix trusted "evil<base>"), the session cookie is SameSite=Lax, and the
+// public preview block cuts that one cookie out of the header before
+// tunnelling into a guest app (the app's own cookies survive).
+func TestGenerateCaddyfile_PortalRedirectSuffixCookieAndPreviewCookieStrip(t *testing.T) {
+	apps := []App{{Name: "crew", Hostname: "crew", ContainerIP: "172.18.0.2", Port: 8080, Mode: ModeAuthenticated, RPS: 100}}
+	cfg := testConfig()
+	result := GenerateCaddyfile(apps, cfg)
+	assertContains(t, result, "trust login redirect uri domain suffix ."+cfg.BaseDomain+" path prefix /")
+	assertNotContains(t, result, "domain suffix "+cfg.BaseDomain+" path")
+	assertContains(t, result, "cookie samesite lax")
+	if cfg.PreviewDomain != "" {
+		assertContains(t, result, `request_header Cookie "(?:^|;\s*)`+AuthCookieName+`=[^;]*" ""`)
+	}
+	// Caddy compiles that pattern with Go's regexp: it must compile here too,
+	// and cut exactly the portal cookie out of a header that carries others.
+	re := regexp.MustCompile(`(?:^|;\s*)` + AuthCookieName + `=[^;]*`)
+	if got := re.ReplaceAllString("a=1; "+AuthCookieName+"=tok.en; b=2", ""); got != "a=1; b=2" {
+		t.Fatalf("cookie strip regex: %q", got)
+	}
+	if got := re.ReplaceAllString(AuthCookieName+"=tok", ""); got != "" {
+		t.Fatalf("cookie strip regex (only cookie): %q", got)
+	}
+	if out := os.Getenv("STYRMAN_CADDYFILE_OUT"); out != "" {
+		if err := os.WriteFile(out, []byte(result), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestSanitizeHostnameRefusesEmpty(t *testing.T) {
+	labels := map[string]string{LabelCaddy: "true", LabelHostname: "___", LabelPort: "80"}
+	if _, err := ParseLabels(labels, "c1", []int{80}, 100); err == nil {
+		t.Fatal("a hostname that sanitizes to nothing was accepted")
 	}
 }

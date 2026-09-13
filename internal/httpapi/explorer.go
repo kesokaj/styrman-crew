@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,6 +64,9 @@ func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("cannot list path"))
 		return
 	}
+	// The formatter's transient temp file (format.go) lives beside the file
+	// being formatted for a fraction of a second; never show it.
+	entries = slices.DeleteFunc(entries, func(e files.Entry) bool { return strings.HasPrefix(e.Name, ".styrman-fmt-") })
 	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
 

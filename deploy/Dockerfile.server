@@ -6,7 +6,7 @@
 # NEWEST 1.25.x: govulncheck flags dozens of CALLED stdlib vulns across the
 # 1.25 series (h2c, TLS post-handshake, net/textproto, crypto/x509 — fixes
 # spread from 1.25.4 through 1.25.13), and this binary is internet-facing.
-FROM golang:1.25.13-trixie AS builder
+FROM golang:1.25.13-trixie@sha256:6be3daa12135c38c177e2fbbf38ef2ad000d09b34bfa9f73dd7ca785bff134a5 AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -16,7 +16,7 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags "-s -w -X github.com/kesokaj/styrman-crew/internal/httpapi.Version=${STYRMAN_VERSION}" \
     -o /out/styrman ./cmd/styrman/
 
-FROM debian:trixie-slim
+FROM debian:trixie-slim@sha256:abc9cb88a5587630d7f915f47b23b0668fe250fbfc6457aa4d52b534c1bbf73f
 RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates curl git \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /out/styrman /usr/local/bin/styrman

@@ -368,8 +368,12 @@ fi
 # push; a stale host is rebuilt from this script + the repo. If an old host
 # still carries styrman-backup.{service,timer}, disable and delete them.)
 # /etc/styrman itself stays: the auto-updater's allowed_signers, gh-token,
-# and run-state live there.
-install -d -m 700 /etc/styrman
+# and run-state live there. Same bar as the three state roots above: never
+# through a symlink, and an existing dir is re-asserted root:root 0700 (the
+# updater reads secrets from it) — audit 2026-09-13.
+if [[ -L /etc/styrman ]]; then echo "FATAL: /etc/styrman is a symlink — refusing to provision through it"; exit 1; fi
+install -d -m 700 -o root -g root /etc/styrman
+chmod 700 /etc/styrman && chown root:root /etc/styrman
 
 # ─── 9. Next steps (secrets can't be auto-filled) ────────────────────────────
 cat <<NEXT

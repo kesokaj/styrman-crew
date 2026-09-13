@@ -428,6 +428,10 @@ func checkScript(suffix string, n int, cmd string) string {
 	// own state dir): every checker takes the file by path and needs no module
 	// context, and a workspace-root temp showed up in git status and the file
 	// explorer on every debounce tick (carried-over review low, 2026-09-01).
+	// FORMAT differs on purpose (format.go): formatters DO resolve config from
+	// the file's path, so its temp file sits beside the edited file, hidden
+	// through .git/info/exclude and the explorer's listing filter — a check
+	// runs on every keystroke pause, a format on an explicit click.
 	return fmt.Sprintf(`D="$HOME/.styrman/tmp"; mkdir -p "$D" && find "$D" -type f -mmin +60 -delete 2>/dev/null; F=$(mktemp -p "$D" --suffix=.%s) || { printf 'STYRMAN_ERR\ncannot create temp file'; exit 0; }
 trap 'rm -f "$F" "${F}.out"' EXIT
 head -c %d > "$F"

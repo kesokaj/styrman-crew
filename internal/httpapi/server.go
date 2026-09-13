@@ -18,6 +18,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -602,7 +603,7 @@ func csrfGuard(next http.Handler) http.Handler {
 		// CSRF concern (protecting its OWN API) doesn't apply, and the JSON body
 		// cap would truncate the app's uploads. A sandboxed preview also sends
 		// Origin: null, which would 403 every mutation the app makes (B2).
-		if isPreviewPath(r.URL.Path) || isLinkPath(r.URL.Path) || isSharedPath(r.URL.Path) {
+		if p := path.Clean(r.URL.Path); isPreviewPath(p) || isLinkPath(p) || isSharedPath(p) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -843,11 +844,13 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		err = files.MkdirAllPerm(s.cfg.TenantDir(u.Username), filepath.Join("p", p.ID), 0o700)
 		if err != nil {
 			_ = sp.projects.Remove(p.ID)
+			_ = os.Remove(workdir) // just created, empty (audit 2026-09-13: it leaked)
 			writeErr(w, http.StatusInternalServerError, errors.New("cannot create project home"))
 			return
 		}
 	} else {
 		_ = sp.projects.Remove(p.ID)
+		_ = os.Remove(workdir)
 		writeErr(w, http.StatusInternalServerError, errors.New("cannot create project home"))
 		return
 	}

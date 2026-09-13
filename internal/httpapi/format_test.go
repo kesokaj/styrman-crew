@@ -136,3 +136,50 @@ func TestFormatScriptReadsAnExactByteCount(t *testing.T) {
 		t.Errorf("a hostile extension reached the script body:\n%s", s)
 	}
 }
+
+// The temp file sits beside the edited file (config discovery), inside the
+// workspace only (realpath confinement), named so .git/info/exclude hides it,
+// swept by depth and name only, and prettier ignores no ignore file (audit
+// 2026-09-13; this reverses the 2026-09-01 move out of the workspace for
+// FORMAT alone — see formatScript's comment).
+func TestFormatScriptPlacesTheTempFileBesideTheEditedFile(t *testing.T) {
+	s := formatScript("ts", 3, `prettier --write --ignore-path /dev/null "$F"`)
+	for _, want := range []string{
+		`D="$PWD"`,
+		`case "$(realpath -m -- "$PWD/${STYRMAN_FMT_DIR}")" in "$PWD"|"$PWD"/*)`,
+		`find "$D" -maxdepth 1 -name '.styrman-fmt-*' -mmin +60 -delete`,
+		`.git/info/exclude`,
+		`mktemp -p "$D" .styrman-fmt-XXXXXX --suffix=.ts`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("script lacks %q:\n%s", want, s)
+		}
+	}
+	if strings.Contains(s, `find "$D" -type f`) {
+		t.Fatal("an unscoped sweep inside the workspace would delete project files")
+	}
+	if !strings.Contains(formatInPlace("ts"), "--ignore-path /dev/null") {
+		t.Fatal("prettier must not consult ignore files for the explicit temp path")
+	}
+}
+
+func TestFormatDirConfinesToTheWorkspace(t *testing.T) {
+	for in, want := range map[string]string{
+		"x.ts":           ".",
+		"web/src/x.ts":   "web/src",
+		"./web/x.ts":     "web",
+		"a/../b/x.ts":    "b",
+		"a/./b/x.ts":     "a/b",
+		"web\\src\\x.ts": "web/src",
+	} {
+		got, err := formatDir(in)
+		if err != nil || got != want {
+			t.Errorf("formatDir(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"/etc/x.ts", "../x.ts", "a/../../x.ts", "../../etc/passwd"} {
+		if _, err := formatDir(bad); err == nil {
+			t.Errorf("formatDir(%q) accepted a path outside the workspace", bad)
+		}
+	}
+}

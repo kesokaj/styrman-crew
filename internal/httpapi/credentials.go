@@ -36,7 +36,13 @@ func (s *Server) credentialContent(w http.ResponseWriter, r *http.Request) {
 	switch kind {
 	case "file":
 		files, err := s.creds.AllFiles(u.Username)
-		if err == nil {
+		if err != nil {
+			// A store fault is not "no such credential" (audit 2026-09-13).
+			s.logger.Warn("credential store read failed", "user", u.Username, "kind", kind, "error", err)
+			writeErr(w, http.StatusInternalServerError, errors.New("cannot read credentials"))
+			return
+		}
+		{
 			for _, f := range files {
 				if f.ID == id {
 					if !utf8.Valid(f.Data) {
@@ -50,11 +56,14 @@ func (s *Server) credentialContent(w http.ResponseWriter, r *http.Request) {
 		}
 	case "env":
 		env, err := s.creds.AllEnv(u.Username)
-		if err == nil {
-			if v, ok := env[id]; ok {
-				writeJSON(w, http.StatusOK, map[string]any{"content": v, "path": id})
-				return
-			}
+		if err != nil {
+			s.logger.Warn("credential store read failed", "user", u.Username, "kind", kind, "error", err)
+			writeErr(w, http.StatusInternalServerError, errors.New("cannot read credentials"))
+			return
+		}
+		if v, ok := env[id]; ok {
+			writeJSON(w, http.StatusOK, map[string]any{"content": v, "path": id})
+			return
 		}
 	case "git":
 		if c, err := s.creds.GetGit(u.Username, id); err == nil {
