@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isChord,
   keyParams,
   modifiersOf,
   mouseParams,
@@ -93,6 +94,16 @@ describe("keyParams", () => {
     const p = keyParams({ ...noMods, ctrlKey: true, type: "keydown", key: "a", code: "KeyA", keyCode: 65 });
     expect(p.modifiers).toBe(2);
     expect(p.text).toBeUndefined();
+  });
+
+  it("inserts an AltGr (Ctrl+Alt) character — that is typing, not a chord", () => {
+    const p = keyParams({ ...noMods, ctrlKey: true, altKey: true, type: "keydown", key: "@", code: "Digit2", keyCode: 50 });
+    expect(p.modifiers).toBe(3);
+    expect(p.text).toBe("@");
+    expect(isChord({ ...noMods, ctrlKey: true, altKey: true })).toBe(false);
+    expect(isChord({ ...noMods, ctrlKey: true })).toBe(true);
+    expect(isChord({ ...noMods, metaKey: true })).toBe(true);
+    expect(isChord({ ...noMods, altKey: true })).toBe(false);
   });
 
   it("marks keypad keys", () => {

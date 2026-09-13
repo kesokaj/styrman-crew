@@ -3,13 +3,16 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coder/websocket"
 
@@ -178,12 +181,16 @@ func TestBrowserPortRefusedOnPreviewSharesLinks(t *testing.T) {
 }
 
 // fakeDevTools stands in for the guest's DevTools server: /json/version
-// announces a browser endpoint (with a host the relay must NOT trust), and
-// the endpoint pushes one event, echoes every message, and closes on "bye".
-func fakeDevTools(t *testing.T) *httptest.Server {
+// announces a browser endpoint (with a host the relay must NOT trust) and
+// records the Connection header it was asked with; the endpoint pushes one
+// event, echoes every message, answers "big" with a frame over the relay's
+// upstream read limit, and closes on "bye".
+func fakeDevTools(t *testing.T) (*httptest.Server, *string) {
 	t.Helper()
+	var connHeader string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/json/version", func(w http.ResponseWriter, r *http.Request) {
+		connHeader = r.Header.Get("Connection")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"Browser":"Chrome/152.0.0.0","webSocketDebuggerUrl":"ws://127.0.0.1:1/devtools/browser/abc"}`))
 	})
@@ -212,12 +219,17 @@ func fakeDevTools(t *testing.T) *httptest.Server {
 				c.Close(websocket.StatusNormalClosure, "chromium gone")
 				return
 			}
+			if string(data) == `{"id":98,"method":"big"}` {
+				// One byte over the relay's ceiling for a guest frame.
+				_ = c.Write(ctx, websocket.MessageText, make([]byte, browserRelayReadLimit+1))
+				continue
+			}
 			_ = c.Write(ctx, websocket.MessageText, append([]byte(`{"echo":`), append(data, '}')...))
 		}
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, &connHeader
 }
 
 func dialRelay(t *testing.T, h http.Handler, pid string) (*websocket.Conn, *httptest.Server) {
@@ -234,7 +246,7 @@ func dialRelay(t *testing.T, h http.Handler, pid string) (*websocket.Conn, *http
 }
 
 func TestBrowserRelayPumpsBothWays(t *testing.T) {
-	dev := fakeDevTools(t)
+	dev, connHeader := fakeDevTools(t)
 	f := &fakeGuest{reply: browserReply(true, 0, "")}
 	_, h, pid := browserTest(t, f, attached(strings.TrimPrefix(dev.URL, "http://")))
 	c, _ := dialRelay(t, h, pid)
@@ -246,9 +258,19 @@ func TestBrowserRelayPumpsBothWays(t *testing.T) {
 	if err != nil || !strings.Contains(string(ev), "Target.targetCreated") {
 		t.Fatalf("first frame = %q, %v", ev, err)
 	}
-	// The relay started the browser before dialing (start, then status).
+	// The relay started the browser before dialing with ONE exec: the
+	// launcher's exit code is the answer, and the status verb the REST start
+	// adds is not asked for (review finding, 2026-09-13).
 	if got := f.matching("start"); len(got) != 1 {
 		t.Fatalf("start execs = %v", got)
+	}
+	if got := f.matching("status"); len(got) != 0 {
+		t.Fatalf("status execs on the relay path = %v, want none", got)
+	}
+	// Discovery does not keep its connection alive: a parked connection
+	// would hold one of the guest forwarder's bounded children.
+	if *connHeader != "close" {
+		t.Fatalf("/json/version Connection header = %q, want close", *connHeader)
 	}
 	if err := c.Write(ctx, websocket.MessageText, []byte(`{"id":1,"method":"Target.getTargets"}`)); err != nil {
 		t.Fatal(err)
@@ -301,17 +323,87 @@ func asCloseError(err error, ce *websocket.CloseError) bool {
 	return false
 }
 
+// A launcher's output ends with the log lines that say why; the close frame
+// keeps that END within its 123-byte budget, and both cuts land on rune
+// boundaries.
 func TestCloseReasonFitsAndKeepsRunes(t *testing.T) {
-	long := strings.Repeat("é", 100) // 200 bytes
-	r := closeReason("browser did not start: " + long)
-	if len(r) > 120 {
-		t.Fatalf("reason %d bytes", len(r))
+	head := "chromium did not answer on :9229 within 15 s; last log lines:\n"
+	r := closeReason(head + strings.Repeat("é", 60) + "\nNo usable sandbox!")
+	if len(r) > 120 || !utf8.ValidString(r) {
+		t.Fatalf("reason %d bytes, valid utf-8 %v: %q", len(r), utf8.ValidString(r), r)
 	}
-	if !strings.HasPrefix(r, "browser did not start: ") || strings.HasSuffix(r, "\xc3") {
-		t.Fatalf("reason cut mid-rune or lost its head: %q", r)
+	if !strings.HasPrefix(r, "…") || !strings.HasSuffix(r, "No usable sandbox!") || strings.Contains(r, "chromium did not") {
+		t.Fatalf("reason kept the wrong end: %q", r)
+	}
+	if short := closeReason("No usable sandbox!"); short != "No usable sandbox!" {
+		t.Fatalf("short reason changed: %q", short)
 	}
 	if tail("abc", 5) != "abc" || tail(strings.Repeat("x", 10)+"END", 3) != "…END" {
 		t.Fatal("tail keeps the wrong end")
+	}
+	// A cut that would land inside "é" (2 bytes) moves forward to the next rune.
+	if got := tail("ab"+strings.Repeat("é", 5), 5); got != "…éé" || !utf8.ValidString(got) {
+		t.Fatalf("tail split a rune: %q", got)
+	}
+}
+
+// An owner removed from the allowlist loses an open relay: the pane sees
+// 4003, exactly as an open terminal does.
+func TestBrowserRelayClosesOnRevocation(t *testing.T) {
+	dev, _ := fakeDevTools(t)
+	f := &fakeGuest{reply: browserReply(true, 0, "")}
+	s, h, pid := browserTest(t, f, attached(strings.TrimPrefix(dev.URL, "http://")))
+	var checks atomic.Int32
+	s.stillAuthorized = func(string) bool { return checks.Add(1) < 3 }
+	s.browserReauthEvery = 10 * time.Millisecond
+	c, _ := dialRelay(t, h, pid)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, ev, err := c.Read(ctx); err != nil || !strings.Contains(string(ev), "Target.targetCreated") {
+		t.Fatalf("first frame = %q, %v", ev, err)
+	}
+	var ce websocket.CloseError
+	_, _, err := c.Read(ctx)
+	if !asCloseError(err, &ce) || ce.Code != websocket.StatusCode(config.CloseAccessRevoked) || ce.Reason != "access revoked" {
+		t.Fatalf("after revocation: err = %v, want close %d access revoked", err, config.CloseAccessRevoked)
+	}
+	// The pane's own send is refused too — the relay is gone, not just muted.
+	if err := c.Write(ctx, websocket.MessageText, []byte(`{"id":1,"method":"Target.getTargets"}`)); err == nil {
+		t.Fatal("write on a revoked relay succeeded")
+	}
+}
+
+// A guest frame over the relay's ceiling closes the pane 1009 — the library
+// reports the breach as a wrapped ErrMessageTooBig, which the old
+// close-status comparison never matched (so the pane got 1011).
+func TestBrowserRelayOversizeUpstreamFrameIs1009(t *testing.T) {
+	dev, _ := fakeDevTools(t)
+	f := &fakeGuest{reply: browserReply(true, 0, "")}
+	_, h, pid := browserTest(t, f, attached(strings.TrimPrefix(dev.URL, "http://")))
+	c, _ := dialRelay(t, h, pid)
+	c.SetReadLimit(-1) // the CLIENT must not be the side that gives up
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, _, err := c.Read(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Write(ctx, websocket.MessageText, []byte(`{"id":98,"method":"big"}`)); err != nil {
+		t.Fatal(err)
+	}
+	// The relay streams the frame and abandons it at the limit: what reaches
+	// the pane is an unfinished message followed by the 1009 close.
+	var err error
+	for {
+		var r io.Reader
+		if _, r, err = c.Reader(ctx); err != nil {
+			break
+		}
+		if _, err = io.Copy(io.Discard, r); err != nil {
+			break
+		}
+	}
+	if websocket.CloseStatus(err) != websocket.StatusMessageTooBig {
+		t.Fatalf("oversize upstream frame: err = %v, want close 1009", err)
 	}
 }
 

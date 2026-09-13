@@ -67,13 +67,14 @@ version_of() { probe | jq -r '.Browser // empty' 2>/dev/null || true; }
 # literal is accepted: the value lands inside socat's option list, where a
 # stray comma would read as more options (security review).
 peer_range() {
-    local host=""
+    local host="" server_run=0
     # SET decides, not non-empty: the server always sets STYRMAN_BROWSER_PEER
     # on its starts — empty when it could not learn its own address — and
     # an empty value must mean "no forwarder", not "fall back to the
     # broker's host" (security review, round 4). Only an UNSET variable (a
     # browser the agent's MCP server started) uses the broker fallback.
     if [ -n "${STYRMAN_BROWSER_PEER+set}" ]; then
+        server_run=1
         host="${STYRMAN_BROWSER_PEER}"
     elif [ -n "${STYRMAN_CRED_BROKER:-}" ]; then
         host="${STYRMAN_CRED_BROKER#*://}"
@@ -84,19 +85,45 @@ peer_range() {
     # a multi-line value and then emit all of it into socat's options).
     if [[ "${host}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
         printf '%s/32' "${host}"
+        return 0
     fi
+    # Set but unusable is a server-run start whose server could not learn
+    # its own bridge address: that start must FAIL, loudly, instead of
+    # leaving a browser the pane can never reach and a generic "endpoint
+    # unreachable" later (review finding, 2026-09-13). Unset — an
+    # agent-started browser — stays loopback-only and fine.
+    [ "${server_run}" = 1 ] && return 1
     return 0
 }
 
-forwarder_up() { ss -ltnH 2>/dev/null | grep -q ":${PORT} "; }
+port_listening() { ss -ltnH 2>/dev/null | grep -q ":${PORT} "; }
+# comm_is <pid> <prefix>: the process's comm (first 15 bytes of its
+# executable name) starts with the prefix.
+comm_is() { case "$(cat "/proc/$1/comm" 2>/dev/null || true)" in "$2"*) return 0 ;; *) return 1 ;; esac; }
+# The forwarder THIS launcher started: the recorded pid is alive, is socat,
+# and :9222 listens. "Anything listening on :9222" used to count (review
+# finding, 2026-09-13), so the user's own app on that port read as "up" and
+# the server was pointed at it.
+forwarder_up() {
+    local pid
+    pid="$(cat "${SOCATPID}" 2>/dev/null || true)"
+    [[ "${pid}" =~ ^[0-9]+$ ]] && [ -d "/proc/${pid}" ] && comm_is "${pid}" socat && port_listening
+}
 
 # The forwarder is its own process group with its own pid file, so it can be
 # started AFTER Chromium: a browser the agent's MCP server started (no peer in
 # its environment) gains the server's door when the pane's `start` arrives
 # with STYRMAN_BROWSER_PEER set.
+# A failure here (no usable peer, a stranger on the port, socat not coming
+# up) leaves Chromium RUNNING: the browser itself is fine and the agents'
+# MCP session must not be torn down over the server's door. Only the launch
+# timeout in do_start takes the group down.
 ensure_forwarder() {
     local range
-    range="$(peer_range)"
+    if ! range="$(peer_range)"; then
+        echo "no usable peer address for :${PORT}: STYRMAN_BROWSER_PEER is set but not an IPv4 address (the server could not learn its own bridge address); the browser is running, loopback-only" >&2
+        return 1
+    fi
     if [ -z "${range}" ]; then
         echo "no peer address for :${PORT} (STYRMAN_BROWSER_PEER unset): browser stays loopback-only" >&2
         return 0
@@ -107,15 +134,31 @@ ensure_forwarder() {
         # running forwarder would refuse the server forever: replace it
         # (review finding, Phase 3).
         [ "$(cat "${SOCATRANGE}" 2>/dev/null || true)" = "${range}" ] && return 0
-        kill_group_file "${SOCATPID}"
+        kill_group_file "${SOCATPID}" socat
+    elif port_listening; then
+        # The user's own app, or a forwarder whose pid file was lost: fail
+        # closed with the reason rather than fight for the port.
+        echo "something else listens on :${PORT} (not the forwarder this launcher started): the browser is running but the server cannot reach it" >&2
+        return 1
     fi
-    printf '%s' "${range}" > "${SOCATRANGE}"
+    rm -f "${SOCATRANGE}"
+    # max-children bounds socat's concurrent forwards. The server admits at
+    # most browserRelayPerUser (8, internal/httpapi/browser.go) relays per
+    # user and a project has one owner; each relay is one forward, plus one
+    # short-lived /json/version discovery per connect (Connection: close on
+    # the server side, so it never parks a child). 16 = twice the relay cap;
+    # a Go test pins the two numbers together.
     # shellcheck disable=SC2016  # the $-expressions belong to the inner bash
-    setsid -f bash -c 'echo $$ > "$1"; exec socat "TCP-LISTEN:$2,fork,reuseaddr,bind=0.0.0.0,range=$3,max-children=4" "TCP:127.0.0.1:$4"' \
+    setsid -f bash -c 'echo $$ > "$1"; exec socat "TCP-LISTEN:$2,fork,reuseaddr,bind=0.0.0.0,range=$3,max-children=16" "TCP:127.0.0.1:$4"' \
         _ "${SOCATPID}" "${PORT}" "${range}" "${CHROME_PORT}" 9>&- >>"${LOG}" 2>&1
     local _i
     for _i in $(seq 1 10); do
-        forwarder_up && return 0
+        if forwarder_up; then
+            # Recorded only once the listener is confirmed: a range file
+            # without a forwarder behind it would claim a door that is shut.
+            printf '%s' "${range}" > "${SOCATRANGE}"
+            return 0
+        fi
         sleep 0.2
     done
     echo "forwarder did not come up on :${PORT}" >&2
@@ -176,7 +219,7 @@ do_start() {
     # surface as a failure, not a hang the server's 30 s exec cap has to cut.
     flock -w 20 9 || { echo "another start is holding ${LOCK} for over 20 s"; return 1; }
     if probe >/dev/null; then
-        ensure_forwarder
+        ensure_forwarder # a failure leaves the running browser alone (see there)
         return $?
     fi
     launch
@@ -196,28 +239,39 @@ do_start() {
     return 1
 }
 
+# kill_group_file <pidfile> <comm-prefix>: take down the process group whose
+# leader the file names — but only OUR group. Pid files live in the
+# bind-mounted home and survive a VM restart, so the number may since have
+# been handed to an unrelated process (review finding, 2026-09-13). Signal
+# the GROUP (chromium's children share the group setsid created and outlive
+# a crashed leader) only when it still has members AND the leader is either
+# what we started (its comm carries the prefix) or already gone — a dead
+# leader whose zygote/renderer children still hold the group is exactly the
+# failed launch do_start cleans up. A live leader with another name is a
+# recycled pid: the file is dropped and nothing is signalled.
 kill_group_file() {
-    local f="$1" pid
-    if [ -f "${f}" ]; then
-        pid="$(cat "${f}" 2>/dev/null || true)"
-        # Signal the GROUP, not the leader: chromium's children share the
-        # group setsid created, and they outlive a leader that crashed.
-        if [ -n "${pid}" ]; then
-            kill -TERM -- "-${pid}" 2>/dev/null || true
-            for _ in $(seq 1 10); do
-                pgrep -g "${pid}" >/dev/null 2>&1 || break
-                sleep 0.5
-            done
-            kill -KILL -- "-${pid}" 2>/dev/null || true
-        fi
-        rm -f "${f}"
+    local f="$1" want="$2" pid
+    [ -f "${f}" ] || return 0
+    pid="$(cat "${f}" 2>/dev/null || true)"
+    rm -f "${f}"
+    [[ "${pid}" =~ ^[0-9]+$ ]] || return 0
+    if [ -d "/proc/${pid}" ] && ! comm_is "${pid}" "${want}"; then
+        echo "${f} named pid ${pid}, which is not ${want}: stale, not signalled" >&2
+        return 0
     fi
+    pgrep -g "${pid}" >/dev/null 2>&1 || return 0
+    kill -TERM -- "-${pid}" 2>/dev/null || true
+    for _ in $(seq 1 10); do
+        pgrep -g "${pid}" >/dev/null 2>&1 || break
+        sleep 0.5
+    done
+    kill -KILL -- "-${pid}" 2>/dev/null || true
 }
 
 do_stop() {
-    kill_group_file "${SOCATPID}"
+    kill_group_file "${SOCATPID}" socat
     rm -f "${SOCATRANGE}"
-    kill_group_file "${PIDFILE}"
+    kill_group_file "${PIDFILE}" chrom
     return 0
 }
 
@@ -236,7 +290,11 @@ do_mcp() {
         echo "styrman-browser: the browser did not start" >&2
         exit 1
     fi
-    exec chrome-devtools-mcp --browserUrl "http://127.0.0.1:${CHROME_PORT}"
+    # 9>&-: do_start opened the start lock on fd 9 in THIS shell; an exec
+    # without closing it would hand the lock to the MCP server for its whole
+    # life, and the pane's next `start` would wait 20 s and fail (review
+    # finding, 2026-09-13).
+    exec chrome-devtools-mcp --browserUrl "http://127.0.0.1:${CHROME_PORT}" 9>&-
 }
 
 case "${1:-}" in

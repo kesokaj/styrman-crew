@@ -1306,6 +1306,22 @@ try {
     );
   });
 
+  await check("switching to the terminal and back resumes the screencast", async () => {
+    // Hidden, the pane stops its screencast (the box is 0×0 and no viewport
+    // is pushed onto the agents' page); shown again it restarts it, and
+    // Page.startScreencast always emits a first frame — so the count rises
+    // only if the show path really restarted it (review, 2026-09-13).
+    const before = await browserFramesOf();
+    await page.getByRole("button", { name: "Terminal", exact: true }).click();
+    await page.waitForFunction(
+      () => document.querySelector('button[aria-label="Browser"]')?.getAttribute("aria-pressed") !== "true",
+      null,
+      { timeout: 10000 },
+    );
+    await page.getByRole("button", { name: "Browser", exact: true }).click();
+    await waitBrowserFrames(before + 1);
+  });
+
   await check("terminal session survived the browser round-trip", async () => {
     await page.getByRole("button", { name: "Terminal", exact: true }).click();
     await page.locator(".xterm textarea").first().focus();

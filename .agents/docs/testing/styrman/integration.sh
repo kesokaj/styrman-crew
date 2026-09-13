@@ -24,7 +24,12 @@ bash "$(dirname "${BASH_SOURCE[0]}")/ensure-test-image.sh" "${IMAGE}"
 # green against the wrong target (BUG-040). A green run against the wrong
 # server is worse than a red one.
 PORT="${STYRMAN_ITEST_PORT:-18080}"
-if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${PORT}$"; then
+# Fail CLOSED: without `ss` the old pipeline was simply false and the guard
+# passed (review finding 2026-09-13); capture first, then grep, so a failing
+# `ss` is a FATAL of its own rather than a silent pass.
+command -v ss >/dev/null 2>&1 || { echo "FATAL: ss (iproute2) is required to prove port ${PORT} is free" >&2; exit 1; }
+bound="$(ss -ltn 2>/dev/null | awk '{print $4}')" || { echo "FATAL: ss failed; cannot prove port ${PORT} is free" >&2; exit 1; }
+if printf '%s\n' "${bound}" | grep -qE "[:.]${PORT}$"; then
     echo "FATAL: port ${PORT} is already bound — another server would answer this suite's health probe (set STYRMAN_ITEST_PORT to pick another)" >&2
     exit 1
 fi

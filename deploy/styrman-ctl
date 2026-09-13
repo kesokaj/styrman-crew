@@ -24,6 +24,12 @@ STATE_DIR="${STYRMAN_STATE_DIR:-/var/lib/styrman}"
 DEPLOY_DIR="${STYRMAN_DEPLOY_DIR:-/opt/styrman}"
 ETC_DIR="${STYRMAN_ETC_DIR:-/etc/styrman}"
 UNIT_DIR="${STYRMAN_UNIT_DIR:-/etc/systemd/system}"
+# The root-only temp dir setup_auto_update stages secrets in, global so the
+# EXIT/INT/TERM/HUP trap can still name it after the function returns (a
+# `local` there left the token file behind — review finding 2026-09-13).
+# Empty = nothing to remove; the trap tests it, so an empty value never
+# becomes `rm -rf ""`.
+CTL_TMPD=""
 # shellcheck disable=SC2034  # used by uninstall (plan phase 4)
 BIN_DIR="${STYRMAN_BIN_DIR:-/usr/local/bin}"
 # shellcheck disable=SC2034
@@ -499,7 +505,7 @@ private_file() {
 
 # setup_auto_update [TOKEN_FILE] [SIGNERS_FILE]
 setup_auto_update() {
-    local token_file="${1:-}" signers_file="${2:-}" token="" signers="" origin tmpd
+    local token_file="${1:-}" signers_file="${2:-}" token="" signers="" origin
     [ -x "${BIN_DIR}/styrman-update" ] || [ "${DRY}" = 1 ] || die "${BIN_DIR}/styrman-update is not installed — run install first"
     if [ -n "${token_file}" ]; then
         private_file "${token_file}"
@@ -525,14 +531,15 @@ setup_auto_update() {
     fi
     origin="$(https_origin)"
 
+    local tmpd
     if [ "${DRY}" = 1 ]; then
         # The plan names the temp paths; nothing — secrets least of all —
         # touches the disk under --dry-run (review finding).
         tmpd="<tmpdir>"
     else
-        tmpd="$(mktemp -d)"; chmod 700 "${tmpd}"
+        CTL_TMPD="$(mktemp -d)"; chmod 700 "${CTL_TMPD}"; tmpd="${CTL_TMPD}"
         # EXIT alone misses an interrupted multi-minute clone (review finding).
-        trap 'rm -rf "${tmpd}"' EXIT INT TERM HUP
+        trap '[ -n "${CTL_TMPD}" ] && rm -rf "${CTL_TMPD}"' EXIT INT TERM HUP
         # Secrets travel through root-only temp files, never argv or the plan.
         (umask 077; printf '%s' "${token}" > "${tmpd}/gh-token"; printf '%s\n' "${signers}" > "${tmpd}/allowed_signers")
     fi
@@ -584,7 +591,7 @@ setup_auto_update() {
     run env "${UPDATER_ENV[@]}" "${BIN_DIR}/styrman-update" --check
     run systemctl enable --now styrman-update.timer
     run systemctl start styrman-update.service
-    [ "${DRY}" = 1 ] || { rm -rf "${tmpd}"; trap - EXIT; }
+    [ "${DRY}" = 1 ] || { rm -rf "${CTL_TMPD}"; CTL_TMPD=""; trap - EXIT INT TERM HUP; }
 }
 
 # ─── update: one auto-updater tick (or a forced redeploy of the current tag) ─
@@ -920,18 +927,22 @@ cmd_menu() {
 }
 
 main() {
-    local verb="${1:-}"; [ $# -gt 0 ] && shift
-    # Global flags may sit anywhere; verbs get the rest.
+    # The three global flags may sit ANYWHERE — before the verb included
+    # (`styrman-ctl --dry-run status` used to be "unknown verb --dry-run",
+    # review finding 2026-09-13). "Flag" means exactly these three; every
+    # other token, `--help`/`-h` included, is a verb candidate: the verb is
+    # the first of them, the rest are its arguments.
     local rest=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --dry-run) DRY=1; shift ;;
             --yes) YES=1; shift ;;
-            --confirm) CONFIRM_GIVEN="$2"; shift 2 ;;
+            --confirm) CONFIRM_GIVEN="${2:-}"; shift 2 ;;
             *) rest+=("$1"); shift ;;
         esac
     done
     set -- "${rest[@]+"${rest[@]}"}"
+    local verb="${1:-}"; [ $# -gt 0 ] && shift
     case "${verb}" in
         "") cmd_menu ;;
         status) cmd_status "$@" ;;

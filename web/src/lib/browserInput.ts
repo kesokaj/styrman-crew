@@ -117,6 +117,16 @@ export type KeyEventLike = ModifierKeys & {
   location?: number;
 };
 
+/**
+ * A Ctrl/Meta chord (Ctrl+A, Cmd+C) must not insert its letter — but
+ * Ctrl+Alt together is AltGr on Windows and many Linux layouts, and its
+ * characters (@, €, {, }) are typed, not commanded (review finding,
+ * 2026-09-13). The pane's own shortcuts (Ctrl+L, Ctrl+R) use the same rule.
+ */
+export function isChord(e: ModifierKeys): boolean {
+  return (e.ctrlKey || e.metaKey) && !e.altKey;
+}
+
 export type InputKeyParams = {
   type: "keyDown" | "keyUp";
   key: string;
@@ -151,8 +161,7 @@ export function keyParams(e: KeyEventLike): InputKeyParams {
     if (e.location === 3) p.isKeypad = true;
   }
   if (p.type === "keyDown") {
-    // Ctrl/Meta chords (Ctrl+A, Cmd+C) must not insert their letter.
-    const chord = e.ctrlKey || e.metaKey;
+    const chord = isChord(e);
     if (e.key === "Enter") {
       p.text = "\r";
       p.unmodifiedText = "\r";

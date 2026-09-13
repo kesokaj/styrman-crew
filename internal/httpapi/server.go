@@ -114,12 +114,17 @@ type Server struct {
 	browserPeerFn func(ctx context.Context, project string) string
 	// browserRelays counts live CDP relays (capped globally and per user).
 	browserRelays relayCounter
-	mode          modeRuntime
-	tmux          *conversation.Manager
-	bridge        *terminal.Bridge
-	users         *userstore.Store
-	logger        *slog.Logger
-	links         *links.Store
+	// stillAuthorized is the same re-check the terminal bridge runs (nil in
+	// AuthMode=none, "" exempt — see New); an open browser relay asks it
+	// every browserReauthEvery and closes 4003 when the owner is gone.
+	stillAuthorized    func(email string) bool
+	browserReauthEvery time.Duration
+	mode               modeRuntime
+	tmux               *conversation.Manager
+	bridge             *terminal.Bridge
+	users              *userstore.Store
+	logger             *slog.Logger
+	links              *links.Store
 
 	spacesMu sync.Mutex
 	spaces   map[string]*userSpace
@@ -234,6 +239,8 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		// otherwise close every minute).
 		stillAuthorized = func(email string) bool { return email == "" || users.IsAuthorized(email) }
 	}
+	s.stillAuthorized = stillAuthorized
+	s.browserReauthEvery = 60 * time.Second
 	s.bridge = terminal.NewBridge(orch, cfg, logger, s.termStoreFor, s.ensureFor, s.guestUserFor, stillAuthorized)
 	return s
 }

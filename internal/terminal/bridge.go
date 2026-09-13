@@ -50,7 +50,7 @@ type Bridge struct {
 	swapMu      sync.Mutex
 	activeConns sync.Map
 	// stillAuthorized is consulted every reauthEvery for an open terminal;
-	// nil in AuthMode=none (see revocationWatch). reauthEvery is a field so a
+	// nil in AuthMode=none (see RevocationWatch). reauthEvery is a field so a
 	// test can shrink it.
 	stillAuthorized func(email string) bool
 	reauthEvery     time.Duration
@@ -67,12 +67,13 @@ func NewBridge(orch *orchestrator.Orchestrator, cfg *config.Config, logger *slog
 		stillAuthorized: stillAuthorized, reauthEvery: 60 * time.Second}
 }
 
-// revocationWatch calls check every interval until ctx ends; the first false
+// RevocationWatch calls check every interval until ctx ends; the first false
 // runs onRevoked once and returns. A nil check never fires — AuthMode=none
 // mints an identity that is in no store, so re-checking it would close every
 // local terminal. Split out so the decision is unit-testable without a
-// WebSocket (TODO close-out 2026-09-10, item I).
-func revocationWatch(ctx context.Context, interval time.Duration, check func() bool, onRevoked func()) {
+// WebSocket (TODO close-out 2026-09-10, item I); exported because the
+// browser relay (httpapi) re-checks its owner the same way.
+func RevocationWatch(ctx context.Context, interval time.Duration, check func() bool, onRevoked func()) {
 	if check == nil {
 		return
 	}
@@ -377,7 +378,7 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 		if b.stillAuthorized != nil {
 			check = func() bool { return b.stillAuthorized(s.email) }
 		}
-		revocationWatch(hctx, b.reauthEvery, check, func() {
+		RevocationWatch(hctx, b.reauthEvery, check, func() {
 			b.logger.Info("terminal closed: user no longer authorized", "user", s.user, "session", s.key)
 			revoked.Store(true)
 			conn.Close(websocket.StatusCode(config.CloseAccessRevoked), "access revoked")

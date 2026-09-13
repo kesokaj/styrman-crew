@@ -134,6 +134,15 @@ func TestStyrmanCtlStatusJSON(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("status --json: %d %s", code, out)
 	}
+	// The global flags may come BEFORE the verb too (review finding
+	// 2026-09-13: this used to be "unknown verb --dry-run"), and `--help`
+	// is still a verb, not a swallowed flag.
+	if out2, code2 := ctl(t, e, "--dry-run", "status", "--json"); code2 != 0 || out2 != out {
+		t.Fatalf("--dry-run status --json: %d\n%s\nwant the same as status --json --dry-run:\n%s", code2, out2, out)
+	}
+	if out2, code2 := ctl(t, e, "--dry-run", "--help"); code2 != 0 || !strings.Contains(out2, "status") {
+		t.Fatalf("--dry-run --help: %d %s", code2, out2)
+	}
 	var st struct {
 		Host      string `json:"host"`
 		Installed bool   `json:"installed"`

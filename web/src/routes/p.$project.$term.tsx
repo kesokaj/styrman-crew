@@ -9,7 +9,7 @@ import { EditorPane } from "../components/EditorPane";
 import { DiffPane } from "../components/DiffPane";
 import { BrowserPane } from "../components/BrowserPane";
 import { ConfirmDialog } from "../components/ui";
-import { basename, useEditorPane } from "../lib/editorPane";
+import { basename, useEditorPane, type PaneState } from "../lib/editorPane";
 
 export const Route = createFileRoute("/p/$project/$term")({
   component: TerminalPage,
@@ -38,23 +38,14 @@ function TerminalPage() {
     enableBeforeUnload: () => pane.dirty,
     withResolver: true,
   });
-  // Mount the editor lazily on first use, then keep it mounted alongside the
-  // terminal so switching views never reloads the file or the session. (The
-  // ref latches across terminal switches too, since this route does not
-  // remount — harmless: it only decides whether the editor subtree exists.)
-  const editorUsed = useRef(false);
-  if (pane.view === "editor" || pane.file) editorUsed.current = true;
-  // Same latch for the diff view. DiffPane is cheaper to unmount than the
-  // editor (no unsaved buffer, no socket), so this is consistency and one
-  // saved refetch rather than correctness — but a fourth pane view arriving
-  // later should find ONE pattern in this file, not two.
-  const diffUsed = useRef(false);
-  if (pane.view === "diff" || pane.diff) diffUsed.current = true;
-  // And for the Browser view (ADR-068): once mounted it keeps its relay
-  // socket open while hidden, so switching back shows the page at once and
-  // a tab the agent opened meanwhile is already in the strip.
-  const browserUsed = useRef(false);
-  if (pane.view === "browser" || pane.browser) browserUsed.current = true;
+  // Mount the editor, diff and browser panes lazily on first use, then keep
+  // them mounted alongside the terminal so switching views never reloads the
+  // file, refetches the diff or reconnects the browser relay. Latched PER
+  // TERMINAL: this route does not remount on a terminal switch, and a latch
+  // that survived it mounted a hidden BrowserPane — one relay and one
+  // launcher exec — on every terminal visited after the first browser use
+  // (review, 2026-09-13).
+  const used = useViewLatch(`${project}/${term}`, pane);
   // Bumped on every switch back to the terminal so it reclaims keyboard focus
   // (it is hidden, not unmounted, so nothing else would).
   const [focusToken, setFocusToken] = useState(0);
@@ -199,7 +190,7 @@ function TerminalPage() {
               focusToken={focusToken}
             />
           </div>
-          {diffUsed.current && (
+          {used.diff && (
             <div className={`h-full ${pane.view === "diff" ? "" : "hidden"}`}>
               <DiffPane
                 key={`${project}/${term}`}
@@ -209,17 +200,18 @@ function TerminalPage() {
               />
             </div>
           )}
-          {browserUsed.current && (
+          {used.browser && (
             <div className={`h-full ${pane.view === "browser" ? "" : "hidden"}`}>
               <BrowserPane
                 key={`${project}/${term}`}
                 project={project}
                 term={term}
+                visible={pane.view === "browser"}
                 onShowTerminal={showTerminal}
               />
             </div>
           )}
-          {editorUsed.current && (
+          {used.editor && (
             <div className={`h-full ${pane.view === "editor" ? "" : "hidden"}`}>
               <EditorPane
                 // Keyed per terminal, like TerminalPane. Without it the pane
@@ -257,4 +249,20 @@ function TerminalPage() {
       )}
     </>
   );
+}
+
+/**
+ * Which secondary panes have been used for THIS terminal (keyed by
+ * project/terminal, reset on a switch): a view once shown, or a pending
+ * open/diff/browser request, mounts its pane and keeps it mounted.
+ */
+function useViewLatch(key: string, pane: PaneState) {
+  const ref = useRef({ key: "", used: new Set<PaneState["view"]>() });
+  if (ref.current.key !== key) ref.current = { key, used: new Set() };
+  const used = ref.current.used;
+  if (pane.view !== "terminal") used.add(pane.view);
+  if (pane.file) used.add("editor");
+  if (pane.diff) used.add("diff");
+  if (pane.browser) used.add("browser");
+  return { editor: used.has("editor"), diff: used.has("diff"), browser: used.has("browser") };
 }

@@ -49,6 +49,14 @@ type Port struct {
 // avoiding the previous O(listening × open-fds) /proc/*/fd walk that took
 // ~190 ms per port on a busy VM. Output: "<decport> <comm>" per socket.
 // Falls back to a cheap /proc scan (no comm) if ss is unavailable.
+//
+// The inner dockerd's published ports follow in the SAME exec, after the
+// sentinel line: the Ports panel polls every 7 s and each exec is a Docker
+// round trip plus a process in the guest, so two of them per poll was the
+// single most frequent exec the server ran (review finding, 2026-09-13).
+// `|| true` keeps the script's status 0 whether or not dockerd exists (system
+// VMs have none); the vanished-container guard in ListeningPorts rests on
+// the DOCKER exec's own code and error, not on the script's.
 const portScanScript = `
 if command -v ss >/dev/null 2>&1; then
   ss -ltnH 2>/dev/null | awk '
@@ -57,7 +65,17 @@ if command -v ss >/dev/null 2>&1; then
       print port, comm }'
 else
   awk '$4=="0A" {split($2,a,":"); print strtonum("0x" a[2]), "?"}' /proc/net/tcp /proc/net/tcp6 2>/dev/null | sort -u
-fi`
+fi
+printf '%s\n' '` + portScanSentinel + `'
+docker ps --format '{{.Image}}|{{.Ports}}' 2>/dev/null || true`
+
+// portScanSentinel separates the socket lines from the docker lines in
+// portScanScript's output. Both halves are guest-controlled text (a process
+// comm, an image name), so the split is the FIRST line equal to the
+// sentinel (surrounding whitespace ignored, so a CR cannot defeat it): the
+// worst a guest can do by printing it is hide its own ports from its own
+// panel.
+const portScanSentinel = "--styrman-docker--"
 
 // ListeningPorts scans the guest for LISTEN sockets ≥1024 with process names
 // and inner-docker image attribution.
@@ -93,32 +111,48 @@ func (o *Orchestrator) ListeningPorts(ctx context.Context, user, project string)
 		return nil, fmt.Errorf("port scan exited %d", code)
 	}
 
-	// Inner-docker port → image map (best effort; dockerd may be absent in
-	// system VMs). docker-proxy owns published ports, so attribute those to
-	// the container image instead of the proxy process.
+	scan, images := splitPortScan(out)
+	return parseListeningPorts(scan, images), nil
+}
+
+// splitPortScan separates portScanScript's output into the socket lines and
+// the inner-docker port → image map. No sentinel (an older runtime image
+// whose script had none, or truncated output) means the whole output is
+// the scan and nothing is attributed — never "no ports".
+func splitPortScan(out string) (scan string, images map[int]string) {
+	images = map[int]string{}
+	lines := strings.Split(out, "\n")
+	for i, line := range lines {
+		if strings.TrimSpace(line) == portScanSentinel {
+			return strings.Join(lines[:i], "\n"), parseDockerPorts(strings.Join(lines[i+1:], "\n"))
+		}
+	}
+	return out, images
+}
+
+// parseDockerPorts maps published host ports to their image from
+// `docker ps --format '{{.Image}}|{{.Ports}}'` lines (best effort; dockerd
+// may be absent in system VMs). docker-proxy owns published ports, so the
+// caller attributes those to the container image instead of the proxy.
+func parseDockerPorts(lines string) map[int]string {
 	images := map[int]string{}
-	if c2, out2, err2 := o.Exec(ctx, st.ContainerID, ExecSpec{
-		Cmd: []string{"sh", "-c", `docker ps --format '{{.Image}}|{{.Ports}}' 2>/dev/null`},
-	}); err2 == nil && c2 == 0 {
-		for _, line := range strings.Split(strings.TrimSpace(out2), "\n") {
-			img, ports, ok := strings.Cut(line, "|")
-			if !ok {
-				continue
-			}
-			for _, part := range strings.Split(ports, ",") {
-				// e.g. "0.0.0.0:8080->80/tcp"
-				if h, _, ok := strings.Cut(strings.TrimSpace(part), "->"); ok {
-					if _, pstr, ok := strings.Cut(h, ":"); ok {
-						if p, err := strconv.Atoi(pstr); err == nil {
-							images[p] = img
-						}
+	for _, line := range strings.Split(strings.TrimSpace(lines), "\n") {
+		img, ports, ok := strings.Cut(line, "|")
+		if !ok {
+			continue
+		}
+		for _, part := range strings.Split(ports, ",") {
+			// e.g. "0.0.0.0:8080->80/tcp"
+			if h, _, ok := strings.Cut(strings.TrimSpace(part), "->"); ok {
+				if _, pstr, ok := strings.Cut(h, ":"); ok {
+					if p, err := strconv.Atoi(pstr); err == nil {
+						images[p] = img
 					}
 				}
 			}
 		}
 	}
-
-	return parseListeningPorts(out, images), nil
+	return images
 }
 
 // parseListeningPorts turns portScanScript's "<port> <comm>" lines into the

@@ -296,7 +296,8 @@ export async function tryUI(action: () => Promise<void>): Promise<void> {
   }
 }
 
-class ApiError extends Error {
+/** A failed request: `status` is the HTTP status (0 when no response came). */
+export class ApiError extends Error {
   readonly status: number;
   constructor(message: string, status: number) {
     super(message);
@@ -552,16 +553,14 @@ export const api = {
   notifications: () =>
     request<{ notifications: AppNotification[] }>("/api/notifications"),
 
-  // Browser view (ADR-068): owner-only status/start/stop of the project's
-  // in-guest Chromium. start answers 409 (project not running), 503 +
-  // Retry-After (fresh bridge attach — retry once) or 502 with the
-  // launcher's log tail; the pane surfaces the message as is.
-  browserStatus: (project: string) =>
-    request<BrowserStatus>(u`/api/projects/${project}/browser`),
+  // Browser view (ADR-068): the owner-only start of the project's in-guest
+  // Chromium, which the pane's Retry calls for the launcher's FULL log tail
+  // (a close frame holds 123 bytes of it). 409 = project not running, 503 +
+  // Retry-After = fresh bridge attach (retry once), 502 = the launcher's log
+  // tail. The status and stop routes exist server-side for the operator API
+  // and the integration tier; the pane has no use for them.
   browserStart: (project: string) =>
     request<BrowserStatus>(u`/api/projects/${project}/browser/start`, { method: "POST" }),
-  browserStop: (project: string) =>
-    request<void>(u`/api/projects/${project}/browser/stop`, { method: "POST" }),
   listPorts: (project: string) =>
     request<{ ports: PortInfo[] }>(u`/api/projects/${project}/ports`),
 

@@ -55,7 +55,7 @@ STYRMAN_VERSION=<x.y.z> docker compose -f deploy/docker-compose.yml up -d --buil
 deploy/verify-commit.sh [commit-ish]   # default HEAD; SKIP_WEB_FRESHNESS=1 skips the npm-dependent steps
 
 # Test suites
-bash .agents/docs/testing/styrman/integration.sh   # 82 checks; counts live in .agents/docs/testing/styrman/README.md vs real Kata
+bash .agents/docs/testing/styrman/integration.sh   # vs real Kata; check counts live in .agents/docs/testing/styrman/README.md (the source of truth)
 bash web/e2e/run.sh                                # browser e2e (Playwright, self-hosted; check counts: .agents/docs/testing/styrman/README.md)
 ```
 

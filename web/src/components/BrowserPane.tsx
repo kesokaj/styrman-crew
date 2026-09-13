@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { browserSocketUrl } from "../lib/api";
+import { api, ApiError, browserSocketUrl } from "../lib/api";
 import {
+  isChord,
   keyParams,
   mouseParams,
   normalizeUrl,
   wheelParams,
   type FrameGeom,
+  type InputMouseParams,
+  type RectLike,
 } from "../lib/browserInput";
 import { CdpClient, type CdpTransport } from "../lib/cdp";
 import { clearBrowserRequest, useEditorPane } from "../lib/editorPane";
@@ -21,10 +24,17 @@ import { ChevronLeftIcon, ChevronRightIcon, PlusIcon, RefreshIcon, XIcon } from 
  *
  * Close codes (terminal-protocol.md): 4002 = project stopped (no auto-
  * reconnect; the terminal boots it), 4004 = the browser could not start (the
- * reason is the launcher's log tail; Retry re-runs the launch on purpose),
- * anything else = disconnected (Reconnect). A FAILED HANDSHAKE (the server
- * answered 503 while attaching to the project bridge) is retried once after
- * a second, as the API contract says.
+ * reason is the launcher's log tail; Retry re-runs the launch through the
+ * REST start, whose reply carries the FULL tail), 4003 = access revoked,
+ * 1009 = a frame over the relay's limit, anything else = disconnected
+ * (Reconnect). A FAILED HANDSHAKE (the server answered 503 while attaching
+ * to the project bridge) is retried once after a second, as the API contract
+ * says.
+ *
+ * Hidden (the terminal or the editor is shown) the pane keeps its relay so
+ * the tab strip stays current, but the screencast is stopped and no viewport
+ * is pushed: a hidden box is 0×0, and forcing that (or a floor) onto the
+ * browser the agents share would shrink THEIR page (review, 2026-09-13).
  */
 
 type Phase = "connecting" | "ready" | "stopped" | "unavailable" | "disconnected";
@@ -41,10 +51,13 @@ const RESIZE_MS = 150;
 export function BrowserPane({
   project,
   term,
+  visible,
   onShowTerminal,
 }: {
   project: string;
   term: string;
+  /** Whether this pane is the one on screen (the route hides, never unmounts). */
+  visible: boolean;
   /** Switch the pane back to the terminal view. */
   onShowTerminal: () => void;
 }) {
@@ -57,12 +70,12 @@ export function BrowserPane({
   const [urlInput, setUrlInput] = useState("");
   const [editingUrl, setEditingUrl] = useState(false);
   const [notice, setNotice] = useState("");
-  const [frames, setFrames] = useState(0);
+  const [retrying, setRetrying] = useState(false);
   // Bumped to reconnect; the connection effect keys on it.
   const [epoch, setEpoch] = useState(0);
   // Automatic handshake retries left in this chain: ONE (the API contract
-  // for a 503 while the server attaches to the bridge). A user's Reconnect
-  // or Retry click refills it.
+  // for a 503 while the server attaches to the bridge). A successful open,
+  // a user's Reconnect or a Retry refills it.
   const autoRetries = useRef(1);
 
   const boxRef = useRef<HTMLDivElement>(null);
@@ -71,9 +84,20 @@ export function BrowserPane({
   const clientRef = useRef<CdpClient | null>(null);
   const sessionRef = useRef<string | null>(null);
   const activeRef = useRef<string | null>(null);
+  // The session whose screencast is running, or null: the ONE guard both
+  // writers (attach, the visible effect) go through, so neither can start a
+  // second screencast on the same session.
+  const screencastRef = useRef<string | null>(null);
+  const visibleRef = useRef(visible);
   const frameRef = useRef<FrameGeom>({ deviceWidth: 1280, deviceHeight: 800 });
+  // The canvas's rect, refreshed on resize and pointer entry — not read
+  // from layout on every mouse move.
+  const rectRef = useRef<RectLike>({ left: 0, top: 0, width: 0, height: 0 });
   const tabsRef = useRef<Tab[]>([]);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Attaches are serialized: two rapid tab clicks used to interleave their
+  // detach/attach steps and leave an orphan screencast running.
+  const attachChain = useRef<Promise<void>>(Promise.resolve());
 
   const say = useCallback((text: string) => {
     setNotice(text);
@@ -86,14 +110,26 @@ export function BrowserPane({
     setTabs(next);
   }, []);
 
-  /** The active page's viewport follows the canvas box, 1:1 CSS pixels. */
+  const refreshRect = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (canvas) rectRef.current = canvas.getBoundingClientRect();
+  }, []);
+
+  /**
+   * The active page's viewport follows the canvas box, 1:1 CSS pixels —
+   * only while the box HAS a size. Hidden, it is 0×0, and the old floor of
+   * 320×200 was pushed onto the agents' page every time the operator
+   * switched to the terminal.
+   */
   const applyViewport = useCallback(async () => {
     const c = clientRef.current;
     const sid = sessionRef.current;
     const box = boxRef.current;
     if (!c || !sid || !box) return;
-    const width = Math.max(320, Math.round(box.clientWidth));
-    const height = Math.max(200, Math.round(box.clientHeight));
+    const width = Math.round(box.clientWidth);
+    const height = Math.round(box.clientHeight);
+    if (width === 0 || height === 0) return;
+    refreshRect();
     try {
       await c.send(
         "Emulation.setDeviceMetricsOverride",
@@ -103,45 +139,93 @@ export function BrowserPane({
     } catch {
       // The session may have gone away between the resize and this call.
     }
+  }, [refreshRect]);
+
+  /** Start or stop the active session's screencast; idempotent per session. */
+  const setScreencast = useCallback(async (on: boolean) => {
+    const c = clientRef.current;
+    const sid = sessionRef.current;
+    if (!c || !sid) return;
+    if (on) {
+      if (screencastRef.current === sid) return;
+      screencastRef.current = sid;
+      try {
+        await c.send(
+          "Page.startScreencast",
+          { format: "jpeg", quality: 70, maxWidth: 4096, maxHeight: 4096, everyNthFrame: 1 },
+          sid,
+        );
+      } catch {
+        if (screencastRef.current === sid) screencastRef.current = null;
+      }
+    } else {
+      if (screencastRef.current !== sid) return;
+      screencastRef.current = null;
+      try {
+        await c.send("Page.stopScreencast", {}, sid);
+      } catch {
+        // Gone already; nothing to stop.
+      }
+    }
   }, []);
 
-  /** Attach to one page target and start its screencast; detach the previous. */
+  /**
+   * Attach to one page target, detaching the previous, and screencast it
+   * when the pane is on screen. Calls queue behind each other; the tab is
+   * marked active before the first await so a concurrent target-destroyed
+   * sees it, and unmarked again if the attach fails.
+   */
   const attach = useCallback(
-    async (targetId: string) => {
-      const c = clientRef.current;
-      if (!c) return;
-      const prev = sessionRef.current;
-      if (prev) {
-        sessionRef.current = null;
-        try {
-          await c.send("Page.stopScreencast", {}, prev);
-          await c.send("Target.detachFromTarget", { sessionId: prev });
-        } catch {
-          // Already gone — that is the case we are handling.
+    (targetId: string) => {
+      const run = async () => {
+        const c = clientRef.current;
+        if (!c) return;
+        activeRef.current = targetId;
+        setActive(targetId);
+        const prev = sessionRef.current;
+        if (prev) {
+          sessionRef.current = null;
+          screencastRef.current = null;
+          try {
+            await c.send("Page.stopScreencast", {}, prev);
+            await c.send("Target.detachFromTarget", { sessionId: prev });
+          } catch {
+            // Already gone — that is the case we are handling.
+          }
         }
-      }
-      const { sessionId } = await c.send<{ sessionId: string }>("Target.attachToTarget", {
-        targetId,
-        flatten: true,
-      });
-      sessionRef.current = sessionId;
-      activeRef.current = targetId;
-      setActive(targetId);
-      try {
-        await c.send("Target.activateTarget", { targetId });
-      } catch {
-        // Headless has no window to raise; harmless.
-      }
-      await c.send("Page.enable", {}, sessionId);
-      await applyViewport();
-      await c.send(
-        "Page.startScreencast",
-        { format: "jpeg", quality: 70, maxWidth: 4096, maxHeight: 4096, everyNthFrame: 1 },
-        sessionId,
-      );
+        try {
+          const { sessionId } = await c.send<{ sessionId: string }>("Target.attachToTarget", {
+            targetId,
+            flatten: true,
+          });
+          sessionRef.current = sessionId;
+          try {
+            await c.send("Target.activateTarget", { targetId });
+          } catch {
+            // Headless has no window to raise; harmless.
+          }
+          await c.send("Page.enable", {}, sessionId);
+          await applyViewport();
+          if (visibleRef.current) await setScreencast(true);
+        } catch (e) {
+          if (activeRef.current === targetId) {
+            activeRef.current = null;
+            setActive(null);
+          }
+          throw e;
+        }
+      };
+      const p = attachChain.current.then(run, run);
+      attachChain.current = p.catch(() => {});
+      return p;
     },
-    [applyViewport],
+    [applyViewport, setScreencast],
   );
+
+  const reconnect = useCallback(() => {
+    autoRetries.current = 1;
+    setEpoch((e) => e + 1);
+  }, []);
 
   // ── Connection ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -165,12 +249,24 @@ export function BrowserPane({
     clientRef.current = client;
     sessionRef.current = null;
     activeRef.current = null;
+    screencastRef.current = null;
 
     // Frames: decode one at a time, keep only the newest while decoding —
     // latency over completeness. The ack goes back at once either way, so
-    // Chromium keeps producing.
+    // Chromium keeps producing. The frame counter lives on the canvas
+    // element (the e2e reads it): a React state per frame re-rendered the
+    // whole pane up to 60 times a second.
     let decoding = false;
+    let frames = 0;
     let pending: { data: string; sid: string; geom: FrameGeom } | null = null;
+    const drain = () => {
+      decoding = false;
+      if (pending) {
+        const next = pending;
+        pending = null;
+        draw(next);
+      }
+    };
     const draw = (f: { data: string; sid: string; geom: FrameGeom }) => {
       decoding = true;
       const img = new Image();
@@ -183,18 +279,11 @@ export function BrowserPane({
           }
           canvas.getContext("2d")?.drawImage(img, 0, 0);
           frameRef.current = f.geom;
-          setFrames((n) => n + 1);
+          canvas.dataset.frames = String(++frames);
         }
-        decoding = false;
-        if (pending) {
-          const next = pending;
-          pending = null;
-          draw(next);
-        }
+        drain();
       };
-      img.onerror = () => {
-        decoding = false;
-      };
+      img.onerror = drain;
       img.src = "data:image/jpeg;base64," + f.data;
     };
 
@@ -260,6 +349,7 @@ export function BrowserPane({
       setTabList(rest);
       if (activeRef.current === id) {
         sessionRef.current = null;
+        screencastRef.current = null;
         activeRef.current = null;
         setActive(null);
         const next = rest[0];
@@ -276,6 +366,7 @@ export function BrowserPane({
       if (disposed) return;
       clientRef.current = null;
       sessionRef.current = null;
+      screencastRef.current = null;
       if (code === 4002) {
         setPhase("stopped");
       } else if (code === 4004) {
@@ -298,6 +389,9 @@ export function BrowserPane({
 
     ws.onopen = () => {
       opened = true;
+      // A successful open refills the one automatic retry for the NEXT
+      // drop; it used to stay spent after the first handshake failure.
+      autoRetries.current = 1;
       (async () => {
         await client.send("Target.setDiscoverTargets", { discover: true });
         const { targetInfos } = await client.send<{ targetInfos: TargetInfo[] }>("Target.getTargets");
@@ -316,9 +410,11 @@ export function BrowserPane({
         // chosen the phase, and this rejection — a microtask later — must
         // not overwrite it with "disconnected".
         if (disposed || client.closed) return;
+        // Close FIRST: closing runs onClose, which sets its own reason
+        // ("closed by client"); ours must land after it, not under it.
+        client.close();
         setReason(e.message);
         setPhase("disconnected");
-        client.close();
       });
     };
 
@@ -333,12 +429,21 @@ export function BrowserPane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, epoch]);
 
+  // ── Hidden panes stream nothing ────────────────────────────────────────────
+  useEffect(() => {
+    visibleRef.current = visible;
+    if (!sessionRef.current) return;
+    if (visible) void applyViewport().then(() => setScreencast(true));
+    else void setScreencast(false);
+  }, [visible, applyViewport, setScreencast]);
+
   // ── Viewport follows the box ───────────────────────────────────────────────
   useEffect(() => {
     const box = boxRef.current;
     if (!box) return;
     let t: ReturnType<typeof setTimeout> | undefined;
     const ro = new ResizeObserver(() => {
+      refreshRect();
       clearTimeout(t);
       t = setTimeout(() => void applyViewport(), RESIZE_MS);
     });
@@ -347,7 +452,7 @@ export function BrowserPane({
       clearTimeout(t);
       ro.disconnect();
     };
-  }, [applyViewport]);
+  }, [applyViewport, refreshRect]);
 
   // ── The URL bar reflects the active tab unless the user is typing ─────────
   const activeTab = tabs.find((t) => t.targetId === active) ?? null;
@@ -377,6 +482,28 @@ export function BrowserPane({
     navigate(request.url);
     clearBrowserRequest(project, term);
   }, [request, phase, navigate, project, term]);
+
+  /**
+   * Retry after a failed launch: the REST start first, whose reply carries
+   * the launcher's full log tail (a close frame holds 123 bytes of it), then
+   * the relay. 409 = the project stopped meanwhile; 503 = a fresh bridge
+   * attach, which the socket path retries once on its own; anything else
+   * stays here with the message.
+   */
+  const retry = useCallback(async () => {
+    setRetrying(true);
+    try {
+      await api.browserStart(project);
+      reconnect();
+    } catch (e) {
+      const status = e instanceof ApiError ? e.status : 0;
+      if (status === 409) setPhase("stopped");
+      else if (status === 503) reconnect();
+      else setReason((e as Error).message);
+    } finally {
+      setRetrying(false);
+    }
+  }, [project, reconnect]);
 
   const history = useCallback(
     async (delta: -1 | 1) => {
@@ -430,34 +557,59 @@ export function BrowserPane({
     const sid = sessionRef.current;
     if (c && sid) c.send(method, params, sid).catch(() => {});
   };
-  const rectOf = () => canvasRef.current?.getBoundingClientRect() ?? { left: 0, top: 0, width: 0, height: 0 };
+  // Mouse moves are coalesced to one per animation frame (the newest wins)
+  // and flushed before any press or release so the guest sees them in order.
+  const pendingMove = useRef<InputMouseParams | null>(null);
+  const moveRaf = useRef(0);
+  const flushMove = () => {
+    if (moveRaf.current) {
+      cancelAnimationFrame(moveRaf.current);
+      moveRaf.current = 0;
+    }
+    const m = pendingMove.current;
+    if (m) {
+      pendingMove.current = null;
+      sendInput("Input.dispatchMouseEvent", m);
+    }
+  };
+  useEffect(() => () => cancelAnimationFrame(moveRaf.current), []);
   const onMouse = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (e.type === "mousedown") canvasRef.current?.focus();
-    sendInput(
-      "Input.dispatchMouseEvent",
-      mouseParams(
-        {
-          type: e.type as "mousedown" | "mouseup" | "mousemove",
-          button: e.button,
-          buttons: e.buttons,
-          clientX: e.clientX,
-          clientY: e.clientY,
-          detail: e.detail,
-          altKey: e.altKey,
-          ctrlKey: e.ctrlKey,
-          metaKey: e.metaKey,
-          shiftKey: e.shiftKey,
-        },
-        rectOf(),
-        frameRef.current,
-      ),
+    const params = mouseParams(
+      {
+        type: e.type as "mousedown" | "mouseup" | "mousemove",
+        button: e.button,
+        buttons: e.buttons,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        detail: e.detail,
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+      },
+      rectRef.current,
+      frameRef.current,
     );
+    if (e.type === "mousemove") {
+      pendingMove.current = params;
+      if (!moveRaf.current) {
+        moveRaf.current = requestAnimationFrame(() => {
+          moveRaf.current = 0;
+          flushMove();
+        });
+      }
+      return;
+    }
+    if (e.type === "mousedown") canvasRef.current?.focus();
+    flushMove();
+    sendInput("Input.dispatchMouseEvent", params);
   };
   const onWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    sendInput("Input.dispatchMouseEvent", wheelParams(e, rectOf(), frameRef.current));
+    flushMove();
+    sendInput("Input.dispatchMouseEvent", wheelParams(e, rectRef.current, frameRef.current));
   };
   const onKey = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
-    const chord = e.ctrlKey || e.metaKey;
+    const chord = isChord(e);
     // The pane's own shortcuts, never forwarded: focus the URL bar, reload.
     if (e.type === "keydown" && chord && (e.key === "l" || e.key === "L")) {
       e.preventDefault();
@@ -565,12 +717,19 @@ export function BrowserPane({
         </div>
       )}
       <div ref={boxRef} className="relative min-h-0 flex-1 bg-black">
+        {/* data-frames starts at 0 in the markup and is then counted on the
+            element itself (see the connection effect); the e2e gate reads it. */}
         <canvas
           ref={canvasRef}
           tabIndex={0}
           aria-label="Page"
-          data-frames={frames}
+          data-frames="0"
           className={`h-full w-full outline-none ${busy ? "hidden" : ""}`}
+          // Pointer capture keeps a drag that leaves the canvas ours, so its
+          // release still reaches the guest — no stuck button. Mouse events
+          // follow the capture; it lifts itself on pointerup.
+          onPointerDown={(e) => e.currentTarget.setPointerCapture(e.pointerId)}
+          onPointerEnter={refreshRect}
           onMouseDown={onMouse}
           onMouseUp={onMouse}
           onMouseMove={onMouse}
@@ -592,13 +751,7 @@ export function BrowserPane({
                   {/* Once the project runs again (the terminal boots it, or
                       the sidebar's Start), this is the way back in — a 4002
                       never auto-reconnects. */}
-                  <Button
-                    variant="text"
-                    onClick={() => {
-                      autoRetries.current = 1;
-                      setEpoch((e) => e + 1);
-                    }}
-                  >
+                  <Button variant="text" onClick={reconnect}>
                     Reconnect
                   </Button>
                 </div>
@@ -608,27 +761,15 @@ export function BrowserPane({
               <>
                 <p className="text-danger">Browser unavailable.</p>
                 <pre className="max-w-full overflow-x-auto whitespace-pre-wrap text-left font-mono text-[11px] text-text-dim">{reason}</pre>
-                <Button
-                  variant="tonal"
-                  onClick={() => {
-                    autoRetries.current = 1;
-                    setEpoch((e) => e + 1);
-                  }}
-                >
-                  Retry
+                <Button variant="tonal" onClick={() => void retry()} disabled={retrying}>
+                  {retrying ? "Starting…" : "Retry"}
                 </Button>
               </>
             )}
             {phase === "disconnected" && (
               <>
                 <p className="text-text-dim">Browser disconnected.{reason ? ` ${reason}` : ""}</p>
-                <Button
-                  variant="tonal"
-                  onClick={() => {
-                    autoRetries.current = 1;
-                    setEpoch((e) => e + 1);
-                  }}
-                >
+                <Button variant="tonal" onClick={reconnect}>
                   Reconnect
                 </Button>
               </>

@@ -16,6 +16,7 @@ import (
 
 	"github.com/kesokaj/styrman-crew/internal/config"
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
+	"github.com/kesokaj/styrman-crew/internal/terminal"
 )
 
 // Browser view (ADR-068): one headless Chromium per project microVM, started
@@ -141,13 +142,20 @@ func (s *Server) browserStop(ctx context.Context, user, project, guestUser strin
 }
 
 // tail keeps the last max bytes of a launcher's output — the log tail is at
-// the end, and a runaway log must not become a runaway error body.
+// the end, and a runaway log must not become a runaway error body. The cut
+// lands on a rune boundary: the output is shown as text, and a split
+// multi-byte sequence would render as garbage (or, in a close frame, make
+// the frame invalid UTF-8).
 func tail(s string, max int) string {
 	s = strings.TrimSpace(s)
 	if len(s) <= max {
 		return s
 	}
-	return "…" + s[len(s)-max:]
+	cut := len(s) - max
+	for cut < len(s) && !utf8RuneStart(s[cut]) {
+		cut++
+	}
+	return "…" + s[cut:]
 }
 
 // GET /api/projects/{project}/browser — owner only.
@@ -369,13 +377,26 @@ func (s *Server) browserSocket(w http.ResponseWriter, r *http.Request) {
 		closeWith(config.CloseProjectStopped, "project stopped")
 		return
 	}
-	if _, err := s.browserStart(r.Context(), u.Username, p.ID, sp.profile.GuestUser()); err != nil {
+	// ONE exec: the launcher's start is idempotent and its exit code is the
+	// answer; the status verb the REST start adds would be a second exec (and
+	// a second inspect) on every relay for nothing the dial below does not
+	// prove (review finding, 2026-09-13).
+	code, out, err := s.browserExec(r.Context(), u.Username, p.ID, sp.profile.GuestUser(), "start")
+	if err != nil {
 		if errors.Is(err, errProjectNotRunning) {
 			closeWith(config.CloseProjectStopped, "project stopped")
 			return
 		}
 		s.logger.Warn("browser start failed", "project", p.ID, "error", err)
-		closeWith(config.CloseBrowserUnavailable, closeReason(err.Error()))
+		closeWith(config.CloseBrowserUnavailable, "browser is not available right now")
+		return
+	}
+	if code != 0 {
+		s.logger.Warn("browser did not start", "project", p.ID, "exit", code, "tail", tail(out, 512))
+		// The close frame carries the END of the launcher's output — its log
+		// tail is the diagnostic; the pane's own heading says the rest, and
+		// Retry fetches the full 2 KiB through the REST start.
+		closeWith(config.CloseBrowserUnavailable, closeReason(tail(out, 2048)))
 		return
 	}
 	wsURL, err := browserEndpoint(r.Context(), host)
@@ -403,23 +424,53 @@ func (s *Server) browserSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	conn.SetReadLimit(browserPaneReadLimit)
-	relayWebSockets(r.Context(), conn, upstream)
+	// The owner is re-checked while the relay lives, exactly as the terminal
+	// bridge re-checks its session (nil in AuthMode=none: the identity is in
+	// no store). A relay is a DevTools client over the project's browser,
+	// which is nothing a revoked user should keep holding.
+	var check func() bool
+	if s.stillAuthorized != nil {
+		email := u.Email
+		check = func() bool { return s.stillAuthorized(email) }
+	}
+	relayWebSockets(r.Context(), conn, upstream, check, s.browserReauthEvery)
 }
 
-// relayWebSockets pumps frames both ways until either side ends. The pane
+// relayBuffers hands the pumps their copy buffers: a screencast frame is
+// streamed through 32 KiB at a time instead of being materialized whole
+// (up to 16 MiB) on every hop.
+var relayBuffers = sync.Pool{New: func() any { b := make([]byte, 32<<10); return &b }}
+
+// relayWebSockets pumps messages both ways until either side ends. The pane
 // closing is normal (the upstream is closed 1000); the guest side dropping
 // (Chromium crashed, project stopped) closes the pane with 1011 so it shows
-// "Browser disconnected" and offers Reconnect.
-func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn) {
+// "Browser disconnected" and offers Reconnect; a frame over the read limit
+// closes it 1009; a revoked owner (stillAuthorized turning false, checked
+// every reauthEvery; nil = never) closes it 4003.
+//
+// Each message is streamed: Reader → Writer of the same type → CopyBuffer →
+// Close. The Close is what completes the message (FIN), so it happens ONLY
+// after a clean copy — on a mid-message error the writer is abandoned and
+// the relay ends, and no truncated frame is ever delivered as complete.
+func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn, stillAuthorized func() bool, reauthEvery time.Duration) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	pump := func(dst, src *websocket.Conn) error {
+		buf := relayBuffers.Get().(*[]byte)
+		defer relayBuffers.Put(buf)
 		for {
-			typ, data, err := src.Read(ctx)
+			typ, r, err := src.Reader(ctx)
 			if err != nil {
 				return err
 			}
-			if err := dst.Write(ctx, typ, data); err != nil {
+			w, err := dst.Writer(ctx, typ)
+			if err != nil {
+				return err
+			}
+			if _, err := io.CopyBuffer(w, r, *buf); err != nil {
+				return err
+			}
+			if err := w.Close(); err != nil {
 				return err
 			}
 		}
@@ -428,6 +479,10 @@ func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn) {
 	go func() { paneErr <- pump(upstream, pane) }()
 	upErr := make(chan error, 1)
 	go func() { upErr <- pump(pane, upstream) }()
+	revoked := make(chan struct{}, 1)
+	if stillAuthorized != nil {
+		go terminal.RevocationWatch(ctx, reauthEvery, stillAuthorized, func() { revoked <- struct{}{} })
+	}
 	// Heartbeat toward BOTH sides: a tab that went away without a close
 	// frame (laptop lid, network drop) or a guest whose TCP half-died must
 	// not hold the slot and the guest exec forever — r.Context() is no
@@ -457,6 +512,9 @@ func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn) {
 		}
 	}()
 	select {
+	case <-revoked:
+		upstream.Close(websocket.StatusNormalClosure, "")
+		pane.Close(websocket.StatusCode(config.CloseAccessRevoked), "access revoked")
 	case <-pingErr:
 		upstream.Close(websocket.StatusNormalClosure, "")
 		pane.Close(websocket.StatusGoingAway, "no heartbeat")
@@ -464,7 +522,10 @@ func relayWebSockets(ctx context.Context, pane, upstream *websocket.Conn) {
 		upstream.Close(websocket.StatusNormalClosure, "")
 		pane.Close(websocket.StatusNormalClosure, "")
 	case err := <-upErr:
-		if websocket.CloseStatus(err) == websocket.StatusMessageTooBig {
+		// A limit breach is reported as a wrapped ErrMessageTooBig, not as a
+		// close status (the library closes the UPSTREAM 1009 itself); the
+		// old CloseStatus comparison could never match.
+		if errors.Is(err, websocket.ErrMessageTooBig) {
 			pane.Close(websocket.StatusMessageTooBig, "frame too large")
 		} else {
 			pane.Close(websocket.StatusInternalError, "browser disconnected")
@@ -488,6 +549,11 @@ func browserEndpoint(ctx context.Context, host string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Connection: close — a kept-alive discovery connection would park one of
+	// the guest forwarder's bounded children (socat max-children) for the
+	// idle timeout, doing nothing. The WebSocket dial below is hijacked and
+	// never pooled, so it needs no such flag.
+	req.Close = true
 	resp, err := browserHTTPClient.Do(req)
 	if err != nil {
 		return "", err
@@ -509,19 +575,23 @@ func browserEndpoint(ctx context.Context, host string) (string, error) {
 	return "ws://" + host + wu.Path, nil
 }
 
-// closeReason fits an error into a close frame's 123-byte reason budget.
+// closeReason fits a message into a close frame's 123-byte reason budget,
+// keeping its END: the launcher's output ends with the log lines that say
+// why, and the head ("chromium did not answer on :9229 within 15 s; last log
+// lines:") is the part the pane can do without. The cut lands on a rune
+// boundary — a split multi-byte sequence would make the close frame invalid
+// UTF-8 and the browser would drop the reason.
 func closeReason(msg string) string {
 	const max = 120
 	if len(msg) <= max {
 		return msg
 	}
-	// Cut on a rune boundary: a split multi-byte sequence would make the
-	// close frame invalid UTF-8 and the browser would drop the reason.
-	cut := max
-	for cut > 0 && !utf8RuneStart(msg[cut]) {
-		cut--
+	const mark = "…" // 3 bytes
+	cut := len(msg) - (max - len(mark))
+	for cut < len(msg) && !utf8RuneStart(msg[cut]) {
+		cut++
 	}
-	return msg[:cut]
+	return mark + msg[cut:]
 }
 
 func utf8RuneStart(b byte) bool { return b&0xC0 != 0x80 }
