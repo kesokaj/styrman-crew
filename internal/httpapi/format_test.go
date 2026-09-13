@@ -148,7 +148,9 @@ func TestFormatScriptPlacesTheTempFileBesideTheEditedFile(t *testing.T) {
 		`D="$PWD"`,
 		`case "$(realpath -m -- "$PWD/${STYRMAN_FMT_DIR}")" in "$PWD"|"$PWD"/*)`,
 		`find "$D" -maxdepth 1 -name '.styrman-fmt-*' -mmin +60 -delete`,
-		`.git/info/exclude`,
+		// -F: as a regex, ".styrman-fmt-*" never matches the literal line the
+		// next statement appends, so every click appended one more (review).
+		`grep -qsxF -- '.styrman-fmt-*'`,
 		`mktemp -p "$D" .styrman-fmt-XXXXXX --suffix=.ts`,
 	} {
 		if !strings.Contains(s, want) {

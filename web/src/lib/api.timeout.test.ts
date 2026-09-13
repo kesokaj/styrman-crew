@@ -26,21 +26,18 @@ describe("request() signal ownership", () => {
   });
 
   it("passes a caller's own timeout signal through unchanged", async () => {
-    // startProject carries AbortSignal.timeout(150000); it must reach fetch as
-    // THAT signal, not as a composite that also fires at 20 s. A composite
-    // built with AbortSignal.any is a fresh object, so identity is the test —
-    // read through the same API surface the pane uses.
-    await api.startProject("11111111-1111-4111-8111-111111111111");
-    const s = seen[0];
-    expect(s).toBeInstanceOf(AbortSignal);
-    // A composite would abort when a 20 s timer fires; a 150 s timeout signal
-    // does not abort in the next macrotask. Advance fake time past 20 s.
-    vi.useFakeTimers();
+    // startProject carries AbortSignal.timeout(150000). The old request()
+    // wrapped every caller signal in AbortSignal.any([...]) with a 20 s
+    // timer; the rule now is "a caller's signal is used as is", which the
+    // absence of any AbortSignal.any call proves (a timer-based check would
+    // pass for both shapes — review of this test).
+    const anySpy = vi.spyOn(AbortSignal, "any");
     try {
-      vi.advanceTimersByTime(25000);
-      expect(s?.aborted).toBe(false);
+      await api.startProject("11111111-1111-4111-8111-111111111111");
+      expect(anySpy).not.toHaveBeenCalled();
+      expect(seen[0]).toBeInstanceOf(AbortSignal);
     } finally {
-      vi.useRealTimers();
+      anySpy.mockRestore();
     }
   });
 

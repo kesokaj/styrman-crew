@@ -42,16 +42,14 @@ func (s *Server) credentialContent(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusInternalServerError, errors.New("cannot read credentials"))
 			return
 		}
-		{
-			for _, f := range files {
-				if f.ID == id {
-					if !utf8.Valid(f.Data) {
-						writeJSON(w, http.StatusOK, map[string]any{"path": f.Path, "binary": true})
-						return
-					}
-					writeJSON(w, http.StatusOK, map[string]any{"content": string(f.Data), "path": f.Path})
+		for _, f := range files {
+			if f.ID == id {
+				if !utf8.Valid(f.Data) {
+					writeJSON(w, http.StatusOK, map[string]any{"path": f.Path, "binary": true})
 					return
 				}
+				writeJSON(w, http.StatusOK, map[string]any{"content": string(f.Data), "path": f.Path})
+				return
 			}
 		}
 	case "env":

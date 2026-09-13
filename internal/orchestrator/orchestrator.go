@@ -1479,12 +1479,17 @@ func (o *Orchestrator) recreateMissingNetwork(ctx context.Context, containerID, 
 		return false // network exists; the start failure was something else
 	}
 	o.logger.Warn("project network missing — recreating it and the container", "network", netName, "lan", lan)
-	if err := o.createBridgeNetwork(ctx, netName, lan); err != nil {
-		o.logger.Error("network recreate failed", "network", netName, "error", err)
+	// Container FIRST: if the network came first and the remove then failed,
+	// the old container would sit on a fresh subnet with a stale broker env
+	// (BUG-054 verbatim) or be unstartable with this healer declining to act
+	// (review). Removed first, a failed network create leaves nothing behind:
+	// the next start creates both.
+	if err := o.docker.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true}); err != nil {
+		o.logger.Error("container remove for network recreate failed", "network", netName, "error", err)
 		return false
 	}
-	if err := o.docker.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true}); err != nil {
-		o.logger.Error("container remove after network recreate failed", "network", netName, "error", err)
+	if err := o.createBridgeNetwork(ctx, netName, lan); err != nil {
+		o.logger.Error("network recreate failed", "network", netName, "error", err)
 		return false
 	}
 	// The recreated bridge is a new network: drop any stale self-attach memo

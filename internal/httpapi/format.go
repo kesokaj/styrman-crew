@@ -164,7 +164,7 @@ if [ -n "${STYRMAN_FMT_DIR:-}" ] && [ -d "$PWD/${STYRMAN_FMT_DIR}" ]; then
   case "$(realpath -m -- "$PWD/${STYRMAN_FMT_DIR}")" in "$PWD"|"$PWD"/*) D="$PWD/${STYRMAN_FMT_DIR}" ;; esac
 fi
 find "$D" -maxdepth 1 -name '.styrman-fmt-*' -mmin +60 -delete 2>/dev/null
-if [ -d "$PWD/.git" ] && ! grep -qsx '.styrman-fmt-*' "$PWD/.git/info/exclude"; then mkdir -p "$PWD/.git/info" && printf '%%s\n' '.styrman-fmt-*' >> "$PWD/.git/info/exclude"; fi 2>/dev/null
+if [ -d "$PWD/.git" ] && ! grep -qsxF -- '.styrman-fmt-*' "$PWD/.git/info/exclude"; then mkdir -p "$PWD/.git/info" && printf '%%s\n' '.styrman-fmt-*' >> "$PWD/.git/info/exclude"; fi 2>/dev/null
 F=$(mktemp -p "$D" .styrman-fmt-XXXXXX --suffix=.%s) || { printf 'STYRMAN_ERR\ncannot create temp file'; exit 0; }
 trap 'rm -f "$F" "${F}.err"' EXIT
 E="${F}.err"
