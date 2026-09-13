@@ -226,8 +226,17 @@ func Read(homeDir, project, id string, maxBytes int64) (string, error) {
 	}
 	defer rt.Close()
 	// Confined open: a guest symlink under ~/.styrman/logs pointing outside
-	// the home is refused, not followed.
-	f, err := rt.OpenFile(path.Join(logsRel(project), id+".log"), os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	// the home is refused, not followed. Regular files only, checked before
+	// AND after the open exactly as searchOne does (parity, audit 2026-09-13):
+	// a FIFO with no writer reads as EOF, but a device node would be read as
+	// a file.
+	rel := path.Join(logsRel(project), id+".log")
+	if li, err := rt.Lstat(rel); err != nil {
+		return "", err
+	} else if !li.Mode().IsRegular() {
+		return "", fmt.Errorf("transcript is not a regular file")
+	}
+	f, err := rt.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return "", err
 	}
@@ -235,6 +244,9 @@ func Read(homeDir, project, id string, maxBytes int64) (string, error) {
 	st, err := f.Stat()
 	if err != nil {
 		return "", err
+	}
+	if !st.Mode().IsRegular() {
+		return "", fmt.Errorf("transcript is not a regular file")
 	}
 	if st.Size() > maxBytes {
 		if _, err := f.Seek(st.Size()-maxBytes, 0); err != nil {

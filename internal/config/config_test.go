@@ -192,3 +192,28 @@ func TestHomeLayoutKeepsGuestMountsApart(t *testing.T) {
 		t.Error("a project home must not sit inside the setup VM's home")
 	}
 }
+
+// STYRMAN_DOCKER_DISK_GB at boot is bounded exactly like the operator PATCH
+// and the persisted overrides (5-500): out of range fails closed with a
+// message naming the variable (audit 2026-09-13).
+func TestLoadBoundsDockerDisk(t *testing.T) {
+	for _, k := range []string{
+		"STYRMAN_AUTH", "STYRMAN_ADDR", "STYRMAN_DEV_ADDR",
+		"STYRMAN_INGRESS_TOKEN", "STYRMAN_USER", "STYRMAN_HOME_DIR",
+	} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("STYRMAN_STATE_DIR", t.TempDir())
+	t.Setenv("STYRMAN_IMAGE", "styrman-runtime:9.9.9")
+	for _, bad := range []string{"1", "0", "100000"} {
+		t.Setenv("STYRMAN_DOCKER_DISK_GB", bad)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), "STYRMAN_DOCKER_DISK_GB") {
+			t.Fatalf("STYRMAN_DOCKER_DISK_GB=%s: err = %v, want a refusal naming the variable", bad, err)
+		}
+	}
+	t.Setenv("STYRMAN_DOCKER_DISK_GB", "40")
+	c, err := Load()
+	if err != nil || c.DockerDiskGB() != 40 {
+		t.Fatalf("in-range value: %v, disk %d", err, c.DockerDiskGB())
+	}
+}

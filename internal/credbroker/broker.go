@@ -16,9 +16,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 
 	"github.com/kesokaj/styrman-crew/internal/credstore"
 )
@@ -87,7 +89,12 @@ func (b *Broker) git(w http.ResponseWriter, r *http.Request) {
 	c, err := b.store.GetGit(user, host)
 	if err != nil {
 		// Not onboarded for this host — tell git "no credential" (404) so it
-		// falls through rather than erroring the operation.
+		// falls through rather than erroring the operation. A read FAULT is
+		// still 404 to git (it must not error the operation) but is logged,
+		// so an unreadable store is diagnosable (audit 2026-09-13).
+		if !os.IsNotExist(err) && !errors.Is(err, os.ErrNotExist) {
+			b.logger.Warn("cred broker: git credential read failed", "user", user, "host", host, "error", err)
+		}
 		http.Error(w, "no credential", http.StatusNotFound)
 		return
 	}

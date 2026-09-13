@@ -230,6 +230,13 @@ func Load() (*Config, error) {
 	// styrman-runtime:latest — a silent mutable pin whenever env wiring broke;
 	// compose derives styrman-runtime:${STYRMAN_VERSION}, dev runs pass :dev
 	// explicitly (README), so an empty value only ever means a broken deploy.
+	// Same bound as SetOperator and the overrides loader: an env value
+	// outside 5-500 GB fails closed like every other config check here,
+	// instead of sizing every new project's Docker disk silently (audit
+	// 2026-09-13).
+	if c.dockerDisk < 5 || c.dockerDisk > 500 {
+		return nil, fmt.Errorf("STYRMAN_DOCKER_DISK_GB must be 5-500, got %d", c.dockerDisk)
+	}
 	if c.Image == "" {
 		return nil, fmt.Errorf("STYRMAN_IMAGE is not set — deploys use styrman-runtime:<x.y.z> (compose derives it from STYRMAN_VERSION); local dev: STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman")
 	}
@@ -296,6 +303,11 @@ func (c *Config) loadOverrides() {
 	defer c.opMu.Unlock()
 	if o.DockerDiskGB >= 5 && o.DockerDiskGB <= 500 {
 		c.dockerDisk = o.DockerDiskGB
+	} else if o.DockerDiskGB != 0 {
+		// 0 = field absent = keep. Out of range is ignored, not fatal: a
+		// hand-edited file must not brick the server — but say so (audit
+		// 2026-09-13).
+		fmt.Fprintf(os.Stderr, "WARN: ignoring dockerDiskGB=%d in %s (must be 5-500)\n", o.DockerDiskGB, c.overridesPath())
 	}
 	if o.IdleTimeout != "" {
 		if d, err := time.ParseDuration(o.IdleTimeout); err == nil && d >= 0 {
@@ -505,6 +517,7 @@ func envIntOr(key string, def int) int {
 		if n, err := strconv.Atoi(v); err == nil {
 			return n
 		}
+		fmt.Fprintf(os.Stderr, "WARN: %s=%q is not an integer — using %d\n", key, v, def)
 	}
 	return def
 }
@@ -514,6 +527,7 @@ func envDurationOr(key string, def time.Duration) time.Duration {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
 		}
+		fmt.Fprintf(os.Stderr, "WARN: %s=%q is not a duration — using %s\n", key, v, def)
 	}
 	return def
 }

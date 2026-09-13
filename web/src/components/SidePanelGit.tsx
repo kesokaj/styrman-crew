@@ -429,10 +429,16 @@ export function GitTab({
             <button
               onClick={() =>
                 run(async () => {
-                  await api.gitStash(project, "pop");
-                  setStashes((await api.gitStashList(project)).entries);
-                  treeChanged();
-                  toast("success", "Popped");
+                  // finally: a CONFLICTING pop answers 409 but has already
+                  // rewritten the tree with markers, so open editor buffers
+                  // are stale either way (audit 2026-09-13).
+                  try {
+                    await api.gitStash(project, "pop");
+                    setStashes((await api.gitStashList(project)).entries);
+                    toast("success", "Popped");
+                  } finally {
+                    treeChanged();
+                  }
                 })
               }
               disabled={busy || stashes.length === 0}
@@ -526,9 +532,17 @@ export function GitTab({
           confirmLabel="Discard"
           danger
           onConfirm={() =>
-            run(() =>
-              api.gitDiscard(project, discarding.path, discarding.untracked),
-            )
+            run(async () => {
+              // Discard rewrites the working tree server-side: evict the path
+              // from open editor panes like every other tree-mutating verb,
+              // or a stale buffer's next Save silently undoes the discard
+              // (audit 2026-09-13).
+              try {
+                await api.gitDiscard(project, discarding.path, discarding.untracked);
+              } finally {
+                treeChanged();
+              }
+            })
           }
           onClose={() => setDiscarding(null)}
         />

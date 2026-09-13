@@ -348,15 +348,17 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 			o.logger.Info("starting stopped project container", "project", project)
 			if err := o.docker.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
 				// Defense in depth: if the project's network went missing
-				// (e.g. an older buggy sweep removed it), recreate it and
-				// reconnect the container rather than leaving it unstartable.
+				// (e.g. an older buggy sweep removed it), recreate it — and
+				// the CONTAINER with it, never a reconnect: the env baked in at
+				// create names the broker address of the bridge it was made
+				// for, and a reconnected container on a fresh subnet would
+				// carry a stale one (BUG-054, ADR-069). One level of
+				// recursion: on the second pass the network exists, so this
+				// branch cannot be taken again.
 				if o.recreateMissingNetwork(ctx, id, config.NetworkName(project), lan) {
-					if err2 := o.docker.ContainerStart(ctx, id, container.StartOptions{}); err2 != nil {
-						return "", fmt.Errorf("start %s after network recreate: %w", name, err2)
-					}
-				} else {
-					return "", fmt.Errorf("start %s: %w", name, err)
+					return o.ensureRunningLocked(ctx, user, project, opts)
 				}
+				return "", fmt.Errorf("start %s: %w", name, err)
 			}
 		}
 	case errdefs.IsNotFound(err):
@@ -1466,19 +1468,23 @@ func (o *Orchestrator) RunIdleReaper(ctx context.Context) {
 }
 
 // recreateMissingNetwork recreates a project's bridge network if it is absent
-// and reconnects the container to it. Returns true if it recreated (so the
-// caller should retry the start). Best effort — false on any failure.
+// and REMOVES the (stopped — its start just failed) container, so the caller
+// creates it afresh on the new bridge with an env that names it. It used to
+// reconnect the existing container instead, which left STYRMAN_CRED_BROKER
+// pointing at the old subnet's address (BUG-054's other half; ADR-069).
+// Returns true if it recreated (the caller re-runs ensureRunningLocked).
+// Best effort — false on any failure.
 func (o *Orchestrator) recreateMissingNetwork(ctx context.Context, containerID, netName string, lan bool) bool {
 	if _, err := o.docker.NetworkInspect(ctx, netName, network.InspectOptions{}); err == nil {
 		return false // network exists; the start failure was something else
 	}
-	o.logger.Warn("project network missing — recreating", "network", netName, "lan", lan)
+	o.logger.Warn("project network missing — recreating it and the container", "network", netName, "lan", lan)
 	if err := o.createBridgeNetwork(ctx, netName, lan); err != nil {
 		o.logger.Error("network recreate failed", "network", netName, "error", err)
 		return false
 	}
-	if err := o.docker.NetworkConnect(ctx, netName, containerID, nil); err != nil {
-		o.logger.Error("network reconnect failed", "network", netName, "error", err)
+	if err := o.docker.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true}); err != nil {
+		o.logger.Error("container remove after network recreate failed", "network", netName, "error", err)
 		return false
 	}
 	// The recreated bridge is a new network: drop any stale self-attach memo

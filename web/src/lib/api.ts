@@ -363,13 +363,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json" },
     // Don't hang forever if the server is wedged (a stuck VM boot pinning the
     // box); surface a timeout the UI can show instead of a spinner forever.
-    // A caller's signal is COMBINED with the timeout, never a replacement
-    // for it (review of the close-out's phase 2: the first abortable check
-    // request silently lost its 20 s bound).
+    // A caller that passes a signal OWNS its bound: start/stop (150 s), the
+    // LAN toggle (210 s) and uploads (120 s) carry deliberately long
+    // budgets, and combining them with this default clipped every one of
+    // them to 20 s (BUG-055, BUG-022's mechanism). The one caller that wants
+    // the default AND its own abort — checkFile — combines them itself.
     ...init,
-    signal: init?.signal
-      ? AbortSignal.any([init.signal, AbortSignal.timeout(20000)])
-      : AbortSignal.timeout(20000),
+    signal: init?.signal ?? AbortSignal.timeout(20000),
     // Never follow a redirect. The API issues none; the one the ingress issues
     // for an expired session (→ https://auth.<domain>/oauth2/google/ →
     // accounts.google.com) is cross-origin, so a fetch that FOLLOWED it
@@ -618,11 +618,13 @@ export const api = {
   // Syntax-check content with the language's real CLI checker in the project
   // VM (gofmt, shellcheck, hadolint, …). `supported:false` means we have no
   // checker for this file type — a normal answer, not an error.
+  // The editor's abort (a new debounce cycle) AND the 20 s bound, combined
+  // here because a caller-supplied signal replaces request()'s default.
   checkFile: (project: string, path: string, content: string, signal?: AbortSignal) =>
     request<CheckResult>(u`/api/projects/${project}/check`, {
       method: "POST",
       body: JSON.stringify({ path, content }),
-      ...(signal ? { signal } : {}),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000),
     }),
   deleteFile: (scope: Scope, path: string) =>
     request<void>(`${scopeBase(scope)}/file?path=${encodeURIComponent(path)}`, {

@@ -97,7 +97,13 @@ func NewStore(path string) (*Store, error) {
 		}
 		// Migration from name-keyed records: assign a UUID, freeze the dir.
 		if p.ID == "" {
-			p.ID = NewUUID()
+			id, err := NewUUID()
+			if err != nil {
+				slog.Error("quarantining project that cannot be assigned an id (preserved in .rejected)", "name", p.Name, "error", err)
+				rejected = append(rejected, p)
+				continue
+			}
+			p.ID = id
 			migrated = true
 		}
 		if p.Dir == "" {
@@ -152,7 +158,11 @@ func (s *Store) Add(p Project) (Project, error) {
 			return Project{}, fmt.Errorf("a project named %q already exists", p.Name)
 		}
 	}
-	p.ID = NewUUID()
+	id, err := NewUUID()
+	if err != nil {
+		return Project{}, err
+	}
+	p.ID = id
 	p.Dir = p.Name
 	s.projects[p.ID] = p
 	if err := s.save(); err != nil {

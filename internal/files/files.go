@@ -171,33 +171,6 @@ func openReg(rt *os.Root, rel string) (*os.File, os.FileInfo, error) {
 	return f, st, nil
 }
 
-// ContainedPath resolves rel under root and returns the real (symlink-
-// evaluated) absolute path, erroring if it escapes root. For callers that
-// need a filesystem PATH rather than a handle — chiefly exec-based tools
-// like git (`git -C <path>`) that cannot use an os.Root handle. Direct I/O
-// should use the confined helpers above (List/Read/Write/…) instead, which
-// have no check-then-use window.
-func ContainedPath(root, rel string) (string, error) {
-	rel = strings.TrimPrefix(path.Clean("/"+strings.TrimSpace(rel)), "/")
-	full := filepath.Join(root, rel)
-	realRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", err
-	}
-	realFull, err := filepath.EvalSymlinks(full)
-	if err != nil {
-		realParent, perr := filepath.EvalSymlinks(filepath.Dir(full))
-		if perr != nil {
-			return "", err
-		}
-		realFull = filepath.Join(realParent, filepath.Base(full))
-	}
-	if realFull != realRoot && !strings.HasPrefix(realFull, realRoot+string(os.PathSeparator)) {
-		return "", fmt.Errorf("path escapes root")
-	}
-	return full, nil
-}
-
 // List returns the entries in the directory at rel, directories first.
 // Dotfiles are included — this is a developer's home, they matter.
 func List(root, rel string) ([]Entry, error) {
@@ -294,7 +267,16 @@ func Read(root, rel string) (*FileContent, error) {
 	}
 	defer f.Close()
 	buf := make([]byte, MaxReadBytes)
-	n, _ := io.ReadFull(f, buf)
+	// A short read is the normal end of a small file (io.EOF /
+	// io.ErrUnexpectedEOF); anything else is a real I/O fault that must not
+	// be served as a 200 with Truncated set (audit 2026-09-13). The fault
+	// branch has no unit test: a mid-read error cannot be planted through
+	// os.Root without a seam, and the branch is two lines — recorded, not
+	// hidden.
+	n, err := io.ReadFull(f, buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil, err
+	}
 	buf = buf[:n]
 	fc := &FileContent{
 		Path:      strings.TrimPrefix(rel, "/"),

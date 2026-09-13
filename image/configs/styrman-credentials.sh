@@ -16,28 +16,35 @@
 # read back a stale value and clobber a token the user just re-authed (H6).
 [ -z "${STYRMAN_SKIP_CRED_PULL:-}" ] || return 0 2>/dev/null || exit 0
 
-# The broker listens at broadcast-1 of this VM's own /16 bridge subnet
-# (ADR-030). Derive that from our own IP rather than trusting the address baked
-# into the container env at create time, so a network recreation (which can hand
-# the bridge a different subnet) cannot strand the project on a stale broker IP
-# (M17). Keep the port from the injected env (defaults to 8091). Best-effort:
-# the injected value stands if we cannot read our own address.
-__sc_ip="$(ip -o -4 addr show scope global 2>/dev/null | awk 'NR==1{print $4}' | cut -d/ -f1)"
-case "${__sc_ip}" in
-    [0-9]*.[0-9]*.*)
-        __sc_port="$(printf '%s' "${STYRMAN_CRED_BROKER:-}" | sed -n 's#.*:\([0-9][0-9]*\)$#\1#p')"
-        STYRMAN_CRED_BROKER="http://$(printf '%s' "${__sc_ip}" | cut -d. -f1,2).255.254:${__sc_port:-8091}"
-        ;;
-esac
-unset __sc_ip __sc_port
-
-[ -n "${STYRMAN_CRED_BROKER:-}" ] || return 0 2>/dev/null || exit 0
+# STYRMAN_CRED_BROKER is injected by the server when it creates this
+# container: broadcast-1 of the bridge's REAL subnet (ADR-030,
+# orchestrator.brokerIPForSubnet). It is authoritative. This snippet used to
+# re-derive it from the VM's own IP as "<o1>.<o2>.255.254" — a /16
+# assumption — so that a recreated network could not strand the project on
+# a stale address; the day the host pinned bridges to /24 (v1.27.1,
+# 2026-09-10) that arithmetic pointed every login shell at an address nobody
+# answers, silently (BUG-054). The stale-network case is the server's job
+# now: a container whose network vanished is recreated with a fresh env,
+# never reconnected (ADR-069).
+__sc_marker="${HOME}/.styrman/broker-unreachable"
+if [ -z "${STYRMAN_CRED_BROKER:-}" ]; then
+    # No broker by design (host-mode dev): nothing to reach, nothing stale.
+    rm -f "${__sc_marker}" 2>/dev/null || true
+    unset __sc_marker
+    return 0 2>/dev/null || exit 0
+fi
 command -v curl >/dev/null 2>&1 || return 0 2>/dev/null || exit 0
+# Either probe failing sets the marker the MOTD reports; it is cleared only
+# when BOTH answered (BUG-054's lesson: a silent `|| true` hid the outage).
+__sc_fail=0
 
 # env-token tier: export each KEY=VALUE. jq is in the base image; fall back to
 # doing nothing rather than mis-parsing if it is somehow absent.
 if command -v jq >/dev/null 2>&1; then
-    __sc_env="$(curl -fsS --connect-timeout 1 --max-time 5 "${STYRMAN_CRED_BROKER}/env" 2>/dev/null || true)"
+    if ! __sc_env="$(curl -fsS --connect-timeout 1 --max-time 5 "${STYRMAN_CRED_BROKER}/env" 2>/dev/null)"; then
+        __sc_env=""
+        __sc_fail=1
+    fi
     if [ -n "${__sc_env}" ]; then
         while IFS="$(printf '\t')" read -r __k __v; do
             case "${__k}" in
@@ -51,11 +58,15 @@ EOF
     unset __sc_env __k __v
 
     # file-injection tier: write each file at its mode under $HOME.
-    __sc_files="$(curl -fsS --connect-timeout 1 --max-time 5 "${STYRMAN_CRED_BROKER}/files" 2>/dev/null || true)"
+    if ! __sc_files="$(curl -fsS --connect-timeout 1 --max-time 5 "${STYRMAN_CRED_BROKER}/files" 2>/dev/null)"; then
+        __sc_files=""
+        __sc_fail=1
+    fi
     if [ -n "${__sc_files}" ]; then
         printf '%s' "${__sc_files}" \
             | jq -r '.[] | [.path, .mode, .data] | @tsv' 2>/dev/null \
             | while IFS="$(printf '\t')" read -r __p __m __d; do
+                # shellcheck disable=SC2088  # "~/"* is a case PATTERN, not an expansion
                 case "${__p}" in
                     "~/"*) __p="${HOME}/${__p#\~/}" ;;
                     /*)    continue ;;                 # never absolute
@@ -72,6 +83,14 @@ EOF
             done
     fi
     unset __sc_files
+
+    # The marker (read by profile-motd.sh): never fatal, the login must go on.
+    if [ "${__sc_fail}" = 1 ]; then
+        mkdir -p "${HOME}/.styrman" 2>/dev/null || true
+        printf '%s %s\n' "$(date -u +%FT%TZ 2>/dev/null || echo unknown)" "${STYRMAN_CRED_BROKER}" > "${__sc_marker}" 2>/dev/null || true
+    else
+        rm -f "${__sc_marker}" 2>/dev/null || true
+    fi
 
     # git identity: the broker serves the author name/email as env creds (the
     # token flows via the git credential helper, but the identity doesn't).

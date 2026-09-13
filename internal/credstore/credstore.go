@@ -87,6 +87,11 @@ func New(baseDir string) (*Store, error) {
 	if err := os.MkdirAll(baseDir, 0o700); err != nil {
 		return nil, err
 	}
+	// MkdirAll sets the mode only when it creates the directory; a
+	// pre-existing looser mode stays otherwise (audit 2026-09-13).
+	if err := os.Chmod(baseDir, 0o700); err != nil {
+		return nil, err
+	}
 	return &Store{base: baseDir}, nil
 }
 

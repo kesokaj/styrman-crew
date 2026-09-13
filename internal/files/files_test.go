@@ -144,32 +144,6 @@ func TestReadRawAndExists(t *testing.T) {
 	}
 }
 
-func TestContainedPath(t *testing.T) {
-	root, victim := setup(t)
-	if _, err := ContainedPath(root, "projects/p"); err != nil {
-		t.Fatalf("legit path: %v", err)
-	}
-	link := filepath.Join(root, "projects", "p", "esc")
-	if err := os.Symlink(filepath.Dir(victim), link); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ContainedPath(root, "projects/p/esc"); err == nil {
-		t.Fatal("ContainedPath through escaping symlink must fail")
-	}
-	// Lexical ".." is clamped inside the root, so the returned path never
-	// escapes even when the input tries to.
-	for _, rel := range []string{"../victim", "../../etc/passwd"} {
-		got, err := ContainedPath(root, rel)
-		if err != nil {
-			continue // rejected is also fine
-		}
-		real, _ := filepath.EvalSymlinks(root)
-		if rp, _ := filepath.Rel(real, got); rp == ".." || filepath.IsAbs(rp) || len(rp) > 2 && rp[:3] == ".."+string(filepath.Separator) {
-			t.Fatalf("ContainedPath %q escaped root: %q", rel, got)
-		}
-	}
-}
-
 func TestSaveStreamAndDownloadConfined(t *testing.T) {
 	root, victim := setup(t)
 	if err := SaveStream(root, "projects/p/up.txt", strings.NewReader("data")); err != nil {

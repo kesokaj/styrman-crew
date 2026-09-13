@@ -270,3 +270,37 @@ func TestCurrentBridgeFoundMissingAndError(t *testing.T) {
 		t.Fatal("an inspect error must be returned, never folded into not-found")
 	}
 }
+
+// A STOPPED container whose bridge vanished: the network is recreated and the
+// container is REMOVED and created again (never reconnected), so its env
+// names the broker address of the bridge it is actually on (BUG-054,
+// ADR-069). One level of recursion, one create.
+func TestEnsureRunningRecreatesTheContainerWhenItsNetworkVanished(t *testing.T) {
+	o, fd, cfg := seamOrch(t)
+	plant(fd, cfg, false, false)
+	delete(fd.networks, config.NetworkName(tProj))
+	// The first start fails (Docker: "network not found"); the fake fails every
+	// ContainerStart until the second one is observed.
+	fd.fail["ContainerStart"] = errors.New("network sdb-x not found")
+	starts := 0
+	fd.onCall = func(method string) {
+		if method == "ContainerStart" {
+			starts++
+			if starts == 2 {
+				fd.mu.Lock()
+				delete(fd.fail, "ContainerStart")
+				fd.mu.Unlock()
+			}
+		}
+	}
+	id, err := o.EnsureRunning(context.Background(), tUser, tProj, opts(false))
+	if err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+	if id == "" || fd.callsTo("NetworkCreate") != 1 || fd.callsTo("ContainerRemove") != 1 || fd.callsTo("ContainerCreate") != 1 || fd.callsTo("NetworkConnect") != 0 {
+		t.Fatalf("want network create + container remove + create, no reconnect; got calls %v", fd.calls)
+	}
+	if starts != 2 {
+		t.Fatalf("starts = %d, want the failed one and the fresh container's", starts)
+	}
+}

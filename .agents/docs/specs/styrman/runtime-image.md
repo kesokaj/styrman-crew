@@ -246,12 +246,18 @@ Steps, in order:
    entirely if `STYRMAN_SKIP_CRED_PULL` is set (the harvest/import exec sets
    this so it reads the guest's REAL current files instead of the broker's
    own copy — H6). Otherwise, on every login shell:
-   - Derives the broker's address from the VM's OWN current IP (broadcast−1
-     of its `/16`) rather than trusting `$STYRMAN_CRED_BROKER` baked into the
-     container env at creation time — a network recreation can hand the
-     bridge a new subnet, which would otherwise strand the project on a
-     stale broker IP (M17). Falls back to the injected value if its own
-     address can't be read.
+   - Uses `$STYRMAN_CRED_BROKER` exactly as the server injected it at
+     container creation (broadcast−1 of the bridge's REAL subnet,
+     `orchestrator.brokerIPForSubnet`). It no longer re-derives the address
+     from the VM's own IP: that arithmetic assumed a `/16` bridge and pointed
+     every login shell at a dead address once bridges became `/24` on
+     2026-09-10 (BUG-054, fixed in v1.30.0). The case it guarded — a
+     recreated network with a new subnet under an existing container — is
+     closed on the server side instead: a stopped container whose network
+     vanished is recreated with a fresh env, never reconnected (ADR-069).
+     When `/env` or `/files` does not answer, the snippet writes
+     `~/.styrman/broker-unreachable` (`<time> <url>`) and the MOTD says so
+     in the next interactive shell; the marker is removed once both answer.
    - `GET /env` → `export` each var. The broker merges any PROJECT-SCOPED
      variables (SidePanel → Env, ADR-043) over the user-wide set for the
      calling project — the guest snippet is unchanged; scoping happens
