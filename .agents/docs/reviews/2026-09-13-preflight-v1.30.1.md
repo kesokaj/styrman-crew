@@ -116,3 +116,13 @@ user. PASS.
   shape checks, read by two reviewers).
 - `deploy/verify-commit.sh` on the release commit and the updater's deploy:
   appended below once observed.
+
+## Release commit gate (appended after the release commit)
+
+`deploy/verify-commit.sh 5a4dcde` — first run 13:33 FAILED on Docker Hub's
+anonymous pull rate limit (`429 Too Many Requests` resolving the pinned
+`debian:trixie` base; BUG-056), not on the code; no tag was pushed. The
+window returned at 14:03 (`ratelimit-remaining=100`); second run — exit 0:
+"OK: commit 5a4dcdef0e76 builds and tests clean in isolation — safe to tag".
+Log: `.agents/scratch/verify-commit-v1.30.1.log`. Tag `v1.30.1` signed on
+5a4dcde.
