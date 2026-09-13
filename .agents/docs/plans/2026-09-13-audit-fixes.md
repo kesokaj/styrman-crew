@@ -94,7 +94,7 @@ explorer.go grab-bag split; credstore `safe()` injectivity (store migration); se
 - [x] host-setup /etc/styrman guard; styrman-ctl edit key validation — verify: bash -n, shellcheck, ctl tests (AI) — green
 ### Phase 4 — Web lows, docs, records, release
 - [x] BrowserPane/icons/settings/portUrl/reveal→lib with zero-width family/clips test/agent-memory untracked — verify: check/lint/vitest 177 (AI) — green
-- [ ] documentation (api.md ADR-067, runtime-image.md, testing README), changelog (audit + fixes + ADR-030 amendment + image-pin ADR), bugs (BUG-054/055 done; any new), TODO records — then `/preflight v1.30.0`
+- [x] documentation (api.md ADR-067, runtime-image.md, testing README), changelog (audit + fixes + ADR-030 amendment + image-pin ADR), bugs (BUG-054/055 done; any new), TODO records — then `/preflight v1.30.0` — DONE 2026-09-13: gate `.agents/docs/reviews/2026-09-13-preflight-v1.30.0.md` (SHIP), tag v1.30.0 on 5393ef5, live 12:54 (handoff `.agents/docs/handoffs/2026-09-13-session-end-v1.30.0.md`)
 
 ## Cold-read trail
 
