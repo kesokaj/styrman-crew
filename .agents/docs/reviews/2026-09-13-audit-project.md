@@ -61,7 +61,7 @@ sink, no hand-rolled crypto, every gate green.
 | Severity | Confirmed | Refuted / re-graded down | Unverified lows |
 |---|---|---|---|
 | 🔴 high | 2 | 1 (git Discard → medium) | — |
-| 🟡 medium | 14 (2 awaiting the last refuter) | 2 (orchestrator recreate branch; transcript FIFO hang → low) | — |
+| 🟡 medium | 14 (all refuted-or-held; the setup-socket boot re-graded low-to-medium) | 2 (orchestrator recreate branch; transcript FIFO hang → low) | — |
 | 🟢 low | — | — | 38 |
 
 ## 🔴 High
@@ -84,8 +84,8 @@ sink, no hand-rolled crypto, every gate green.
 | 🟡 | `internal/credbroker/broker.go` | 61 | Any container inside a project's dockerd reaches the broker with the guest's IP and gets the user's whole credential set; no ADR records that. | Record the decision (the user's own workloads, R3's shared-credentials model; the boundary is the project) in ADR-030's amendment; no code change. |
 | 🟡 | `deploy/update/styrman-update` | 313 | The "must be SSH-signed" grep knows two of git's four signature markers; an object with an SSH block followed by `PGP MESSAGE`/`SIGNED MESSAGE` passes the gate while git dispatches to gpg/gpgsm. Bounded on the timer (`ProtectHome=yes`), open on `sudo styrman-update --force`. | Widen the regex to all four markers, keep "last must be SSH"; run verification with `GNUPGHOME` at an empty dir; add the four fixtures to the updater's test. |
 | 🟡 | `image/Dockerfile` | 89–97 | Go toolchain fetched as "newest today" with no checksum; NodeSource and Antigravity `curl \| bash` as root; `npm install -g @anthropic-ai/claude-code` unpinned and without `--ignore-scripts`; the comment at :55 claims everything is pinned and verified. The auto-updater rebuilds the image on every tag, so rollback determinism depends on this. | Pin Go by version + sha256; install Node from the official tarball with `SHASUMS256.txt`; pin claude-code's version + `--ignore-scripts`; for the Antigravity installer record the accepted risk (no upstream pinning mechanism) in the comment and ADR instead of a hash that would break every release on an upstream edit; correct the comment. |
-| 🟡 | `deploy/caddy/ingress/generator.go` | 264 | `trust login redirect uri domain suffix <BASE_DOMAIN>` is a bare `HasSuffix` in go-authcrunch: `evilstyrman.xyz` is trusted and `?redirect_url=` survives sign-in — open redirect on the auth portal. *(refuter pending)* | Emit a leading dot. |
-| 🟡 | `internal/terminal/bridge.go` | 196 | `ServeSetup` boots the setup microVM before the Origin check (which only runs inside `websocket.Accept`); csrfGuard exempts GET; any page a signed-in operator visits can force-boot a VM. *(refuter pending)* | Check `sameOriginOrAbsent` first, as `browserSocket` does. |
+| 🟡 | `deploy/caddy/ingress/generator.go` | 264 | `trust login redirect uri domain suffix <BASE_DOMAIN>` is a bare `HasSuffix` in go-authcrunch: `evilstyrman.xyz` is trusted and `?redirect_url=` survives sign-in — open redirect on the auth portal (refuter: HOLDS — `go-authcrunch v1.1.41` `redirect_match.go:59-60` is a bare `HasSuffix`; `?redirect_url=` survives Google sign-in via the referer cookie, `handle_http_login.go:377-405`; a leading dot is accepted by the directive and `crew.<BASE>` still matches; no token leaks). | Emit `.` + BASE_DOMAIN; a generator test asserting the leading dot (there is none for this line today). |
+| 🟡 | `internal/terminal/bridge.go` | 196 | `ServeSetup` boots the setup microVM before the Origin check (which only runs inside `websocket.Accept`); csrfGuard exempts GET; a page can force-boot a VM (refuter: HOLDS at low-to-medium — the cookie carries no SameSite so Chromium treats it Lax and drops it on a cross-site WS handshake, Firefox/Safari do not; and from a SAME-SITE page — another tenant's opt-in preview host `<token>.public.crew.<BASE>` — every browser sends it. Bounded: `EnsureSetup` is per-user idempotent, one VM per victim, reaped by the idle reaper; no guest code runs before `Accept`). | Check `sameOriginOrAbsent` first in `ServeSetup` (and `ServeTerminal`), as `browserSocket` does; `cookie samesite lax` in the generator closes the cross-site half. |
 | 🟡 | `.agents/docs/specs/styrman/api.md` | 15, 200, 266 | Documents the deleted ADR-065 design (lanState/lanMessage, hostFirewall, `STYRMAN_FIREWALL_DIR`) as current. | `documentation` rewrites those sections to ADR-067. |
 | 🟡 | `internal/httpapi/projectenv.go`, `stats.go` | — | Reachable routes with zero test coverage (verifier FAIL lines). | Handler tests over the guest seam. |
 
@@ -139,5 +139,4 @@ sink, no hand-rolled crypto, every gate green.
 ## What was not checked
 
 - Web components' coverage map is approximate (verifier: filename grep against e2e checks, ~20 files with no unit test and no traced e2e driver).
-- The auth-portal open redirect and the setup-socket boot are awaiting their refuter (this file is updated when it lands).
 - Kata guest kernel behaviour for FIFOs on virtiofs was reasoned, not measured.
