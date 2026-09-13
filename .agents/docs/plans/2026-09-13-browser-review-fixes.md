@@ -202,7 +202,7 @@ ports/terminals polling (a SPA polling restructure, out of scope).
 - [x] `styrman-ctl` flag ordering + `CTL_TMPD` trap — verify: `TestStyrmanCtl…` new case (`--dry-run status` ≡ `status --dry-run`); `bash -n` (AI)
 - [x] `integration.sh` guard fails closed — verify: `bash -n`; a run with `ss` shadowed by a failing stub exits 1 before any check (AI)
 - [x] `AGENTS.md` count → README pointer — verify: read (AI)
-- [ ] Definition of Done: verifier (all tiers named above), reviewer (diff), security (relay/auth/launcher), documentation, changelog (+ADR-068 amendment), bugs — then `/preflight v1.29.0`
+- [x] Definition of Done: verifier (all tiers named above), reviewer (diff), security (relay/auth/launcher), documentation, changelog (+ADR-068 amendment), bugs — then `/preflight v1.29.0` — DONE 2026-09-13: gate `.agents/docs/reviews/2026-09-13-preflight-v1.29.0.md` (SHIP), tag v1.29.0 on b6bc2bf, live at 10:24 (handoff `.agents/docs/handoffs/2026-09-13-session-end-v1.29.0.md`)
 
 ## Risks
 
