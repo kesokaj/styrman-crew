@@ -76,6 +76,16 @@ func TestRouting(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Errorf("cross-origin POST = %d, want 403", w.Code)
 	}
+	// The guard judges the CLEANED path: a raw "/link/../api/projects" is not
+	// a link path and gets the same 403, never the link exemption (audit
+	// 2026-09-13; the mux would 301 it, but the guard must not exempt first).
+	req = httptest.NewRequest(http.MethodPost, "/link/../api/projects", strings.NewReader("{}"))
+	req.Header.Set("Origin", "https://evil.example")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "cross-origin") {
+		t.Errorf("cross-origin POST through a dot-dot link prefix = %d %s, want the CSRF 403", w.Code, w.Body.String())
+	}
 
 	// Unknown project 404s before any docker interaction.
 	if w := get("/api/projects/nope"); w.Code != http.StatusNotFound {

@@ -315,7 +315,11 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   `hasCompletedOnboarding` flag so a materialized token doesn't re-trigger
   first-run login, v1.5.6); and `GET /files` (files — gcloud ADC, ssh key,
   claude's `.credentials.json`, and agy's OAuth token file — written into
-  the home by the same snippet). That's all three tiers: the fourth
+  the home by the same snippet). When the broker does not answer (`/env` or
+  `/files` fails), the snippet writes a marker instead of failing the login
+  shell, and the next INTERACTIVE shell's MOTD prints one line naming the
+  broker URL and the time credentials last failed to arrive (BUG-054); the
+  marker clears once both calls succeed again. That's all three tiers: the fourth
   `GET /keyring` tier ADR-032a added for agy (Secret Service) turned out to
   not match agy's real build (a plain file, ADR-038) and was left dormant,
   then deleted outright in the 2026-08-30 security review (ADR-040) — no

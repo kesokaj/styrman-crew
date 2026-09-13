@@ -164,3 +164,22 @@ func TestListAndDelete(t *testing.T) {
 		t.Fatal("unknown kind accepted")
 	}
 }
+
+// New re-asserts 0700 on a directory that already exists with a looser mode
+// (MkdirAll only sets the mode when it creates — audit 2026-09-13).
+func TestNewTightensAPreexistingDirMode(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "creds")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(dir); err != nil {
+		t.Fatal(err)
+	}
+	st, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o700 {
+		t.Fatalf("mode = %o, want 0700", st.Mode().Perm())
+	}
+}

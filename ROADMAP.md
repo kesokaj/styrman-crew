@@ -12,6 +12,12 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
+**Heading for v1.30.0 (MINOR), not yet cut.** The 2026-09-13 whole-project
+audit (`.agents/docs/reviews/2026-09-13-audit-project.md`) found 2 high and
+14 medium findings; all are fixed in plan
+`.agents/docs/plans/2026-09-13-audit-fixes.md` (committed at `e18d62c`).
+`/preflight` is next.
+
 **v1.29.0 shipped 2026-09-13** (MINOR) — the Browser view review fixes: a
 `/code-review` of the Browser view returned 15 findings plus below-the-cut
 items, resolved across all four phases of plan

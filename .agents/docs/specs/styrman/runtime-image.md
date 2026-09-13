@@ -42,8 +42,26 @@ docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> image/
   `node --check` (js/jsx/mjs/cjs), `jq empty` (json), `yq e .` (yaml/yml),
   `tofu fmt -check` (tf/tfvars/hcl), `hadolint -f json`
   (Dockerfile/Containerfile/`*.dockerfile`)
-- Go (latest stable at build time), Node 22
-- Agents: `claude` (npm `@anthropic-ai/claude-code`), `agy` (official installer → `/usr/local/bin/agy`)
+- Go and Node, both pinned by exact version + publisher sha256, same shape
+  as OpenTofu/yq/hadolint above: `ARG GO_VERSION=1.27.1 GO_SHA256=…` (go.dev's
+  published sum) and `ARG NODE_VERSION=22.23.2 NODE_SHA256=…`
+  (`nodejs.org/dist/vX.Y.Z/SHASUMS256.txt` — replaces the former NodeSource
+  `curl | bash` installer). Bump procedure: re-read the publisher's sums
+  (`go.dev/dl/?mode=json`, `nodejs.org/dist/vX/SHASUMS256.txt`), move the
+  `ARG …_VERSION`/`ARG …_SHA256` pair together in one commit, `docker build`.
+- Agents: `claude` (npm `@anthropic-ai/claude-code`, pinned:
+  `ARG CLAUDE_CODE_VERSION=2.1.270` → `npm install -g
+  @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}`, no `--ignore-scripts` —
+  the package's own `postinstall` is what installs the CLI; bump procedure:
+  `npm view @anthropic-ai/claude-code versions`, bump the ARG, `docker
+  build`); `agy` (official installer → `/usr/local/bin/agy`) is deliberately
+  UNPINNED (ADR-069) — the installer fetches a "latest" manifest from
+  Google's own origin and verifies the payload's sha512 against that
+  manifest, no versioned artifact URL is offered, and the CLI self-updates
+  at run time anyway, so a build-time pin would be theatre. Base images
+  (`debian:trixie`, `debian:trixie-slim`, `golang:1.25.13-trixie` — the
+  builder stage) are digest-pinned the same way `deploy/caddy/Dockerfile`
+  pins its own bases.
 - Browser (ADR-068, 2026-09-11): Debian's `chromium` (headless; pinned by the
   archive like `docker-ce`, so security updates move its version),
   `fonts-liberation`, `socat`, and the npm package `chrome-devtools-mcp`

@@ -29,7 +29,7 @@ Cloudflare DNS — `caddy/`) in front of the containerized server
 | `status [--json]` | what is installed, deployed and running; exit 0 ok, 1 degraded, 2 nothing installed |
 | `install [--user U] [--version X.Y.Z] [--env-file F] [--gh-token-file F] [--allowed-signers-file F] [--skip-auto-update]` | `host-setup.sh`, the six must-fill `.env` keys (validated), build the runtime image, bring the stack up at the checkout's release tag (or `--version`), offer auto-update setup |
 | `update` / `update --redeploy` / `update --setup […]` | run one updater tick now; `--redeploy` forces the current tag and clears a latched failure; `--setup` performs the auto-update setup on its own (token, clone, `.env` copy, `allowed_signers`, timer) — the 8c prose below, as prompts |
-| `edit [KEY=VALUE …] [--no-apply]` | edits `.env` (both copies when the clone exists, validated) and recreates the stack at the deployed version |
+| `edit [KEY=VALUE …] [--no-apply]` | edits `.env` (both copies when the clone exists, validated — a `KEY` not matching `[A-Z][A-Z0-9_]*` is refused outright) and recreates the stack at the deployed version |
 | `uninstall [--level 1|2|3] [--confirm WORD]` | tears down at one of three levels (below); prints the exact plan before asking |
 
 Global flags: `--dry-run` prints every command a verb would run, as `+ cmd`,
@@ -75,5 +75,15 @@ from every verified tag.
 **DISABLED**. Enabling it is a deliberate, separate operator action — it
 requires a dedicated clone at `/opt/styrman`, its own `deploy/.env`, and a
 root-owned `/etc/styrman/allowed_signers` for SSH-signed releases before the
-timer is turned on. Runbook (prerequisites, signing, rollback):
-`../.agents/docs/specs/styrman/deploy.md` → Auto-update.
+timer is turned on. The signature gate (`verify_tag`) recognises all four
+git tag-signature markers (`SSH SIGNATURE`, `PGP SIGNATURE`, `PGP MESSAGE`,
+`SIGNED MESSAGE`) so a mis-armored tag is refused with a clear message
+instead of a mis-dispatch, but only the trailing `SSH SIGNATURE` block ever
+passes — `git verify-tag` itself runs with `GNUPGHOME` pointed at a fresh
+empty directory (removed after) so a PGP-signed tag can never succeed by
+accident. `styrman-update __verify-tag <tag> <allowed_signers> <repo>` is a
+test-only internal verb exercising that same `verify_tag` function directly
+(`internal/config/styrman_update_test.go`); it refuses to run at all unless
+`STYRMAN_UPDATE_TEST=1` is set, which only the Go test sets. Runbook
+(prerequisites, signing, rollback): `../.agents/docs/specs/styrman/deploy.md`
+→ Auto-update.
