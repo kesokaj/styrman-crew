@@ -136,4 +136,49 @@ None blocking.
 
 ## Deploy (observed after the tag)
 
-(filled in after the updater tick)
+Release commit `3730551` (gate report, release entry, ADR-071, README/ROADMAP,
+terminal-protocol.md note, the test-comment correction) verified by
+`deploy/verify-commit.sh 3730551` on a detached worktree (rc 0, Go
+build/vet/test -race, ingress module, dependency agreement, harness mirror,
+shellcheck, gofmt, server image, runtime image; `SKIP_WEB_FRESHNESS=1`
+because `web/` is untouched since the full run at 340b045). Tagged
+`v1.32.0`, SSH-signed with `git -c gpg.format=ssh -c user.signingkey=…
+tag -s` (no git config changed); `git tag -v` against a root-read copy of
+`/etc/styrman/allowed_signers`: `Good "git" signature … ED25519 key
+SHA256:5HpYQJjpG+yE1xXBTOIZPsTkbkgkVnV8z0eG8hBawyU`, the key that signed
+v1.31.0. Branch and tag pushed 13:19:19Z.
+
+Updater tick 15:20:30 local (`journalctl -u styrman-update`): "v1.32.0
+signature OK (allowed signer)", "deployed=v1.31.0 latest-stable=v1.32.0",
+"deploying v1.32.0 as 1.32.0", "building runtime image
+(styrman-runtime:1.32.0)", "building + starting the stack (server +
+ingress) at 1.32.0", then 15:20:56 "[styrman-update] OK — v1.32.0 is
+live". No rollback, no latch.
+
+`styrman-ctl status` 15:21: server healthy on `styrman-server:1.32.0`
+(`styrman-caddy:1.32.0`), deployed v1.32.0 sha
+`3730551f223103345bd3001a6b7e4b1c0d032f34`, updater clone `/opt/styrman` at
+3730551, firewall timer active (7 FWD rules, 1 IN), 0 running microVMs, 0
+project dirs, verdict OK. Server log 13:20:41Z: "credential broker up
+(bridge-only)" `:8091`, "styrman listening" with `styrman-runtime:1.32.0`,
+"adopted state" 0 containers. In-container probe
+`curl -fsS http://localhost:8080/api/health` → `{"status":"ok"}`; the public
+URL answers 302 to an anonymous request (the ingress sign-in redirect).
+`styrman-runtime:1.32.0`: `VERSION` 1.32.0, harness mirror 154 files.
+
+**Live proof of the fix — NOT yet observed, and not observable on this
+host today without a further server restart:** the condition is a project
+STOPPED across a server restart, opened from the UI. At deploy time there
+were 0 projects, so every project created from now on carries its
+creation-time attach until the server next restarts; a create → stop →
+open cycle on 1.32.0 would pass on 1.31.0 too and proves nothing. The
+discriminating check is: create a project, stop it, restart the server
+(the next release's tick, a host reboot, or `sudo deploy/styrman-ctl`),
+then open it from the UI — its first terminal must show no "credentials:
+the broker did not answer" line and `gh auth status` must succeed. Until
+then the release is verified as deployed and healthy, and the fix as
+unit-tested and reviewed — exactly what the release review's finding 1
+said. The operator was told which check closes it.
+
+Not observed here (operator, versioning.md step 5): a fresh Google sign-in
+showing 1.32.0 in Settings.
