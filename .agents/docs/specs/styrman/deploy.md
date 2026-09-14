@@ -90,7 +90,12 @@ Composition (`deploy/docker-compose.yml`):
 - **styrman-server** — the Go binary containerized
   (`deploy/Dockerfile.server`), discovered via labels
   (`caddy_hostname=styrman` → `https://styrman.<BASE_DOMAIN>`), running as
-  the operator's uid/gid + the host docker group. `STYRMAN_AUTH=header`:
+  the operator's uid/gid + the host docker group. Since v1.33.0 it asserts
+  `net.ipv4.ip_forward=0` at boot and refuses to start otherwise, since it
+  joins every project bridge and forwarding-on would violate R12;
+  `STYRMAN_ALLOW_IP_FORWARD=1` in `deploy/.env` is the deliberate override —
+  a tripped guard fails the health check and the auto-updater rolls back.
+  `STYRMAN_AUTH=header`:
   every request must carry the ingress's `X-Caddy-Email` AND pass the
   userstore (`STYRMAN_ALLOWED_EMAILS` + `/var/lib/styrman/users.json`) — R8's
   two layers. The state dir and docker.sock are mounted at host-identical

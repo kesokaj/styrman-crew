@@ -111,7 +111,11 @@ that section for why.
    frontend `check`/`lint`/unit-test trio (`npm run check && npm run lint &&
    npm test`), and finally the real server image build
    (`deploy/Dockerfile.server`) — the exact build the auto-updater runs, and
-   what failed for v1.18.0. `SKIP_WEB_FRESHNESS=1` skips every npm-dependent
+   what failed for v1.18.0. Since v1.33.0 a `docker build` failure caused by
+   Docker Hub's anonymous pull rate limit is reported as such (a named 429
+   message, not a generic build failure) and is not a defect in the commit —
+   see `.agents/docs/deploy/remote.md` "Docker Hub (pull budget)" (BUG-056).
+   `SKIP_WEB_FRESHNESS=1` skips every npm-dependent
    step (freshness rebuild + check/lint/test) for a quick Go-only pass; never
    set it before actually tagging a release that touched `web/`. Only a
    green result against THIS checkout says the commit is safe to tag — a
