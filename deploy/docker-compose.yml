@@ -103,6 +103,11 @@ services:
       # the CONTAINER only and answers on each project bridge at a fixed IP —
       # NEVER publish it to the host: caller identity is bridge position.
       - STYRMAN_BROKER_ADDR=${STYRMAN_BROKER_ADDR:-:8091}
+      # v1.33.0: the deliberate override of the boot-time ip_forward=0
+      # assertion (see the sysctls block above). Unset = refuse to start
+      # with forwarding on; set it in deploy/.env only to run without R12's
+      # no-routing guarantee.
+      - STYRMAN_ALLOW_IP_FORWARD=${STYRMAN_ALLOW_IP_FORWARD:-}
       # Public preview links (1.1): must equal the ingress PREVIEW_DOMAIN so a
       # <token>.PREVIEW_BASE subdomain resolves to the link. Empty = off.
       - STYRMAN_PREVIEW_BASE=${STYRMAN_PUBLIC_DOMAIN:-}

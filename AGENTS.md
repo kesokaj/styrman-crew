@@ -90,7 +90,9 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
   text = resize, close 4000 = exited, 4001 = replaced.
 - Per-project dockerd: overlay2 on loop-mounted `~/.dockerd/<uuid>.img`.
 - Project networks are isolated from each other (R12); the server joins
-  them in the background for the port-preview proxy (ip_forward=0), and
+  them in the background for the port-preview proxy (ip_forward=0, asserted
+  at boot since v1.33.0: a containerized server refuses to start with
+  forwarding on unless `STYRMAN_ALLOW_IP_FORWARD=1`), and
   synchronously on every terminal boot, before the WebSocket upgrade, so
   the login shell it is about to spawn can reach the credential broker
   (`wsBoot`, BUG-060).

@@ -56,6 +56,7 @@ type fakeContainer struct {
 type fakeNetwork struct {
 	name, bridge string
 	gateway      string // IPAM gateway, as NetworkInspect reports it
+	subnet       string // IPAM subnet (CIDR), the broker address derives from it
 }
 
 func newFakeDocker() *fakeDocker {
@@ -260,8 +261,8 @@ func (f *fakeDocker) NetworkInspect(_ context.Context, name string, _ network.In
 		return network.Inspect{}, notFound("network")
 	}
 	insp := network.Inspect{Name: n.name, ID: "net-" + n.name, Options: map[string]string{"com.docker.network.bridge.name": n.bridge}}
-	if n.gateway != "" {
-		insp.IPAM.Config = []network.IPAMConfig{{Gateway: n.gateway}}
+	if n.gateway != "" || n.subnet != "" {
+		insp.IPAM.Config = []network.IPAMConfig{{Subnet: n.subnet, Gateway: n.gateway}}
 	}
 	return insp, nil
 }
@@ -279,7 +280,13 @@ func (f *fakeDocker) NetworkRemove(_ context.Context, name string) error {
 	return nil
 }
 
-func (f *fakeDocker) NetworkConnect(_ context.Context, name, id string, _ *network.EndpointSettings) error {
+// NetworkConnect records the static address when the caller asked for one
+// (`NetworkConnect(net,id,ip=A.B.C.D)`), else the two-field form — callsTo
+// counts both, since record splits on the first "(".
+func (f *fakeDocker) NetworkConnect(_ context.Context, name, id string, ep *network.EndpointSettings) error {
+	if ep != nil && ep.IPAMConfig != nil && ep.IPAMConfig.IPv4Address != "" {
+		return f.record(fmt.Sprintf("NetworkConnect(%s,%s,ip=%s)", name, id, ep.IPAMConfig.IPv4Address))
+	}
 	return f.record(fmt.Sprintf("NetworkConnect(%s,%s)", name, id))
 }
 

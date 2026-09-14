@@ -275,7 +275,9 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   `sdb-<11hex>` at the Linux interface level via `config.BridgeNameFor` —
   Docker's default `br-<hash>` interface name would slip past the firewall
   match, which is exactly what happened until v1.8.3, see deploy.md) shared
-  only with the server, which runs `ip_forward=0`; the server joins project
+  only with the server, which runs `ip_forward=0` (asserted at boot since
+  v1.33.0 — `STYRMAN_ALLOW_IP_FORWARD` in `api.md`'s env table is the
+  deliberate override); the server joins project
   networks in the background (a live join can drop in-flight connections —
   the preview proxy 307s once instead when it must join on demand). A
   project reaches the **internet and nothing else**: not another project

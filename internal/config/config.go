@@ -135,7 +135,9 @@ type Config struct {
 	// SelfContainer: when the server itself runs in a container, its name —
 	// the orchestrator attaches it to each project network so the port-preview
 	// proxy can reach microVM IPs across docker's bridge isolation. Empty =
-	// host process (reaches all bridges natively).
+	// host process (reaches all bridges natively). A containerized server
+	// also asserts ip_forward=0 at boot (IPForwardOff in main;
+	// STYRMAN_ALLOW_IP_FORWARD=1 is the deliberate override).
 	SelfContainer string
 	// DevAddr: optional second listener with auth bypassed, for testing
 	// without the OAuth ingress. Publish it on host loopback ONLY
