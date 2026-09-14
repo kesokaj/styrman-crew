@@ -38,6 +38,18 @@ func LoadState(home string) (State, bool, error) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return State{}, false, fmt.Errorf("parsing %s: %w", statePath(home), err)
 	}
+	// The manifest is a file under the user's home: its entries are paths
+	// every reader (install's resync, uninstall, status) joins under the
+	// install root and may Lstat or remove, so a non-local entry (`../x`, an
+	// absolute path) is dropped HERE, once, never followed by any caller
+	// (security review 2026-09-14).
+	kept := s.Files[:0]
+	for _, rel := range s.Files {
+		if filepath.IsLocal(rel) {
+			kept = append(kept, rel)
+		}
+	}
+	s.Files = kept
 	if s.Vendor == "" {
 		s.Vendor = VendorAll
 	}

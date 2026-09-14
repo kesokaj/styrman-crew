@@ -2,7 +2,7 @@
 owner: bugs
 date: 2026-09-14
 id: BUG-058
-status: open
+status: fixed upstream
 area: image/harness (vendored styrman-harness mirror; upstream ~/workspace/styrman-harness)
 ---
 # BUG-058: vendored harness's own `go test ./...` fails — test assumes a git-checkout tree shape the plain-copy mirror doesn't have
@@ -59,3 +59,11 @@ from wherever the package happens to be checked out.
 this failure went through the exact anti-pattern that rule exists to stop;
 worth noting if a third instance turns up, since the rule already exists
 and was still nearly missed.
+
+## Fixed upstream (2026-09-14)
+styrman-harness BUG-016: `TestDryRunNeverBuilds` builds its own
+checkout-shaped fixture (a plain copy plus an empty `.git` entry) instead of
+asserting the shape of `../..`, so the mirror's `go test ./...` passes in a
+plain copy. Shipped to this repo by the v1.33.0 mirror refresh; the mirror's
+tests are still not a release check (VENDORED.md), but a failure there is a
+real one from now on.

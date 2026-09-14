@@ -193,15 +193,20 @@ func TestKnownCheckout(t *testing.T) {
 	}
 }
 
-// TestDryRunNeverBuilds: with a toolchain present and no child guard, a dry
-// run must report the rebuild instead of performing it, and write nothing.
+// TestDryRunNeverBuilds: with a toolchain present, no child guard and a
+// checkout-shaped repo, a dry run must report the rebuild instead of
+// performing it, and write nothing.
 func TestDryRunNeverBuilds(t *testing.T) {
 	t.Setenv(harness.ChildEnv, "")
+	// A checkout-SHAPED repo of its own, not this checkout (`../..`): when
+	// the test runs inside a downstream mirror — a plain copy with no .git,
+	// which is what styrman-crew's image/harness is — `../..` is not a
+	// checkout, the dry run rightly prints the plain-copy line, and the
+	// assertion below failed for a shape the test never meant to cover
+	// (styrman-crew BUG-058). IsCheckout asks only for a `.git` entry and
+	// Inspect tolerates one git cannot read, so an empty directory is enough.
+	repo := checkoutShaped(t)
 	home := t.TempDir()
-	repo, err := filepath.Abs("../..")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var out bytes.Buffer
 	if err := run([]string{"install", "--dry-run", "--repo", repo, "--home", home}, &out); err != nil {
 		t.Fatalf("dry run: %v\n%s", err, out.String())
@@ -222,6 +227,19 @@ func TestDryRunNeverBuilds(t *testing.T) {
 	if strings.Contains(out.String(), "building sh-agent from") {
 		t.Errorf("dry run ran a build:\n%s", out.String())
 	}
+}
+
+// checkoutShaped is plainCopy plus the one thing IsCheckout looks for: a
+// `.git` entry. It is what the dry-run test needs — "this is a checkout"
+// without being THIS checkout — and it is not a git repository, which
+// Inspect tolerates (empty fields) and nothing on the install path needs.
+func checkoutShaped(t *testing.T) string {
+	t.Helper()
+	dir := plainCopy(t)
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 // plainCopy copies this checkout's deployable trees into a directory with

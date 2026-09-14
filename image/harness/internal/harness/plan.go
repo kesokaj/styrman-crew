@@ -100,6 +100,14 @@ func Plan(repo string, selfExe []byte, vendor string) ([]File, error) {
 			if err != nil {
 				return err
 			}
+			// A link is refused, not followed: os.ReadFile would deploy the
+			// TARGET'S bytes under the LINK'S mode (d.Info reports the link, and
+			// `|0o600` on a link's 0777 ships a world-writable file into
+			// ~/.claude) — an arbitrary-file read into every consumer home
+			// (security review 2026-09-14). A skill ships regular files only.
+			if d.Type()&fs.ModeSymlink != 0 {
+				return fmt.Errorf("%s is a symlink — a skill ships regular files only", path)
+			}
 			if d.IsDir() || d.Name() == ".DS_Store" {
 				return nil
 			}

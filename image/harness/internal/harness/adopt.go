@@ -60,6 +60,11 @@ func copyTree(src, dest string) error {
 		if err != nil {
 			return err
 		}
+		// Same refusal as Plan's walk: a link would be copied as its target's
+		// bytes under the link's mode (security review 2026-09-14).
+		if d.Type()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink — refused", path)
+		}
 		target := filepath.Join(dest, rel)
 		if d.IsDir() {
 			return os.MkdirAll(target, 0o755)

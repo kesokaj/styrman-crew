@@ -44,6 +44,39 @@ type Inventory struct {
 	Rules    []Doc   // rules/<name>.md
 }
 
+// validName is the parse boundary for a frontmatter `name:` — the value
+// `plan.go` joins into ~/.claude/skills/<name>/…, ~/.claude/agents/<name>.md
+// and the agy mirrors. A name is ONE path segment: nothing that filepath.Join
+// would carry out of the install root (`../x`, an absolute path), and no
+// separator at all (`a/b` would nest a skill inside another's directory),
+// and only the characters an identifier needs (`[A-Za-z0-9._-]`, leading
+// alphanumeric): the same value is rendered verbatim into the consumer's
+// AGENTS.md, so a backtick or a newline in it would inject prose into the
+// global context (security review 2026-09-14).
+// Refused with the file named, so an author sees it at `sh-agent install`
+func identLike(name string) bool {
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case i > 0 && (r == '.' || r == '_' || r == '-'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// time rather than finding a file written beside their home.
+func validName(kind, file, name string) error {
+	switch {
+	case name == "", name == ".", name == "..":
+		return fmt.Errorf("%s %s: name %q is not a path segment", kind, file, name)
+	case strings.ContainsAny(name, `/\`), !filepath.IsLocal(name), !identLike(name):
+		return fmt.Errorf("%s %s: name %q must be a single local path segment", kind, file, name)
+	}
+	return nil
+}
+
 // LoadInventory reads every customization directory of the repo.
 func LoadInventory(repo string) (Inventory, error) {
 	var inv Inventory
@@ -97,6 +130,9 @@ func LoadSkills(repo string) ([]Skill, error) {
 		if name == "" {
 			name = e.Name()
 		}
+		if err := validName("skill", e.Name()+"/SKILL.md", name); err != nil {
+			return nil, err
+		}
 		if fm["description"] == "" {
 			return nil, fmt.Errorf("skill %s: SKILL.md has no description", e.Name())
 		}
@@ -134,6 +170,9 @@ func LoadAgents(repo string) ([]Agent, error) {
 		name := fm["name"]
 		if name == "" {
 			name = strings.TrimSuffix(filepath.Base(p), ".md")
+		}
+		if err := validName("agent", filepath.Base(p), name); err != nil {
+			return nil, err
 		}
 		if fm["description"] == "" {
 			return nil, fmt.Errorf("agent %s: no description", name)

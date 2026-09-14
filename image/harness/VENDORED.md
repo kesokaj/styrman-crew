@@ -29,11 +29,12 @@ diff -rq --exclude .git --exclude .agents --exclude .gitignore "$H" image/harnes
 # expected: exactly three lines, "Only in image/harness: COMMIT", "... SHA256SUMS", "... VENDORED.md"
 ```
 
-The mirror's own `go test ./...` is not a check here, and it is red by
-construction: `TestDryRunNeverBuilds` in `cmd/sh-agent` asserts the
-checkout-shaped dry-run output and fails in any plain copy (BUG-058,
-upstream); `deploy/verify-commit.sh` vets the mirror and never runs its
-tests. A different failure there is a different problem.
+The mirror's own `go test ./...` is not a check here: `deploy/verify-commit.sh`
+vets the mirror (SHA256SUMS, build, image counts) and never runs its tests.
+It used to be red by construction — `TestDryRunNeverBuilds` asserted the
+checkout-shaped dry-run output and failed in any plain copy (BUG-058 here,
+BUG-016 upstream) — until the harness gave that test its own
+checkout-shaped fixture (2026-09-14); a failure there now is a real one.
 
 `SHA256SUMS` is what makes the mirror checkable without the private
 checkout: `deploy/verify-commit.sh` runs `sha256sum -c` over it in the
