@@ -106,11 +106,19 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.30.1**, deployed: https://crew.styrman.xyz (Google sign-in).
+**v1.31.0**, deployed: https://crew.styrman.xyz (Google sign-in).
 
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
 
+- **v1.31.0** (2026-09-14): the agent harness every project home receives
+  is refreshed to styrman-harness `8046e4d`: 27 skills (`/review` replaces
+  `/audit`; `gcloud-auth-verification` is folded into `gcloud-setup`), the
+  rewritten global context and agents, `sh-agent install --vendor`, and an
+  install that treats the image's mirror as the plain copy it is — never a
+  rebuild, never a git call inside the VM (the harness's BUG-015 fix);
+  `sh-agent status` in a project says so on its `repo` line. Every project
+  re-seeds on its next start.
 - **v1.30.1** (2026-09-13): the firewall reports a degraded host (missing
   `xt_physdev`) and `styrman-ctl status` shows it; the guest harness stamp
   no longer interpolates the version; `image/bump-pins.sh` refreshes the
