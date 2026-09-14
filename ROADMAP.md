@@ -12,9 +12,9 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-Active plan: `.agents/docs/plans/2026-09-14-v1.33.0-close-out.md` — the ten
-carried items, then the v1.33.0 release. Its unticked boxes are the remaining
-work.
+<!-- Nothing in progress. Every shipped release is recorded in .agents/docs/changes/
+(newest: 2026-09-14-v1.33.0-release.md) and in git tags; operator steps live in
+the newest handoff's Next Steps. -->
 
 ## Next
 

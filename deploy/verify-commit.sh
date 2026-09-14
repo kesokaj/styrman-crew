@@ -18,12 +18,16 @@ REF="${1:-HEAD}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SHA="$(git -C "${ROOT}" rev-parse --verify "${REF}^{commit}")"
 WT="$(mktemp -d "${TMPDIR:-/tmp}/styrman-verify-XXXXXX")"
+# Build logs live OUTSIDE the worktree: a file inside it would sit inside the
+# server image's build context and the gate would no longer build exactly the
+# commit's tree (release review 2026-09-14).
+LOGDIR="$(mktemp -d "${TMPDIR:-/tmp}/styrman-verify-logs-XXXXXX")"
 IMG="styrman-verify-$$:tmp"
 RIMG="styrman-verify-runtime-$$:tmp"
 
 cleanup() {
     git -C "${ROOT}" worktree remove --force "${WT}" >/dev/null 2>&1 || true
-    rm -rf "${WT}" 2>/dev/null || true
+    rm -rf "${WT}" "${LOGDIR}" 2>/dev/null || true
     docker rmi "${IMG}" >/dev/null 2>&1 || true
     docker rmi "${RIMG}" >/dev/null 2>&1 || true
 }
@@ -37,8 +41,9 @@ trap cleanup EXIT
 build_image() {  # build_image <log> <docker build args…>
     local log="$1"; shift
     if ! docker build "$@" >"${log}" 2>&1; then
-        if grep -qiE 'toomanyrequests|too many requests|429' "${log}"; then
+        if grep -qiE 'toomanyrequests|too many requests' "${log}"; then
             echo "FAIL: Docker Hub rate limit (anonymous pulls exhausted for this IP) — not a defect in the commit; wait for the window or docker login (.agents/docs/deploy/remote.md, Docker Hub)" >&2
+            tail -n 20 "${log}" >&2
         else
             echo "FAIL: docker build failed — last lines of ${log}:" >&2
             tail -n 20 "${log}" >&2
@@ -200,14 +205,14 @@ fi
 
 # The build the auto-updater actually runs. This is what failed for v1.18.0.
 echo "==> server image (the build the updater runs)"
-( cd "${WT}" && build_image "${WT}/.verify-server-build.log" -q -f deploy/Dockerfile.server \
+( cd "${WT}" && build_image "${LOGDIR}/server-build.log" -q -f deploy/Dockerfile.server \
     --build-arg STYRMAN_VERSION=verify -t "${IMG}" . )
 
 # The runtime image is the updater's other build, and the one that ships the
 # harness: build it from the commit too, then check that the harness the
 # image lists is the harness the commit's tree holds (ADR-062).
 echo "==> runtime image (image/) and the harness it seeds"
-( cd "${WT}" && build_image "${WT}/.verify-runtime-build.log" -q --build-arg STYRMAN_VERSION=verify -t "${RIMG}" image/ )
+( cd "${WT}" && build_image "${LOGDIR}/runtime-build.log" -q --build-arg STYRMAN_VERSION=verify -t "${RIMG}" image/ )
 want_skills="$(find "${WT}/image/harness/skills" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l | tr -d ' ')"
 want_agents="$(find "${WT}/image/harness/agents" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')"
 listed="$(docker run --rm --entrypoint /styrman/bin/sh-agent "${RIMG}" list --repo /styrman/harness 2>&1)"

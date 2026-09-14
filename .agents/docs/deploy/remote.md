@@ -139,7 +139,7 @@ re-raises it.
 ## Docker Hub (pull budget) — BUG-056
 
 Every image build on this host pulls its digest-pinned base images from
-Docker Hub anonymously, and Hub allows 100 anonymous pulls per 6 h per IP:
+Docker Hub anonymously, and Hub allowed this host 100 anonymous pulls per hour per IP (`x-ratelimit-limit: 100;w=3600`, measured in BUG-056; Hub's published figure changes, the header is authoritative):
 each `docker build` issues a HEAD per `FROM` line (three for the runtime
 image), so a day of gate runs (`deploy/verify-commit.sh` builds two images;
 `ensure-test-image.sh` one; `image/bump-pins.sh` adds three `manifest

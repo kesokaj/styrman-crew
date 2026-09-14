@@ -106,11 +106,21 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.32.0**, deployed: https://crew.styrman.xyz (Google sign-in).
+**v1.33.0**, deployed: https://crew.styrman.xyz (Google sign-in).
 
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
 
+- **v1.33.0** (2026-09-14): a containerized server refuses to start when
+  `ip_forward` is on inside its container — R12's no-routing guarantee is
+  asserted at boot, not assumed from the compose file (`STYRMAN_ALLOW_IP_FORWARD=1`
+  is the deliberate override); every project home's agent harness refreshes
+  to styrman-harness `cceee54` (27 skills / 7 subagents; the root-steps
+  sentence each VM receives is conditioned on the project's recorded
+  permission; skill/agent names validated, symlinks in skill dirs refused;
+  the mirror's tests pass as a plain copy); the release gate names a Docker
+  Hub rate limit for what it is (BUG-056). Ten carried items closed —
+  `.agents/docs/plans/2026-09-14-v1.33.0-close-out.md`.
 - **v1.32.0** (2026-09-14): a project left stopped across a server restart
   now has its credential broker reachable from its first terminal — the
   terminal-WebSocket boot path joins the server to the project's bridge
