@@ -136,4 +136,51 @@ None blocking.
 
 ## Deploy (observed after the tag)
 
-(filled in after the updater tick)
+Release commit `21d8fd7` (gate report, the three release reviews, release
+entry, README/ROADMAP, the three post-review fixes) verified by
+`deploy/verify-commit.sh 21d8fd7` on a detached worktree (rc 0; Go
+build/vet/test -race, ingress, dependency agreement, harness mirror,
+shellcheck, gofmt, server image, runtime image 27/7 — the modified gate
+script itself ran this pass; `SKIP_WEB_FRESHNESS=1` because `web/` is
+untouched since the full run at 8aaa5e9). Tagged `v1.33.0`, SSH-signed
+with `git -c gpg.format=ssh -c user.signingkey=… tag -s` (no git config
+changed); `git tag -v` against a root-read copy of
+`/etc/styrman/allowed_signers`: `Good "git" signature … ED25519 key
+SHA256:5HpYQJjpG+yE1xXBTOIZPsTkbkgkVnV8z0eG8hBawyU`. Branch and tag pushed
+14:41:59Z.
+
+Updater tick 16:47:00 local (`journalctl -u styrman-update`): "v1.33.0
+signature OK (allowed signer)", "deployed=v1.32.0 latest-stable=v1.33.0",
+"deploying v1.33.0 as 1.33.0", "building runtime image
+(styrman-runtime:1.33.0)", "building + starting the stack (server +
+ingress) at 1.33.0", then 16:47:29 "[styrman-update] OK — v1.33.0 is
+live". No rollback, no latch.
+
+`styrman-ctl status` 16:48: server healthy on `styrman-server:1.33.0`
+(`styrman-caddy:1.33.0`), deployed v1.33.0 sha
+`21d8fd7c0a9cc2780657f2a20e7809cc3283c848`, updater clone `/opt/styrman`
+at 21d8fd7, firewall timer active (7 FWD rules, 1 IN), 0 running microVMs,
+0 project dirs, verdict OK. In-container probe `curl -fsS
+http://localhost:8080/api/health` → `{"status":"ok"}`; the public URL
+answers 302 to an anonymous request (the ingress sign-in redirect).
+
+**The new boot guard, observed on the new container:** `docker exec
+styrman-server cat /proc/sys/net/ipv4/ip_forward` → `0`;
+`STYRMAN_ALLOW_IP_FORWARD` is empty in the container (the compose
+passthrough with no `.env` value); the server log from 14:47:14Z carries
+no `ip_forward` line at all — the silent branch, forwarding asserted off
+— then "credential broker up (bridge-only)" `:8091`, "styrman listening"
+with `styrman-runtime:1.33.0`, "adopted state" 0 containers.
+
+`styrman-runtime:1.33.0`: `VERSION` 1.33.0, `/styrman/harness/COMMIT`
+cceee548ea8bf8ca1e4b3f6b561383a88bea7aa4, no `.git` in the mirror,
+`sh-agent list` → Skills (27) / Subagents (7).
+
+Not observed here (operator, versioning.md step 5 and the handoff): a fresh
+Google sign-in showing 1.33.0 in Settings; a project started on the new
+runtime (its boot log should carry `agent harness deployed (version
+1.33.0, styrman-harness cceee54 …)`); item 1's live proof — a project
+STOPPED across a server restart, opened from the UI, its first terminal
+showing no "broker did not answer" line — this deploy restarted the server
+with no project to prove it on, so the condition next arises at the
+restart after a project has been created and stopped.
