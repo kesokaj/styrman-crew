@@ -22,9 +22,13 @@ path — up to a few seconds; the HTTP upgrade completes only after readiness).
 Before the upgrade, the server also joins its own container to the project's
 bridge (`EnsureSelfAttached`, via `wsBoot` in `internal/httpapi/server.go`) so
 the login shell the terminal spawns finds the credential broker reachable;
-the join is memoized for 60s, so reconnects do not pay it. On a host with a
-published server port, a fresh join can disturb that one handshake, which
-the client's reconnect loop retries (BUG-060, ADR-071).
+the join is memoized for 60s, so reconnects do not pay it. No supported
+topology can see a fresh join disturb this handshake: loopback dev is
+host-mode with no attach at all, and the compose deploy publishes no server
+port (Caddy reaches it over the ingress bridge); the client's reconnect loop
+would retry it anyway (BUG-060, ADR-071; the caveat ADR-071 states for
+ADR-021's published-port dev topology describes no deployment this project
+ships).
 
 ## Frames
 

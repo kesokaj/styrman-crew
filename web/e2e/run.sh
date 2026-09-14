@@ -20,6 +20,12 @@ STATE="$(mktemp -d /tmp/styrman-e2e-XXXX)"
 # which is what keeps it away from production's (created long ago) without
 # needing a label the orchestrator does not set.
 RUN_START="$(date -u +%s)"
+# The mount-source format for cleanup()'s `docker inspect`, defined HERE and
+# not inline in the trap: a single-quoted format string with a literal
+# newline inside `$( )` inside an EXIT trap is exactly the shape BUG-038's
+# unexplained "unexpected EOF while looking for matching `'" named, and a
+# variable defined at the top is parsed once, where `bash -n` can see it.
+MOUNT_SOURCES_FMT=$'{{range .Mounts}}{{.Source}}\n{{end}}'
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 API="http://127.0.0.1:${PORT}"
 PID=""
@@ -54,8 +60,7 @@ cleanup() {
         # killed cleanup BEFORE the rm below — leaving /tmp/styrman-e2e-* dirs
         # behind AND handing the shell an exit status of 1 after a run that
         # reported failed=0 (BUG-024).
-        srcs=$(docker inspect "$c" --format '{{range .Mounts}}{{.Source}}
-{{end}}' 2>/dev/null) || continue
+        srcs=$(docker inspect "$c" --format "${MOUNT_SOURCES_FMT}" 2>/dev/null) || continue
         echo "$srcs" | grep -q "^${STATE}/" && docker rm -f "$c" >/dev/null 2>&1 || true
     done
     # Networks outlive their containers here. The suite creates several

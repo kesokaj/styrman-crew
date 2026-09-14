@@ -2,7 +2,7 @@
 owner: bugs
 date: 2026-09-10
 id: BUG-038
-status: open
+status: mitigated
 area: web/e2e/run.sh (cleanup trap)
 ---
 # BUG-038: e2e cleanup trap reported bash parse error after a fully green suite
@@ -48,3 +48,13 @@ only when the trap actually runs.
 BUG-024 (set -e inside EXIT traps swallowing/mangling exit status in this
 same trap), BUG-027 (same trap's container filter never matching a real
 instance).
+
+## Mitigation (2026-09-14, v1.33.0)
+Root cause still not established. The prevention rule's hardening is
+applied: `web/e2e/run.sh` defines `MOUNT_SOURCES_FMT` (a `$'…\n…'` string)
+at the top and the EXIT trap's `docker inspect` uses it, so the quote-heavy
+format with a literal newline no longer sits inside `$( )` inside the trap;
+`bash -n` and `shellcheck -S warning` are unchanged from before the edit
+(the one pre-existing warning, an unused loop variable, is not this bug's).
+A recurrence is a NEW record citing this one, with the `bash -x` trace the
+Repro section asks for.
