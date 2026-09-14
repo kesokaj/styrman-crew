@@ -106,11 +106,17 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.31.0**, deployed: https://crew.styrman.xyz (Google sign-in).
+**v1.32.0**, deployed: https://crew.styrman.xyz (Google sign-in).
 
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
 
+- **v1.32.0** (2026-09-14): a project left stopped across a server restart
+  now has its credential broker reachable from its first terminal — the
+  terminal-WebSocket boot path joins the server to the project's bridge
+  before the socket is upgraded (BUG-060, ADR-071). Before, that first
+  shell reported "credentials: the broker did not answer" and had no
+  git/gh/ssh/gcloud/claude credentials until something else attached.
 - **v1.31.0** (2026-09-14): the agent harness every project home receives
   is refreshed to styrman-harness `8046e4d`: 27 skills (`/review` replaces
   `/audit`; `gcloud-auth-verification` is folded into `gcloud-setup`), the

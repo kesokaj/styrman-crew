@@ -24,11 +24,12 @@ func (oneRecordStore) Touch(_, _ string) {}
 // The boot callback runs BEFORE the socket is upgraded: the callback is
 // where the server joins the project's bridge so the login shell the
 // terminal spawns can reach the credential broker (httpapi.wsBoot, BUG-060),
-// and that has to be settled while the response is still plain HTTP. A
-// recorder cannot be hijacked, so a handler that upgraded first would fail
-// there and never call the callback; this test asserts the callback was
-// reached, with the caller's identity, and that its error came back as a
-// plain 500 — no 101, no Upgrade header.
+// and that has to be settled while the response is still plain HTTP. The
+// request carries no handshake headers, so a handler that upgraded first
+// would be refused by websocket.Accept's client-request check with 426 and
+// an `Upgrade: websocket` header, and the callback would never run; this
+// test asserts the callback was reached, with the caller's identity, and
+// that its error came back as a plain 500 with no Upgrade header.
 func TestBootCallbackRunsBeforeTheUpgrade(t *testing.T) {
 	var got []string
 	ensure := func(_ context.Context, user, projectID string) (string, string, string, error) {

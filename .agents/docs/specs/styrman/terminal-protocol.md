@@ -19,6 +19,12 @@ GET /ws/term/{projectId}/{terminal}?cols=<n>&rows=<n>
 
 Connecting boots the project's microVM if it is stopped (this is the one slow
 path — up to a few seconds; the HTTP upgrade completes only after readiness).
+Before the upgrade, the server also joins its own container to the project's
+bridge (`EnsureSelfAttached`, via `wsBoot` in `internal/httpapi/server.go`) so
+the login shell the terminal spawns finds the credential broker reachable;
+the join is memoized for 60s, so reconnects do not pay it. On a host with a
+published server port, a fresh join can disturb that one handshake, which
+the client's reconnect loop retries (BUG-060, ADR-071).
 
 ## Frames
 
