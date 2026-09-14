@@ -2,7 +2,7 @@
 owner: bugs
 date: 2026-09-13
 id: BUG-056
-status: open
+status: fixed
 area: process — release gate (deploy/verify-commit.sh)
 ---
 # BUG-056: v1.30.1 verify-commit failed on Docker Hub 429, not a code defect
@@ -52,3 +52,17 @@ not pushed on a failed verify.
 Same family as BUG-034/BUG-053 (claims/records must cite real evidence — here
 the evidence is the rate-limit header, not a guess); process rule to add to
 `.agents/docs/deploy/remote.md` once the operator picks auth-vs-cache.
+
+## Fix (2026-09-14, v1.33.0)
+- `deploy/verify-commit.sh`: both image builds run through `build_image`,
+  which captures the whole build output (stderr included) and, on failure,
+  names a Docker Hub 429 for what it is ("not a defect in the commit; wait
+  for the window or docker login") instead of a generic build failure; any
+  other failure prints the log's tail. Exercised with a fake `docker` for
+  all three branches (429, other failure, success).
+- `.agents/docs/deploy/remote.md` "Docker Hub (pull budget)": the budget,
+  which steps spend it, the operator-user `docker login` remedy for the
+  gate and the suites, and why the updater builds anonymously by design
+  (only a `/run` RuntimeDirectory config is honoured, security review
+  2026-09-02). The login itself is the operator's, not done as of
+  2026-09-14 and recorded there when it is.

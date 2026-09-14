@@ -136,6 +136,37 @@ for specific projects only, and the operator accepts the exposure above for
 them. The procedure stays here for whoever changes their mind; nothing
 re-raises it.
 
+## Docker Hub (pull budget) — BUG-056
+
+Every image build on this host pulls its digest-pinned base images from
+Docker Hub anonymously, and Hub allows 100 anonymous pulls per 6 h per IP:
+each `docker build` issues a HEAD per `FROM` line (three for the runtime
+image), so a day of gate runs (`deploy/verify-commit.sh` builds two images;
+`ensure-test-image.sh` one; `image/bump-pins.sh` adds three `manifest
+inspect` calls per run) plus two updater deploys exhausted the budget once
+and failed a release verify with every other check green (BUG-056,
+2026-09-13). Since v1.33.0 `verify-commit.sh` names a 429 for what it is
+("Docker Hub rate limit … not a defect in the commit") instead of a
+generic build failure; the tag is still not pushed.
+
+- **The gate and the test suites run as the operator user.** A one-time
+  `docker login` with a Docker Hub account (a free account gives 40/h
+  authenticated, a paid one more) stores a token in `~/.docker/config.json`
+  and lifts every operator-run build out of the anonymous pool. That file
+  is a credential: never commit it, never point `DOCKER_CONFIG` at a copy
+  inside the repo. **Not done as of 2026-09-14 — operator's call**; record
+  the date here once it is.
+- **The updater builds anonymously by design.** `deploy/update/styrman-update`
+  honours only a `DOCKER_CONFIG` under `/run` (the unit's root-0700
+  `RuntimeDirectory`, `%t/styrman-update/docker`, empty at every start —
+  security review 2026-09-02, so no persisted root-executed docker config
+  or plugin surface exists). Its two builds per deploy cost ~6 HEADs; it
+  has never hit the limit alone. Authenticating it would need its own
+  decision (an `ExecStartPre` copying a root-owned token into the runtime
+  dir) — not proposed here.
+- Run `image/bump-pins.sh` sparingly and never inside verifier loops; cite
+  a check-mode run instead of repeating it (BUG-056's prevention rule).
+
 ## Procedure
 
 Release procedure, the three-image lineup, and the exact commands: `.agents/docs/specs/styrman/versioning.md` "Release procedure". In short: `deploy/verify-commit.sh <commit>` (builds and tests a detached worktree of that exact commit, ADR-061), tag, then on the host

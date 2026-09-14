@@ -29,6 +29,24 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Docker Hub's anonymous pull budget (100 per 6 h per IP) failed this gate
+# once with every other check green (BUG-056). A build that dies on it is
+# named as such — it is not a defect in the commit — instead of a generic
+# failure. The whole build output (stderr included: BuildKit reports the
+# 429 there) is captured, and its tail shown for any other failure.
+build_image() {  # build_image <log> <docker build args…>
+    local log="$1"; shift
+    if ! docker build "$@" >"${log}" 2>&1; then
+        if grep -qiE 'toomanyrequests|too many requests|429' "${log}"; then
+            echo "FAIL: Docker Hub rate limit (anonymous pulls exhausted for this IP) — not a defect in the commit; wait for the window or docker login (.agents/docs/deploy/remote.md, Docker Hub)" >&2
+        else
+            echo "FAIL: docker build failed — last lines of ${log}:" >&2
+            tail -n 20 "${log}" >&2
+        fi
+        exit 1
+    fi
+}
+
 echo "==> verifying commit ${SHA:0:12} (${REF}) in a detached worktree"
 git -C "${ROOT}" worktree add -q --detach "${WT}" "${SHA}"
 
@@ -182,14 +200,14 @@ fi
 
 # The build the auto-updater actually runs. This is what failed for v1.18.0.
 echo "==> server image (the build the updater runs)"
-( cd "${WT}" && docker build -q -f deploy/Dockerfile.server \
-    --build-arg STYRMAN_VERSION=verify -t "${IMG}" . >/dev/null )
+( cd "${WT}" && build_image "${WT}/.verify-server-build.log" -q -f deploy/Dockerfile.server \
+    --build-arg STYRMAN_VERSION=verify -t "${IMG}" . )
 
 # The runtime image is the updater's other build, and the one that ships the
 # harness: build it from the commit too, then check that the harness the
 # image lists is the harness the commit's tree holds (ADR-062).
 echo "==> runtime image (image/) and the harness it seeds"
-( cd "${WT}" && docker build -q --build-arg STYRMAN_VERSION=verify -t "${RIMG}" image/ >/dev/null )
+( cd "${WT}" && build_image "${WT}/.verify-runtime-build.log" -q --build-arg STYRMAN_VERSION=verify -t "${RIMG}" image/ )
 want_skills="$(find "${WT}/image/harness/skills" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l | tr -d ' ')"
 want_agents="$(find "${WT}/image/harness/agents" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')"
 listed="$(docker run --rm --entrypoint /styrman/bin/sh-agent "${RIMG}" list --repo /styrman/harness 2>&1)"
