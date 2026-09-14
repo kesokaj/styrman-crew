@@ -45,7 +45,7 @@ echo "==> vendored ingress module (separate go.mod)"
 
 # The harness mirror is a THIRD module and compiles into a binary every
 # project runs (ADR-062). Root ./... never reaches it, and a partially staged
-# refresh (151 files, refreshed by hand) is exactly the class this gate
+# refresh (150-odd files, refreshed by hand) is exactly the class this gate
 # exists for — so check the mirror's own integrity manifest against the
 # commit's tree, build the module, and pin the two Dockerfiles' Go toolchain
 # to the same value (vulncheck.sh derives its scan image from
@@ -200,6 +200,16 @@ if ! grep -q "Skills (${want_skills})" <<<"${listed}" || ! grep -q "Subagents ($
     exit 1
 fi
 echo "    runtime image seeds ${want_skills} skills, ${want_agents} subagents (styrman-harness $(cut -c1-7 "${WT}/image/harness/COMMIT"))"
+# The mirror in the image must be a plain copy — no `.git` — or sh-agent's
+# install would take its rebuild path at every project boot (harness BUG-015;
+# the entrypoint's git guards are gone on that promise). The guarantee is
+# image/.dockerignore's `**/.git`; this is the one place the release path
+# proves it on the built image (security review 2026-09-14, round 3).
+if ! docker run --rm --entrypoint sh "${RIMG}" -c 'test ! -e /styrman/harness/.git'; then
+    echo "FAIL: the runtime image carries /styrman/harness/.git — the mirror is not a plain copy" >&2
+    exit 1
+fi
+echo "    runtime image's mirror is a plain copy (no /styrman/harness/.git)"
 
 echo
 echo "OK: commit ${SHA:0:12} builds and tests clean in isolation — safe to tag."

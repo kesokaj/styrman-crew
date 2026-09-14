@@ -29,6 +29,12 @@ diff -rq --exclude .git --exclude .agents --exclude .gitignore "$H" image/harnes
 # expected: exactly three lines, "Only in image/harness: COMMIT", "... SHA256SUMS", "... VENDORED.md"
 ```
 
+The mirror's own `go test ./...` is not a check here, and it is red by
+construction: `TestDryRunNeverBuilds` in `cmd/sh-agent` asserts the
+checkout-shaped dry-run output and fails in any plain copy (BUG-058,
+upstream); `deploy/verify-commit.sh` vets the mirror and never runs its
+tests. A different failure there is a different problem.
+
 `SHA256SUMS` is what makes the mirror checkable without the private
 checkout: `deploy/verify-commit.sh` runs `sha256sum -c` over it in the
 commit's own worktree (a partially staged refresh fails there, not at
@@ -37,13 +43,22 @@ skill and subagent counts `sh-agent list` reports inside the image with the
 commit's tree. `COMMIT` remains an attestation by whoever refreshed — the
 `diff -rq` above, run against the checkout at that SHA, is its only check.
 
-Then bump `STYRMAN_VERSION` — the version stamp is the only thing that makes
-a running project re-seed (ADR-046). Record the new `COMMIT` in the release's
-entry in `.agents/docs/specs/styrman/versioning.md`.
+Then cut a release — the image version stamp is the only thing that makes
+a running project re-seed (ADR-046). The release's entry in
+`.agents/docs/changes/` names the new `COMMIT` (full SHA), as the release
+procedure in `.agents/docs/specs/styrman/versioning.md` says.
 
-## Known cosmetic gap
+## A plain copy, by design
 
-`sh-agent` records the repo commit by running `git rev-parse` in `--repo`; the
-mirror has no `.git`, so the manifest's `commit` field is empty and
-`sh-agent status` inside a project prints a blank commit. `COMMIT` here is
-the record. `sh-agent update` is not used inside projects (D4).
+The mirror has no `.git`, and `sh-agent` decides what a tree is by exactly
+that (`harness.IsCheckout`: a `.git` entry directly in `--repo`), never by
+asking git. So inside the image `install` takes the plain-copy path: it
+installs the running binary as is, never runs `go build`, never runs git,
+and prints `plain copy, not its own git checkout: the running binary is
+installed as is` (BUG-015 in the harness, fixed in 2c8990e — the first
+harness commit that installs cleanly from a read-only, git-less mirror). The
+manifest's `commit` field is empty for the same reason, there being no
+checkout to read one from, and `sh-agent status` in a project prints
+`repo /styrman/harness (plain copy, not its own git checkout; update is
+refused)`. `COMMIT` here is the record; `sh-agent update` is not used inside
+projects (D4).

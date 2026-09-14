@@ -1,6 +1,6 @@
 # TODO
 
-Deferred work items. Not blocking current work, but should be addressed later.
+Items the active plan will consume. Empty when the work is done; anything the operator must do, or an idea worth keeping, goes in the newest handoff's Next Steps.
 
 <!-- Format: - [ ] Description (added YYYY-MM-DD) -->
 

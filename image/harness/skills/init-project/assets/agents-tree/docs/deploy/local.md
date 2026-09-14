@@ -43,6 +43,10 @@ curl -i localhost:8080/healthz
 
 <!-- `colima status || colima start`, native-arch build and run for local testing; the amd64 build belongs in gcp.md. -->
 
+## Operator steps
+
+<!-- What the operator does by hand on this target: standing procedures, never pending items (those live in the newest handoff). -->
+
 ## Stop and clean up
 
 <!-- How to stop it and what it leaves behind (data dirs, containers, volumes). -->

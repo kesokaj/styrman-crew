@@ -2,8 +2,9 @@
 name: gcloud-setup
 description: |
   GCloud CLI authentication and project configuration. Use when encountering "ADC not found",
-  "gcloud auth error", "Application Default Credentials", "project not set", "permission denied",
-  or when setting up gcloud CLI for a new machine or project.
+  "gcloud auth error", "No credentialed accounts", "Application Default Credentials", "project not set",
+  "permission denied", a 403 from gcloud, bq, or a client library, or when setting up gcloud CLI
+  for a new machine or project.
   Activate for any gcloud auth, gcloud config, or GCP credential question.
   Do NOT use for GKE cluster management (use gke-basics) or Terraform GCP resources (use terraform).
 ---
@@ -12,7 +13,7 @@ description: |
 
 Quick-reference for configuring `gcloud` CLI authentication and project settings (macOS or Linux).
 
-**When NOT to use this skill:** GKE cluster management (use the `gke-basics` skill), Terraform GCP resources (use the `terraform` skill), or Cloud Run deployments (use `gcloud run deploy` directly).
+**When NOT to use this skill:** GKE cluster management (use the `gke-basics` skill), Terraform GCP resources (use the `terraform` skill), or Cloud Run deployments (use the `cloud-run-deploy` skill).
 
 ## Quick Fixes
 
@@ -102,13 +103,13 @@ gcloud config configurations list
 gcloud auth configure-docker REGION-docker.pkg.dev
 ```
 
-## Project Discovery (Agent Convention)
+## Before asking the user to log in
 
-Per global rules, agents discover the active GCP project in this order:
+1. Verify first: `gcloud auth list`. `No credentialed accounts.` means missing authentication; an account that IS listed plus a `403` means IAM permissions on that account, not authentication — investigate the roles instead of asking for a new login. The same applies to `bq`, client libraries and notebooks (`DefaultCredentialsError`).
+2. Never fix credentials by code or alternative tools; the user runs `gcloud auth login` and `gcloud auth application-default login` in their own terminal.
+3. After they confirm, `gcloud auth list` again, then continue the original task.
 
-1. `gcloud config get project` — check active gcloud config
-2. `.env` file — check for `GCP_PROJECT` or `PROJECT_ID`
-3. **Ask the user** — if neither is found
+The project ID is never discovered from `gcloud config` or `.env`: the global context has the agent ask for the project's GCP defaults once and record them in the project's `docs/deploy/gcp.md`.
 
 ## Troubleshooting
 

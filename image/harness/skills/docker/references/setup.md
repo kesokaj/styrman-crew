@@ -1,132 +1,81 @@
-# Docker First-Time Setup
+# Docker First-Time Setup (Go service)
 
-Detailed setup guide for configuring Docker development environments in new projects.
+What a new Go project needs before its first `docker build`. The Dockerfile itself is
+in `SKILL.md`.
 
-## Step 1: Determine Configuration
+## Step 1: `.dockerignore`
 
-**Q1: Does your project use native Node.js modules?**
-
-| Module | Native? | Requires glibc? |
-|--------|---------|-----------------|
-| `better-sqlite3` | Yes | Yes |
-| `sharp` | Yes | Yes |
-| `bcrypt` | Yes | Yes |
-| `node-gyp` builds | Yes | Usually |
-| Pure JS packages | No | No |
-
-```bash
-# Check for native module indicators
-grep -E "node-gyp|prebuild|nan|napi" package.json package-lock.json 2>/dev/null | head -5
+```
+.git
+.agents/scratch
+web/node_modules
+web/.output
+*.env*
+*.pem
+*.key
+*.tfvars
+*.tfstate
 ```
 
-**Q2: Base image priority?**
+Secrets are excluded by name so a stray `COPY . .` cannot bake them into a layer.
 
-| Priority | Recommended Base Image |
-|----------|------------------------|
-| Smallest image size | `node:20-alpine` (if no native modules) |
-| Maximum compatibility | `node:20-slim` (Debian, has glibc) |
-| Full tooling | `node:20` (full Debian) |
+## Step 2: `docker-compose.yml` for local dependencies
 
-## Step 2: Generate Docker Files
-
-### With Native Modules (Recommended Default)
-
-```dockerfile
-FROM node:20-slim
-WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ git \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY package*.json ./
-RUN npm install
-COPY . .
-RUN npm run build --if-present
-
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
-```
-
-### Without Native Modules (Smaller Image)
-
-```dockerfile
-FROM node:20-alpine
-WORKDIR /app
-
-RUN apk add --no-cache python3 make g++ git
-
-COPY package*.json ./
-RUN npm install
-COPY . .
-RUN npm run build --if-present
-
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
-```
-
-### docker-compose.yml
+The app runs on the host (`go run ./cmd/<app>`) during development; compose provides
+what it talks to. Add only the services the project actually uses.
 
 ```yaml
 services:
-  dev:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: ${COMPOSE_PROJECT_NAME:-my-project}-dev-1
+  db:
+    image: postgres:16
     ports:
-      - "${DEV_PORT:-3000}:3000"
-    volumes:
-      - .:/app
-      - node_modules:/app/node_modules
+      - "${DB_PORT:-5432}:5432"
     environment:
-      - NODE_ENV=development
-    command: npm run dev -- --host 0.0.0.0
-    profiles:
-      - dev
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 volumes:
-  node_modules:
+  pgdata:
 ```
 
-## Step 3: Start and Verify
+Pin the image tag. Local credentials like `app`/`app` are fine in compose; real ones
+never are.
+
+## Step 3: First run
 
 ```bash
-# Ensure Colima is running
-colima status || colima start
-
-# Start container
-docker compose --profile dev up -d
-
-# Verify
-docker ps --filter "name=my-project"
-
-# Install dependencies (first time)
-docker exec my-project-dev-1 npm install
+colima status || colima start        # macOS only
+docker compose up -d
+docker compose ps                    # db should be "healthy"
+DATABASE_URL=postgres://app:app@localhost:5432/app?sslmode=disable go run ./cmd/<app>
 ```
 
-## Troubleshooting
+Then the container smoke test from `SKILL.md` §4, and `docs/deploy/local.md` records
+the exact commands for the next session.
 
-### ERR_DLOPEN_FAILED
+## Optional: the app in compose too
 
-**Cause:** Using Alpine image with modules that require glibc.
+Only when a second container must reach the app by name (a worker, an e2e runner):
 
-```bash
-docker compose --profile dev down
-docker volume rm <project>_node_modules
-docker compose --profile dev build --no-cache
-docker compose --profile dev up -d
-docker exec <container> npm install
+```yaml
+  app:
+    build: .
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      DATABASE_URL: postgres://app:app@db:5432/app?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
 ```
 
-### Decision Tree: Alpine vs Slim
-
-```
-Does package.json contain native modules?
-│
-├─ YES → Use node:20-slim (glibc)
-│        └─ Examples: sharp, bcrypt, sqlite3
-│
-├─ UNSURE → Use node:20-slim (safe default)
-│
-└─ NO (pure JS only) → Use node:20-alpine (smaller)
-         └─ Examples: express, react, typescript
-```
+`build: .` uses the native architecture, which is what a local run wants; the amd64
+build for Google is a separate `buildx` command, never a compose setting.

@@ -46,6 +46,6 @@ Change the least that turns the test green and satisfies "fixed means". No adjac
 
 ## Step 5: Definition of Done and the record
 
-Global Definition of Done: `verifier` log (the new test named), `reviewer` for 50+ lines or 5+ files with the diff only, `security` when the area is sensitive, `documentation` if behavior changed, `changelog`, commit, push. Then dispatch `bugs` with: symptom, repro, root cause, fix (files, commit), and the prevention rule — the sentence a future agent needs before working in this area. If the diagnosis diverged from your hypothesis, say why in the record; that is where the harness learns.
+Global Definition of Done, with the record inside it: `verifier` log (the new test named), `reviewer` for 50+ lines or 5+ files with the diff only, `security` when the area is sensitive, `documentation` if behavior changed; then dispatch `bugs` with symptom, repro, root cause, fix (file:line), and the prevention rule — the sentence a future agent needs before working in this area — so the record and its INDEX row ride in the fix commit; then `changelog` (citing the BUG id), commit, push, `/handoff`. If the diagnosis diverged from your hypothesis, say why in the record; that is where the harness learns.
 
 Report in chat: bug in one line, root cause, fix (file:line), the test that captures it, goldfish agreement or divergence, review outcome, BUG id.

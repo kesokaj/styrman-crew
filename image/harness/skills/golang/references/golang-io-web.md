@@ -1,7 +1,5 @@
 # Domain: golang-io-web
 
-
-
 ## Sub-topic: golang-http
 
 **Persona:** You are a Go HTTP engineer. You build APIs that are observable, resilient, and correct — every handler has structured error handling, every request has a timeout, and every response has the right status code.
@@ -459,9 +457,8 @@ For comprehensive HTTP testing patterns (request bodies, query parameters, heade
 
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for context propagation and timeout patterns
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for error wrapping, sentinel errors, and the single handling rule
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for functional options and server constructor patterns
-- → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for otelhttp tracing middleware and Prometheus metrics middleware
-- → See the Testing (unit tests, benchmarks, testify) reference (`golang-testing.md`) for HTTP handler testing with httptest
+- → See the Architecture (style, naming, patterns, modernize) reference (`golang-architecture.md`) for functional options and server constructor patterns
+- → See the Testing (unit tests, benchmarks) reference (`golang-testing.md`) for HTTP handler testing with httptest
 
 ## Sub-topic: golang-grpc
 
@@ -496,7 +493,7 @@ This skill is not exhaustive. Please refer to library documentation and code exa
 
 Organize by domain with versioned directories (`proto/user/v1/`). Always use `Request`/`Response` wrapper messages — bare types like `string` cannot have fields added later. Generate with `buf generate` or `protoc`.
 
-[Proto & code generation reference](references/protoc-reference.md)
+Proto & code generation reference
 
 ## Server Implementation
 
@@ -618,7 +615,7 @@ func (s *server) ListUsers(req *pb.ListUsersRequest, stream pb.UserService_ListU
 
 Use `bufconn` for in-memory connections that exercise the full gRPC stack (serialization, interceptors, metadata) without network overhead. Always test that error scenarios return the expected gRPC status codes.
 
-[Testing patterns and examples](references/testing.md)
+Testing patterns and examples
 
 ## Security
 
@@ -655,8 +652,7 @@ Most services do not need connection pooling — profile before adding complexit
 
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for deadline and cancellation patterns
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for gRPC error to Go error mapping
-- → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for gRPC interceptors (logging, tracing, metrics)
-- → See the Testing (unit tests, benchmarks, testify) reference (`golang-testing.md`) for gRPC testing with bufconn
+- → See the Testing (unit tests, benchmarks) reference (`golang-testing.md`) for gRPC testing with bufconn
 
 ## Sub-topic: golang-database
 
@@ -744,11 +740,11 @@ if !allowed[sortCol] {
 query := fmt.Sprintf("SELECT id, name, email FROM users ORDER BY %s", sortCol)
 ```
 
-For more injection prevention patterns, see the the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`).
+For more injection prevention patterns, see the Ecosystem (observability, linters, security, performance) reference (`golang-ecosystem.md`).
 
 ## Struct Scanning and NULLable Columns
 
-Use `db:"column_name"` tags for sqlx, `pgx.CollectRows` with `pgx.RowToStructByName` for pgx. Handle NULLable columns with pointer fields (`*string`, `*time.Time`) — they work cleanly with both scanning and JSON marshaling. See [Scanning Reference](./references/scanning.md) for examples of all approaches.
+Use `db:"column_name"` tags for sqlx, `pgx.CollectRows` with `pgx.RowToStructByName` for pgx. Handle NULLable columns with pointer fields (`*string`, `*time.Time`) — they work cleanly with both scanning and JSON marshaling. See Scanning Reference for examples of all approaches.
 
 ## Error Handling
 
@@ -825,11 +821,11 @@ db.Query("SELECT ...")
 db.QueryContext(ctx, "SELECT ...")
 ```
 
-For context patterns in depth, see the the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`).
+For context patterns in depth, see the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`).
 
 ## Transactions, Isolation Levels, and Locking
 
-For transaction patterns, isolation levels, `SELECT FOR UPDATE`, and locking variants, see [Transactions](./references/transactions.md).
+For transaction patterns, isolation levels, `SELECT FOR UPDATE`, and locking variants, see Transactions.
 
 ## Connection Pool
 
@@ -840,7 +836,7 @@ db.SetConnMaxLifetime(5 * time.Minute)  // recycle stale connections
 db.SetConnMaxIdleTime(1 * time.Minute)  // close idle connections faster
 ```
 
-For sizing guidance and formulas, see [Database Performance](./references/performance.md).
+For sizing guidance and formulas, see Database Performance.
 
 ## Migrations
 
@@ -852,7 +848,7 @@ Recommended tools:
 - [Flyway](https://flywaydb.org/) — JVM-based, widely used in enterprise environments
 - [Atlas](https://atlasgo.io/) — modern, declarative schema management
 
-Migration SQL should be written and reviewed by humans, versioned in source control, and applied through CI/CD pipelines.
+Migration SQL should be written and reviewed by humans, versioned in source control, and applied by a versioned migration step at deploy time.
 
 ## Avoid Hidden SQL Features
 
@@ -864,17 +860,16 @@ Do not rely on triggers, views, materialized views, stored procedures, or row-le
 
 ## Deep Dives
 
-- **[Transactions](./references/transactions.md)** — Transaction boundaries, isolation levels, deadlock prevention, `SELECT FOR UPDATE`
-- **[Testing Database Code](./references/testing.md)** — Mock connections, integration tests with containers, fixtures, schema setup/teardown
-- **[Database Performance](./references/performance.md)** — Connection pool sizing, batch processing, indexing strategy, query optimization
-- **[Struct Scanning](./references/scanning.md)** — Struct tags, NULLable column handling, JSON marshaling patterns
+- **Transactions** — Transaction boundaries, isolation levels, deadlock prevention, `SELECT FOR UPDATE`
+- **Testing Database Code** — Mock connections, integration tests with containers, fixtures, schema setup/teardown
+- **Database Performance** — Connection pool sizing, batch processing, indexing strategy, query optimization
+- **Struct Scanning** — Struct tags, NULLable column handling, JSON marshaling patterns
 
 ## Cross-References
 
-- → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for SQL injection prevention patterns
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for context propagation to database operations
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for database error wrapping patterns
-- → See the Testing (unit tests, benchmarks, testify) reference (`golang-testing.md`) for database integration test patterns
+- → See the Testing (unit tests, benchmarks) reference (`golang-testing.md`) for database integration test patterns
 
 ## References
 
@@ -931,11 +926,11 @@ myapp/
 └── go.sum
 ```
 
-`main.go` should be minimal — see [assets/examples/main.go](assets/examples/main.go).
+`main.go` should be minimal — see assets/examples/main.go.
 
 ## Root Command Setup
 
-The root command initializes Viper configuration and sets up global behavior via `PersistentPreRunE`. See [assets/examples/root.go](assets/examples/root.go).
+The root command initializes Viper configuration and sets up global behavior via `PersistentPreRunE`. See assets/examples/root.go.
 
 Key points:
 
@@ -946,11 +941,11 @@ Key points:
 
 ## Subcommands
 
-Add subcommands by creating separate files in `cmd/myapp/` and registering them in `init()`. See [assets/examples/serve.go](assets/examples/serve.go) for a complete subcommand example including command groups.
+Add subcommands by creating separate files in `cmd/myapp/` and registering them in `init()`. See assets/examples/serve.go for a complete subcommand example including command groups.
 
 ## Flags
 
-See [assets/examples/flags.go](assets/examples/flags.go) for all flag patterns:
+See assets/examples/flags.go for all flag patterns:
 
 ### Persistent vs Local
 
@@ -971,7 +966,7 @@ This ensures `viper.GetInt("port")` returns the flag value, env var `MYAPP_PORT`
 
 ## Argument Validation
 
-Cobra provides built-in validators for positional arguments. See [assets/examples/args.go](assets/examples/args.go) for both built-in and custom validation examples.
+Cobra provides built-in validators for positional arguments. See assets/examples/args.go for both built-in and custom validation examples.
 
 | Validator                   | Description                          |
 | --------------------------- | ------------------------------------ |
@@ -991,7 +986,7 @@ Viper resolves configuration values in this order (highest to lowest precedence)
 3. **Config file** (persistent settings)
 4. **Defaults** (set in code)
 
-See [assets/examples/config.go](assets/examples/config.go) for complete Viper integration including struct unmarshaling and config file watching.
+See assets/examples/config.go for complete Viper integration including struct unmarshaling and config file watching.
 
 ### Example Config File (.myapp.yaml)
 
@@ -1012,7 +1007,7 @@ With the setup above, these are all equivalent:
 
 ## Version and Build Info
 
-Version SHOULD be embedded at compile time using `ldflags`. See [assets/examples/version.go](assets/examples/version.go) for the version command and build instructions.
+Version SHOULD be embedded at compile time using `ldflags`. See assets/examples/version.go for the version command and build instructions.
 
 ## Exit Codes
 
@@ -1028,11 +1023,11 @@ Exit codes MUST follow Unix conventions:
 | 127   | Command not found | Missing dependency                        |
 | 128+N | Signal N          | Terminated by signal (e.g., 130 = SIGINT) |
 
-See [assets/examples/exit_codes.go](assets/examples/exit_codes.go) for a pattern mapping errors to exit codes.
+See assets/examples/exit_codes.go for a pattern mapping errors to exit codes.
 
 ## I/O Patterns
 
-See [assets/examples/output.go](assets/examples/output.go) for all I/O patterns:
+See assets/examples/output.go for all I/O patterns:
 
 - **stdout vs stderr**: NEVER write diagnostic output to stdout — stdout is for program output (pipeable), stderr for logs/errors/diagnostics
 - **Detecting pipe vs terminal**: check `os.ModeCharDevice` on stdout
@@ -1041,15 +1036,15 @@ See [assets/examples/output.go](assets/examples/output.go) for all I/O patterns:
 
 ## Signal Handling
 
-Signal handling MUST use `signal.NotifyContext` to propagate cancellation through context. See [assets/examples/signal.go](assets/examples/signal.go) for graceful HTTP server shutdown.
+Signal handling MUST use `signal.NotifyContext` to propagate cancellation through context. See assets/examples/signal.go for graceful HTTP server shutdown.
 
 ## Shell Completions
 
-Cobra generates completions for bash, zsh, fish, and PowerShell automatically. See [assets/examples/completion.go](assets/examples/completion.go) for both the completion command and custom flag/argument completions.
+Cobra generates completions for bash, zsh, fish, and PowerShell automatically. See assets/examples/completion.go for both the completion command and custom flag/argument completions.
 
 ## Testing CLI Commands
 
-Test commands by executing them programmatically and capturing output. See [assets/examples/cli_test.go](assets/examples/cli_test.go).
+Test commands by executing them programmatically and capturing output. See assets/examples/cli_test.go.
 
 Use `cmd.OutOrStdout()` and `cmd.ErrOrStderr()` in commands (instead of `os.Stdout` / `os.Stderr`) so output can be captured in tests.
 
@@ -1070,4 +1065,4 @@ Use `cmd.OutOrStdout()` and `cmd.ErrOrStderr()` in commands (instead of `os.Stdo
 
 ## Related Skills
 
-See the Architecture reference (`golang-architecture.md`), the Architecture reference (`golang-architecture.md`), the Testing reference (`golang-testing.md`), the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`)s.
+See the Structure (structs, interfaces, layout, DI) reference (`golang-structure.md`) for project layout, the Architecture (style, naming, patterns, modernize) reference (`golang-architecture.md`) for constructor and option patterns, and the Testing reference (`golang-testing.md`) for testing CLI commands.

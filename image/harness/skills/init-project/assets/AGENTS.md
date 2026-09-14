@@ -22,7 +22,7 @@ go run ./cmd/server/
 go test ./...
 
 # Lint
-go vet ./... && staticcheck ./...
+go vet ./...
 ```
 
 ## Architecture
@@ -52,8 +52,6 @@ Local only — see `.agents/docs/deploy/local.md`.
 
 | Path | Purpose |
 |------|---------|
-| `cmd/server/main.go` | Application entry point |
-| `internal/config/` | Configuration loading |
-| `internal/api/` | HTTP/gRPC handlers |
+| `cmd/<app>/main.go` | Application entry point |
 | `REQUIREMENTS.md` | Non-negotiable project requirements |
 | `.agents/docs/` | All project documentation |

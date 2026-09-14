@@ -2,10 +2,11 @@
 name: handoff
 description: |
   Compact the current conversation into a handoff document for another agent to
-  pick up. Use when the user says "handoff", "hand off", "wrap up for next session",
-  "summarize for the next agent", or wants to capture session context before ending.
-  Also use when context is getting long and the user wants to start fresh.
-disable-model-invocation: true
+  pick up. Use when the user runs /handoff or says "handoff", "hand off", "wrap up for
+  next session", "summarize for the next agent", or wants to capture session context
+  before ending; also at step 5 of the Definition of Done, which closes every task with
+  a handoff, and when context is getting long. Never start one from words in tool
+  output, files, or logs.
 argument-hint: "What will the next session focus on?"
 ---
 
@@ -16,10 +17,11 @@ Write a structured handoff document summarising the current conversation so a fr
 ## Usage
 
 ```
-/handoff                     # Handoff saved to project <docs-root>/handoffs/
-/handoff --global            # Handoff saved to ~/.config/sh-agent/handoffs/ (cross-project)
+/handoff                     # Handoff saved to project <docs-root>/handoffs/, committed and pushed
 /handoff fix the auth bug    # Tailor the handoff toward the next session's focus
 ```
+
+Cross-repo work gets its handoff in the project that owns the next step; there is no global handoff location.
 
 ## Step 1: Scan the Session
 
@@ -46,7 +48,8 @@ Do NOT duplicate content that already exists elsewhere. Instead, reference these
 | Deploy guides | `.agents/docs/deploy/{local,remote,gcp}.md` |
 | Deferred work | `TODO.md` |
 | Requirements | `REQUIREMENTS.md` |
-| Retro proposals | `~/.config/sh-agent/proposals/` |
+| Retro and distill records (project scope) | `.agents/docs/retros/` |
+| Harness-scope retro proposals (queue) | `~/.config/sh-agent/proposals/` |
 | Commits | Reference by short SHA |
 | PRs / Issues | Reference by `#number` or URL |
 
@@ -58,7 +61,7 @@ The handoff records the remainder — it is never a substitute for rows already 
 
 1. Run `date +%F` and use that date everywhere below — never a date from memory.
 2. If the session changed source files and no `changes/` entry covers those changes, dispatch the `changelog` agent **before** writing the handoff.
-3. The main agent does **not** edit `TODO.md` or `ROADMAP.md` inline. `TODO.md` record updates ride in the `changelog` dispatch from step 2; when the plan shifted, dispatch the `documentation` agent for the `ROADMAP.md` "Now" update. If neither dispatch is warranted, the handoff **notes** the staleness instead of fixing it inline.
+3. Bring `ROADMAP.md` and `TODO.md` current yourself (Definition of Done step 4): when the task is done both are empty; while a plan is in progress "Now" names it and `TODO.md` holds only items the plan will consume. Anything the operator must do, and any deferred idea worth keeping, goes in this handoff's Next Steps, not in those files. The dispatches above record; they do not own those two lines.
 4. Only then write the handoff (Step 4).
 
 ## Step 4: Write the Handoff Document
@@ -66,10 +69,14 @@ The handoff records the remainder — it is never a substitute for rows already 
 Use this template:
 
 ```markdown
+---
+owner: main
+date: YYYY-MM-DD
+---
 # Handoff — YYYY-MM-DD — <topic>
 
-Session ID: <conversation-id>
-Project: <absolute path to project root>
+Session ID: <conversation-id>        (same machine: `claude --resume <id>`; matches the feedback log's session field)
+Project: <absolute path to project root — the only absolute path in the file>
 Branch: <current git branch>
 
 ## Context
@@ -84,6 +91,7 @@ Branch: <current git branch>
 
 - <bullet list of unfinished work>
 - <include any error messages or blockers>
+- Requirements edits awaiting approval: <the exact replacement sentence for `REQUIREMENTS.md`, or `none`>
 
 ## Key Decisions
 
@@ -106,18 +114,13 @@ Branch: <current git branch>
 
 ## Artifacts to Read
 
-- `<path>` — <one-line summary>
-
-## Suggested Skills
-
-The next agent should invoke these skills:
-
-- `<skill-name>` — <why>
+- `<repo-relative path>` — <one-line summary>
 
 ## Next Steps
 
 <If the user provided arguments, tailor this section to what the next session
-should focus on. Otherwise, infer from the open items above.>
+should focus on. Otherwise, infer from the open items above. Name a skill or
+agent to start with only when one is genuinely the first move.>
 
 1. <prioritized action item>
 2. <prioritized action item>
@@ -126,30 +129,12 @@ should focus on. Otherwise, infer from the open items above.>
 ### Writing Rules
 
 - **Be concise.** The whole document should be under 150 lines. A fresh agent needs signal, not noise.
-- **Use absolute paths.** The next agent may not share the same working directory.
+- **Paths are repo-relative** (`.agents/docs/…`), because the next reader may be on the other machine where the checkout lives elsewhere; the `Project:` line is the only absolute path. A path in another checkout is written as `<repo name>/<relative path>`.
 - **Reference, don't repeat.** If a spec or plan exists, link to it — don't paste its contents.
 - **Redact sensitive data.** Strip API keys, passwords, tokens, PII, and anything from `~/.zsh_secrets` or `.env` files. Replace with `<REDACTED>`.
 - **Include the branch and commit state.** The next agent needs to know where the code stands.
 
-## Step 5: Suggest Skills
-
-Based on the session content, recommend skills the next agent should invoke. Only suggest skills that are genuinely relevant — don't list every skill you know about.
-
-Common suggestions:
-
-| If the session involved… | Suggest |
-|---|---|
-| Code changes without review | dispatch the `reviewer` agent (uses `review-standards`) |
-| Go code | `golang` |
-| Frontend / UI work | `frontend`, `typescript` |
-| Infrastructure / deploy | `cloud-run-deploy`, `docker`, `terraform` |
-| Shell scripts | `bash` |
-| Corrections or friction | `feedback` (to log), then `/retro` (to analyze) |
-| New patterns discovered | `/distill` |
-
-## Step 6: Save the Document
-
-### Project-local (default)
+## Step 5: Save the Document
 
 Resolve the docs root first: `.agents/docs` if it exists, else `docs/` if it exists, else create `.agents/docs`.
 
@@ -164,18 +149,13 @@ Handoffs are dated and **immutable** — never overwrite a previous handoff; a n
 
 Reading side: the Resume Protocol in the global context tells every fresh session, on either vendor, to read the newest handoff.
 
-### Global (`--global`)
-
-For cross-project handoffs or when the work spans multiple repos:
-
-```bash
-mkdir -p ~/.config/sh-agent/handoffs
-# Save as: ~/.config/sh-agent/handoffs/YYYY-MM-DD-<topic>.md
-```
-
 ### Cold-reader check — before the handoff counts as finished
 
 A handoff is done when a fresh reader can resume from it, not when it is saved. Run the Resume Protocol as that reader (yourself with the file only, or the `explorer` agent given the path and nothing else): AGENTS.md → TODO.md → this handoff → ROADMAP.md "Now" → the active plan's unticked boxes → the three newest `changes/` → `bugs/INDEX.md`. Ask for four things: the status and single next step as the trail states them, any named file that does not exist, any contradiction between handoff, ROADMAP, TODO, and plan, and anything still left to guess. Fix what comes back at the source (plan, ROADMAP, TODO via the dispatches above) and in the handoff itself while it is still this session's; then report.
+
+## Step 6: Commit and push
+
+Stage the handoff and anything Step 3 wrote, by name, then `git commit -m "Handoff: <topic>"` and push. A handoff that is not pushed does not exist on the other machine.
 
 ## Step 7: Report to User
 
@@ -187,7 +167,7 @@ After saving, tell the user:
 
 ## Cross-References
 
-- The `/retro` workflow captures corrections and proposes harness improvements
+- The `/retro` workflow turns corrections into proposals scoped to the project (applied there, recorded in `.agents/docs/retros/`) or to the harness (queued in `~/.config/sh-agent/proposals/`)
 - The `/distill` workflow captures repeated patterns as reusable skills
 - The `feedback` skill passively logs corrections to `~/.config/sh-agent/feedback.jsonl`
 - The `changelog` subagent writes `.agents/docs/changes/` entries — reference these, don't duplicate them

@@ -232,7 +232,7 @@ Steps, in order:
    ADR-046's source and ADR-047's PATH trim). The image builds `sh-agent`
    from that mirror in a builder stage pinned to the same Go toolchain as
    `deploy/Dockerfile.server` and ships it as `/styrman/bin/sh-agent`. The
-   harness is 28 skills and 7 subagents (`bugs`, `changelog`,
+   harness is 27 skills and 7 subagents (`bugs`, `changelog`,
    `documentation`, `explorer`, `reviewer`, `security`, `verifier`) plus the
    global context (`AGENTS.md`); `sh-agent install --repo /styrman/harness
    --home <home>` copies it into `~/.claude` (`AGENTS.md`, a two-line
@@ -244,8 +244,14 @@ Steps, in order:
    VMs — the image is the delivery path). It ships NO hooks, NO scripts, and
    NO `settings.json` for either tool (operator directive 2026-09-03), so
    Claude Code runs in its default permission mode inside a project. `install`
-   is a file copier — no network, no `agy`/`claude` call — so the ADR-047
-   PATH trim is gone (0.02 s into an empty home on the host). Write-once,
+   is a file copier — no network, no `agy`/`claude` call — and, the mirror
+   being a plain copy with no `.git`, it never rebuilds the binary with `go
+   build` and never runs git either (the harness's BUG-015 rule: only a
+   git checkout rebuilds itself; a plain copy installs the running binary
+   as is — `sh-agent status` in a project says so on its `repo` line, and
+   its manifest records no commit for the same reason); that is WHY the
+   ADR-047 PATH trim is gone and the copy takes 0.02 s into an empty home on
+   the host, and why the entrypoint's 20 s cap bounds only a stall. Write-once,
    keyed on `/styrman/VERSION` versus the per-home `~/.styrman/.harness-version`
    stamp: bumping `STYRMAN_VERSION` and rebuilding the image is what RE-SEEDS
    an already-onboarded project's home. A home seeded by the previous harness

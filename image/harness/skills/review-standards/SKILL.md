@@ -1,11 +1,11 @@
 ---
 name: review-standards
-description: "Per-language code-excellence standards for Go and TypeScript, loaded by the reviewer agent, /audit, and /preflight. Load when applying the project review criteria: dead code, function flow, directory layout, simplicity, security-exempt DIY rule, decoupling. Not a review workflow — the reviewer agent and (on Claude Code) the built-in /code-review do the reviewing."
+description: "Per-language code-excellence standards for Go and TypeScript, loaded by the reviewer agent, /review, and /preflight. Load when applying the project review criteria: dead code, function flow, directory layout, simplicity, security-exempt DIY rule, decoupling. Not a review workflow — `/review` dispatches the reviewing."
 ---
 
 # Review Standards
 
-A standards **library**, not an actor. Whoever is reviewing (the `reviewer` agent, `/audit`, `/preflight`) loads this file and judges the diff against the six criteria below. Every finding gets a severity (high / medium / low) and a confidence level, and lands in the docs root under `reviews/` — never chat-only. Docs root: `.agents/docs/` if it exists, else `docs/` if it exists, else create `.agents/docs/`.
+A standards **library**, not an actor. Whoever is reviewing (the `reviewer` agent, `/review`, `/preflight`) loads this file and judges the diff against the six criteria below. Every finding gets a severity (high / medium / low) and a confidence level, and lands in the docs root under `reviews/` — never chat-only. Docs root: `.agents/docs/` if it exists, else `docs/` if it exists, else create `.agents/docs/`.
 
 Language deep-dives (load only for the languages present in the diff):
 
@@ -22,10 +22,13 @@ Language deep-dives (load only for the languages present in the diff):
 
 ## 2. Flow tracing — every changed function, caller to callee
 
+Installers count as callers. A change that an installer, updater or converge step must act on (a unit `[Install]` section, a new flag, a changed default) is traced to EVERY such step, and to the question "which version of it runs the first time after this ships?" — a self-updating tool runs its OLD code on the tick that installs the change, so a step guarded by "only when something changed" never runs. Require the step to be unconditional or idempotent, and a post-deploy check by the exact command (`systemctl is-enabled …`), not by reading the unit file.
+
 - [ ] Trace each changed function from its callers down through its callees; confirm the change is consistent at every hop (arguments, invariants, locking, units).
 - [ ] Error paths propagate: Go — every `err` wrapped with context (`fmt.Errorf("...: %w", err)`) or explicitly handled, never discarded with `_` or an empty branch; TS — no floating promises (every promise awaited, returned, or explicitly voided with a reason), caught errors typed `unknown` and narrowed.
 - [ ] Context and cancellation flow end-to-end: Go — `context.Context` passed down, honored in loops and I/O, goroutines have an exit path; TS — `AbortSignal` reaches fetches/long operations that outlive a request or component.
 - [ ] Resource lifetimes: everything opened is closed on every path, including the error paths.
+- [ ] Every new test can FAIL: would it still pass if the behaviour it names were reverted? Reject tests that assert on source text rather than behaviour, that re-assert a constant against itself, or that exercise a path the test setup makes unreachable. A test that cannot fail is worse than no test — it reports coverage that does not exist.
 
 ## 3. Standards conformance — the language skills are the authority
 

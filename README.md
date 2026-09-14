@@ -145,7 +145,9 @@ Since v1.22.0, one line per release; the full entry for each is
   check-to-mount window v1.20.0 had accepted (BUG-002/003).
 - **v1.20.0** (2026-09-04): the agent harness every project home receives is
   now a verbatim mirror of the operator's `styrman-harness` repo, installed
-  by `sh-agent` — 28 skills, 7 subagents, global context, no hooks, scripts,
+  by `sh-agent` — the harness's skills, subagents and global context (the
+  roster shipped at the time was 28 skills and 7 subagents; the current
+  one is in `image/README.md`), no hooks, scripts,
   or settings files; homes seeded by the previous harness are migrated
   (never deleted) into `~/.styrman/harness-backup-<timestamp>/` (ADR-062),
   and Settings shows the installed roster. The "Failed to fetch" that hit

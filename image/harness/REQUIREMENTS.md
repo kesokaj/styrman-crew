@@ -28,11 +28,11 @@ Every test and every development run of the installer uses `--home` with a scrat
 
 ## R7 — Projects remember and stay resumable
 
-Every project keeps its scratch in `.agents/scratch/` (gitignored), its failures as numbered records in `.agents/docs/bugs/`, and its progress in plan files with task checkboxes, so a zero-context session can resume and does not repeat a mistake. The harness's own state (manifest, feedback log, retro proposals) lives in `~/.config/sh-agent/` and nowhere else.
+Every project keeps its scratch in `.agents/scratch/` (gitignored), its failures as numbered records in `.agents/docs/bugs/`, its progress in plan files with task checkboxes, and its retro and distill records in `.agents/docs/retros/`, so a zero-context session can resume and does not repeat a mistake. The harness's own state (manifest, feedback log, the harness proposal queue, the cross-project index) lives in `~/.config/sh-agent/` and nowhere else; a project's retro and distill records are the project's own state, in its trail (ADR-015, clarified 2026-09-13 with the operator's approval).
 
 ## Known limits
 
-- **Antigravity global rules path.** The CLI's customization root is `~/.gemini/config/`; rules there are documented for the workspace form (`.agents/rules/*.md`) and by analogy for the global one. Verified on the Linux box 2026-09-03 (`.agents/docs/testing/2026-09-03-verify-real-home.md`): the CLI reads rules, skills, and agents from there. The Mac build is confirmed at the operator's next `sh-agent update` there (see the rebuild plan).
+- **Antigravity global rules path.** The CLI's customization root is `~/.gemini/config/`; rules there are documented for the workspace form (`.agents/rules/*.md`) and by analogy for the global one. Verified on the Linux box 2026-09-03 (`.agents/docs/testing/2026-09-03-verify-real-home.md`): the CLI reads rules, skills, and agents from there. Confirmed on the Mac for Antigravity on 2026-09-04 (`.agents/docs/testing/2026-09-04-verify-mac-real-home.md`); Claude Code on the Mac is unverified.
 - **Antigravity tool names cannot be enumerated.** An unrecognised name in an agent's `tools:` hangs the subagent, so `sh-agent install` fails on any tool it cannot map rather than guessing.
 - **Antigravity IDE is out of scope.** Only the `agy` CLI is targeted; the IDE's global paths are unverified.
 

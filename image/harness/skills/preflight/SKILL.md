@@ -1,6 +1,6 @@
 ---
 name: preflight
-description: Release gate and release path. Run whenever the user asks to ship, release, deploy, tag, or cut a new version ("ship it", "deploy v1.4", "new version", "release this"). Brings uncommitted work through the Definition of Done, dispatches the reviewer and security agents over the release diff, writes a SHIP / NO-SHIP report, and on SHIP commits, tags, pushes, and deploys. Do NOT use for ordinary commits or for reviewing a diff (use the reviewer agent or the vendor's built-in review command).
+description: Release gate and release path. Run whenever the user asks to ship, release, deploy, tag, or cut a new version ("ship it", "deploy v1.4", "new version", "release this"). Brings uncommitted work through the Definition of Done, dispatches the reviewer and security agents over the release diff, writes a SHIP / NO-SHIP report, and on SHIP commits, tags, pushes, and deploys. Do NOT use for ordinary commits or for reviewing a diff (use `/review`).
 argument-hint: "[version or base ref]"
 ---
 
@@ -47,7 +47,7 @@ Untracked or modified files **under `<docs-root>`** need no commit of their own 
 
 Never self-review, self-verify, or self-audit. Dispatch in parallel, each with the range `<base>..HEAD`, today's date, and the instruction to record a `Range reviewed: <base>..<head>` line in its artifact:
 
-- **Reviewer** — dispatch the `reviewer` agent on the strongest model (Claude Code: pass `model: opus` in the dispatch; Antigravity: subagents inherit the session model, so run release sessions with `agy --model pro`; it loads the `review-standards` skill) when the release diff is 50+ lines or 5+ files, over the commits **not already covered** by a prior `reviews/*-review-*` or `reviews/*-preflight-*` report. Coverage is your judgement: read each candidate report's `Range reviewed:` line and decide whether it subsumes the commits in question; when it does, cite the covering report in the gate report instead of re-reviewing. Below threshold, read the diff yourself or run the vendor's built-in review command and note that in the gate report.
+- **Reviewer** — dispatch the `reviewer` agent on the strongest model (Claude Code: pass `model: opus` in the dispatch; Antigravity: subagents inherit the session model, so run release sessions with `agy --model pro`; it loads the `review-standards` skill) when the release diff is 50+ lines or 5+ files, over the commits **not already covered** by a prior `reviews/*-review-*` or `reviews/*-preflight-*` report. Coverage is your judgement: read each candidate report's `Range reviewed:` line and decide whether it subsumes the commits in question; when it does, cite the covering report in the gate report instead of re-reviewing. Below threshold, read the diff yourself or run `/review` and note that in the gate report.
 - **Security** — dispatch the `security` agent whenever a changed path in the release diff touches auth, IAM, secrets, input parsing, or dependencies, regardless of diff size — every such surface, always. A release that touches none of those has no security row; say so in the gate report rather than skipping it silently.
 - **Verification** — a `testing/*-verify-*` log written in Step 1 (or earlier today) whose `Range reviewed:` reaches HEAD satisfies this row; cite it. Otherwise dispatch the `verifier` agent now over the release range.
 
@@ -62,7 +62,7 @@ Check by inspection and record each as pass or finding:
 
 ## Step 4: Docs freshness
 
-Confirm `README.md`, `<docs-root>/specs/`, and `<docs-root>/deploy/` reflect the release diff (interfaces, behavior, deployment). If they do not, dispatch the `documentation` agent and record the gap as a finding.
+Run the `--docs` lens of `/review` over `<base>..HEAD` — the `reviewer` agent with the docs brief and the slug `<base>-<head>-docs` — against `README.md`, `<docs-root>/specs/`, `<docs-root>/testing/<app>/guide.md`, and `<docs-root>/deploy/`. Its findings are the docs gaps: dispatch the `documentation` agent for them and record each as a finding in the gate report.
 
 ## Step 5: Write the merged gate report
 
@@ -78,7 +78,7 @@ Never restate a failure as success. Any blocking finding from Steps 2–4 means 
 
 ## Step 6: Ship or stop
 
-- **NO-SHIP:** stop. Report the blocking findings and the report path. Never ship on NO-SHIP — no override. The pre-gate commit from Step 1, if any, stays on the branch — name it and its SHA in the gate report so the user can amend or drop it.
+- **NO-SHIP:** stop. Report the blocking findings and the report path. Never ship on NO-SHIP — no override. The pre-gate commit from Step 1, if any, stays on the branch — name it and its SHA in the gate report so the user can amend or drop it. The task that later resolves the blocking findings appends `## Outcome` to the gate report — `fixed`, `rebutted`, or `left`, one line per finding — in the same commit as the fix; the SHIP path has no findings left and needs none.
 - **SHIP:** the gate has already run against the clean source tree; now assemble **one release commit**:
   1. Dispatch the `changelog` agent with today's date for the release entry.
   2. Bump the version **only where the repo already tracks one** (do not introduce version tracking).

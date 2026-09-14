@@ -27,9 +27,9 @@ const (
 )
 
 // DeriveAgy renders the Antigravity `agent.md` flavour of a Claude Code agent.
-// Claude-only keys (effort, maxTurns, memory, isolation, permissionMode,
-// skills) are dropped: Antigravity has no equivalent, and markdown agents
-// inherit the global skills anyway.
+// Claude-only keys (effort, maxTurns, isolation, permissionMode, skills)
+// are dropped: Antigravity has no equivalent, and markdown agents inherit
+// the global skills anyway.
 func DeriveAgy(a Agent) ([]byte, error) {
 	out := []string{
 		"name: " + a.Name,

@@ -1,7 +1,5 @@
 # Domain: golang-testing
 
-
-
 ## Sub-topic: golang-testing
 
 **Persona:** You are a Go engineer who treats tests as executable specifications. You write tests to constrain behavior, not to hit coverage targets.
@@ -27,10 +25,10 @@ This skill guides the creation of production-ready tests for Go applications. Fo
 4. Independent tests SHOULD use `t.Parallel()` when possible
 5. NEVER test implementation details -- test observable behavior and public API contracts
 6. Packages with goroutines SHOULD use `goleak.VerifyTestMain` in `TestMain` to detect goroutine leaks
-7. Use testify as helpers, not a replacement for standard library
+7. Use the standard `testing` package; assertion and mock libraries are dependencies to justify, and the default is none
 8. Mock interfaces, not concrete types
 9. Keep unit tests fast (< 1ms), use build tags for integration tests
-10. Run tests with race detection in CI
+10. Run tests with `-race` before every commit
 11. Include examples as executable documentation
 
 ## Test Structure and Organization
@@ -104,7 +102,7 @@ Unit tests should be fast (< 1ms), isolated (no external dependencies), and dete
 
 ## Testing HTTP Handlers
 
-Use `httptest` for handler tests with table-driven patterns. See [HTTP Testing](./references/http-testing.md) for examples with request/response bodies, query parameters, headers, and status code assertions.
+Use `httptest` for handler tests with table-driven patterns. See HTTP Testing for examples with request/response bodies, query parameters, headers, and status code assertions.
 
 ## Goroutine Leak Detection with goleak
 
@@ -142,7 +140,7 @@ func TestWorkerPool(t *testing.T) {
 
 ## testing/synctest for Deterministic Goroutine Testing
 
-> **Experimental:** `testing/synctest` is not yet covered by Go's compatibility guarantee. Its API may change in future releases. For stable alternatives, use `clockwork` (see [Mocking](./references/mocking.md)).
+> **Experimental:** `testing/synctest` is not yet covered by Go's compatibility guarantee. Its API may change in future releases. For a stable alternative, inject a `func() time.Time` clock (see Mocking below).
 
 `testing/synctest` (Go 1.24+) provides deterministic time for concurrent code testing. Time advances only when all goroutines are blocked, making ordering predictable.
 
@@ -157,13 +155,10 @@ import (
     "testing"
     "time"
     "testing/synctest"
-    "github.com/stretchr/testify/assert"
 )
 
 func TestChannelTimeout(t *testing.T) {
     synctest.Run(func(t *testing.T) {
-        is := assert.New(t)
-
         ch := make(chan int, 1)
         go func() {
             time.Sleep(50 * time.Millisecond)
@@ -172,7 +167,9 @@ func TestChannelTimeout(t *testing.T) {
 
         select {
         case v := <-ch:
-            is.Equal(42, v)
+            if v != 42 {
+                t.Errorf("got %d, want 42", v)
+            }
         case <-time.After(100 * time.Millisecond):
             t.Fatal("timeout occurred")
         }
@@ -189,11 +186,11 @@ Key differences in `synctest`:
 
 ## Test Timeouts
 
-For tests that may hang, use a timeout helper that panics with caller location. See [Helpers](./references/helpers.md).
+For tests that may hang, use a timeout helper that panics with caller location. See Helpers.
 
 ## Benchmarks
 
-→ See the Testing (unit tests, benchmarks, testify) reference (`golang-testing.md`) for advanced benchmarking: `b.Loop()` (Go 1.24+), `benchstat`, profiling from benchmarks, and CI regression detection.
+→ See the benchmark sub-topic below for `b.Loop()` (Go 1.24+), `benchstat`, and profiling from benchmarks.
 
 Write benchmarks to measure performance and detect regressions:
 
@@ -251,9 +248,7 @@ func TestParallelOperations(t *testing.T) {
     for _, tt := range tests {
         t.Run(tt.name, func(t *testing.T) {
             t.Parallel()
-            is := assert.New(t)
-
-            result := Process(tt.data)
+                result := Process(tt.data)
             is.NotNil(result)
         })
     }
@@ -340,25 +335,61 @@ Run integration tests separately:
 go test -tags=integration ./...
 ```
 
-For Docker Compose fixtures, SQL schemas, and integration test suites, see [Integration Testing](./references/integration-testing.md).
+For Docker Compose fixtures, SQL schemas, and integration test suites, see Integration Testing.
 
 ## Mocking
 
-Mock interfaces, not concrete types. Define interfaces where consumed, then create mock implementations.
+Mock interfaces, not concrete types, and only at real boundaries (database, external API, clock, mailer). Define the interface where it is consumed, keep it small, and write the fake by hand — a struct with the fields the test needs to observe. No mock library: a hand-written fake is shorter, type-checked, and readable without documentation.
 
-For mock patterns, test fixtures, and time mocking, see [Mocking](./references/mocking.md).
+```go
+// Consumer side declares only what it uses.
+type UserStore interface {
+    Get(ctx context.Context, id string) (*User, error)
+}
+
+// Test-side fake: state in, calls out.
+type fakeUserStore struct {
+    users map[string]*User
+    calls int
+}
+
+func (f *fakeUserStore) Get(_ context.Context, id string) (*User, error) {
+    f.calls++
+    u, ok := f.users[id]
+    if !ok {
+        return nil, ErrNotFound
+    }
+    return u, nil
+}
+
+func TestUserService_GetUser(t *testing.T) {
+    store := &fakeUserStore{users: map[string]*User{"1": {ID: "1", Name: "Alice"}}}
+    svc := NewUserService(store)
+
+    got, err := svc.GetUser(context.Background(), "1")
+    if err != nil {
+        t.Fatalf("GetUser: %v", err)
+    }
+    if got.Name != "Alice" {
+        t.Errorf("got %q, want %q", got.Name, "Alice")
+    }
+    if store.calls != 1 {
+        t.Errorf("store called %d times, want 1", store.calls)
+    }
+}
+```
+
+Time: take a `now func() time.Time` in the constructor (default `time.Now`) and pass a fixed function in tests. Randomness: take an `io.Reader` or a `*rand.Rand` seeded by the test. Filesystem: `fstest.MapFS` and `t.TempDir()`. HTTP clients: `httptest.NewServer`. A fake that needs configurable return sequences is a sign the interface is too wide.
 
 ## Enforce with Linters
 
-Many test best practices are enforced automatically by linters: `thelper`, `paralleltest`, `testifylint`. See the the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for configuration and usage.
+Many test best practices are enforced automatically by linters: `thelper`, `paralleltest`. See the Ecosystem (observability, linters, security, performance) reference (`golang-ecosystem.md`) for configuration and usage.
 
 ## Cross-References
 
-- -> See the Testing (unit tests, benchmarks, testify) reference (`golang-testing.md`) for detailed testify API (assert, require, mock, suite)
 - -> See the I/O & Web (HTTP, gRPC, database, CLI) reference (`golang-io-web.md`) (testing.md) for database integration test patterns
 - -> See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for goroutine leak detection with goleak
-- -> See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for CI test configuration and GitHub Actions workflows
-- -> See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for testifylint and paralleltest configuration
+- -> See the Ecosystem (observability, linters, security, performance) reference (`golang-ecosystem.md`) for paralleltest and thelper configuration
 
 ## Quick Reference
 
@@ -379,180 +410,6 @@ go test -fuzz=FuzzName ./...           # fuzzing
 go test -tags=integration ./...        # integration tests
 ```
 
-## Sub-topic: golang-stretchr-testify
-
-**Persona:** You are a Go engineer who treats tests as executable specifications. You write tests to constrain behavior and make failures self-explanatory — not to hit coverage targets.
-
-**Modes:**
-
-- **Write mode** — adding new tests or mocks to a codebase.
-- **Review mode** — auditing existing test code for testify misuse.
-
-# stretchr/testify
-
-testify complements Go's `testing` package with readable assertions, mocks, and suites. It does not replace `testing` — always use `*testing.T` as the entry point.
-
-This skill is not exhaustive. Please refer to library documentation and code examples for more information. Context7 can help as a discoverability platform.
-
-## assert vs require
-
-Both offer identical assertions. The difference is failure behavior:
-
-- **assert**: records failure, continues — see all failures at once
-- **require**: calls `t.FailNow()` — use for preconditions where continuing would panic or mislead
-
-Use `assert.New(t)` / `require.New(t)` for readability. Name them `is` and `must`:
-
-```go
-func TestParseConfig(t *testing.T) {
-    is := assert.New(t)
-    must := require.New(t)
-
-    cfg, err := ParseConfig("testdata/valid.yaml")
-    must.NoError(err)    // stop if parsing fails — cfg would be nil
-    must.NotNil(cfg)
-
-    is.Equal("production", cfg.Environment)
-    is.Equal(8080, cfg.Port)
-    is.True(cfg.TLS.Enabled)
-}
-```
-
-**Rule**: `require` for preconditions (setup, error checks), `assert` for verifications. Never mix randomly.
-
-## Core Assertions
-
-```go
-is := assert.New(t)
-
-// Equality
-is.Equal(expected, actual)              // DeepEqual + exact type
-is.NotEqual(unexpected, actual)
-is.EqualValues(expected, actual)        // converts to common type first
-is.EqualExportedValues(expected, actual)
-
-// Nil / Bool / Emptiness
-is.Nil(obj)                  is.NotNil(obj)
-is.True(cond)                is.False(cond)
-is.Empty(collection)         is.NotEmpty(collection)
-is.Len(collection, n)
-
-// Contains (strings, slices, map keys)
-is.Contains("hello world", "world")
-is.Contains([]int{1, 2, 3}, 2)
-is.Contains(map[string]int{"a": 1}, "a")
-
-// Comparison
-is.Greater(actual, threshold)     is.Less(actual, ceiling)
-is.Positive(val)                  is.Negative(val)
-is.Zero(val)
-
-// Errors
-is.Error(err)                     is.NoError(err)
-is.ErrorIs(err, ErrNotFound)      // walks error chain
-is.ErrorAs(err, &target)
-is.ErrorContains(err, "not found")
-
-// Type
-is.IsType(&User{}, obj)
-is.Implements((*io.Reader)(nil), obj)
-```
-
-**Argument order**: always `(expected, actual)` — swapping produces confusing diff output.
-
-## Advanced Assertions
-
-```go
-is.ElementsMatch([]string{"b", "a", "c"}, result)             // unordered comparison
-is.InDelta(3.14, computedPi, 0.01)                            // float tolerance
-is.JSONEq(`{"name":"alice"}`, `{"name": "alice"}`)             // ignores whitespace/key order
-is.WithinDuration(expected, actual, 5*time.Second)
-is.Regexp(`^user-[a-f0-9]+$`, userID)
-
-// Async polling
-is.Eventually(func() bool {
-    status, _ := client.GetJobStatus(jobID)
-    return status == "completed"
-}, 5*time.Second, 100*time.Millisecond)
-
-// Async polling with rich assertions
-is.EventuallyWithT(func(c *assert.CollectT) {
-    resp, err := client.GetOrder(orderID)
-    assert.NoError(c, err)
-    assert.Equal(c, "shipped", resp.Status)
-}, 10*time.Second, 500*time.Millisecond)
-```
-
-## testify/mock
-
-Mock interfaces to isolate the unit under test. Embed `mock.Mock`, implement methods with `m.Called()`, always verify with `AssertExpectations(t)`.
-
-Key matchers: `mock.Anything`, `mock.AnythingOfType("T")`, `mock.MatchedBy(func)`. Call modifiers: `.Once()`, `.Times(n)`, `.Maybe()`, `.Run(func)`.
-
-For defining mocks, argument matchers, call modifiers, return sequences, and verification, see [Mock reference](./references/mock.md).
-
-## testify/suite
-
-Suites group related tests with shared setup/teardown.
-
-### Lifecycle
-
-```
-SetupSuite()    → once before all tests
-  SetupTest()   → before each test
-    TestXxx()
-  TearDownTest() → after each test
-TearDownSuite() → once after all tests
-```
-
-### Example
-
-```go
-type TokenServiceSuite struct {
-    suite.Suite
-    store   *MockTokenStore
-    service *TokenService
-}
-
-func (s *TokenServiceSuite) SetupTest() {
-    s.store = new(MockTokenStore)
-    s.service = NewTokenService(s.store)
-}
-
-func (s *TokenServiceSuite) TestGenerate_ReturnsValidToken() {
-    s.store.On("Save", mock.Anything, mock.Anything).Return(nil)
-    token, err := s.service.Generate("user-42")
-    s.NoError(err)
-    s.NotEmpty(token)
-    s.store.AssertExpectations(s.T())
-}
-
-// Required launcher
-func TestTokenServiceSuite(t *testing.T) {
-    suite.Run(t, new(TokenServiceSuite))
-}
-```
-
-Suite methods like `s.Equal()` behave like `assert`. For require: `s.Require().NotNil(obj)`.
-
-## Common Mistakes
-
-- **Forgetting `AssertExpectations(t)`** — mock expectations silently pass without verification
-- **`is.Equal(ErrNotFound, err)`** — fails on wrapped errors. Use `is.ErrorIs` to walk the chain
-- **Swapped argument order** — testify assumes `(expected, actual)`. Swapping produces backwards diffs
-- **`assert` for guards** — test continues after failure and panics on nil dereference. Use `require`
-- **Missing `suite.Run()`** — without the launcher function, zero tests execute silently
-- **Comparing pointers** — `is.Equal(ptr1, ptr2)` compares addresses. Dereference or use `EqualExportedValues`
-
-## Linters
-
-Use `testifylint` to catch wrong argument order, assert/require misuse, and more. See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`).
-
-## Cross-References
-
-- → See the Testing (unit tests, benchmarks, testify) reference (`golang-testing.md`) for general test patterns, table-driven tests, and CI
-- → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for testifylint configuration
-
 ## Sub-topic: golang-benchmark
 
 **Persona:** You are a Go performance measurement engineer. You never draw conclusions from a single benchmark run — statistical rigor and controlled conditions are prerequisites before any optimization decision.
@@ -563,7 +420,7 @@ Use `testifylint` to catch wrong argument order, assert/require misuse, and more
 
 Performance improvement does not exist without measures — if you can measure it, you can improve it.
 
-This skill covers the full measurement workflow: write a benchmark, run it, profile the result, compare before/after with statistical rigor, and track regressions in CI. For optimization patterns to apply after measurement, → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`). For pprof setup on running services, → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`).
+This skill covers the full measurement workflow: write a benchmark, run it, profile the result, and compare before/after with statistical rigor. For optimization patterns to apply after measurement, → See the Ecosystem (observability, linters, security, performance) reference (`golang-ecosystem.md`). For pprof setup on running services, → See the Ecosystem (observability, linters, security, performance) reference (`golang-ecosystem.md`).
 
 ## Writing Benchmarks
 
@@ -651,30 +508,25 @@ go test -bench=BenchmarkParse -trace=trace.out ./pkg/parser
 go tool trace trace.out
 ```
 
-For full pprof CLI reference (all commands, non-interactive mode, profile interpretation), see [pprof Reference](./references/pprof.md). For execution trace interpretation, see [Trace Reference](./references/trace.md). For statistical comparison, see [benchstat Reference](./references/benchstat.md).
+For full pprof CLI reference (all commands, non-interactive mode, profile interpretation), see pprof Reference. For execution trace interpretation, see Trace Reference. For statistical comparison, see benchstat Reference.
 
 ## Reference Files
 
-- **[pprof Reference](./references/pprof.md)** — Interactive and non-interactive analysis of CPU, memory, and goroutine profiles. Full CLI commands, profile types (CPU vs alloc*objects vs inuse_space), web UI navigation, and interpretation patterns. Use this to dive deep into \_where* time and memory are being spent in your code.
+- **pprof Reference** — Interactive and non-interactive analysis of CPU, memory, and goroutine profiles. Full CLI commands, profile types (CPU vs alloc*objects vs inuse_space), web UI navigation, and interpretation patterns. Use this to dive deep into \_where* time and memory are being spent in your code.
 
-- **[benchstat Reference](./references/benchstat.md)** — Statistical comparison of benchmark runs with rigorous confidence intervals and p-value tests. Covers output reading, filtering old benchmarks, interleaving results for visual clarity, and regression detection. Use this when you need to prove a change made a meaningful performance difference, not just a lucky run.
+- **benchstat Reference** — Statistical comparison of benchmark runs with rigorous confidence intervals and p-value tests. Covers output reading, filtering old benchmarks, interleaving results for visual clarity, and regression detection. Use this when you need to prove a change made a meaningful performance difference, not just a lucky run.
 
-- **[Trace Reference](./references/trace.md)** — Execution tracer for understanding *when* and *why* code runs. Visualizes goroutine scheduling, garbage collection phases, network blocking, and custom span annotations. Use this when pprof (which shows *where* CPU goes) isn't enough — you need to see the timeline of what happened.
+- **Trace Reference** — Execution tracer for understanding *when* and *why* code runs. Visualizes goroutine scheduling, garbage collection phases, network blocking, and custom span annotations. Use this when pprof (which shows *where* CPU goes) isn't enough — you need to see the timeline of what happened.
 
-- **[Diagnostic Tools](./references/tools.md)** — Quick reference for ancillary tools: fieldalignment (struct padding waste), GODEBUG (runtime logging flags), fgprof (frame graph profiles), race detector (concurrency bugs), and others. Use this when you have a specific symptom and need a focused diagnostic — don't reach for pprof if a simpler tool already answers your question.
+- **Diagnostic Tools** — Quick reference for ancillary tools: fieldalignment (struct padding waste), GODEBUG (runtime logging flags), fgprof (frame graph profiles), race detector (concurrency bugs), and others. Use this when you have a specific symptom and need a focused diagnostic — don't reach for pprof if a simpler tool already answers your question.
 
-- **[Compiler Analysis](./references/compiler-analysis.md)** — Low-level compiler optimization insights: escape analysis (when values move to the heap), inlining decisions (which function calls are eliminated), SSA dump (intermediate representation), and assembly output. Use this when benchmarks show allocations you didn't expect, or when you want to verify the compiler did what you intended.
+- **Compiler Analysis** — Low-level compiler optimization insights: escape analysis (when values move to the heap), inlining decisions (which function calls are eliminated), SSA dump (intermediate representation), and assembly output. Use this when benchmarks show allocations you didn't expect, or when you want to verify the compiler did what you intended.
 
-- **[CI Regression Detection](./references/ci-regression.md)** — Automated performance regression gating in CI pipelines. Covers three tools (benchdiff for quick PR comparisons, cob for strict threshold-based gating, gobenchdata for long-term trend dashboards), noisy neighbor mitigation strategies (why cloud CI benchmarks vary 5-10% even on quiet machines), and self-hosted runner tuning to make benchmarks reproducible. Use this when you want to ensure pull requests don't silently slow down your codebase — detecting regressions early prevents shipping performance debt.
+- **Investigation Session** — Production performance troubleshooting workflow combining Prometheus runtime metrics (heap size, GC frequency, goroutine counts), PromQL queries to correlate metrics with code changes, runtime configuration flags (GODEBUG env vars to enable GC logging), and cost warnings (when you're hitting performance tax). Use this when production benchmarks look good but real traffic behaves differently.
 
-- **[Investigation Session](./references/investigation-session.md)** — Production performance troubleshooting workflow combining Prometheus runtime metrics (heap size, GC frequency, goroutine counts), PromQL queries to correlate metrics with code changes, runtime configuration flags (GODEBUG env vars to enable GC logging), and cost warnings (when you're hitting performance tax). Use this when production benchmarks look good but real traffic behaves differently.
-
-- **[Prometheus Go Metrics Reference](./references/prometheus-go-metrics.md)** — Complete listing of Go runtime metrics actually exposed as Prometheus metrics by `prometheus/client_golang`. Covers 30 default metrics, 40+ optional metrics (Go 1.17+), process metrics, and common PromQL queries. Distinguishes between `runtime/metrics` (Go internal data) and Prometheus metrics (what you scrape from `/metrics`). Use this when setting up monitoring dashboards or writing PromQL queries for production alerts.
+- **Prometheus Go Metrics Reference** — Complete listing of Go runtime metrics actually exposed as Prometheus metrics by `prometheus/client_golang`. Covers 30 default metrics, 40+ optional metrics (Go 1.17+), process metrics, and common PromQL queries. Distinguishes between `runtime/metrics` (Go internal data) and Prometheus metrics (what you scrape from `/metrics`). Use this when setting up monitoring dashboards or writing PromQL queries for production alerts.
 
 ## Cross-References
 
-- → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for optimization patterns to apply after measuring ("if X bottleneck, apply Y")
-- → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for pprof setup on running services (enable, secure, capture), Delve debugger, GODEBUG flags, root cause methodology
-- → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for everyday always-on monitoring, continuous profiling (Pyroscope), distributed tracing (OpenTelemetry)
-- → See the Testing (unit tests, benchmarks, testify) reference (`golang-testing.md`) for general testing practices
+- → See the Testing (unit tests, benchmarks) reference (`golang-testing.md`) for general testing practices
 - → See `samber/cc-skills@promql-cli` skill for querying Prometheus runtime metrics in production to validate benchmark findings

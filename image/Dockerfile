@@ -163,6 +163,13 @@ COPY skel/ /styrman/skel/
 COPY harness/ /styrman/harness/
 COPY --from=harness-builder /out/sh-agent /styrman/bin/sh-agent
 ARG STYRMAN_VERSION=0.0.0
+# The mirror in the image is built as a plain copy: .dockerignore keeps every
+# `.git` out of the build context, so no refresh can ship one here, and
+# sh-agent tells a checkout from a plain copy by exactly that entry (harness
+# BUG-015). That is the property the entrypoint's install path rests on — no
+# `go build` in this root-owned tree, no git call at boot — and why it needs
+# no assertion of its own (security review 2026-09-14, round 2: a `test ! -e`
+# here could never fire).
 RUN echo "${STYRMAN_VERSION}" > /styrman/VERSION && chmod +x /styrman/entrypoint.sh && \
     chmod -R go-w /styrman/harness && \
     install -m 755 /styrman/configs/styrman-setup /usr/local/bin/styrman-setup && \

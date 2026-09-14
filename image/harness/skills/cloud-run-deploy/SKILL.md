@@ -8,7 +8,7 @@ description: |
   to get a local container running in GCP. Activate for any Cloud Run deploy or Artifact
   Registry push — even a "just redeploy it" request.
   Do NOT use for Kubernetes/GKE workloads (use gke-basics), local-only container work
-  (use docker), gcloud auth problems (use gcloud-auth-verification), or Terraform-managed
+  (use docker), gcloud auth problems (use gcloud-setup), or Terraform-managed
   infrastructure (use terraform).
 ---
 
@@ -24,8 +24,9 @@ Registry only when explicitly requested.
    else. Never guess a project; `gcloud config get project` and `.env` are
    cross-checks, not sources.
 2. **Auth:** if any gcloud/docker-push command fails with a credential error, stop and
-   apply the `gcloud-auth-verification` skill.
-3. **Colima:** `colima status || colima start`.
+   apply the `gcloud-setup` skill.
+3. **Colima (macOS only):** `colima status || colima start`; on Linux the native daemon is
+   already running.
 4. **Region:** confirm once and reuse everywhere (`REGION`, e.g. `europe-north1`);
    Artifact Registry repo and Cloud Run service should live in the same region.
 5. **Registry auth (once per machine/region):**

@@ -12,7 +12,7 @@ close surfacing as `CdpError`/`CDP_CLOSED`), `web/src/lib/browserInput.test.ts`
 AltGr case 2026-09-13: `Ctrl+Alt` is NOT a chord, so an AltGr-composed
 character types into the page instead of being swallowed as a shortcut),
 `web/src/lib/lan.test.ts` (8 tests, rewritten for ADR-067's two-state model — `off`/`pending`/`error`/`unavailable` are gone, so this file no longer tests them: `lanChip` renders nothing for a sandboxed or field-absent project and flags "LAN" with warn colours when on; `lanLine` states what LAN mode grants and its limits, and that sandbox is internet-only; three for `preferOverride`, BUG-020 — the optimistic PUT reply is shown until the poll CATCHES UP with it, an ordering comparison on the one `lanAccess` boolean rather than the timestamp-equality test that used to latch the component to a stale reply forever once anything changed the record out of band — the latch is now structurally impossible since there is no clock to compare), `web/src/lib/api.test.ts` (`projectNameFromRepoURL`, `cloneURLError`, `projectNameError` — pure, security- or UX-load-bearing string logic that was the frontend's entire test-coverage story before this), `web/src/lib/api.encoding.test.ts` (added 2026-09-09, closing the security review of 2026-09-03, round 2: every `api.ts` call that interpolates a caller-supplied value into a REST or WS path is exercised with a path-climbing (`../..`) and a query-injecting (`?wipe=true`) value, asserting the RESOLVED path never leaves its intended prefix and never contains a bare `..` segment — written against the call sites rather than the `u` template tag itself, so a new call site that forgets to use it fails the suite instead of a test of the tag passing regardless; also covers `termSocketUrl`'s project/terminal-id encoding and that legitimate query strings built outside the tag still work; its `browserStatus`/`browserStop` rows were deleted 2026-09-13 along with the dead SPA wrappers they covered — the pane calls `browserExec` directly and the REST `api.browserStart` is the only wrapper still live, for Retry), `web/src/lib/editorPane.test.ts` (`basename`; the 8 diffReveal tests, v1.22.0, moved to `diffReveal.test.ts` above — `reveal` makes bidi overrides/isolates, invisible directional marks and C0/C1 controls VISIBLE as `<U+202E>`-style markers instead of passing them through, since the diff pane's job is reviewing a change before committing it and a Trojan-Source line renders differently from how it applies; TAB is deliberately kept), `web/src/lib/recentsPanel.test.ts` (14 tests, v1.22.0: the Recent strip's persisted geometry — height clamped to 48..320 on the way IN and OUT so a hand-edited key cannot collapse the panel to nothing, a stored string parsed since localStorage holds only strings, the collapsed flag REMOVED rather than set to "0" when expanded, and a private window throwing on access), `web/src/lib/explorerHistory.test.ts` (13 tests, v1.22.0: the file explorer's back/forward reducer — the forward tail dropped on a new navigation, object IDENTITY preserved on a redundant push so it cannot re-render or refetch, the 50-entry cap dropping oldest-first while keeping the current entry reachable, and `crumbTrail`'s middle elision keeping each shown crumb's REAL full path rather than an offset into the shortened list), `web/src/lib/appearance.test.ts` (17 tests, v1.22.0: the Settings font store — the two surfaces' differing defaults, per-FIELD fallback so one bad value never discards the others, size clamping to 8..32, a numeric string and a prototype key (`"toString"`) both rejected as font families, corrupt JSON, and a private window whose `localStorage` throws on ACCESS rather than only on write; plus a guard that `FONT_STACKS["google-sans-code"]` is still byte-identical to `terminal.ts`'s historical stack, since a dropped fallback silently changes what renders), `web/src/lib/api.session.test.ts` (6 tests, BUG-001: `request()`/`uploadFiles` against a stubbed browser facing the ingress's cross-origin session-expiry redirect — re-auth once, the reload cap under partial failure, the deferred counter clear, malformed and corrupt counter records), `web/src/lib/sshKey.test.ts` (added 2026-09-10, TODO close-out item H: `\p{C}` control/formatting rejection — RLO, ZWSP, BOM, U+00AD — and `abbreviateKey`'s `\p{Zs}` space-run collapse, plus the full-OpenSSH-type-token enum matching the server's `publicKeyLine`), and `web/src/lib/projectBadge.test.ts` (added 2026-09-10, item 29: the pure `projectBadge(p)` function's precedence over `deleteError`/`provisionError`/`deleting`/`provisioning`, extracted out of `Sidebar.tsx` so the badge choice is unit-tested rather than left to the component). `editorPane.test.ts` also covers the pane store's `discard(req)` (item K9): the parked draft and dirty flag clear and the loaded doc drops on discard. Deliberately NOT unit-tested: the editor pane store's per-terminal draft behavior (parked on unmount, restored only for the file it belongs to, dropped when that file closes or is evicted) — its state lives in a module-level `Map` that is not exported, so reaching it from a unit test would mean either widening the module's API just for tests or pulling in a React renderer; `editorPane.test.ts`'s own header comment says so explicitly rather than faking coverage with an assertion that would always pass. That behavior is covered by Tier 4 e2e instead. Outside these two files, most TypeScript/React logic is still covered only by type-checking + lint plus, where applicable, Tier 4 e2e — a changed function/component with no unit test and no e2e exercise has no automated coverage at all, note it explicitly when verifying.
-2. **Integration (95 checks; 3 auto-SKIP on firewall-hardened hosts — a green run against a CURRENT runtime image prints `passed=92 failed=0 skipped=3` (2026-09-13: the browser section gained "a second start keeps the running forwarder" and the harness section "harness stamp equals the image version after boot"). Pass the image explicitly: the default `styrman-runtime:test` goes stale and its pre-v1.22.0 skel fails three GOPATH checks for image reasons, not code reasons)** — `bash .agents/docs/testing/styrman/integration.sh [image]` (port `STYRMAN_ITEST_PORT`, default 18080; the run REFUSES to start when that port is already bound, since its health probe cannot tell its own server from another — BUG-040, 2026-09-11)
+2. **Integration (97 checks; 3 auto-SKIP on firewall-hardened hosts — a green run against a CURRENT runtime image prints `passed=94 failed=0 skipped=3` (2026-09-14: the harness section gained "sh-agent status labels the image mirror a plain copy" and "boot log records the harness deployed at the mirror's commit"; 2026-09-13: the browser section gained "a second start keeps the running forwarder" and the harness section "harness stamp equals the image version after boot"). Pass the image explicitly: the default `styrman-runtime:test` goes stale and its pre-v1.22.0 skel fails three GOPATH checks for image reasons, not code reasons)** — `bash .agents/docs/testing/styrman/integration.sh [image]` (port `STYRMAN_ITEST_PORT`, default 18080; the run REFUSES to start when that port is already bound, since its health probe cannot tell its own server from another — BUG-040, 2026-09-11)
    (default `styrman-runtime:test` — see the warning under Prereqs about
    `:dev`). Isolated server (own state dir, port
    18080; the port guard itself now REFUSES to start the run at all when `ss`
@@ -25,8 +25,10 @@ lifecycle: legacy-layout migration, async create
    sticky stop (close 4002 refusal vs `?boot=1` revive), settings,
    persistence across container destruction, UUID identity + friendly
    rename, wipe, and (since ADR-062) the seeded agent harness: `sh-agent
-   status` no drift, the two-line `CLAUDE.md`, 28 skills / 7 agy agents, no
-   previous-harness artifacts, and boot→ready within R1's 15 s hard limit
+   status` no drift and labelling the mirror a plain copy (never rebuilt,
+   never a git call — harness BUG-015), the two-line `CLAUDE.md`, 27 skills /
+   7 agy agents, the boot log's `agent harness deployed` line at the mirror's
+   commit, no previous-harness artifacts, and boot→ready within R1's 15 s hard limit
    (measured and printed; the 5 s soft target is reported, not asserted), and
    (since v1.22.0) the seeded shell skel: `~/.bash_exports` carries
    `GOPATH="$HOME/.go"`, a login shell resolves it, and `~/.go/bin` joins
@@ -378,7 +380,7 @@ moved a previous harness's artifacts to `~/.styrman/harness-backup-<ts>/`
 (ADR-062; plan `plans/2026-09-03-image-harness-replacement.md`). Fires on
 every mirror refresh and every `STYRMAN_VERSION` bump.
 
-Automated (Tier 2, `integration.sh`, five checks inside the booted project,
+Automated (Tier 2, `integration.sh`, seven checks inside the booted project,
 plus six browser checks added 2026-09-11 for ADR-068 — guest side: the
 `styrman-browser` MCP server is registered in `~/.claude.json` and
 `~/.gemini/config/mcp_config.json` (both asserted with `jq` on the command
@@ -389,8 +391,14 @@ reads the live process's cmdline and fails on `--no-sandbox`; `stop` leaves
 9229 while a bare-exec'd browser listens (loopback-only by design without a
 peer), `/proxy/{id}/9222/` and the share PUT answer 400, and the owner's
 status/start/stop routes round-trip with the 9222 forwarder up and hidden):
-`sh-agent status` exits 0 with no drift; `~/.claude/CLAUDE.md` is the
-two-line import stub; 28 skills and 7 agy agents; none of `~/.agents/bin`,
+`sh-agent status` exits 0 with no drift and its `repo` line reads
+`/styrman/harness (plain copy, not its own git checkout; update is refused)`
+(the mirror has no `.git`, so install never rebuilds and never runs git —
+harness BUG-015); the boot log carries `agent harness deployed (version
+<image VERSION>, styrman-harness <COMMIT sha7>)` — install's own stdout is
+discarded, so that line is the in-guest proof install succeeded;
+`~/.claude/CLAUDE.md` is the
+two-line import stub; 27 skills and 7 agy agents; none of `~/.agents/bin`,
 `~/.gemini/GEMINI.md`, `~/.claude/settings.json`; boot→ready under R1's 15 s
 hard limit from the container's own timestamps (the value is printed — watch
 it against the 5 s soft target; ~2.7 s measured 2026-09-01 on the old
@@ -399,13 +407,20 @@ harness, the new install is ~0.02 s on the host).
 Manual, on every mirror refresh:
 
 1. Mirror fidelity: `diff -rq --exclude .git --exclude .agents --exclude
-   .gitignore ~/workspace/styrman-harness image/harness` → exactly
-   `Only in image/harness: COMMIT` and `Only in image/harness: VENDORED.md`;
-   `cat image/harness/COMMIT` equals `git -C ~/workspace/styrman-harness
-   rev-parse HEAD` (the refresh command is in `image/harness/VENDORED.md`).
+   .gitignore ~/workspace/styrman-harness image/harness` → exactly three
+   lines, `Only in image/harness: COMMIT`, `Only in image/harness:
+   SHA256SUMS` and `Only in image/harness: VENDORED.md`; `cat
+   image/harness/COMMIT` equals `git -C ~/workspace/styrman-harness
+   rev-parse HEAD` (the refresh procedure is `image/harness/VENDORED.md`
+   § Refresh; `sha256sum -c SHA256SUMS` in the mirror is what
+   `deploy/verify-commit.sh` checks).
 2. Image contents: `docker run --rm --entrypoint /styrman/bin/sh-agent
-   <image> list --repo /styrman/harness` shows `Skills (28)` and
-   `Subagents (7)`; `docker run --rm --entrypoint sh <image> -c 'cat
+   <image> list --repo /styrman/harness` shows `Skills (27)` and
+   `Subagents (7)`; `docker run --rm --entrypoint /styrman/bin/sh-agent
+   <image> install --dry-run --repo /styrman/harness --home /check` prints
+   `[dry-run] plain copy, not its own git checkout: the running binary
+   would be installed as is` (the mirror has no `.git`; harness BUG-015);
+   `docker run --rm --entrypoint sh <image> -c 'cat
    /styrman/harness/COMMIT; ls /styrman/configs/harness-migrate.sh'`.
 3. Old-home migration on the host, no VM (the exact procedure, with the
    asserted outcomes, is `testing/2026-09-03-verify-harness-phase2.md`): seed
@@ -417,7 +432,7 @@ Manual, on every mirror refresh:
 4. Agent-CLI smoke inside a fresh project (needs the operator's sign-in):
    `claude -p "What is the first heading of your global context, and how
    many skills do you have?"` quotes `# AGENTS.md — global agent context`
-   and 28; `agy` reports the rules file `~/.gemini/config/rules/AGENTS.md`.
+   and 27; `agy` reports the rules file `~/.gemini/config/rules/AGENTS.md`.
 5. Real re-seed evidence, when a stopped project seeded by ≤ v1.19.x is
    available: start it on the new image and read the entrypoint log line
    `agent harness deployed (version …, styrman-harness <sha>)` plus the

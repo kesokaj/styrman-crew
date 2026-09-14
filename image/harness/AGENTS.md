@@ -4,13 +4,13 @@ Project rules for this repo. They override the global context, which this repo i
 
 ## What this repo is
 
-The agent harness: one global context (agents.md standard), 28 skills (Agent Skills `SKILL.md` standard), seven subagents, and `sh-agent`, the Go binary that installs them into Claude Code and the Antigravity CLI. No hooks, no gates, no CI.
+The agent harness: one global context (agents.md standard), 27 skills (Agent Skills `SKILL.md` standard), seven subagents, and `sh-agent`, the Go binary that installs them into Claude Code and the Antigravity CLI. No hooks, no gates, no CI.
 
 ## Setup commands
 
 ```bash
 gofmt -l . && go vet ./... && go test -race ./...     # before any completion claim
-go run ./cmd/sh-agent install --home /tmp/sh-agent-test  # exercise the installer against a scratch home
+go run ./cmd/sh-agent install --home .agents/scratch/home  # exercise the installer against a scratch home (gitignored)
 go run ./cmd/sh-agent list                              # sanity-check skills and agents parse
 ```
 
@@ -31,7 +31,8 @@ Nothing generated is committed. The deployed files are assembled by `sh-agent in
 
 ## Rules for working here
 
-- The installer must never run against the operator's real `$HOME` during development. Use `--home /tmp/<scratch>` for every test. Deploying to the real home is the operator's job.
+- The installer must never run against the operator's real `$HOME` during development. Use `--home .agents/scratch/<name>` for every test (the global scratch rule: never `/tmp`). Deploying to the real home is the operator's job.
+- `sh-agent install` rebuilds the binary from its own git checkout with `go build` and lets that build install (BUG-006); the running binary is copied only when `go` is missing or when the tree is a plain copy with no `.git` — a downstream mirror, whose image built that binary from the same tree and may keep it read-only (BUG-015). After a change under `cmd/` or `internal/`, `sh-agent status` from the target home must show a `binary` line without a warning before the install is called done.
 - Adding a tool to an agent's `tools:` list means adding it to `toolMap` in `internal/harness/derive.go`. An unmapped tool fails the install on purpose: Antigravity hangs a subagent that names a tool it does not recognise.
 - Agent `description:` values are one line, double-quoted if they contain a colon, and free of the words "dispatch prompt" or "harness binary" — there is no binary behind them anymore.
 - Every skill directory needs a `SKILL.md` with a `description`; the installer refuses one without it. It also refuses any frontmatter value that a strict YAML parser reads as a comment — an unquoted `#` at the start or after a space or tab — because Antigravity silently drops such a skill (BUG-004); quote the value.
@@ -42,7 +43,7 @@ Nothing generated is committed. The deployed files are assembled by `sh-agent in
 
 ## Testing
 
-There is no test framework beyond `go test`. A change to `context/`, `agents/`, or `skills/` is verified by `go run ./cmd/sh-agent install --home /tmp/x` succeeding and `go run ./cmd/sh-agent status --home /tmp/x` reporting no drift, then by one start of each CLI in the sandbox (`.agents/docs/testing/2026-09-03-verify-sandbox.md`) with its log grepped for parse errors. A verification log states what it did not exercise; "complete" or "all skills" is said only after the full matrix in `.agents/docs/testing/skill-matrix.md` has run. Tested means tested from where it runs: after any install into a real home, the three smoke checks in `.agents/docs/testing/2026-09-03-verify-real-home.md` (context questions, one skill load, one agent dispatch) run from that home on each CLI before the install is called done.
+There is no test framework beyond `go test`. A change to `context/`, `agents/`, or `skills/` is verified by `go run ./cmd/sh-agent install --home .agents/scratch/x` succeeding and `go run ./cmd/sh-agent status --home .agents/scratch/x` reporting no drift, then by one start of each CLI in the sandbox (`.agents/docs/testing/2026-09-03-verify-sandbox.md`) with its log grepped for parse errors. A verification log states what it did not exercise; "complete" or "all skills" is said only after the full matrix in `.agents/docs/testing/skill-matrix.md` has run. Tested means tested from where it runs: after any install into a real home, the three smoke checks in `.agents/docs/testing/2026-09-03-verify-real-home.md` (context questions, one skill load, one agent dispatch) run from that home on each CLI before the install is called done.
 
 ## Key files
 

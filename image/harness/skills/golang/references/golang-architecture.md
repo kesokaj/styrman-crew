@@ -1,12 +1,10 @@
 # Domain: golang-architecture
 
-
-
 ## Sub-topic: golang-code-style
 
 # Go Code Style
 
-Style rules that require human judgment — linters handle formatting, this skill handles clarity. For naming see the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`); for design patterns see the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`); for struct/interface design see the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`).
+Style rules that require human judgment — linters handle formatting, this skill handles clarity. For naming and design patterns see the sub-topics below; for struct/interface design see the Structure (structs, interfaces, layout, DI) reference (`golang-structure.md`).
 
 > "Clear is better than clever." — Go Proverbs
 
@@ -152,7 +150,7 @@ default:
 ## Function Design
 
 - Functions SHOULD be **short and focused** — one function, one job.
-- Functions SHOULD have **≤4 parameters**. Beyond that, use an options struct (see the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`)).
+- Functions SHOULD have **≤4 parameters**. Beyond that, use an options struct (see the Architecture (style, naming, patterns, modernize) reference (`golang-architecture.md`)).
 - **Parameter order**: `context.Context` first, then inputs, then output destinations.
 - Naked returns help in very short functions (1-3 lines) where return values are obvious, but become confusing when readers must scroll to find what's returned — name returns explicitly in longer functions.
 
@@ -210,14 +208,13 @@ When reviewing code style across a large codebase, use up to 5 parallel sub-agen
 
 ## Enforce with Linters
 
-Many rules are enforced automatically: `gofmt`, `gofumpt`, `goimports`, `gocritic`, `revive`, `wsl_v5`. → See the the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`).
+Many rules are enforced automatically: `gofmt`, `gofumpt`, `goimports`, `gocritic`, `revive`, `wsl_v5`. → See the Ecosystem (observability, linters, security, performance) reference (`golang-ecosystem.md`).
 
 ## Cross-References
 
-- → See the the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for identifier naming conventions
-- → See the the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for pointer vs value receivers, interface design
-- → See the the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for functional options, builders, constructors
-- → See the the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for automated formatting enforcement
+- → See the Architecture (style, naming, patterns, modernize) reference (`golang-architecture.md`) for identifier naming conventions
+- → See the Structure (structs, interfaces, layout, DI) reference (`golang-structure.md`) for pointer vs value receivers, interface design
+- → See the Architecture (style, naming, patterns, modernize) reference (`golang-architecture.md`) for functional options, builders, constructors
 
 ## Sub-topic: golang-naming
 
@@ -315,15 +312,15 @@ These conventions are correct but non-obvious — they are the most common sourc
 
 For complete rules, examples, and rationale, see:
 
-- **[Packages, Files & Import Aliasing](./references/packages-files.md)** — Package naming (single word, lowercase, no plurals), file naming conventions, import alias patterns (only use on collision to avoid cognitive load), and directory structure.
+- **Packages, Files & Import Aliasing** — Package naming (single word, lowercase, no plurals), file naming conventions, import alias patterns (only use on collision to avoid cognitive load), and directory structure.
 
-- **[Variables, Booleans, Receivers & Acronyms](./references/identifiers.md)** — Scope-based naming (length matches scope: `i` for 3-line loops, longer names for package-level), single-letter receiver conventions (`s` for Server), acronym casing (URL not Url, HTTPServer not HttpServer), and boolean naming patterns (isReady, hasPrefix).
+- **Variables, Booleans, Receivers & Acronyms** — Scope-based naming (length matches scope: `i` for 3-line loops, longer names for package-level), single-letter receiver conventions (`s` for Server), acronym casing (URL not Url, HTTPServer not HttpServer), and boolean naming patterns (isReady, hasPrefix).
 
-- **[Functions, Methods & Options](./references/functions-methods.md)** — Getter/setter patterns (Go omits `Get` so `user.Name()` reads naturally), constructor conventions (`New` or `NewTypeName`), named returns (for documentation only), format function suffixes (`Errorf`, `Wrapf`), and functional options (`WithPort`, `WithLogger`).
+- **Functions, Methods & Options** — Getter/setter patterns (Go omits `Get` so `user.Name()` reads naturally), constructor conventions (`New` or `NewTypeName`), named returns (for documentation only), format function suffixes (`Errorf`, `Wrapf`), and functional options (`WithPort`, `WithLogger`).
 
-- **[Types, Constants & Errors](./references/types-errors.md)** — Interface naming (`Reader`, `Closer` suffix with `-er`), struct naming (nouns, MixedCaps), constants (MixedCaps, not ALL_CAPS), enums (type name prefix like `StatusReady`), sentinel errors (`ErrNotFound` variables), error types (`PathError` suffix), and error message conventions (lowercase, no punctuation).
+- **Types, Constants & Errors** — Interface naming (`Reader`, `Closer` suffix with `-er`), struct naming (nouns, MixedCaps), constants (MixedCaps, not ALL_CAPS), enums (type name prefix like `StatusReady`), sentinel errors (`ErrNotFound` variables), error types (`PathError` suffix), and error message conventions (lowercase, no punctuation).
 
-- **[Test Naming](./references/testing.md)** — Test function naming (`TestFunctionName`), table-driven test field conventions (`input`, `expected`), test helper naming, and subcase naming patterns.
+- **Test Naming** — Test function naming (`TestFunctionName`), table-driven test field conventions (`input`, `expected`), test helper naming, and subcase naming patterns.
 
 ## Common Mistakes
 
@@ -373,13 +370,12 @@ The Quick Reference table says "all caps or all lower" for acronyms. These edge 
 
 ## Enforce with Linters
 
-Many naming convention issues are caught automatically by linters: `revive`, `predeclared`, `misspell`, `errname`. See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for configuration and usage.
+Many naming convention issues are caught automatically by linters: `revive`, `predeclared`, `misspell`, `errname`. See the Ecosystem (observability, linters, security, performance) reference (`golang-ecosystem.md`) for configuration and usage.
 
 ## Cross-References
 
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for broader formatting and style decisions
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for interface naming depth and receiver design
-- → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for automated enforcement (revive, predeclared, misspell, errname)
+- → See the Architecture (style, naming, patterns, modernize) reference (`golang-architecture.md`) for broader formatting and style decisions
+- → See the Architecture (style, naming, patterns, modernize) reference (`golang-architecture.md`) for interface naming depth and receiver design
 
 ## Sub-topic: golang-design-patterns
 
@@ -392,7 +388,7 @@ Many naming convention issues are caught automatically by linters: `revive`, `pr
 
 # Go Design Patterns & Idioms
 
-Idiomatic Go patterns for production-ready code. For error handling details see the the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`); for context propagation see the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`); for struct/interface design see the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`).
+Idiomatic Go patterns for production-ready code. For error handling details see the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`); for context propagation see the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`); for struct/interface design see the Structure (structs, interfaces, layout, DI) reference (`golang-structure.md`).
 
 ## Best Practices Summary
 
@@ -563,7 +559,7 @@ Avoid repeated conversions — each one allocates. Stay in one type until you ne
 
 Use iterators (Go 1.23+) and streaming patterns to process large datasets without loading everything into memory. For large transfers between services (e.g., 1M rows DB to HTTP), stream to prevent OOM.
 
-For code examples, see [Data Handling Patterns](references/data-handling.md).
+For code examples, see Data Handling Patterns.
 
 ## Resource Management
 
@@ -583,7 +579,7 @@ if err != nil {
 defer rows.Close()
 ```
 
-For graceful shutdown, resource pools, and `runtime.AddCleanup`, see [Resource Management](references/resource-management.md).
+For graceful shutdown, resource pools, and `runtime.AddCleanup`, see Resource Management.
 
 ## Resilience & Limits
 
@@ -619,10 +615,10 @@ Core principles regardless of architecture:
 
 | Guide | Scope |
 | --- | --- |
-| [Architecture Patterns](references/architecture.md) | High-level principles, when each architecture fits |
-| [Clean Architecture](references/clean-architecture.md) | Use cases, dependency rule, layered adapters |
-| [Hexagonal Architecture](references/hexagonal-architecture.md) | Ports and adapters, domain core isolation |
-| [Domain-Driven Design](references/ddd.md) | Aggregates, value objects, bounded contexts |
+| Architecture Patterns | High-level principles, when each architecture fits |
+| Clean Architecture | Use cases, dependency rule, layered adapters |
+| Hexagonal Architecture | Ports and adapters, domain core isolation |
+| Domain-Driven Design | Aggregates, value objects, bounded contexts |
 
 ## Code Philosophy
 
@@ -634,10 +630,10 @@ Core principles regardless of architecture:
 
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for data structure selection, internals, and container/ packages
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for error wrapping, sentinel errors, and the single handling rule
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for interface design and composition
+- → See the Structure (structs, interfaces, layout, DI) reference (`golang-structure.md`) for interface design and composition
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for goroutine lifecycle and graceful shutdown
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for timeout and cancellation patterns
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for architecture and directory structure
+- → See the Structure (structs, interfaces, layout, DI) reference (`golang-structure.md`) for architecture and directory structure
 
 ## Sub-topic: golang-modernize
 
@@ -648,7 +644,7 @@ Core principles regardless of architecture:
 **Modes:**
 
 - **Inline mode** (developer is actively coding): suggest only modernizations relevant to the current file or feature; mention other opportunities you noticed but do not touch unrelated files.
-- **Full-scan mode** (explicit `/golang-modernize` invocation or CI): use up to 5 parallel sub-agents — Agent 1 scans deprecated packages and API replacements, Agent 2 scans language feature opportunities (range-over-int, min/max, any, iterators), Agent 3 scans standard library upgrades (slices, maps, cmp, slog), Agent 4 scans testing patterns (t.Context, b.Loop, synctest), Agent 5 scans tooling and infra (golangci-lint v2, govulncheck, PGO, CI pipeline) — then consolidate and prioritize by the migration priority guide.
+- **Full-scan mode** (explicit `/golang-modernize` invocation): use up to 5 parallel sub-agents — Agent 1 scans deprecated packages and API replacements, Agent 2 scans language feature opportunities (range-over-int, min/max, any, iterators), Agent 3 scans standard library upgrades (slices, maps, cmp, slog), Agent 4 scans testing patterns (t.Context, b.Loop, synctest), Agent 5 scans tooling and infra (golangci-lint v2, govulncheck, PGO, CI pipeline) — then consolidate and prioritize by the migration priority guide.
 
 # Go Code Modernization Guide
 
@@ -669,7 +665,7 @@ When invoked:
 5. **Run `golangci-lint`** with the `modernize` linter if available
 6. **Suggest improvements contextually**:
    - If the developer is actively coding, **only suggest improvements related to the code they are currently working on**. Do not refactor unrelated files. Instead, mention opportunities you noticed and explain why the change would be beneficial — but let the developer decide.
-   - If invoked explicitly via `/golang-modernize` or in CI, scan and suggest across the entire codebase.
+   - If invoked explicitly via `/golang-modernize`, scan and suggest across the entire codebase.
 7. **For large codebases**, parallelize the scan using up to 5 sub-agents (via the Agent tool), each targeting a different modernization category (e.g. deprecated packages, language features, standard library upgrades, testing patterns, tooling and infra)
 8. **Before suggesting a dependency update**, run `go mod tidy` and the test suite to verify compatibility. Ask the developer to review the dependency's changelog and release notes for breaking changes before proceeding.
 9. **If the developer explicitly ignores a suggestion**, write a short memo to `.modernize` in the project root so it is not suggested again. Format: one line per ignored suggestion, with a short description.
@@ -702,15 +698,15 @@ When the project's `go.mod` targets an older version, suggest upgrading and expl
 
 ## Using the modernize linter
 
-The `modernize` linter (available since **golangci-lint v2.6.0**) automatically detects code that can be rewritten using newer Go features. It originates from `golang.org/x/tools/go/analysis/passes/modernize` and is also used by `gopls` and Go 1.26's rewritten `go fix` command. See the the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for configuration.
+The `modernize` linter (available since **golangci-lint v2.6.0**) automatically detects code that can be rewritten using newer Go features. It originates from `golang.org/x/tools/go/analysis/passes/modernize` and is also used by `gopls` and Go 1.26's rewritten `go fix` command. See the Ecosystem (observability, linters, security, performance) reference (`golang-ecosystem.md`) for configuration.
 
 ## Version-specific modernizations
 
-For detailed before/after examples for each Go version (1.21–1.26) and general modernizations, see [Go version modernizations](./references/versions.md).
+For detailed before/after examples for each Go version (1.21–1.26) and general modernizations, see Go version modernizations.
 
 ## Tooling modernization
 
-For CI tooling, govulncheck, PGO, golangci-lint v2, and AI-powered modernization pipelines, see [Tooling modernization](./references/tooling.md).
+For govulncheck, PGO, and golangci-lint v2, see Tooling modernization.
 
 ## Deprecated Packages Migration
 
@@ -764,744 +760,9 @@ When modernizing a codebase, prioritize changes by impact:
 20. Move tool deps to `go.mod` tool directives _(Go 1.24+)_
 21. Enable PGO for production builds _(Go 1.21+)_
 22. Upgrade to golangci-lint v2 with modernize linter _(golangci-lint v2.6.0+)_
-23. Add `govulncheck` to CI pipeline
-24. Set up monthly modernization CI pipeline
+23. Run `govulncheck ./...` before every release
 25. Evaluate `encoding/json/v2` for new code _(Go 1.25+, experimental)_
 
 ## Related Skills
 
-See the Core reference (`golang-core.md`), the Testing reference (`golang-testing.md`), the Ecosystem reference (`golang-ecosystem.md`), the Core reference (`golang-core.md`), the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`)s.
-
-## Sub-topic: golang-structs-interfaces
-
-**Persona:** You are a Go type system designer. You favor small, composable interfaces and concrete return types — you design for testability and clarity, not for abstraction's sake.
-
-# Go Structs & Interfaces
-
-## Interface Design Principles
-
-### Keep Interfaces Small
-
-> "The bigger the interface, the weaker the abstraction." — Go Proverbs
-
-Interfaces SHOULD have 1-3 methods. Small interfaces are easier to implement, mock, and compose. If you need a larger contract, compose it from small interfaces:
-
-→ See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for interface naming conventions (method + "-er" suffix, canonical names)
-
-```go
-type Reader interface {
-    Read(p []byte) (n int, err error)
-}
-
-type Writer interface {
-    Write(p []byte) (n int, err error)
-}
-
-// Composed from small interfaces
-type ReadWriter interface {
-    Reader
-    Writer
-}
-```
-
-Compose larger interfaces from smaller ones:
-
-```go
-type ReadWriteCloser interface {
-    io.Reader
-    io.Writer
-    io.Closer
-}
-```
-
-### Define Interfaces Where They're Consumed
-
-Interfaces Belong to Consumers.
-
-Interfaces MUST be defined where consumed, not where implemented. This keeps the consumer in control of the contract and avoids importing a package just for its interface.
-
-```go
-// package notification — defines only what it needs
-type Sender interface {
-    Send(to, body string) error
-}
-
-type Service struct {
-    sender Sender
-}
-```
-
-The `email` package exports a concrete `Client` struct — it doesn't need to know about `Sender`.
-
-### Accept Interfaces, Return Structs
-
-Functions SHOULD accept interface parameters for flexibility and return concrete types for clarity. Callers get full access to the returned type's fields and methods; consumers upstream can still assign the result to an interface variable if needed.
-
-```go
-// Good — accepts interface, returns concrete
-func NewService(store UserStore) *Service { ... }
-
-// BAD — NEVER return interfaces from constructors
-func NewService(store UserStore) ServiceInterface { ... }
-```
-
-### Don't Create Interfaces Prematurely
-
-> "Don't design with interfaces, discover them."
-
-NEVER create interfaces prematurely — wait for 2+ implementations or a testability requirement. Premature interfaces add indirection without value. Start with concrete types; extract an interface when a second consumer or a test mock demands it.
-
-```go
-// Bad — premature interface with a single implementation
-type UserRepository interface {
-    FindByID(ctx context.Context, id string) (*User, error)
-}
-type userRepository struct { db *sql.DB }
-
-// Good — start concrete, extract an interface later when needed
-type UserRepository struct { db *sql.DB }
-```
-
-## Make the Zero Value Useful
-
-Design structs so they work without explicit initialization. A well-designed zero value reduces constructor boilerplate and prevents nil-related bugs:
-
-```go
-// Good — zero value is ready to use
-var buf bytes.Buffer
-buf.WriteString("hello")
-
-var mu sync.Mutex
-mu.Lock()
-
-// Bad — zero value is broken, requires constructor
-type Registry struct {
-    items map[string]Item // nil map, panics on write
-}
-
-// Good — lazy initialization guards the zero value
-func (r *Registry) Register(name string, item Item) {
-    if r.items == nil {
-        r.items = make(map[string]Item)
-    }
-    r.items[name] = item
-}
-```
-
-## Avoid `any` / `interface{}` When a Specific Type Will Do
-
-Since Go 1.18+, MUST prefer generics over `any` for type-safe operations. Use `any` only at true boundaries where the type is genuinely unknown (e.g., JSON decoding, reflection):
-
-```go
-// Bad — loses type safety
-func Contains(slice []any, target any) bool { ... }
-
-// Good — generic, type-safe
-func Contains[T comparable](slice []T, target T) bool { ... }
-```
-
-## Key Standard Library Interfaces
-
-| Interface     | Package         | Method                                |
-| ------------- | --------------- | ------------------------------------- |
-| `Reader`      | `io`            | `Read(p []byte) (n int, err error)`   |
-| `Writer`      | `io`            | `Write(p []byte) (n int, err error)`  |
-| `Closer`      | `io`            | `Close() error`                       |
-| `Stringer`    | `fmt`           | `String() string`                     |
-| `error`       | builtin         | `Error() string`                      |
-| `Handler`     | `net/http`      | `ServeHTTP(ResponseWriter, *Request)` |
-| `Marshaler`   | `encoding/json` | `MarshalJSON() ([]byte, error)`       |
-| `Unmarshaler` | `encoding/json` | `UnmarshalJSON([]byte) error`         |
-
-Canonical method signatures MUST be honored — if your type has a `String()` method, it must match `fmt.Stringer`. Don't invent `ToString()` or `ReadData()`.
-
-## Compile-Time Interface Check
-
-Verify a type implements an interface at compile time with a blank identifier assignment. Place it near the type definition:
-
-```go
-var _ io.ReadWriter = (*MyBuffer)(nil)
-```
-
-This costs nothing at runtime. If `MyBuffer` ever stops satisfying `io.ReadWriter`, the build fails immediately.
-
-## Type Assertions & Type Switches
-
-### Safe Type Assertion
-
-Type assertions MUST use the comma-ok form to avoid panics:
-
-```go
-// Good — safe
-s, ok := val.(string)
-if !ok {
-    // handle
-}
-
-// Bad — panics if val is not a string
-s := val.(string)
-```
-
-### Type Switch
-
-Discover the dynamic type of an interface value:
-
-```go
-switch v := val.(type) {
-case string:
-    fmt.Println(v)
-case int:
-    fmt.Println(v * 2)
-case io.Reader:
-    io.Copy(os.Stdout, v)
-default:
-    fmt.Printf("unexpected type %T\n", v)
-}
-```
-
-### Optional Behavior with Type Assertions
-
-Check if a value supports additional capabilities without requiring them upfront:
-
-```go
-type Flusher interface {
-    Flush() error
-}
-
-func writeData(w io.Writer, data []byte) error {
-    if _, err := w.Write(data); err != nil {
-        return err
-    }
-    // Flush only if the writer supports it
-    if f, ok := w.(Flusher); ok {
-        return f.Flush()
-    }
-    return nil
-}
-```
-
-This pattern is used extensively in the standard library (e.g., `http.Flusher`, `io.ReaderFrom`).
-
-## Struct & Interface Embedding
-
-### Struct Embedding
-
-Embedding promotes the inner type's methods and fields to the outer type — composition, not inheritance:
-
-```go
-type Logger struct {
-    *slog.Logger
-}
-
-type Server struct {
-    Logger
-    addr string
-}
-
-// s.Info(...) works — promoted from slog.Logger through Logger
-s := Server{Logger: Logger{slog.Default()}, addr: ":8080"}
-s.Info("starting", "addr", s.addr)
-```
-
-The receiver of promoted methods is the _inner_ type, not the outer. The outer type can override by defining its own method with the same name.
-
-### When to Embed vs Named Field
-
-| Use | When |
-| --- | --- |
-| **Embed** | You want to promote the full API of the inner type — the outer type "is a" enhanced version |
-| **Named field** | You only need the inner type internally — the outer type "has a" dependency |
-
-```go
-// Embed — Server exposes all http.Handler methods
-type Server struct {
-    http.Handler
-}
-
-// Named field — Server uses the store but doesn't expose its methods
-type Server struct {
-    store *DataStore
-}
-```
-
-## Dependency Injection via Interfaces
-
-Accept dependencies as interfaces in constructors. This decouples components and makes testing straightforward:
-
-```go
-type UserStore interface {
-    FindByID(ctx context.Context, id string) (*User, error)
-}
-
-type UserService struct {
-    store UserStore
-}
-
-func NewUserService(store UserStore) *UserService {
-    return &UserService{store: store}
-}
-```
-
-In tests, pass a mock or stub that satisfies `UserStore` — no real database needed.
-
-## Struct Field Tags
-
-Use field tags for serialization control. Exported fields in serialized structs MUST have field tags:
-
-```go
-type Order struct {
-    ID        string    `json:"id"         db:"id"`
-    UserID    string    `json:"user_id"    db:"user_id"`
-    Total     float64   `json:"total"      db:"total"`
-    Items     []Item    `json:"items"      db:"-"`
-    CreatedAt time.Time `json:"created_at" db:"created_at"`
-    DeletedAt time.Time `json:"-"          db:"deleted_at"`
-    Internal  string    `json:"-"          db:"-"`
-}
-```
-
-| Directive               | Meaning                                     |
-| ----------------------- | ------------------------------------------- |
-| `json:"name"`           | Field name in JSON output                   |
-| `json:"name,omitempty"` | Omit field if zero value                    |
-| `json:"-"`              | Always exclude from JSON                    |
-| `json:",string"`        | Encode number/bool as JSON string           |
-| `db:"column"`           | Database column mapping (sqlx, etc.)        |
-| `yaml:"name"`           | YAML field name                             |
-| `xml:"name,attr"`       | XML attribute                               |
-| `validate:"required"`   | Struct validation (go-playground/validator) |
-
-## Pointer vs Value Receivers
-
-| Use pointer `(s *Server)` | Use value `(s Server)` |
-| --- | --- |
-| Method modifies the receiver | Receiver is small and immutable |
-| Receiver contains `sync.Mutex` or similar | Receiver is a basic type (int, string) |
-| Receiver is a large struct | Method is a read-only accessor |
-| Consistency: if any method uses a pointer, all should | Map and function values (already reference types) |
-
-Receiver type MUST be consistent across all methods of a type — if one method uses a pointer receiver, all methods should.
-
-## Preventing Struct Copies with `noCopy`
-
-Some structs must never be copied after first use (e.g., those containing a mutex, a channel, or internal pointers). Embed a `noCopy` sentinel to make `go vet` catch accidental copies:
-
-```go
-// noCopy may be added to structs which must not be copied after first use.
-// See https://pkg.go.dev/sync#noCopy
-type noCopy struct{}
-
-func (*noCopy) Lock()   {}
-func (*noCopy) Unlock() {}
-
-type ConnPool struct {
-    noCopy noCopy
-    mu     sync.Mutex
-    conns  []*Conn
-}
-```
-
-`go vet` reports an error if a `ConnPool` value is copied (passed by value, assigned, etc.). This is the same technique the standard library uses for `sync.WaitGroup`, `sync.Mutex`, `strings.Builder`, and others.
-
-Always pass these structs by pointer:
-
-```go
-// Good
-func process(pool *ConnPool) { ... }
-
-// Bad — go vet will flag this
-func process(pool ConnPool) { ... }
-```
-
-## Cross-References
-
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for interface naming conventions (Reader, Closer, Stringer)
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for functional options, constructors, and builder patterns
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for DI patterns using interfaces
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for value vs pointer function parameters (distinct from receivers)
-
-## Common Mistakes
-
-| Mistake | Fix |
-| --- | --- |
-| Large interfaces (5+ methods) | Split into focused 1-3 method interfaces, compose if needed |
-| Defining interfaces in the implementor package | Define where consumed |
-| Returning interfaces from constructors | Return concrete types |
-| Bare type assertions without comma-ok | Always use `v, ok := x.(T)` |
-| Embedding when you only need a few methods | Use a named field and delegate explicitly |
-| Missing field tags on serialized structs | Tag all exported fields in marshaled types |
-| Mixing pointer and value receivers on a type | Pick one and be consistent |
-| Forgetting compile-time interface check | Add `var _ Interface = (*Type)(nil)` |
-| Using `ToString()` instead of `String()` | Honor canonical method names |
-| Premature interface with a single implementation | Start concrete, extract interface when needed |
-| Nil map/slice in zero value struct | Use lazy initialization in methods |
-| Using `any` for type-safe operations | Use generics (`[T comparable]`) instead |
-
-## Sub-topic: golang-project-layout
-
-**Persona:** You are a Go project architect. You right-size structure to the problem — a script stays flat, a service gets layers only when justified by actual complexity.
-
-# Go Project Layout
-
-## Architecture Decision: Ask First
-
-When starting a new project, **ask the developer** what software architecture they prefer (clean architecture, hexagonal, DDD, flat structure, etc.). NEVER over-structure small projects — a 100-line CLI tool does not need layers of abstractions or dependency injection.
-
-→ See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for detailed architecture guides with file trees and code examples.
-
-## Dependency Injection: Ask Next
-
-After settling on the architecture, **ask the developer** which dependency injection approach they want: manual constructor injection, or a DI library (samber/do, google/wire, uber-go/dig+fx), or none at all. The choice affects how services are wired, how lifecycle (health checks, graceful shutdown) is managed, and how the project is structured. See the the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for a full comparison and decision table.
-
-## 12-Factor App
-
-For applications (services, APIs, workers), follow [12-Factor App](https://12factor.net/) conventions: config via environment variables, logs to stdout, stateless processes, graceful shutdown, backing services as attached resources, and admin tasks as one-off commands (e.g., `cmd/migrate/`).
-
-## Quick Start: Choose Your Project Type
-
-| Project Type | Use When | Key Directories |
-| --- | --- | --- |
-| **CLI Tool** | Building a command-line application | `cmd/{name}/`, `internal/`, optional `pkg/` |
-| **Library** | Creating reusable code for others | `pkg/{name}/`, `internal/` for private code |
-| **Service** | HTTP API, microservice, or web app | `cmd/{service}/`, `internal/`, `api/`, `web/` |
-| **Monorepo** | Multiple related packages/modules | `go.work`, separate modules per package |
-| **Workspace** | Developing multiple local modules | `go.work`, replace directives |
-
-## Module Naming Conventions
-
-### Module Name (go.mod)
-
-Your module path in `go.mod` should:
-
-- **MUST match your repository URL**: `github.com/username/project-name`
-- **Use lowercase only**: `github.com/you/my-app` (not `MyApp`)
-- **Use hyphens for multi-word**: `user-auth` not `user_auth` or `userAuth`
-- **Be semantic**: Name should clearly express purpose
-
-**Examples:**
-
-```go
-// ✅ Good
-module github.com/jdoe/payment-processor
-module github.com/company/cli-tool
-
-// ❌ Bad
-module myproject
-module github.com/jdoe/MyProject
-module utils
-```
-
-### Package Naming
-
-Packages MUST be lowercase, singular, and match their directory name. → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for complete package naming conventions and examples.
-
-## Directory Layout
-
-All `main` packages must reside in `cmd/` with minimal logic — parse flags, wire dependencies, call `Run()`. Business logic belongs in `internal/` or `pkg/`. Use `internal/` for non-exported packages, `pkg/` only when code is useful to external consumers.
-
-See [directory layout examples](references/directory-layouts.md) for universal, small project, and library layouts, plus common mistakes.
-
-## Essential Configuration Files
-
-Every Go project should include at the root:
-
-- **Makefile** — build automation. See [Makefile template](assets/Makefile)
-- **.gitignore** — git ignore patterns. See [.gitignore template](assets/.gitignore)
-- **.golangci.yml** — linter config. See the the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for the recommended configuration
-
-For application configuration with Cobra + Viper, see [config reference](references/config.md).
-
-## Tests, Benchmarks, and Examples
-
-Co-locate `_test.go` files with the code they test. Use `testdata/` for fixtures. See [testing layout](references/testing-layout.md) for file naming, placement, and organization details.
-
-## Go Workspaces
-
-Use `go.work` when developing multiple related modules in a monorepo. See [workspaces](references/workspaces.md) for setup, structure, and commands.
-
-## Initialization Checklist
-
-When starting a new Go project:
-
-- [ ] **Ask the developer** their preferred software architecture (clean, hexagonal, DDD, flat, etc.)
-- [ ] **Ask the developer** their preferred DI approach — see the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`)
-- [ ] Decide project type (CLI, library, service, monorepo)
-- [ ] Right-size the structure to the project scope
-- [ ] Choose module name (matches repo URL, lowercase, hyphens)
-- [ ] Run `go version` to detect the current go version
-- [ ] Run `go mod init github.com/user/project-name`
-- [ ] Create `cmd/{name}/main.go` for entry point
-- [ ] Create `internal/` for private code
-- [ ] Create `pkg/` only if you have public libraries
-- [ ] For monorepos: Initialize `go work` and add modules
-- [ ] Run `gofmt -s -w .` to ensure formatting
-- [ ] Add `.gitignore` with `/vendor/` and binary patterns
-
-## Related Skills
-
-→ See the I/O & Web (HTTP, gRPC, database, CLI) reference (`golang-io-web.md`) for CLI tool structure and Cobra/Viper patterns. → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for DI approach comparison and wiring. → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for golangci-lint configuration. → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for CI/CD pipeline setup. → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for architectural patterns.
-
-## Sub-topic: golang-dependency-injection
-
-**Persona:** You are a Go software architect. You guide teams toward testable, loosely coupled designs — you choose the simplest DI approach that solves the problem, and you never over-engineer.
-
-**Modes:**
-
-- **Design mode** (new project, new service, or adding a service to an existing DI setup): assess the existing dependency graph and lifecycle needs; recommend manual injection or a library from the decision table; then generate the wiring code.
-- **Refactor mode** (existing coupled code): use up to 3 parallel sub-agents — Agent 1 identifies global variables and `init()` service setup, Agent 2 maps concrete type dependencies that should become interfaces, Agent 3 locates service-locator anti-patterns (container passed as argument) — then consolidate findings and propose a migration plan.
-
-# Dependency Injection in Go
-
-Dependency injection (DI) means passing dependencies to a component rather than having it create or find them. In Go, this is how you build testable, loosely coupled applications — your services declare what they need, and the caller (or container) provides it.
-
-This skill is not exhaustive. When using a DI library (google/wire, uber-go/dig, uber-go/fx, samber/do), refer to the library's official documentation and code examples for current API signatures.
-
-For interface-based design foundations (accept interfaces, return structs), see the the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`).
-
-## Best Practices Summary
-
-1. Dependencies MUST be injected via constructors — NEVER use global variables or `init()` for service setup
-2. Small projects (< 10 services) SHOULD use manual constructor injection — no library needed
-3. Interfaces MUST be defined where consumed, not where implemented — accept interfaces, return structs
-4. NEVER use global registries or package-level service locators
-5. The DI container MUST only exist at the composition root (`main()` or app startup) — NEVER pass the container as a dependency
-6. **Prefer lazy initialization** — only create services when first requested
-7. **Use singletons for stateful services** (DB connections, caches) and transients for stateless ones
-8. **Mock at the interface boundary** — DI makes this trivial
-9. **Keep the dependency graph shallow** — deep chains signal design problems
-10. **Choose the right DI library** for your project size and team — see the decision table below
-
-## Why Dependency Injection?
-
-| Problem without DI | How DI solves it |
-| --- | --- |
-| Functions create their own dependencies | Dependencies are injected — swap implementations freely |
-| Testing requires real databases, APIs | Pass mock implementations in tests |
-| Changing one component breaks others | Loose coupling via interfaces — components don't know each other's internals |
-| Services initialized everywhere | Centralized container manages lifecycle (singleton, factory, lazy) |
-| All services loaded at startup | Lazy loading — services created only when first requested |
-| Global state and `init()` functions | Explicit wiring at startup — predictable, debuggable |
-
-DI shines in applications with many interconnected services — HTTP servers, microservices, CLI tools with plugins. For a small script with 2-3 functions, manual wiring is fine. Don't over-engineer.
-
-## Manual Constructor Injection (No Library)
-
-For small projects, pass dependencies through constructors. See [Manual DI examples](./references/manual-di.md) for a complete application example.
-
-```go
-// ✓ Good — explicit dependencies, testable
-type UserService struct {
-    db     UserStore
-    mailer Mailer
-    logger *slog.Logger
-}
-
-func NewUserService(db UserStore, mailer Mailer, logger *slog.Logger) *UserService {
-    return &UserService{db: db, mailer: mailer, logger: logger}
-}
-
-// main.go — manual wiring
-func main() {
-    logger := slog.Default()
-    db := postgres.NewUserStore(connStr)
-    mailer := smtp.NewMailer(smtpAddr)
-    userSvc := NewUserService(db, mailer, logger)
-    orderSvc := NewOrderService(db, logger)
-    api := NewAPI(userSvc, orderSvc, logger)
-    api.ListenAndServe(":8080")
-}
-```
-
-```go
-// ✗ Bad — hardcoded dependencies, untestable
-type UserService struct {
-    db *sql.DB
-}
-
-func NewUserService() *UserService {
-    db, _ := sql.Open("postgres", os.Getenv("DATABASE_URL")) // hidden dependency
-    return &UserService{db: db}
-}
-```
-
-Manual DI breaks down when:
-
-- You have 15+ services with cross-dependencies
-- You need lifecycle management (health checks, graceful shutdown)
-- You want lazy initialization or scoped containers
-- Wiring order becomes fragile and hard to maintain
-
-## DI Library Comparison
-
-Go has three main approaches to DI libraries:
-
-- [google/wire examples](./references/google-wire.md) — Compile-time code generation
-- [uber-go/dig + fx examples](./references/uber-dig-fx.md) — Reflection-based framework
-- [samber/do examples](./references/samber-do.md) — Generics-based, no code generation
-
-### Decision Table
-
-| Criteria | Manual | google/wire | uber-go/dig + fx | samber/do |
-| --- | --- | --- | --- | --- |
-| **Project size** | Small (< 10 services) | Medium-Large | Large | Any size |
-| **Type safety** | Compile-time | Compile-time (codegen) | Runtime (reflection) | Compile-time (generics) |
-| **Code generation** | None | Required (`wire_gen.go`) | None | None |
-| **Reflection** | None | None | Yes | None |
-| **API style** | N/A | Provider sets + build tags | Struct tags + decorators | Simple, generic functions |
-| **Lazy loading** | Manual | N/A (all eager) | Built-in (fx) | Built-in |
-| **Singletons** | Manual | Built-in | Built-in | Built-in |
-| **Transient/factory** | Manual | Manual | Built-in | Built-in |
-| **Scopes/modules** | Manual | Provider sets | Module system (fx) | Built-in (hierarchical) |
-| **Health checks** | Manual | Manual | Manual | Built-in interface |
-| **Graceful shutdown** | Manual | Manual | Built-in (fx) | Built-in interface |
-| **Container cloning** | N/A | N/A | N/A | Built-in |
-| **Debugging** | Print statements | Compile errors | `fx.Visualize()` | `ExplainInjector()`, web interface |
-| **Go version** | Any | Any | Any | 1.18+ (generics) |
-| **Learning curve** | None | Medium | High | Low |
-
-### Quick Comparison: Same App, Four Ways
-
-The dependency graph: `Config -> Database -> UserStore -> UserService -> API`
-
-**Manual**:
-
-```go
-cfg := NewConfig()
-db := NewDatabase(cfg)
-store := NewUserStore(db)
-svc := NewUserService(store)
-api := NewAPI(svc)
-api.Run()
-// No automatic shutdown, health checks, or lazy loading
-```
-
-**google/wire**:
-
-```go
-// wire.go — then run: wire ./...
-func InitializeAPI() (*API, error) {
-    wire.Build(NewConfig, NewDatabase, NewUserStore, NewUserService, NewAPI)
-    return nil, nil
-}
-// No shutdown or health check support
-```
-
-**uber-go/fx**:
-
-```go
-app := fx.New(
-    fx.Provide(NewConfig, NewDatabase, NewUserStore, NewUserService),
-    fx.Invoke(func(api *API) { api.Run() }),
-)
-app.Run() // manages lifecycle, but reflection-based
-```
-
-**samber/do**:
-
-```go
-i := do.New()
-do.Provide(i, NewConfig)
-do.Provide(i, NewDatabase)    // auto shutdown + health check
-do.Provide(i, NewUserStore)
-do.Provide(i, NewUserService)
-api := do.MustInvoke[*API](i)
-api.Run()
-// defer i.Shutdown() — handles all cleanup automatically
-```
-
-## Testing with DI
-
-DI makes testing straightforward — inject mocks instead of real implementations:
-
-```go
-// Define a mock
-type MockUserStore struct {
-    users map[string]*User
-}
-
-func (m *MockUserStore) FindByID(ctx context.Context, id string) (*User, error) {
-    u, ok := m.users[id]
-    if !ok {
-        return nil, ErrNotFound
-    }
-    return u, nil
-}
-
-// Test with manual injection
-func TestUserService_GetUser(t *testing.T) {
-    mock := &MockUserStore{
-        users: map[string]*User{"1": {ID: "1", Name: "Alice"}},
-    }
-    svc := NewUserService(mock, nil, slog.Default())
-
-    user, err := svc.GetUser(context.Background(), "1")
-    if err != nil {
-        t.Fatalf("unexpected error: %v", err)
-    }
-    if user.Name != "Alice" {
-        t.Errorf("got %q, want %q", user.Name, "Alice")
-    }
-}
-```
-
-### Testing with samber/do — Clone and Override
-
-Container cloning creates an isolated copy where you override only the services you need to mock:
-
-```go
-func TestUserService_WithDo(t *testing.T) {
-    // Create a test injector with mock implementation
-    testInjector := do.New()
-
-    // Provide the mock UserStore interface
-    do.Override[UserStore](testInjector, &MockUserStore{
-        users: map[string]*User{"1": {ID: "1", Name: "Alice"}},
-    })
-
-    // Provide other real services as needed
-    do.Provide[*slog.Logger](testInjector, func(i *do.Injector) (*slog.Logger, error) {
-        return slog.Default(), nil
-    })
-
-    svc := do.MustInvoke[*UserService](testInjector)
-    user, err := svc.GetUser(context.Background(), "1")
-    // ... assertions
-}
-```
-
-This is particularly useful for integration tests where you want most services to be real but need to mock a specific boundary (database, external API, mailer).
-
-## When to Adopt a DI Library
-
-| Signal | Action |
-| --- | --- |
-| < 10 services, simple dependencies | Stay with manual constructor injection |
-| 10-20 services, some cross-cutting concerns | Consider a DI library |
-| 20+ services, lifecycle management needed | Strongly recommended |
-| Need health checks, graceful shutdown | Use a library with built-in lifecycle support |
-| Team unfamiliar with DI concepts | Start manual, migrate incrementally |
-
-## Common Mistakes
-
-| Mistake | Fix |
-| --- | --- |
-| Global variables as dependencies | Pass through constructors or DI container |
-| `init()` for service setup | Explicit initialization in `main()` or container |
-| Depending on concrete types | Accept interfaces at consumption boundaries |
-| Passing the container everywhere (service locator) | Inject specific dependencies, not the container |
-| Deep dependency chains (A->B->C->D->E) | Flatten — most services should depend on repositories and config directly |
-| Creating a new container per request | One container per application; use scopes for request-level isolation |
-
-## Cross-References
-
-- → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for detailed samber/do usage patterns
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for interface design and composition
-- → See the Testing (unit tests, benchmarks, testify) reference (`golang-testing.md`) for testing with dependency injection
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for DI initialization placement
-
-## References
-
-- [samber/do/v2 documentation](https://do.samber.dev) | [github.com/samber/do/v2](https://github.com/samber/do)
-- [google/wire user guide](https://github.com/google/wire/blob/main/docs/guide.md)
-- [uber-go/fx documentation](https://uber-go.github.io/fx/)
-- [uber-go/dig](https://github.com/uber-go/dig)
+See the Core reference (`golang-core.md`) for the language features being modernized, the Testing reference (`golang-testing.md`) for `b.Loop()` and `testing/synctest`, and the Ecosystem reference (`golang-ecosystem.md`) for the `modernize` linter and dependency upgrades.

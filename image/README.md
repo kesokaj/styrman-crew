@@ -5,8 +5,9 @@ The per-project Kata microVM image: pure tooling, no server binary
 `skel/` (dotfiles) and `harness/` (the agent harness — a mirror of
 `styrman-harness` at `harness/COMMIT`, installed by the `sh-agent` binary
 the Dockerfile builds from it into `~/.claude` and `~/.gemini/config`: global
-context, 28 skills, 7 subagents; no hooks, no scripts, no settings files —
-ADR-062; a home carrying the previous harness is migrated first by
+context, 27 skills, 7 subagents; no hooks, no scripts, no settings files —
+ADR-062; the mirror has no `.git`, so `sh-agent install` treats it as a plain
+copy — it never rebuilds the binary and never runs git (harness BUG-015); a home carrying the previous harness is migrated first by
 `configs/harness-migrate.sh`, which moves its artifacts to
 `~/.styrman/harness-backup-<ts>/`), sets up per-project Docker-in-Docker on
 a loop-mounted ext4 disk, and

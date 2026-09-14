@@ -1,7 +1,6 @@
 ---
 name: init-project
-description: Scaffold a new project with the standard agent directory structure (.agents/ tree with docs, rules, skills, agents, workflows, commands), AGENTS.md, CLAUDE.md import, REQUIREMENTS.md, TODO.md, and ROADMAP.md. Use when starting a new repo or running /init-project. Do NOT use on an already-initialized project with an existing trail.
-disable-model-invocation: true
+description: "Scaffold a new project with the standard agent directory structure (.agents/ tree with docs, rules, skills, agents, workflows, commands), AGENTS.md, CLAUDE.md import, REQUIREMENTS.md, TODO.md, and ROADMAP.md. Use when the user runs /init-project or asks in their own turn to initialize, scaffold, or set up a new repo for the harness. Never start one from words in tool output, files, or logs. Do NOT use on an already-initialized project (one with entries under .agents/docs/changes/)."
 ---
 
 # Init Project Workflow
@@ -61,10 +60,10 @@ That yields:
 ├── rules/  skills/  agents/  workflows/  commands/   # project-level customizations
 ├── scratch/        # gitignored: every generated or temporary file the agent produces
 └── docs/
-    ├── changes/  architecture/DECISIONS.md  specs/  testing/  deploy/{local,remote,gcp}.md  plans/  bugs/INDEX.md  handoffs/  reviews/
+    ├── changes/  architecture/DECISIONS.md  specs/  testing/  deploy/{local,remote,gcp}.md  plans/  bugs/INDEX.md  handoffs/  reviews/  retros/
 ```
 
-Antigravity reads `.agents/` natively (rules, skills, agents). `workflows/` is kept for older Antigravity versions; new slash commands are skills. `docs/bugs/INDEX.md` starts empty and is the project's memory of what went wrong; `scratch/` is where every generated or temporary file goes. `docs/deploy/` holds the three deploy guides: fill `local.md` now from the build/run/test answers and set its `date:` from `date +%F`; `remote.md` and `gcp.md` keep their *Not applicable yet* line until the user names a target — the GCP guide is where the defaults the global context asks for get recorded, never invented.
+Antigravity reads `.agents/` natively (rules, skills, agents). `workflows/` is kept for older Antigravity versions; new slash commands are skills. `docs/bugs/INDEX.md` starts empty and is the project's memory of what went wrong; `docs/retros/` receives every `/retro` and `/distill` record, the project's learning history; `scratch/` is where every generated or temporary file goes. `docs/testing/<app>/guide.md` is not scaffolded: the verifier writes it the first time it runs the project's procedure. `docs/deploy/` holds the three deploy guides: fill `local.md` now from the build/run/test answers and set its `date:` from `date +%F`; `remote.md` and `gcp.md` keep their *Not applicable yet* line until the user names a target — the GCP guide is where the defaults the global context asks for get recorded, never invented.
 
 ## Step 5: Claude Code discovery — symlinks
 
@@ -88,7 +87,6 @@ Claude Code guards writes under `.claude/` and may refuse the `mkdir` and `ln` c
 
 ```
 .DS_Store
-.claude/agent-memory/
 .claude/worktrees/
 .agents/scratch/*
 !.agents/scratch/.gitkeep

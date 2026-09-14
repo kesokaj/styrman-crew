@@ -1,7 +1,5 @@
 # Domain: golang-core
 
-
-
 ## Sub-topic: golang-concurrency
 
 **Persona:** You are a Go concurrency engineer. You assume every goroutine is a liability until proven necessary — correctness and leak-freedom come before performance.
@@ -101,16 +99,14 @@ When auditing concurrency across a large codebase, use up to 5 parallel sub-agen
 | Unbounded goroutine spawning | Use `errgroup.SetLimit(n)` or semaphore |
 | Sharing pointer via channel | Send copies or immutable values |
 | `wg.Add` inside goroutine | Call `Add` before `go` — `Wait` may return early otherwise |
-| Forgetting `-race` in CI | Always run `go test -race ./...` |
+| Forgetting `-race` | Always run `go test -race ./...` |
 | Mutex held across I/O | Keep critical sections short |
 
 ## Cross-References
 
-- -> See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for false sharing, cache-line padding, `sync.Pool` hot-path patterns
 - -> See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for cancellation propagation and timeout patterns
 - -> See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for concurrent map access and race condition prevention
-- -> See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for debugging goroutine leaks and deadlocks
-- -> See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for graceful shutdown patterns
+- -> See the Architecture (style, naming, patterns, modernize) reference (`golang-architecture.md`) for graceful shutdown patterns
 
 ## References
 
@@ -173,14 +169,13 @@ func (s *OrderService) Create(ctx context.Context, order Order) error {
 
 ## Cross-References
 
-- → See the the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for goroutine cancellation patterns using context
-- → See the the I/O & Web (HTTP, gRPC, database, CLI) reference (`golang-io-web.md`) for context-aware database operations (QueryContext, ExecContext)
-- → See the the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for trace context propagation with OpenTelemetry
-- → See the the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for timeout and resilience patterns
+- → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for goroutine cancellation patterns using context
+- → See the I/O & Web (HTTP, gRPC, database, CLI) reference (`golang-io-web.md`) for context-aware database operations (QueryContext, ExecContext)
+- → See the Architecture (style, naming, patterns, modernize) reference (`golang-architecture.md`) for timeout and resilience patterns
 
 ## Enforce with Linters
 
-Many context pitfalls are caught automatically by linters: `govet`, `staticcheck`. → See the the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for configuration and usage.
+Many context pitfalls are caught automatically by linters: `govet`, `staticcheck`. → See the Ecosystem (observability, linters, security, performance) reference (`golang-ecosystem.md`) for configuration and usage.
 
 ## Sub-topic: golang-data-structures
 
@@ -188,7 +183,7 @@ Many context pitfalls are caught automatically by linters: `govet`, `staticcheck
 
 # Go Data Structures
 
-Built-in and standard library data structures: internals, correct usage, and selection guidance. For safety pitfalls (nil maps, append aliasing, defensive copies) see the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`). For channels and sync primitives see the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`). For string/byte/rune choice see the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`).
+Built-in and standard library data structures: internals, correct usage, and selection guidance. For safety pitfalls (nil maps, append aliasing, defensive copies) see the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`). For channels and sync primitives see the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`). For string/byte/rune choice see the Architecture (style, naming, patterns, modernize) reference (`golang-architecture.md`).
 
 ## Best Practices Summary
 
@@ -327,12 +322,11 @@ When using third-party libraries, refer to their official documentation and code
 
 ## Cross-References
 
-- → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for struct field alignment, memory layout optimization, and cache locality
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for nil map/slice pitfalls, append aliasing, defensive copying, `slices.Clone`/`Equal`
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for channels, `sync.Map`, `sync.Pool`, and all sync primitives
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for `string` vs `[]byte` vs `[]rune`, iterators, streaming
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for struct composition, embedding, and generics vs `any`
-- → See the Architecture (style, naming, patterns, layout, structs) reference (`golang-architecture.md`) for slice/map initialization style
+- → See the Architecture (style, naming, patterns, modernize) reference (`golang-architecture.md`) for `string` vs `[]byte` vs `[]rune`, iterators, streaming
+- → See the Structure (structs, interfaces, layout, DI) reference (`golang-structure.md`) for struct composition, embedding, and generics vs `any`
+- → See the Architecture (style, naming, patterns, modernize) reference (`golang-architecture.md`) for slice/map initialization style
 
 ## Common Mistakes
 
@@ -553,7 +547,7 @@ func avg(total, count int) (int, error) {
 }
 ```
 
-For integer overflow as a security vulnerability, see the the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) section.
+For integer overflow as a security vulnerability, see the Ecosystem (observability, linters, security, performance) reference (`golang-ecosystem.md`) section.
 
 ## Resource Safety
 
@@ -643,15 +637,13 @@ func (db *DB) connection() *sql.DB {
 
 ## Enforce with Linters
 
-Many safety pitfalls are caught automatically by linters: `errcheck`, `forcetypeassert`, `nilerr`, `govet`, `staticcheck`. See the the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for configuration and usage.
+Many safety pitfalls are caught automatically by linters: `errcheck`, `forcetypeassert`, `nilerr`, `govet`, `staticcheck`. See the Ecosystem (observability, linters, security, performance) reference (`golang-ecosystem.md`) for configuration and usage.
 
 ## Cross-References
 
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for concurrent access patterns and sync primitives
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for slice/map internals, capacity growth, and container/ packages
 - → See the Core (concurrency, context, data structures, errors, safety) reference (`golang-core.md`) for nil error interface trap
-- → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for security-relevant safety issues (memory safety, integer overflow)
-- → See the Ecosystem (observability, CI/CD, linters, samber libs) reference (`golang-ecosystem.md`) for debugging panics and race conditions
 
 ## Common Mistakes
 

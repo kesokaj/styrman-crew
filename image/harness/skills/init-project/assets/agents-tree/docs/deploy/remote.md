@@ -36,6 +36,10 @@ ssh <host> 'mv <install path>/server.new <install path>/server && sudo systemctl
 
 <!-- Health check from outside, the log line that proves the new build is serving, the version it reports. -->
 
+## Operator steps
+
+<!-- What the operator does by hand on this target: standing procedures, never pending items (those live in the newest handoff). -->
+
 ## Rollback
 
 <!-- Keep the previous artifact; the exact commands that put it back. -->

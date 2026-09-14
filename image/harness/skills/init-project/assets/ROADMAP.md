@@ -1,6 +1,6 @@
 # Roadmap
 
-<!-- Division of labor: ROADMAP.md = where the project is going; TODO.md = small deferred items; .agents/docs/plans/ = how. -->
+<!-- Division of labor: ROADMAP.md = where the project is going while work is in progress; TODO.md = items the active plan will consume; .agents/docs/plans/ = how. Both ROADMAP sections and TODO are empty when the work is done; operator actions and ideas live in the newest handoff. -->
 
 Last reviewed: YYYY-MM-DD
 

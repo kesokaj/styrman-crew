@@ -13,19 +13,18 @@ vendored content in place (fork it into a differently-named skill instead).
 
 ## Apache-2.0 skills — attribution recorded from their own frontmatter
 
-These three were vendored without a row here. Each declares its licence and publisher
+These two were vendored without a row here (a third, `gcloud-auth-verification` by google, v1, Apache-2.0, was merged into `gcloud-setup` on 2026-09-13 — its three rules paraphrased under "Before asking the user to log in" — and removed). Each declares its licence and publisher
 in its own `SKILL.md` frontmatter, which is the authority for attribution; the fetch
 origin was not recorded at the time and is marked unknown rather than guessed.
 
 | Skill | Publisher / author | Version | License | Source |
 |-------|--------------------|---------|---------|--------|
-| gcloud-auth-verification | google | v1 | Apache-2.0 | not recorded when vendored |
 | gke-basics | Google Cloud | 1.0.0 | Apache-2.0 | not recorded when vendored |
 | terraform | Anton Babenko | 1.6.0 | Apache-2.0 | not recorded when vendored |
 
 Apache-2.0 permits redistribution with attribution, which the table above provides.
 It also asks that a copy of the licence travel with the work: this repository is not
-published, and if that changes, add `LICENSE` files for these three before it does.
+published, and if that changes, add `LICENSE` files for these two before it does.
 Re-vendoring any of them should fill in the Source column at the same time.
 
 Notes:

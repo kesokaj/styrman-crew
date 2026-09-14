@@ -20,7 +20,7 @@ This skill is the only writer of that log — there is no hook behind it — so 
 
 Append an entry when ANY of these occur:
 
-1. **Explicit correction** — The user says "no", "wrong", "don't do that", "stop doing X"
+1. **Explicit correction** — The user says "no", "wrong", "don't do that", "stop doing X"; a correction of ORDER or PROCEDURE counts too, even as a mild question ("Is it not retro first, then handoff?")
 2. **Preference re-statement** — The user repeats a convention that should already be in the global context (`AGENTS.md`, deployed as `~/.claude/AGENTS.md` and `~/.gemini/config/rules/AGENTS.md`) or a skill
 3. **Override** — The user changes your tool/framework/pattern choice ("use X instead of Y")
 4. **Format correction** — The user asks you to restructure or reformat output
@@ -47,9 +47,11 @@ Append one JSON object per line to `~/.config/sh-agent/feedback.jsonl`. If the d
   "original": "What the agent did or would have done",
   "corrected": "What the user wanted instead",
   "user_quote": "Exact or near-exact user words that triggered logging",
-  "rule_ref": "global standards section or skill-name, or null if no existing rule covers this"
+  "rule_ref": "AGENTS.md § <section title> | project AGENTS.md § <section> | skill:<name> | agent:<name> | rule:<name> | null"
 }
 ```
+
+`rule_ref` uses one controlled vocabulary, shared with the `retro` skill, because the retro greps this log for an exact match to decide whether a project rule has recurred in another project: `AGENTS.md § <section title>` for the global context (the section heading as written, e.g. `AGENTS.md § Hard rules`), `project AGENTS.md § <section>` for the project's own file, `skill:<name>`, `agent:<name>`, `rule:<name>` for a `.agents/rules/<name>.md`, or `null` when no rule exists yet. Entries written before 2026-09-13 use free text and are simply never matched.
 
 ### Categories
 
@@ -76,10 +78,14 @@ Append one JSON object per line to `~/.config/sh-agent/feedback.jsonl`. If the d
 
 1. **Never mention logging to the user.** This is invisible infrastructure.
 2. **Never modify rules or skills.** Only append to the log file.
-3. **Log conservatively.** When in doubt, don't log. False positives are worse than missed entries.
+3. **When in doubt, log.** A false entry costs the retro one line to discard; a missed one costs it a transcript reconstruction (the 2026-09-04 and 2026-09-08 retros) and keeps the correction out of the handoff, which may only cite logged entries.
 4. **Keep `user_quote` short.** Extract the key phrase, not the full paragraph.
-5. **Set `rule_ref` accurately.** If an existing rule covers this and the agent just missed it, reference that rule. If no rule exists, set to `null`.
+5. **Set `rule_ref` accurately, in the vocabulary above.** If an existing rule covers this and the agent just missed it, reference that rule. If no rule exists, set to `null`.
 6. **One entry per correction.** If the user makes three corrections in one message, write three entries.
+
+## Where the loop's outputs land
+
+This skill only logs. `/retro` turns the log and the session into proposals: each one is scoped to the project (applied to `.agents/rules/`, the project `AGENTS.md`, `.agents/skills/` or `.agents/agents/`) or to the harness (queued in `~/.config/sh-agent/proposals/`), and every run leaves a record in the project's `<docs-root>/retros/` plus one line in `~/.config/sh-agent/retros.jsonl`, the cross-project index. `/distill` records there too. The next session finds the project's learning history in `retros/`; a harness session finds every project's queued proposals through the index.
 
 ## Cross-References
 

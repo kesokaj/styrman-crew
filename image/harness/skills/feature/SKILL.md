@@ -18,6 +18,8 @@ Four points always wait for the user, whatever "work autonomously" instruction i
 
 Restate the request in one or two sentences: "I read this as: X. Confirm or correct." If `$ARGUMENTS` is `#<n>` or an issue URL, read it first (`gh issue view <n> --json title,body,labels,comments`). Check `REQUIREMENTS.md`, `ROADMAP.md`, and `docs/bugs/INDEX.md` for anything that constrains or has bitten this area before. Misreads here cost the most later.
 
+When the request ranges over a LIST — a backlog, `TODO.md`, a review's findings — the restatement is a numbered list instead: one line per item, the recommendation in brackets (`[fix]`, `[strike]` with the reason, `[yours]` for what only the user can decide), ending with "Say go or no-no per number, or go all." The answers ARE the scope; strikes the user approves are applied before the plan is written, with the reason on each line.
+
 ## Step 2: Plan file — `<docs-root>/plans/<date>-<slug>.md`
 
 ```markdown
@@ -61,19 +63,19 @@ Point `ROADMAP.md` "Now" at the plan. For a small feature the plan can be short;
 
 Dispatch the `reviewer` agent with **only the plan file**, nothing from the conversation, and this brief:
 
-> You are a fresh reader with no prior context. Read this plan and the code surfaces it names. Answer two things. (1) Gaps: what must be decided before implementation starts that the plan does not decide — interfaces, failure modes, scope edges, misunderstandings of existing code (cite file:line). (2) Readiness: could a first-pass implementer ship this without asking the author a question? List every question you would have to ask. End with `design ready` only if you have zero gaps, and `implementation ready` only if you have zero questions; otherwise `design needs revision` / `implementation not ready`.
+> You are a fresh reader with no prior context. Read this plan and the code surfaces it names. Answer two things. (1) Gaps: what must be decided before implementation starts that the plan does not decide — interfaces, failure modes, scope edges, misunderstandings of existing code (cite file:line). (2) Readiness: could a first-pass implementer ship this without asking the author a question? List every question you would have to ask, and mark each BLOCKING (two careful implementers would build different things) or NON-BLOCKING (the plan states a default, or a reasonable implementer decides it alone). End with `design ready` only if you have zero gaps, and `implementation ready` only if you have zero BLOCKING questions; otherwise `design needs revision` / `implementation not ready`.
 
-Address every gap and question in the plan, or rebut it in writing citing `REQUIREMENTS.md`, `AGENTS.md`, or the user's words. Re-run until both tokens are "ready". After three rounds without convergence the feature is under-specified: stop and ask the user which requirement to clarify or cut. Until then, no source edits; reading, `git log`, and running existing tests are fine.
+Address every gap and blocking question in the plan, or rebut it in writing citing `REQUIREMENTS.md`, `AGENTS.md`, or the user's words; note non-blocking questions in the plan as the implementer's call. Re-run until both tokens are "ready". After three rounds without convergence the feature is under-specified: stop and ask the user which requirement to clarify or cut — and say in the question whether the residue is a real ambiguity or one narrow item you would resolve the same way, with your recommendation first. Until then, no source edits; reading, `git log`, and running existing tests are fine.
 
 ## Step 4: Phases, one at a time
 
-For each phase: implement its tasks in order; after each task run its named verification; when the phase is green, run the project's full test command, tick the boxes in the plan, write the `changes/` entry for the phase (`changelog` agent or yourself), commit, push. That is the checkpoint. A new session resumes at the first unticked box.
+For each phase: implement its tasks in order; after each task run its named verification; when the phase is green, run the project's full test command **as its own tool call, bare, and read its exit status** (never `test | tail && git commit` — BUG-033/041 in styrman-crew both shipped a red test that way); then tick the boxes in the plan, write the `changes/` entry for the phase (`changelog` agent or yourself), and commit and push as separate calls. That is the checkpoint. A new session resumes at the first unticked box.
 
 Per-layer verification, typical Go + TanStack Start project: migration applied and schema inspected → package tests with `-race` → API hit with `curl` → UI driven in a real browser (golden path, one edge case) → container built and run locally (`docker build`, `docker run`, `curl /healthz`).
 
 ## Step 5: E2E before "done"
 
-Type checks and unit tests prove the code; e2e proves the feature. Service: build the container, run it, call the health check and one real request. Frontend: walk the golden path and one edge case (empty state, error response, unauthenticated) in a real browser. Deploy (only when the user asked for GCP): the live URL and the logs. Record the outcome in the verification log.
+Type checks and unit tests prove the code; e2e proves the feature. Service: build the container, run it, call the health check and one real request. Frontend: walk the golden path and one edge case (empty state, error response, unauthenticated) in a real browser. A deploy is not e2e: when the user asked for GCP, the cloud smoke tier runs inside `/preflight` after Step 6 — the only path that gates, tags, and deploys by `<docs-root>/deploy/gcp.md`. Record the outcome in the verification log.
 
 ## Step 6: Definition of Done
 

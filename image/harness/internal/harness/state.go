@@ -16,6 +16,7 @@ type State struct {
 	Repo        string   `json:"repo"`
 	Commit      string   `json:"commit"`
 	InstalledAt string   `json:"installedAt"`
+	Vendor      string   `json:"vendor,omitempty"`
 	Files       []string `json:"files"` // relative to $HOME, sorted
 }
 
@@ -36,6 +37,9 @@ func LoadState(home string) (State, bool, error) {
 	var s State
 	if err := json.Unmarshal(data, &s); err != nil {
 		return State{}, false, fmt.Errorf("parsing %s: %w", statePath(home), err)
+	}
+	if s.Vendor == "" {
+		s.Vendor = VendorAll
 	}
 	return s, true, nil
 }
@@ -58,11 +62,13 @@ func RemoveState(home string) error {
 	return nil
 }
 
-// LastRetro returns when the newest /retro proposal was written. The retro
-// skill writes to ~/.config/sh-agent/proposals/, so this is the harness's
-// only view of whether the learning loop is being run.
+// LastRetro returns when the learning loop last ran: the newest of the
+// harness proposal files under ~/.config/sh-agent/proposals/ and the
+// cross-project index ~/.config/sh-agent/retros.jsonl, which a project-level
+// /retro or /distill appends to even when it proposes nothing for the harness.
 func LastRetro(home string) (time.Time, bool) {
 	paths, _ := filepath.Glob(filepath.Join(home, ".config", "sh-agent", "proposals", "*.md"))
+	paths = append(paths, filepath.Join(home, ".config", "sh-agent", "retros.jsonl"))
 	var newest time.Time
 	for _, p := range paths {
 		if info, err := os.Stat(p); err == nil && info.ModTime().After(newest) {

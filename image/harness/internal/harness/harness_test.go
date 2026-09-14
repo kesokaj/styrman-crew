@@ -2,11 +2,14 @@ package harness
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newRepo builds a minimal harness checkout: two skills, one agent, two
@@ -217,12 +220,12 @@ func TestInstallStatusResyncUninstall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	files, err := Plan(repo, self)
+	files, err := Plan(repo, self, VendorAll)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := Install(repo, home, files, false, &out); err != nil {
+	if err := Install(repo, home, files, VendorAll, false, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, rel := range []string{
@@ -263,7 +266,7 @@ func TestInstallStatusResyncUninstall(t *testing.T) {
 		t.Errorf("fresh install should be clean apart from the foreign CLAUDE.md: %+v", report.Counts)
 	}
 	// status and diff plan without the binary; the installed one is not stale.
-	noSelf, err := Plan(repo, nil)
+	noSelf, err := Plan(repo, nil, VendorAll)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,12 +290,12 @@ func TestInstallStatusResyncUninstall(t *testing.T) {
 	if err := os.RemoveAll(filepath.Join(repo, "skills", "beta")); err != nil {
 		t.Fatal(err)
 	}
-	files, err = Plan(repo, self)
+	files, err = Plan(repo, self, VendorAll)
 	if err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := Install(repo, home, files, false, &out); err != nil {
+	if err := Install(repo, home, files, VendorAll, false, &out); err != nil {
 		t.Fatal(err)
 	}
 	for _, rel := range []string{".claude/skills/beta", ".gemini/config/skills/beta"} {
@@ -337,11 +340,11 @@ func TestInstallStatusResyncUninstall(t *testing.T) {
 func TestInstallWritesOwnClaudeStub(t *testing.T) {
 	repo := newRepo(t)
 	home := t.TempDir()
-	files, err := Plan(repo, nil)
+	files, err := Plan(repo, nil, VendorAll)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := Install(repo, home, files, false, &bytes.Buffer{}); err != nil {
+	if err := Install(repo, home, files, VendorAll, false, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(filepath.Join(home, ClaudeRoot, "CLAUDE.md"))
@@ -350,6 +353,129 @@ func TestInstallWritesOwnClaudeStub(t *testing.T) {
 	}
 	if !IsOurs(got) || !strings.Contains(string(got), "\n@AGENTS.md\n") {
 		t.Errorf("stub = %q", got)
+	}
+}
+
+func TestVendorSelection(t *testing.T) {
+	// NormalizeVendor checks
+	for _, in := range []string{"", "all", "ALL", " all "} {
+		if got, err := NormalizeVendor(in); err != nil || got != VendorAll {
+			t.Errorf("NormalizeVendor(%q) = %q, err %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"antigravity", "Antigravity", "agy", "gemini"} {
+		if got, err := NormalizeVendor(in); err != nil || got != VendorAntigravity {
+			t.Errorf("NormalizeVendor(%q) = %q, err %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"claude", "Claude", "claudecode"} {
+		if got, err := NormalizeVendor(in); err != nil || got != VendorClaude {
+			t.Errorf("NormalizeVendor(%q) = %q, err %v", in, got, err)
+		}
+	}
+	if _, err := NormalizeVendor("invalid-vendor"); err == nil {
+		t.Error("NormalizeVendor should reject unknown vendor")
+	}
+
+	repo := newRepo(t)
+	self := []byte("#!/bin/sh\necho sh-agent\n")
+
+	// Plan for antigravity only
+	agyPlan, err := Plan(repo, self, VendorAntigravity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range agyPlan {
+		if strings.HasPrefix(f.Rel, ClaudeRoot) {
+			t.Errorf("antigravity plan contains Claude file %s", f.Rel)
+		}
+	}
+	foundAgyAgents := false
+	for _, f := range agyPlan {
+		if f.Rel == filepath.Join(AgyRoot, "rules", "AGENTS.md") {
+			foundAgyAgents = true
+		}
+	}
+	if !foundAgyAgents {
+		t.Error("antigravity plan missing rules/AGENTS.md")
+	}
+
+	// Plan for claude only
+	claudePlan, err := Plan(repo, self, VendorClaude)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range claudePlan {
+		if strings.HasPrefix(f.Rel, AgyRoot) {
+			t.Errorf("claude plan contains Antigravity file %s", f.Rel)
+		}
+	}
+
+	// Install antigravity-only to clean home
+	home := t.TempDir()
+	var out bytes.Buffer
+	if err := Install(repo, home, agyPlan, VendorAntigravity, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ClaudeRoot)); err == nil {
+		t.Errorf(".claude should not exist after antigravity-only install")
+	}
+	if _, err := os.Stat(filepath.Join(home, AgyRoot, "rules", "AGENTS.md")); err != nil {
+		t.Errorf("expected antigravity rules/AGENTS.md to exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, BinPath)); err != nil {
+		t.Errorf("expected binary to be installed: %v", err)
+	}
+
+	// Verify state records vendor
+	st, found, err := LoadState(home)
+	if err != nil || !found {
+		t.Fatalf("LoadState failed: %v, found: %v", err, found)
+	}
+	if st.Vendor != VendorAntigravity {
+		t.Errorf("state vendor = %q, want %q", st.Vendor, VendorAntigravity)
+	}
+
+	// Status check with antigravity plan has no drift
+	noSelfAgy, err := Plan(repo, nil, VendorAntigravity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := Status(home, noSelfAgy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Drift() {
+		t.Errorf("antigravity status has drift: %+v", report.Counts)
+	}
+
+	// Switch from antigravity to all, then back to antigravity:
+	// Verify resync removes Claude files when returning to antigravity
+	allPlan, err := Plan(repo, self, VendorAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(repo, home, allPlan, VendorAll, false, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ClaudeRoot, "AGENTS.md")); err != nil {
+		t.Fatalf("expected .claude/AGENTS.md after installing all: %v", err)
+	}
+
+	// Now switch back to antigravity
+	out.Reset()
+	if err := Install(repo, home, agyPlan, VendorAntigravity, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ClaudeRoot, "AGENTS.md")); err == nil {
+		t.Errorf(".claude/AGENTS.md should have been removed by resync when switching back to antigravity")
+	}
+	st, _, err = LoadState(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Vendor != VendorAntigravity {
+		t.Errorf("state vendor = %q, want %q", st.Vendor, VendorAntigravity)
 	}
 }
 
@@ -472,6 +598,65 @@ func TestBehindAndPull(t *testing.T) {
 	}
 }
 
+// TestNestedCopyIsNotACheckout: a harness-shaped tree inside another git
+// repository must not inherit that repository's branch, commit, or dirty
+// state, and git-driven update must refuse it.
+func TestNestedCopyIsNotACheckout(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	root := newRepo(t)
+	gitIn(t, root, "init", "-q")
+	gitIn(t, root, "add", ".")
+	gitIn(t, root, "commit", "-q", "-m", "fixture")
+
+	nested := filepath.Join(root, "mirror")
+	for _, rel := range []string{"context", "skills"} {
+		if err := os.MkdirAll(filepath.Join(nested, rel), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(nested, "context", "AGENTS.md"), []byte("# copy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !IsRepo(nested) {
+		t.Fatal("fixture: nested copy should look like a harness")
+	}
+
+	if got := Inspect(nested); got != (RepoInfo{}) {
+		t.Errorf("nested copy Inspect = %+v, want empty", got)
+	}
+	if _, err := Behind(nested); !errors.Is(err, errPlainCopy) {
+		t.Errorf("nested copy Behind err = %v, want %v", err, errPlainCopy)
+	}
+	if err := Pull(nested, &bytes.Buffer{}); !errors.Is(err, errPlainCopy) {
+		t.Errorf("nested copy Pull err = %v, want %v", err, errPlainCopy)
+	}
+
+	// An inherited GIT_DIR/GIT_WORK_TREE must not redirect the check to the
+	// enclosing repository: the check looks for .git itself and never asks git.
+	t.Setenv("GIT_DIR", filepath.Join(root, ".git"))
+	t.Setenv("GIT_WORK_TREE", nested)
+	if got := Inspect(nested); got != (RepoInfo{}) {
+		t.Errorf("nested copy with GIT_DIR/GIT_WORK_TREE set: Inspect = %+v, want empty", got)
+	}
+	if _, err := Behind(nested); !errors.Is(err, errPlainCopy) {
+		t.Errorf("nested copy with GIT_DIR set: Behind err = %v, want %v", err, errPlainCopy)
+	}
+	t.Setenv("GIT_DIR", "")
+	t.Setenv("GIT_WORK_TREE", "")
+	os.Unsetenv("GIT_DIR")
+	os.Unsetenv("GIT_WORK_TREE")
+
+	got := Inspect(root)
+	if got.Branch == "" || got.Commit == "" || !got.Dirty {
+		t.Errorf("repo root Inspect = %+v, want branch, commit, and dirty (the untracked mirror)", got)
+	}
+	if _, err := Behind(root); errors.Is(err, errPlainCopy) {
+		t.Errorf("repo root Behind must not be refused as a plain copy: %v", err)
+	}
+}
+
 func TestLastRetro(t *testing.T) {
 	home := t.TempDir()
 	if _, ok := LastRetro(home); ok {
@@ -484,7 +669,190 @@ func TestLastRetro(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "2026-09-03-retro.md"), []byte("# retro\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := LastRetro(home); !ok {
+	first, ok := LastRetro(home)
+	if !ok {
 		t.Fatal("proposal should be found")
+	}
+	// A project-level retro appends to the index without a proposal file;
+	// that counts as a retro too, and its newer mtime wins.
+	index := filepath.Join(home, ".config", "sh-agent", "retros.jsonl")
+	if err := os.WriteFile(index, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	later := first.Add(48 * time.Hour)
+	if err := os.Chtimes(index, later, later); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := LastRetro(home); !ok || !got.Equal(later) {
+		t.Fatalf("LastRetro = %v, %v; want %v", got, ok, later)
+	}
+}
+
+func TestSlashNoteOnlyWhenSomeSkillIsSlashOnly(t *testing.T) {
+	repo := newRepo(t)
+	inv, err := LoadInventory(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marked = "Skills marked `/name` are typed by the user"
+	if !strings.Contains(RenderInventoryCompact(inv), marked) || !strings.Contains(RenderInventory(inv), marked) {
+		t.Errorf("fixture has a slash-only skill; the note should be printed")
+	}
+	for i := range inv.Skills {
+		inv.Skills[i].SlashOnly = false
+	}
+	for _, out := range []string{RenderInventoryCompact(inv), RenderInventory(inv)} {
+		if strings.Contains(out, marked) {
+			t.Errorf("no slash-only skill; the note must not be printed:\n%s", out)
+		}
+		if !strings.Contains(out, "can also be typed as `/name`") {
+			t.Errorf("expected the all-model-invocable sentence:\n%s", out)
+		}
+	}
+}
+
+// gitIn runs git in dir and fails the test on error.
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+	outb, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, outb)
+	}
+	return strings.TrimSpace(string(outb))
+}
+
+func TestFindRepoRefusesNamedNonRepo(t *testing.T) {
+	home := t.TempDir()
+	bogus := filepath.Join(t.TempDir(), "not-a-checkout")
+	if _, err := FindRepo(bogus, home); err == nil {
+		t.Error("an explicit path that is not a checkout must be an error, not a fallback")
+	}
+	t.Setenv("SH_AGENT_REPO", bogus)
+	if _, err := FindRepo("", home); err == nil {
+		t.Error("$SH_AGENT_REPO pointing at a non-checkout must be an error, not a fallback")
+	}
+	t.Setenv("SH_AGENT_REPO", "")
+	repo := newRepo(t)
+	if got, err := FindRepo(repo, home); err != nil || got != repo {
+		t.Errorf("explicit checkout: %q, %v", got, err)
+	}
+}
+
+func TestInstallMarksDirtyTree(t *testing.T) {
+	repo := newRepo(t)
+	gitIn(t, repo, "init", "-q")
+	gitIn(t, repo, "add", ".")
+	gitIn(t, repo, "commit", "-q", "-m", "fixture")
+	short := gitIn(t, repo, "rev-parse", "--short", "HEAD")
+	home := t.TempDir()
+	files, err := Plan(repo, nil, VendorAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Install(repo, home, files, VendorAll, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	st, _, err := LoadState(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Commit != short {
+		t.Errorf("clean tree: commit = %q, want %q", st.Commit, short)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "context", "AGENTS.md"), []byte("# AGENTS.md\n\nBe honest and brief.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err = Plan(repo, nil, VendorAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(repo, home, files, VendorAll, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	st, _, err = LoadState(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Commit != short+"+dirty" {
+		t.Errorf("dirty tree: commit = %q, want %q", st.Commit, short+"+dirty")
+	}
+}
+
+// TestReinstallBuildsAndInstalls runs the real rebuild path against this
+// checkout: go build into the repo's scratch space, then that build installs
+// into a scratch home and copies itself there, stamped with the revision.
+func TestReinstallBuildsAndInstalls(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not on PATH")
+	}
+	repo, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	var out bytes.Buffer
+	if err := Reinstall(repo, []string{"--home", home}, &out); err != nil {
+		t.Fatalf("Reinstall: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "files managed") {
+		t.Errorf("child install output missing:\n%s", out.String())
+	}
+	bin := filepath.Join(home, BinPath)
+	ver, err := exec.Command(bin, "version").Output()
+	if err != nil {
+		t.Fatalf("installed binary does not run: %v", err)
+	}
+	if v := strings.TrimSpace(string(ver)); strings.Contains(v, "(devel)") || strings.Contains(v, "unknown") {
+		t.Errorf("installed binary is unstamped: %q", v)
+	}
+	builds, _ := filepath.Glob(filepath.Join(repo, ".agents", "scratch", "sh-agent-build-*"))
+	if len(builds) != 0 {
+		t.Errorf("build directories left behind: %v", builds)
+	}
+}
+
+// TestNoTmpInHarnessProse guards the scratch rule at the source: the
+// context, the agents, the skills, and the repo docs may mention /tmp only
+// to forbid it. Three records (BUG-003, BUG-007, BUG-014) are the reason
+// this is a test and not a reminder.
+func TestNoTmpInHarnessProse(t *testing.T) {
+	repo, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := []string{"context", "agents", "README.md", "AGENTS.md"}
+	skills, _ := filepath.Glob(filepath.Join(repo, "skills", "*", "SKILL.md"))
+	for _, s := range skills {
+		rel, _ := filepath.Rel(repo, s)
+		roots = append(roots, rel)
+	}
+	allowed := func(line string) bool {
+		l := strings.ToLower(line)
+		return strings.Contains(l, "never /tmp") || strings.Contains(l, "never `/tmp`") ||
+			strings.Contains(l, "not /tmp") || strings.Contains(l, "not `/tmp`") || strings.Contains(l, "instead of `/tmp`")
+	}
+	for _, root := range roots {
+		err := filepath.WalkDir(filepath.Join(repo, root), func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			for i, line := range strings.Split(string(data), "\n") {
+				if strings.Contains(line, "/tmp") && !allowed(line) {
+					rel, _ := filepath.Rel(repo, path)
+					t.Errorf("%s:%d mentions /tmp outside a 'never /tmp' clause: %s", rel, i+1, strings.TrimSpace(line))
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }

@@ -1,19 +1,14 @@
-# Architectural Decision Records
+# Architecture Decisions
 
-<!-- Append-only. Mark superseded entries, never delete them. -->
+Append-only. To reverse a decision, append a new ADR and mark the old one `Superseded by ADR-NNN` — never rewrite it.
 
-<!--
-## ADR NNN: [Title]
-**Status:** Proposed | Accepted | Superseded by ADR NNN
-**Date:** YYYY-MM-DD
+<!-- One entry per decision, in this exact shape (the changelog agent writes them):
 
-### Context
-What is the issue or decision? What constraints exist?
+## ADR-001: <Title>     (YYYY-MM-DD) — Accepted
 
-### Decision
-What was decided and why? Include specific technologies, configurations, or trade-offs.
+**Context:** what forced the decision.
+
+**Decision:** what was chosen.
+
+**Consequences:** trade-offs, follow-ups.
 -->
-
----
-
-<!-- Add ADR entries below -->

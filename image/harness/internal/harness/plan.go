@@ -17,6 +17,28 @@ const (
 	BinPath    = ".local/bin/sh-agent"
 )
 
+// Supported vendor identifiers.
+const (
+	VendorAll         = "all"
+	VendorAntigravity = "antigravity"
+	VendorClaude      = "claude"
+)
+
+// NormalizeVendor parses and standardizes vendor names. It accepts "all",
+// "antigravity" (or "agy", "gemini"), and "claude". An empty string defaults to "all".
+func NormalizeVendor(v string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "all":
+		return VendorAll, nil
+	case "antigravity", "agy", "gemini":
+		return VendorAntigravity, nil
+	case "claude", "claudecode":
+		return VendorClaude, nil
+	default:
+		return "", fmt.Errorf("unknown vendor %q: must be all, antigravity (or agy), or claude", v)
+	}
+}
+
 // File is one path the install produces, relative to $HOME.
 type File struct {
 	Rel  string
@@ -40,9 +62,17 @@ type File struct {
 //	workflows/<name>.md   → same as commands/
 //	rules/<name>.md       → .claude/rules/<name>.md,    .gemini/config/rules/<name>.md
 //
+// vendor selects which targets to generate ("all", "antigravity", or "claude").
 // selfExe is the running binary, copied to ~/.local/bin so `sh-agent update`
 // works from any directory; pass nil to skip it.
-func Plan(repo string, selfExe []byte) ([]File, error) {
+func Plan(repo string, selfExe []byte, vendor string) ([]File, error) {
+	v, err := NormalizeVendor(vendor)
+	if err != nil {
+		return nil, err
+	}
+	wantClaude := v == VendorAll || v == VendorClaude
+	wantAgy := v == VendorAll || v == VendorAntigravity
+
 	inv, err := LoadInventory(repo)
 	if err != nil {
 		return nil, err
@@ -52,10 +82,17 @@ func Plan(repo string, selfExe []byte) ([]File, error) {
 		return nil, err
 	}
 
-	files := []File{
-		{Rel: filepath.Join(ClaudeRoot, "AGENTS.md"), Data: context, Mode: 0o644},
-		{Rel: filepath.Join(ClaudeRoot, "CLAUDE.md"), Data: []byte(claudeStub), Mode: 0o644, KeepForeign: true},
-		{Rel: filepath.Join(AgyRoot, "rules", "AGENTS.md"), Data: context, Mode: 0o644},
+	var files []File
+	if wantClaude {
+		files = append(files,
+			File{Rel: filepath.Join(ClaudeRoot, "AGENTS.md"), Data: context, Mode: 0o644},
+			File{Rel: filepath.Join(ClaudeRoot, "CLAUDE.md"), Data: []byte(claudeStub), Mode: 0o644, KeepForeign: true},
+		)
+	}
+	if wantAgy {
+		files = append(files,
+			File{Rel: filepath.Join(AgyRoot, "rules", "AGENTS.md"), Data: context, Mode: 0o644},
+		)
 	}
 
 	for _, s := range inv.Skills {
@@ -81,10 +118,12 @@ func Plan(repo string, selfExe []byte) ([]File, error) {
 			mode := info.Mode().Perm() | 0o600
 			// Both CLIs get their own copy: neither is documented to read the
 			// other's directory, and a copy has no dangling-symlink failure mode.
-			files = append(files,
-				File{Rel: filepath.Join(ClaudeRoot, "skills", s.Name, rel), Data: data, Mode: mode},
-				File{Rel: filepath.Join(AgyRoot, "skills", s.Name, rel), Data: data, Mode: mode},
-			)
+			if wantClaude {
+				files = append(files, File{Rel: filepath.Join(ClaudeRoot, "skills", s.Name, rel), Data: data, Mode: mode})
+			}
+			if wantAgy {
+				files = append(files, File{Rel: filepath.Join(AgyRoot, "skills", s.Name, rel), Data: data, Mode: mode})
+			}
 			return nil
 		})
 		if err != nil {
@@ -93,31 +132,37 @@ func Plan(repo string, selfExe []byte) ([]File, error) {
 	}
 
 	for _, a := range inv.Agents {
-		derived, err := DeriveAgy(a)
-		if err != nil {
-			return nil, err
+		if wantClaude {
+			files = append(files, File{Rel: filepath.Join(ClaudeRoot, "agents", a.Name+".md"), Data: a.Raw, Mode: 0o644})
 		}
-		files = append(files,
-			File{Rel: filepath.Join(ClaudeRoot, "agents", a.Name+".md"), Data: a.Raw, Mode: 0o644},
-			File{Rel: filepath.Join(AgyRoot, "agents", a.Name, "agent.md"), Data: derived, Mode: 0o644},
-		)
+		if wantAgy {
+			derived, err := DeriveAgy(a)
+			if err != nil {
+				return nil, err
+			}
+			files = append(files, File{Rel: filepath.Join(AgyRoot, "agents", a.Name, "agent.md"), Data: derived, Mode: 0o644})
+		}
 	}
 
 	// A command is a markdown prompt invoked as /name on both vendors: Claude
 	// Code calls it a command, Antigravity a workflow. Copied verbatim; both
 	// ignore frontmatter keys they do not know.
 	for _, c := range inv.Commands {
-		files = append(files,
-			File{Rel: filepath.Join(ClaudeRoot, "commands", c.Name+".md"), Data: c.Raw, Mode: 0o644},
-			File{Rel: filepath.Join(AgyRoot, "workflows", c.Name+".md"), Data: c.Raw, Mode: 0o644},
-		)
+		if wantClaude {
+			files = append(files, File{Rel: filepath.Join(ClaudeRoot, "commands", c.Name+".md"), Data: c.Raw, Mode: 0o644})
+		}
+		if wantAgy {
+			files = append(files, File{Rel: filepath.Join(AgyRoot, "workflows", c.Name+".md"), Data: c.Raw, Mode: 0o644})
+		}
 	}
 
 	for _, r := range inv.Rules {
-		files = append(files,
-			File{Rel: filepath.Join(ClaudeRoot, "rules", r.Name+".md"), Data: r.Raw, Mode: 0o644},
-			File{Rel: filepath.Join(AgyRoot, "rules", r.Name+".md"), Data: r.Raw, Mode: 0o644},
-		)
+		if wantClaude {
+			files = append(files, File{Rel: filepath.Join(ClaudeRoot, "rules", r.Name+".md"), Data: r.Raw, Mode: 0o644})
+		}
+		if wantAgy {
+			files = append(files, File{Rel: filepath.Join(AgyRoot, "rules", r.Name+".md"), Data: r.Raw, Mode: 0o644})
+		}
 	}
 
 	if selfExe != nil {

@@ -115,8 +115,25 @@ check "sh-agent reports no drift in the project home" \
     "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/sh-agent status --repo /styrman/harness --home ${GH} >/dev/null"
 check "CLAUDE.md is the two-line import stub" \
     "docker exec ${CN} grep -qx '@AGENTS.md' ${GH}/.claude/CLAUDE.md"
-check "28 skills and 7 agy agents seeded" \
-    "[ \"\$(docker exec ${CN} sh -c 'ls ${GH}/.claude/skills | wc -l')\" = 28 ] && [ \"\$(docker exec ${CN} sh -c 'ls ${GH}/.gemini/config/agents | wc -l')\" = 7 ]"
+check "27 skills and 7 agy agents seeded" \
+    "[ \"\$(docker exec ${CN} sh -c 'ls ${GH}/.claude/skills | wc -l')\" = 27 ] && [ \"\$(docker exec ${CN} sh -c 'ls ${GH}/.gemini/config/agents | wc -l')\" = 7 ]"
+# The mirror has no .git, so the harness installs it as a plain copy: never a
+# `go build` in a root-owned tree, never a git call (harness BUG-015, fixed in
+# 2c8990e). `status` labels it so; the boot log's own pass line names the
+# mirror commit (install's stdout is discarded, so the log line is the only
+# in-guest evidence that install succeeded this boot). The commit it must
+# name is the one THIS tree pins, read from the host file — not from the
+# container, which would compare a constant with itself (review 2026-09-14);
+# ensure-test-image is what makes the image and the tree the same commit.
+# Both values are captured first and length-checked so a failed read cannot
+# leave a truncated pattern that still matches.
+# `grep -F … >/dev/null`, never `grep -q`: under this script's pipefail a -q
+# that exits on the first line leaves the writer with SIGPIPE (141) and the
+# pipeline red on a matching output (BUG-057).
+check "sh-agent status labels the image mirror a plain copy" \
+    "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/sh-agent status --repo /styrman/harness --home ${GH} | grep -F '/styrman/harness (plain copy, not its own git checkout; update is refused)' >/dev/null"
+check "boot log records the harness deployed at the mirror's commit" \
+    "c=\"\$(cut -c1-7 '${REPO}/image/harness/COMMIT')\" && v=\"\$(docker exec ${CN} cat /styrman/VERSION)\" && [ \${#c} = 7 ] && [ -n \"\$v\" ] && docker logs ${CN} 2>&1 | grep -F \"agent harness deployed (version \$v, styrman-harness \$c\" >/dev/null"
 check "no previous-harness artifacts (shell gates, GEMINI.md, settings.json)" \
     "! docker exec ${CN} sh -c 'test -e ${GH}/.agents/bin || test -e ${GH}/.gemini/GEMINI.md || test -e ${GH}/.claude/settings.json'"
 
