@@ -748,6 +748,19 @@ so the port must NEVER be published to the host or the ingress; there is
 nothing to configure for it beyond leaving it unpublished (the compose file
 does not expose it).
 
+When the server attaches (`EnsureSelfAttached`) varies by path: a terminal
+boot attaches SYNCHRONOUSLY, before the WebSocket upgrade (`wsBoot` in
+`internal/httpapi/server.go`), because the login shell the terminal is
+about to spawn needs the broker reachable immediately and there is no HTTP
+response left to protect by then; project create, start, and a LAN-mode
+toggle attach in a background goroutine AFTER their response; the
+port-preview proxy attaches lazily, on the first proxied request; and a
+container already running at server start is adopted at boot time. Before
+`wsBoot` existed, the terminal-boot path only booted the VM and relied on
+one of the other paths to have attached already, so the first terminal of a
+project that was stopped across a server restart came up with the broker
+unreachable ("credentials: the broker did not answer" MOTD) — BUG-060.
+
 On-disk: the broker's store lives at `<state>/credentials/<user>/` (0600
 JSON files — git tokens, env tokens, injected files). There is no backup
 layer (see "Durability" above) — losing the host loses this store too;

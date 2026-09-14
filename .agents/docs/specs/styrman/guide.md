@@ -241,7 +241,13 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   cloning or running `gh repo create` — attach used to run LAST, after
   provisioning, so every credentialed create ran against an unreachable
   broker and silently degraded to an empty repo (no ssh key, no `GH_TOKEN`,
-  no git identity). The OTHER way provisioning can fail — the microVM never
+  no git identity). The terminal-WS boot path has the same shape of fix
+  (BUG-060, 2026-09-14): `wsBoot` (`internal/httpapi/server.go`) now calls
+  `EnsureSelfAttached` itself, synchronously, right after the microVM boots
+  and before the socket is upgraded, because that path has no HTTP response
+  to protect and its login shell needs the broker reachable immediately —
+  before this, the first terminal of a project left stopped across a server
+  restart came up with the broker unreachable. The OTHER way provisioning can fail — the microVM never
   boots at all — is handled by a sibling function, `bootFailed`, built from
   the SAME `provisionSpec` so the two outcomes can never disagree about what
   was asked for: before v1.18.1 a boot failure on the GitHub-create arm

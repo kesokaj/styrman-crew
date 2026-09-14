@@ -448,7 +448,9 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 	// NOTE: no EnsureSelfAttached here — attaching the server's own
 	// container to a network reconfigures its netns and can kill in-flight
 	// HTTP responses (observed as browser ERR_CONNECTION_REFUSED on the
-	// published dev port). The port-preview proxy attaches lazily instead.
+	// published dev port). The port-preview proxy attaches lazily instead;
+	// the terminal-WS boot path attaches before its upgrade (httpapi.wsBoot,
+	// BUG-060) and the other boot paths in a goroutine after their response.
 	o.Touch(user, project)
 	return id, nil
 }

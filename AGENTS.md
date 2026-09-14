@@ -90,7 +90,10 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
   text = resize, close 4000 = exited, 4001 = replaced.
 - Per-project dockerd: overlay2 on loop-mounted `~/.dockerd/<uuid>.img`.
 - Project networks are isolated from each other (R12); the server joins
-  them in the background for the port-preview proxy (ip_forward=0).
+  them in the background for the port-preview proxy (ip_forward=0), and
+  synchronously on every terminal boot, before the WebSocket upgrade, so
+  the login shell it is about to spawn can reach the credential broker
+  (`wsBoot`, BUG-060).
   Cross-project isolation is Docker's own, unconditional per-bridge `DROP`
   rule, unaffected by anything below. A project's MODE is its Docker bridge
   INTERFACE name, chosen by the server at `docker network create` — nothing

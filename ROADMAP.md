@@ -16,9 +16,11 @@ Nothing queued. Every shipped release is recorded in `.agents/docs/changes/`
 (newest: `2026-09-14-v1.31.0-release.md`) and in git tags. The 2026-09-13
 audit's recorded lows and the v1.29.0 follow-ups were struck or fixed with
 reasons in ADR-070 (`.agents/docs/architecture/DECISIONS.md`). Operator
-checks that stand outside the roadmap: BUG-054's production proof (`gh auth
-status` in a terminal of a project opened on the current release), and a
-fresh sign-in showing the current version in Settings.
+checks that stand outside the roadmap: BUG-054's and BUG-060's production
+proof (`gh auth status` in a terminal of a project opened on the current
+release — for BUG-060 a project left STOPPED across the server restart and
+opened from the UI, whose first terminal must show no "broker did not
+answer" line), and a fresh sign-in showing the current version in Settings.
 
 ## Next
 

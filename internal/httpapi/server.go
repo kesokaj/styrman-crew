@@ -274,8 +274,36 @@ func (s *Server) ensureFor(ctx context.Context, user, projectID string) (contain
 		return "", "", "", err
 	}
 	guest := sp.profile.GuestUser()
-	id, err := s.orch.EnsureRunning(ctx, user, p.ID, orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest, Lan: lanOf(sp, p.ID)})
+	id, err := wsBoot(ctx, s.orch, user, p.ID, orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest, Lan: lanOf(sp, p.ID)})
 	return id, guest, p.Dir, err
+}
+
+// wsBooter is the slice of the orchestrator the terminal-WS boot path uses;
+// an interface so the path is testable without Docker (as the mode toggle's
+// Project is).
+type wsBooter interface {
+	EnsureRunning(ctx context.Context, user, project string, opts orchestrator.RunOpts) (string, error)
+	EnsureSelfAttached(user, project string) bool
+}
+
+// wsBoot boots the project for the WS bridge and joins this server to its
+// bridge BEFORE the caller upgrades the socket. The login shell the terminal
+// is about to spawn pulls its credentials from the broker at the bridge's
+// fixed address (STYRMAN_CRED_BROKER), which answers only once this server
+// holds that address. EnsureRunning does not attach on purpose (see its
+// NOTE), and every other boot path attaches in a goroutine after its
+// response — this path has no response to protect, so it never attached, and
+// after every server restart the first terminal of a stopped project came up
+// without credentials (BUG-060). The "fresh" return is ignored here: nothing
+// is upgraded yet, and a client whose handshake a fresh attach disturbed
+// simply reconnects into the memoized attach.
+func wsBoot(ctx context.Context, o wsBooter, user, project string, opts orchestrator.RunOpts) (string, error) {
+	id, err := o.EnsureRunning(ctx, user, project, opts)
+	if err != nil {
+		return "", err
+	}
+	o.EnsureSelfAttached(user, project)
+	return id, nil
 }
 
 // guestUserFor resolves the in-guest username for a user.

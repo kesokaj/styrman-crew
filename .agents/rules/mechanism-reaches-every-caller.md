@@ -29,3 +29,10 @@ after v1.27.0 shipped.
 ## Related
 
 BUG-035 (both the original defect and its same-day recurrence).
+
+BUG-060 (2026-09-14): the credential-broker attach reached the create,
+start, mode-toggle and port-preview paths but not the terminal-WebSocket
+boot callback — the path every project page opens with — so after every
+server restart the first terminal of a stopped project had no credentials.
+Before adding or moving a step a booted VM depends on, grep every
+`EnsureRunning(` caller in `internal/httpapi` and name each in the change.
