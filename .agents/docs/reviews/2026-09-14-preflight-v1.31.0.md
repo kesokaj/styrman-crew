@@ -177,3 +177,37 @@ deleted rather than repaired.
 - A fresh Google sign-in on the deployed version, and opening a project in the browser on the new runtime tag: operator checks after the deploy (versioning.md step 5).
 - LAN-mode projects, the Mac/Antigravity side of the harness: out of scope.
 - The deploy itself is recorded below once the updater has acted on the tag.
+
+## Deploy (observed after the tag)
+
+Release commit `c3b4417` (gate report, release entry, README/ROADMAP bump)
+tagged `v1.31.0`, SSH-signed with `git -c gpg.format=ssh -c
+user.signingkey=~/.ssh/id_ed25519.pub tag -s` (no git config changed);
+`git tag -v` against a root-read copy of `/etc/styrman/allowed_signers`:
+`Good "git" signature … ED25519 key SHA256:5HpYQJjpG+yE1xXBTOIZPsTkbkgkVnV8z0eG8hBawyU`,
+the same key that signed v1.30.1. Branch and tag pushed 12:52:54.
+
+Updater tick 12:55:47 (`journalctl -u styrman-update`): "v1.31.0 signature
+OK (allowed signer)", "deployed=v1.30.1 latest-stable=v1.31.0", "deploying
+v1.31.0 as 1.31.0", "building runtime image (styrman-runtime:1.31.0)",
+"building + starting the stack (server + ingress) at 1.31.0", then 12:56:18
+"[styrman-update] OK — v1.31.0 is live". No rollback, no latch.
+
+`styrman-ctl status` 12:56: server healthy on `styrman-server:1.31.0`
+(`styrman-caddy:1.31.0`), deployed v1.31.0 sha
+`c3b44179fa569cee68c4d5cfe6d35631f5fff074`, updater clone `/opt/styrman` at
+c3b4417, firewall enabled/inactive (service) + timer active, 0 running
+microVMs, verdict OK. The server container's own probe (`curl -fsS
+http://localhost:8080/api/health`) reports `healthy`, failing streak 0; the
+public URL answers 302 to an anonymous request (the ingress sign-in
+redirect, as designed). The deployed `styrman-runtime:1.31.0`: `VERSION`
+1.31.0, `/styrman/harness/COMMIT` 8046e4d5f24b009bd2461ebef28931cade7a4acd,
+no `.git` in the mirror, no git-config override on the install line,
+`sh-agent list` → Skills (27) / Subagents (7), `install --dry-run` →
+`[dry-run] plain copy, not its own git checkout: the running binary would be
+installed as is`; go1.27.1, node v22.23.2, claude 2.1.270, agy 1.2.2.
+
+Not observed here (operator, versioning.md step 5): a fresh Google sign-in
+showing 1.31.0 in Settings; a project started on the new runtime — its boot
+log should carry `agent harness deployed (version 1.31.0, styrman-harness
+8046e4d …)` and `sh-agent status` in its terminal the plain-copy `repo` line.
