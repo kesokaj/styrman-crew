@@ -37,7 +37,7 @@ git log <base>..HEAD --oneline
 git diff <base>..HEAD --stat
 ```
 
-**Dirty source paths — modified or untracked files outside `<docs-root>` — are uncommitted work that goes in before the gate, never a reason to stop.** Bring them through the Definition of Done first: dispatch the `verifier` agent (tests row) and the `changelog` agent (with today's date) in parallel, and the `reviewer` agent as well when that work alone is 50+ lines or 5+ files. Then commit with a descriptive message. Stage by name from `git status --porcelain`: changed source and `<docs-root>` paths only — never `.env*`, `*.pem`, `*.key`, `*.tfvars`, `*.tfstate`, or credential JSON; if one shows as modified or untracked, stop and report it instead of committing. Before the commit run `gitleaks git --staged` (older binaries: `gitleaks protect --staged`) and refuse on a non-zero exit; without gitleaks, scan `git diff --cached` for `PRIVATE KEY`, `-----BEGIN`, `AKIA`, `AIza`, `ya29.`, `token=`, `password=` and refuse on a hit. Make no further edits between dispatching the rows and committing; if the tree moves, re-run them. Never hand the commit back to the user. Continue with the clean tree.
+**Dirty source paths — modified or untracked files outside `<docs-root>` — are uncommitted work that goes in before the gate, never a reason to stop.** Bring them through the Definition of Done first: dispatch the `verifier` agent (tests row) and the `changelog` agent (with today's date) in parallel, and the `reviewer` agent as well when that work alone is 50+ lines or 5+ files or is a bug fix (the tree adds a `bugs/BUG-*.md` record, or this session ran the `bug` skill on it). Then commit with a descriptive message. Stage by name from `git status --porcelain`: changed source and `<docs-root>` paths only — never `.env*`, `*.pem`, `*.key`, `*.tfvars`, `*.tfstate`, or credential JSON; if one shows as modified or untracked, stop and report it instead of committing. Before the commit run `gitleaks git --staged` (older binaries: `gitleaks protect --staged`) and refuse on a non-zero exit; without gitleaks, scan `git diff --cached` for `PRIVATE KEY`, `-----BEGIN`, `AKIA`, `AIza`, `ya29.`, `token=`, `password=` and refuse on a hit. Make no further edits between dispatching the rows and committing; if the tree moves, re-run them. Never hand the commit back to the user. Continue with the clean tree.
 
 Untracked or modified files **under `<docs-root>`** need no commit of their own — they ride along in the release commit (Step 6).
 
@@ -62,7 +62,7 @@ Check by inspection and record each as pass or finding:
 
 ## Step 4: Docs freshness
 
-Run the `--docs` lens of `/review` over `<base>..HEAD` — the `reviewer` agent with the docs brief and the slug `<base>-<head>-docs` — against `README.md`, `<docs-root>/specs/`, `<docs-root>/testing/<app>/guide.md`, and `<docs-root>/deploy/`. Its findings are the docs gaps: dispatch the `documentation` agent for them and record each as a finding in the gate report.
+Run the `--docs` lens of `/review` over `<base>..HEAD` — the `reviewer` agent with the docs brief exactly as `/review` Step 3 gives it, and the slug `<base>-<head>-docs`. Its findings are the docs gaps, and they are advisory: record each in the gate report with its severity, confidence and an owner, and file it under the active plan's Follow-ups, or the handoff's Next Steps when no plan is active, where the owner picks it up as ordinary work — `documentation` for those in its files, the main agent for those in skills, agents, rules, the context or other `AGENTS.md` sections. No docs gap blocks the release. A docs finding blocks only where the Definition of Done's `/review --docs` runs, in the task that changed an interface, a command or a deploy step; any other docs gap blocks nowhere.
 
 ## Step 5: Write the merged gate report
 
@@ -74,11 +74,11 @@ Write to `<docs-root>/reviews/$(date +%F)-preflight-<version>.md` with frontmatt
 - An explicit verdict line: `VERDICT: SHIP` or `VERDICT: NO-SHIP`.
 - A **"What was not checked"** section — name the gaps honestly.
 
-Never restate a failure as success. Any blocking finding from Steps 2–4 means NO-SHIP.
+Never restate a failure as success. Any blocking finding means NO-SHIP. Blocking means any of: a verifier FAIL or BLOCKED; a security finding of high severity; a Step 2 reviewer REQUEST CHANGES verdict or high-severity finding; a `REQUIREMENTS.md` violation. Step 4's docs gaps never block. A project's `AGENTS.md` may add blocking conditions; it cannot remove these.
 
 ## Step 6: Ship or stop
 
-- **NO-SHIP:** stop. Report the blocking findings and the report path. Never ship on NO-SHIP — no override. The pre-gate commit from Step 1, if any, stays on the branch — name it and its SHA in the gate report so the user can amend or drop it. The task that later resolves the blocking findings appends `## Outcome` to the gate report — `fixed`, `rebutted`, or `left`, one line per finding — in the same commit as the fix; the SHIP path has no findings left and needs none.
+- **NO-SHIP:** stop. Report the blocking findings and the report path. Never ship on NO-SHIP — no override. The pre-gate commit from Step 1, if any, stays on the branch — name it and its SHA in the gate report so the user can amend or drop it. The task that later resolves the blocking findings appends `## Outcome` to the gate report — `fixed`, `rebutted` (a reason as `/review` Step 4 defines it), or `left`, one line per finding — in the same commit as the fix.
 - **SHIP:** the gate has already run against the clean source tree; now assemble **one release commit**:
   1. Dispatch the `changelog` agent with today's date for the release entry.
   2. Bump the version **only where the repo already tracks one** (do not introduce version tracking).

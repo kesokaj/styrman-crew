@@ -20,7 +20,7 @@ These rules apply to all Go code in this environment.
 
 ### Structure & Style
 - Layout `cmd/<app>/` + `internal/`; `pkg/` only for code another module imports.
-- Always run `gofmt` / `goimports`. Code must pass `go vet` and `staticcheck`.
+- Always run `gofmt` / `goimports`. Code must pass `go vet` and `staticcheck`. A vet, lint or test failure is fixed in the source; a `//nolint` or a skip is for a demonstrated false positive and names the linter and the reason.
 - Prefer focused, single-responsibility files.
 - Exported symbols must have a doc comment following `godoc` conventions.
 - No global mutable state — pass dependencies explicitly, wired by hand in `main()`.

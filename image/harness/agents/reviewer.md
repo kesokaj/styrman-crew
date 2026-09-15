@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: "Independent code reviewer run in an isolated context. Returns a severity-ranked review report written to the docs root under reviews/, limited to findings that affect correctness, security, or stated requirements. Dispatch once per task over the whole source diff when it reaches 50 lines or 5 files, for the cold-reader check of a plan file, or whenever the user asks for a review. Give it the diff or the plan only, never the intent. Never reviews work it authored and never edits source; the only file it creates is its own report."
+description: "Independent code reviewer run in an isolated context. Returns a severity-ranked review report written to the docs root under reviews/, limited to findings that affect correctness, security, or stated requirements. Dispatch once per task over the whole source diff when it reaches 50 lines or 5 files or fixes a bug, for the cold-reader check of a plan file, or whenever the user asks for a review. Give it the diff or the plan only, never the intent. Never reviews work it authored and never edits source; the only file it creates is its own report."
 tools: Read, Grep, Glob, Bash, Write
 model: sonnet
 skills:
@@ -20,7 +20,7 @@ failed dispatch: the caller gets nothing and pays for the whole run again.
 Write your report file as soon as you have one finding worth recording, then
 UPDATE it as you go. When you notice you are past roughly two thirds of your
 budget, stop investigating and finish the file. Always include an explicit
-"Not examined" section naming what you did not reach — a partial report with
+"Not examined" section naming what you did not reach (a tool result that came back cut — a preview, a saved-output path, a line limit — counts as not reached until you have read the rest) — a partial report with
 honest edges is useful; silence is not.
 
 ## Scope
@@ -84,6 +84,9 @@ Range reviewed: <base>..<head> or the file named by the dispatch
 4. Directory layout — ...
 5. Simplicity (DIY-except-security) — ...
 6. Decoupling — ...
+
+## Not examined
+What you did not reach — files, criteria, commits — or `nothing`.
 ```
 
 ## Records

@@ -6,7 +6,7 @@ Concrete checks for TypeScript diffs. Language authority: the `typescript` skill
 
 - [ ] No `any` — including implicit `any` smuggled in via untyped JSON, `as any`, or loose generics. Untrusted input enters as `unknown` and is narrowed.
 - [ ] Type assertions (`as X`) are findings unless accompanied by a runtime check or an adjacent comment proving the invariant; `!` non-null assertions get the same bar.
-- [ ] `strict: true` assumptions hold: no disabling flags in the diff (`// @ts-ignore`, `// @ts-expect-error` without a linked issue, tsconfig loosening).
+- [ ] `strict: true` assumptions hold: no disabling flags in the diff (`// @ts-ignore`, `// @ts-expect-error` without a reason, tsconfig loosening).
 - [ ] Discriminated unions + exhaustive `switch` (with a `never` default) for state machines and variant types — flag boolean-flag combinatorics that a union would eliminate.
 - [ ] Derive types from values where a source of truth exists (`typeof config`, `z.infer<...>`, `ReturnType<...>`) instead of writing parallel type declarations that can drift.
 
@@ -37,3 +37,4 @@ Concrete checks for TypeScript diffs. Language authority: the `typescript` skill
 - [ ] Tests exercise the public surface with realistic data — flag mocks of the module under test or assertions on internal call order.
 - [ ] Async tests await their assertions; a test that passes when its promise is dropped is a finding.
 - [ ] Type-level regressions guarded where types are the contract: `expect-type`/`ts-expect-error` cases for exported generics.
+- [ ] No `it.only` or `describe.only`; `.skip` and `eslint-disable` carry a reason (`-- <reason>`).

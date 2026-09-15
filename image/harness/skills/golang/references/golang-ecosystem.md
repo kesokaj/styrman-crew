@@ -320,7 +320,7 @@ go mod verify
 
 `golangci-lint` is the standard Go linting tool. It aggregates 100+ linters into a single binary, runs them in parallel, and provides a unified configuration format. Run it frequently during development and before every commit.
 
-Every Go project MUST have a `.golangci.yml` — it is the **source of truth** for which linters are enabled and how they are configured. Start from a small set (`govet`, `staticcheck`, `errcheck`, `gosec`, `unused`, `misspell`) and add linters when a real defect motivates each one.
+A Go project that runs golangci-lint keeps a `.golangci.yml` as the **source of truth** for which linters are enabled and how they are configured; `go vet` and `staticcheck` are the baseline every Go project passes (`golang` skill). Start from a small set (`govet`, `staticcheck`, `errcheck`, `gosec`, `unused`, `misspell`, `nolintlint`) and add linters when a real defect motivates each one.
 
 ## Quick Reference
 

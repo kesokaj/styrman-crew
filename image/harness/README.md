@@ -1,6 +1,6 @@
 # styrman-harness
 
-A personal agent harness for **Claude Code** and the **Antigravity CLI** (`agy`): one global context file in the [agents.md](https://agents.md) standard, 27 skills in the [Agent Skills](https://agentskills.io) `SKILL.md` standard, seven subagents, and `sh-agent` — a small Go binary that installs, resyncs, inspects, and removes all of it. No hooks, no gates, no CI.
+A personal agent harness for **Claude Code** and the **Antigravity CLI** (`agy`): one global context file in the [agents.md](https://agents.md) standard, skills in the [Agent Skills](https://agentskills.io) `SKILL.md` standard, subagents, and `sh-agent` — a small Go binary that installs, resyncs, inspects, and removes all of it. No hooks, no gates, no CI.
 
 ## Install
 
@@ -21,15 +21,15 @@ Harness state (feedback log, retro proposals and index) lives in `~/.config/sh-a
 |---|---|
 | `sh-agent status` | Shows what is installed, from which commit, the running binary's build (with a warning when it is older than the checkout), and every file that drifted. Exit 1 on drift. |
 | `sh-agent diff` | Unified diff of every drifted file (installed vs repo). |
-| `sh-agent install` (or `sync`) | From its own git checkout, rebuilds the binary with `go build`, then deploys the repo; from a plain copy (no `.git`) deploys the running binary as is (`--vendor antigravity\|claude\|all`). Idempotent; removes files a previous install wrote that the repo no longer has. |
+| `sh-agent install` (or `sync`) | From its own git checkout, rebuilds the binary with `go build`, then deploys the repo; from a plain copy (no `.git`) deploys the running binary as is (`--vendor antigravity\|claude\|all`). Idempotent; removes files a previous install wrote that the repo no longer has. `--dry-run` prints what would change without changing anything. |
 | `sh-agent update` | `git fetch` the harness repo; if behind, `pull --ff-only`, rebuild, and reinstall. `--check` only reports (exit 2 when behind). |
-| `sh-agent uninstall` | Removes exactly the files it installed (from its manifest) and nothing else. |
+| `sh-agent uninstall` | Removes exactly the files it installed (from its manifest) and nothing else. `--dry-run` prints what would be removed without removing anything. |
 | `sh-agent list` | Prints the skill and agent inventory. |
 | `sh-agent render` | Prints the assembled context file. |
-| `sh-agent adopt <name\|path>` | Copies a skill installed elsewhere (for example by `npx skills add -g`) into `skills/`. |
+| `sh-agent adopt <name\|path>` | Copies a skill installed elsewhere (for example by `npx skills add -g`) into `skills/`. `--force` replaces an existing skill of the same name. |
 | `sh-agent version` | Prints the build version. |
 
-Every command accepts `--vendor VENDOR` (target `all` [default], `antigravity` / `agy`, or `claude`), `--home DIR` (install somewhere other than `$HOME`, used by the tests) and `--repo DIR`. Without `--repo`, sh-agent finds the checkout from `$SH_AGENT_REPO`, the working directory, or the path it recorded at the last install — so `sh-agent update` works from anywhere.
+Every command accepts `--vendor VENDOR` (target `antigravity` / `agy` or `claude`; default is the vendor recorded by the existing install, else `all` — `--vendor all` widens a single-vendor install to both through `install`; `update` keeps the recorded vendor instead), `--home DIR` (install somewhere other than `$HOME`, used by the tests) and `--repo DIR`. Without `--repo`, sh-agent finds the checkout from `$SH_AGENT_REPO`, then the working directory or any of its parents, then the path it recorded at the last install — so `sh-agent update` works from anywhere.
 
 ## The loop: edit on one machine, pull on another
 
@@ -50,11 +50,11 @@ sh-agent update      # fetches, pulls, rebuilds, reinstalls
 | the binary | `~/.local/bin/sh-agent` | same |
 | manifest, feedback log, retro proposals, `retros.jsonl` (cross-project retro/distill index) | `~/.config/sh-agent/` | same |
 
-An existing `~/.claude/CLAUDE.md` that sh-agent did not write is left alone; add the line `@AGENTS.md` to it yourself.
+An existing `~/.claude/CLAUDE.md` that sh-agent did not write is left alone: move its content into a rule file under `rules/` in this repository, remove `~/.claude/CLAUDE.md`, and run `sh-agent install`, which writes the one-line import (`@AGENTS.md`).
 
 ## Adding things by hand — no code
 
-Every customization is a file in a directory. Drop it in, run `sh-agent install`, commit. Nothing to register. The installer refuses a `SKILL.md` without a `description`, and any frontmatter value that a strict YAML parser would read as a comment (an unquoted `#` after a space or tab) — Antigravity silently drops such a skill, so quote it.
+Every customization is a file in a directory. Drop it in, run `sh-agent install`, commit. Nothing to register. The installer refuses a `SKILL.md` without a `description`, and any frontmatter value that a strict YAML parser would read as a comment (an unquoted `#` at the start of the value, or after a space or tab) — Antigravity silently drops such a skill, so quote it.
 
 | Put it in | What it is | Claude Code gets | Antigravity gets |
 |---|---|---|---|
@@ -83,8 +83,8 @@ Record third-party provenance in `skills/VENDORED.md`. A skill you already insta
 
 ```
 context/     AGENTS.md (the global context) and dev-setup.md (environment, stack, GCP rule)
-agents/      seven subagents in Claude Code format — the single source; Antigravity's flavour is derived
-skills/      27 skills, each a directory with SKILL.md (+ references/, assets/); `feature` and `bug` are the work protocols and load themselves; `review` is the review command on both CLIs
+agents/      subagents in Claude Code format — the single source; Antigravity's flavour is derived
+skills/      skills, each a directory with SKILL.md (+ references/, assets/); `feature` and `bug` are the work protocols and load themselves; `review` is the review command on both CLIs
 commands/    markdown prompts invoked as /name (empty; prefer skills)
 rules/       extra always-on or path-scoped rules (empty)
 cmd/sh-agent  the binary; internal/harness is its logic and tests

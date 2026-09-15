@@ -18,7 +18,7 @@ failed dispatch: the caller gets nothing and pays for the whole run again.
 Write your report file as soon as you have one finding worth recording, then
 UPDATE it as you go. When you notice you are past roughly two thirds of your
 budget, stop investigating and finish the file. Always include an explicit
-"Not examined" section naming what you did not reach — a partial report with
+"Not examined" section naming what you did not reach (a tool result that came back cut — a preview, a saved-output path, a line limit — counts as not reached until you have read the rest) — a partial report with
 honest edges is useful; silence is not.
 
 ## Pre-flight
@@ -39,12 +39,17 @@ mkdir -p "$docs_root/testing"
 
 ## What to run
 
+- **Every command on its own:** run each command as its own call and read its own exit status and output. A chain in `AGENTS.md` (`a && b && c`) is split into its commands, each run in the directory the chain would run it in: a leading `cd <dir> &&`, or a `(cd <dir> && …)` subshell, stays attached to every command after it. `gofmt -l` fails by printing, not by exit status. Record every command's outcome even after an earlier one failed.
+- **Test counts:** each Go test command the project names (the auto-detected one when it names none), never a `-run` narrowing, runs once with `-v` added in place of its plain run, its output saved to `.agents/scratch/verify-<slug>/go-test-<n>.txt`; read its exit status, then count the `--- PASS:`, `--- FAIL:` and `--- SKIP:` lines, indented subtest lines included, and write `counts: pass N, fail N, skip N at <git rev-parse --short HEAD>[+dirty] for <the command as run>`. Find the newest earlier log in `testing/` with a counts line for the same command and write `vs previous: <path>, pass a→b, skip c→d`. A fall in pass or a rise in skip is a FAIL line unless `git diff <that sha>` explains it (a test removed with its code, a skip added with its reason) or the Environment section does (go or git missing from PATH, no symlink support, another working directory); then the line says `explained: <cause>`. With no earlier counts write `vs previous: none`. A frontend runner's counts are copied from its summary, else `counts: not printed`; a project with neither writes `counts: not applicable`.
+
 When `AGENTS.md` names nothing, auto-detect:
 
 - **Go** (`go.mod` at the root): `gofmt -l .` (must print nothing), `go vet ./...`, `go test -race ./...`. On a failure, rerun the failing target directly — `go test ./<pkg>/... -race -run <Test>` — to narrow it.
 - **Frontend** (`web/` or `ui/` with a `package.json`): the project's own runner (`npm test`, `vitest`, `npm run lint`, `npm run build` when present) — never introduce a new one.
 - **Containers** (only when a Dockerfile changed): on macOS `colima status || colima start`; then `docker build .` natively and `docker buildx build --platform linux/amd64 .` because that is what ships to Google.
 - **Coverage of changed code:** map every changed source file to the test that covers it (`go test -cover ./...`, presence of `_test.go` / `*.test.ts` beside it). A changed file with no covering test is a FAIL line naming the file — reported, never patched.
+- **Inherited failures:** a failing test whose test file and the code it exercises are untouched by the change set is marked `pre-existing?` with that evidence; Status stays FAIL, and the reply says so, so the main agent numbers it.
+- **Suppressions added:** from the change set's diff, list under Coverage of changed code, as file:line, every added `//nolint`, `//lint:ignore`, `@ts-ignore`, `@ts-expect-error` or `eslint-disable` line in source files, every added `t.Skip`, `t.SkipNow` or `//go:build ignore` in `*_test.go`, and every added `.skip(` or `.only(` in `*.test.ts` or `*.spec.ts`. An added `.only(` is a FAIL line, and so is any added suppression or skip that carries no reason: text after the directive on its line (`//nolint:errcheck // <reason>`, `//lint:ignore SA1019 <reason>`, `eslint-disable-next-line <rule> -- <reason>`, `@ts-expect-error <reason>`), a message argument to `t.Skip`, or a comment on the line directly above.
 
 The first time you run a project's verification procedure that no guide describes — the commands, their order, the environment they need — write it as `$docs_root/testing/<app>/guide.md` (`owner: verifier`, `date:`) and cite it from the log; later logs cite the guide and record outcomes only; when the steps change, update the guide in the same run.
 
@@ -68,7 +73,7 @@ Range reviewed: <base>..<head>
 Scope: <what ran and what did not, one line — "complete" only when every tier the plan names and every item in scope ran>
 
 ## Commands
-- `go test ./... -race` → exact outcome (counts, failures verbatim)
+- `go test -race -v ./...` → exit 0; counts: pass N, fail 0, skip N at <sha> for go test -race -v ./...; vs previous: <path> (failures verbatim)
 - ...
 
 ## Root cause  (FAIL only)
@@ -77,6 +82,9 @@ What actually broke, and why — not just that it broke.
 ## Coverage of changed code
 - internal/foo — covered by internal/foo/foo_test.go
 - web/src/lib/bar.ts — NOT COVERED → FAIL
+
+## Not examined
+What this run did not run or read — tiers, packages, paths — or `nothing`.
 
 ## Environment
 OS, Go / Node versions, Docker/Colima state.

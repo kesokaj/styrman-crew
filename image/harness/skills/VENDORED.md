@@ -33,7 +33,7 @@ Notes:
   job on both CLIs, and `sh-agent adopt` replaced the manifest repair. `find-skills` (vendored verbatim)
   still names `skill-repair` in its description; harmless — the model finds no such skill — and fixed
   by the next re-fetch, not by editing the vendored file.
-- `anti-ui-slop` includes its own LICENSE/NOTICE/MANIFEST from the upstream archive; the
+- `anti-ui-slop` includes its own LICENSE and NOTICE from the upstream archive; the
   optional paid UIZZE MCP is NOT configured — the free playbooks work standalone.
 - To add a skill: run `npx skills add <owner/repo> -s <skill> -y` from the repo root (it lands
   in `skills/` through the `.agents/skills` symlink), or copy any directory holding a `SKILL.md`

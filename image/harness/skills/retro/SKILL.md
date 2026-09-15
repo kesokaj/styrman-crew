@@ -40,7 +40,7 @@ Read the conversation transcript, plus the entries in `~/.config/sh-agent/feedba
 3. **Missing knowledge** — something about the stack, tooling, or conventions you did not know
 4. **Output format friction** — the user asked you to restructure or re-present output
 5. **Architecture/tooling mismatches** — the wrong tool, framework, or pattern
-6. **Trail evidence** — `<docs-root>/bugs/INDEX.md` rows from this session whose prevention rule is not yet written anywhere
+6. **Trail evidence** — `<docs-root>/bugs/INDEX.md` rows from this session whose prevention rule is not yet written anywhere, and `Diagnosis missed:` lines in bug records dated on or after the newest `<docs-root>/retros/*-retro*.md` record (all records when there is none)
 
 `--harness` (or the working directory is the harness checkout, `sh-agent status` first line): FIRST, before drafting anything, read `~/.config/sh-agent/retros.jsonl` and every `~/.config/sh-agent/proposals/*.md`, and list in the chat table, oldest first, every proposal whose `**Status:**` line says `queued` or is absent (files older than 2026-09-14 predate the line; absent means queued), plus every `REQUIREMENTS.md` edit the newest handoff names as awaiting approval. Each is a finding; a queued proposal's diff is reused as drafted and re-derived only when its target moved and the diff no longer applies.
 
@@ -53,9 +53,9 @@ Read the conversation transcript, plus the entries in `~/.config/sh-agent/feedba
 |---|---|---|
 | Rule gap or restatement | `.agents/rules/<name>.md`, or `AGENTS.md` § | `context/AGENTS.md` |
 | Environment / stack / GCP | `AGENTS.md` § Deploy, `.agents/docs/deploy/*.md` | `context/dev-setup.md` |
-| Skill knowledge or workflow | `.agents/skills/<name>/SKILL.md` | `skills/<name>/SKILL.md` |
+| Skill knowledge or workflow | `.agents/skills/<name>/SKILL.md` (never a harness skill's name; see `sh-agent list`) | `skills/<name>/SKILL.md` |
 | Skill reference | `.agents/skills/<name>/references/<topic>.md` | `skills/<name>/references/<topic>.md` |
-| Subagent behavior | `.agents/agents/<name>.md` | `agents/<name>.md` |
+| Subagent behavior | `.agents/agents/<name>.md` (never a harness agent's name) | `agents/<name>.md` |
 | Output format preference | `AGENTS.md` § | `context/AGENTS.md` (Hard rules) |
 
 3. **Scope from the target**: under the harness checkout (`context/`, `skills/`, `agents/`) → `Scope: harness`; in the project → `Scope: project`.
@@ -72,7 +72,7 @@ One hit from either → keep the project proposal AND add a second, `Scope: harn
 
 ## Step 3: Draft proposals
 
-For each finding, a **specific, minimal change**: the exact diff for context, rule, or skill edits; the full content for a new file; the **why** — what went wrong and how the change prevents it.
+For each finding, a **specific, minimal change**: the exact diff for context, rule, or skill edits; the full content for a new file; the **why** — what went wrong and how the change prevents it. A diff that deletes or rewrites a rule lists under it each removed rule's new home (file:line) or `dropped: <why>`.
 
 - **Be specific.** "Add a rule about X" is not a proposal. Show the exact text.
 - **Be minimal.** Target the smallest change that fixes the gap; never rewrite a section.
@@ -126,9 +126,9 @@ If `~/.config/sh-agent/` is denied (Claude Code asks once per session; a headles
 
 ## Step 6: Present and apply
 
-Show a numbered table — title, scope, target, one-line why — and ask which to apply. Then:
+Show a numbered table — title, scope, target, one-line why, and for a bug-derived proposal that targets an `AGENTS.md` whether its rule is actionable and generalizable (information, never a filter) — and ask which to apply. Then:
 
-- **Project scope, approved:** apply now as a task under the Definition of Done — edit the target, run the project's checks, commit in the project (stage by name), status `applied` in the record and the index.
+- **Project scope, approved:** apply now as a task under the Definition of Done — edit the target, run the project's checks, commit in the project (stage by name), status `applied` in the record and the index; when the applied rule is a bug's prevention rule, dispatch `bugs` in the same task to move that bug's row to the index's Graduated table.
 - **Harness scope:** status `queued` by default; a later session in the harness checkout runs `/retro --harness` and applies it there. Only when the user asks in the same turn to apply now: locate the checkout (`sh-agent status` first line, confirm `test -f <repo>/context/AGENTS.md`; either failing → stays `queued`), apply there under that repo's own rules (`sh-agent install`, one start of each CLI as its `AGENTS.md` Testing section says, a `changes/` entry, commit, push, handoff; name the downstream mirrors its `deploy/remote.md` lists as the next task in their projects), then update the status in the queue file and in the record when it is on this machine.
 - **Rejected:** annotate `Status: rejected <date> — <reason>` in the record and the queue; never delete a proposal.
 - **Headless, no user turn:** nothing is applied; every status stays `proposed` or `queued`, and the record says so.

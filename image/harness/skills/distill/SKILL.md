@@ -95,7 +95,7 @@ Present the user with a clear recommendation:
 
 | Scope | When | Location |
 |---|---|---|
-| **Project-specific** (default) | Pattern is unique to this project | `.agents/skills/<name>/SKILL.md` |
+| **Project-specific** (default) | Pattern is unique to this project | `.agents/skills/<name>/SKILL.md` (never a harness skill's name; see `sh-agent list`) |
 | **Global** (`--global`) | Pattern applies across all your projects | `<harness-repo>/skills/<name>/SKILL.md` |
 
 Use project-specific as the default. Only suggest global if:

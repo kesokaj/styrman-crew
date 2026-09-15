@@ -91,4 +91,4 @@ Number sequentially. To reverse an old decision, append a new ADR and mark the o
 
 ## Output
 
-Reply in **at most ten lines**: which records you appended (changelog path, ADR number) with a one-line summary each, any deferred work the main agent should put in `TODO.md`, and any `DATE-UNKNOWN` entry so the dispatcher can fix it. The detail is on disk.
+Reply in **at most ten lines**: which records you appended (changelog path, ADR number) with a one-line summary each, any deferred work the main agent should file under the active plan's Follow-ups or the handoff's Next Steps, and any `DATE-UNKNOWN` entry so the dispatcher can fix it. The detail is on disk.

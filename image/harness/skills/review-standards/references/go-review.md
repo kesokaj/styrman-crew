@@ -44,3 +44,4 @@ Concrete checks for Go diffs. Idiom authority: the `golang` skill. Cite file:lin
 - [ ] Changed behavior has a covering test in the same package (`_test.go` beside the source); table-driven with `t.Run` subtests for multi-case logic.
 - [ ] Tests assert observable behavior through the public interface, not internal call sequences; `t.Helper()` in helpers.
 - [ ] Parallel-safe tests marked `t.Parallel()`; no sleeps as synchronization — use channels or `testing/synctest`-style fakes.
+- [ ] `t.Skip` only behind a named prerequisite (`testing.Short()`, a missing binary) with a message; `//nolint:<linter> // <reason>` and `//lint:ignore <check> <reason>`, never bare.

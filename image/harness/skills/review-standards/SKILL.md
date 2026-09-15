@@ -18,6 +18,7 @@ Language deep-dives (load only for the languages present in the diff):
 - [ ] Unused dependencies (`go mod tidy` diff; `npm ls`/depcheck for TS) and unused imports.
 - [ ] Commented-out code blocks — version control remembers; the file must not.
 - [ ] Unreachable branches: conditions that can never be true, code after unconditional return/throw, feature flags that no longer vary.
+- [ ] Leftover debug output and temporary scaffolding added for the change (prints, `console.log`, debug logs).
 - [ ] Verdict is always "delete", with the evidence (no callers, no references). Never suggest wrapping dead code in a comment or a TODO.
 
 ## 2. Flow tracing — every changed function, caller to callee
@@ -29,12 +30,16 @@ Installers count as callers. A change that an installer, updater or converge ste
 - [ ] Context and cancellation flow end-to-end: Go — `context.Context` passed down, honored in loops and I/O, goroutines have an exit path; TS — `AbortSignal` reaches fetches/long operations that outlive a request or component.
 - [ ] Resource lifetimes: everything opened is closed on every path, including the error paths.
 - [ ] Every new test can FAIL: would it still pass if the behaviour it names were reverted? Reject tests that assert on source text rather than behaviour, that re-assert a constant against itself, or that exercise a path the test setup makes unreachable. A test that cannot fail is worse than no test — it reports coverage that does not exist.
+- [ ] A write that can fail halfway leaves no partial state; a check-then-act on a file or row is not a TOCTOU race; a fallback does not mask the error it replaces; empty, NaN, Unicode and timezone inputs are handled where the input allows them.
+- [ ] A source change whose generated counterpart (route tree, protobuf, `go generate` output, embedded build) is absent from the diff.
+- [ ] An assertion changed in an existing test traces to a behaviour change in the source diff; a suppression directive, skip, `.only` or lint-config exclusion the diff adds names its rule or condition and a reason other than making the check pass — otherwise it is a finding.
 
 ## 3. Standards conformance — the language skills are the authority
 
 - [ ] Go changes conform to the `golang` skill; TypeScript to the `typescript` skill; UI/TanStack Start work to the `frontend` skill. Cite the specific rule when flagging.
 - [ ] Where this file and a language skill overlap, the language skill wins for idiom; this file wins for review scope and severity.
 - [ ] Formatting/lint gates already automated (gofmt, vet, eslint) are verified as run, not re-litigated line-by-line.
+- [ ] Comments, doc-comments, test names and spec rows that name behaviour the diff changed still describe it — the global context's describing-text rule; a stale one is a finding, not a comment request.
 
 ## 4. Directory layout
 

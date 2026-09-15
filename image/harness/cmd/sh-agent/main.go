@@ -121,8 +121,8 @@ func run(args []string, out io.Writer) error {
 		// like every install it still reads the checkout's git state, which
 		// is why the checkout must be one the operator named or installed
 		// before. A plain copy (no .git: a mirror inside a project's image)
-		// never rebuilds — its image built the running binary from that
-		// same tree, the tree is often read-only to the installing user,
+		// never rebuilds — its image or VM build step built the running binary
+		// from that same tree, the tree is often read-only to the installing user,
 		// and git cannot update it anyway (BUG-015).
 		_, goErr := exec.LookPath("go")
 		own := harness.IsCheckout(repo)
@@ -306,7 +306,7 @@ func status(repo, home, vendorFlag string, out io.Writer) error {
 		}
 	}
 	if report.Counts["foreign"] > 0 {
-		fmt.Fprintln(out, "note       ~/.claude/CLAUDE.md is yours; make sure it contains the line `@AGENTS.md`")
+		fmt.Fprintln(out, "note       ~/.claude/CLAUDE.md is yours; move its content into a rule file under rules/ in the harness repo, remove it, and run install to write the one-line import")
 	}
 	if !report.Drift() {
 		fmt.Fprintf(out, "drift      none — %d files match the repo\n", report.Counts["ok"])

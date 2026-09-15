@@ -319,3 +319,33 @@ func TestPlainCopyNeverRebuilds(t *testing.T) {
 		t.Errorf("dry run from a plain copy must say so as a dry run:\n%s", out.String())
 	}
 }
+
+// A hand-written ~/.claude/CLAUDE.md survives install, and status names it
+// with where its content belongs, so the one-line import can replace it (R2).
+func TestStatusNamesForeignClaudeMD(t *testing.T) {
+	t.Setenv(harness.ChildEnv, "1")
+	home := t.TempDir()
+	repo, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeMD := filepath.Join(home, harness.ClaudeRoot, "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(claudeMD), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(claudeMD, []byte("my own notes\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := run([]string{"install", "--repo", repo, "--home", home}, &out); err != nil {
+		t.Fatalf("install: %v\n%s", err, out.String())
+	}
+	out.Reset()
+	if err := run([]string{"status", "--repo", repo, "--home", home}, &out); err != nil {
+		t.Fatalf("status: %v\n%s", err, out.String())
+	}
+	want := "note       ~/.claude/CLAUDE.md is yours; move its content into a rule file under rules/ in the harness repo"
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("status missing %q:\n%s", want, out.String())
+	}
+}

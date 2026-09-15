@@ -29,8 +29,8 @@ Read the conversation transcript and identify:
 
 1. **Goal** — What was the user trying to accomplish?
 2. **What got done** — Completed changes, files modified, commands run
-3. **What's still open** — Unfinished work, known issues, blocked items
-4. **Key decisions** — Architecture choices, trade-offs made, rejected alternatives
+3. **What's still open** — the active plan's first unticked box with its in-progress note, then its Follow-ups and `Open:` rows, then unfinished work, known issues, blocked items
+4. **Key decisions** — the active plan's `## Decisions` rows first, then architecture choices, trade-offs made, rejected alternatives from the transcript
 5. **Corrections** — Only what the user actually corrected, each backed by a `~/.config/sh-agent/feedback.jsonl` entry (quote the user's words and the entry's timestamp). Anything the agent inferred is not a correction: it goes under `## Agent notes (unverified)`, never into Corrections — the Resume Protocol gives the newest handoff the win on conflict, so an inferred rule here silently outranks the global context
 6. **Environment state** — Running processes, branches checked out, pending commits, dirty working tree
 
@@ -46,7 +46,7 @@ Do NOT duplicate content that already exists elsewhere. Instead, reference these
 | Implementation plans | `.agents/docs/plans/` |
 | Testing guides | `.agents/docs/testing/<app>/` |
 | Deploy guides | `.agents/docs/deploy/{local,remote,gcp}.md` |
-| Deferred work | `TODO.md` |
+| Deferred work | the active plan's Follow-ups, or the handoff's Next Steps when no plan is active |
 | Requirements | `REQUIREMENTS.md` |
 | Retro and distill records (project scope) | `.agents/docs/retros/` |
 | Harness-scope retro proposals (queue) | `~/.config/sh-agent/proposals/` |
@@ -151,7 +151,7 @@ Reading side: the Resume Protocol in the global context tells every fresh sessio
 
 ### Cold-reader check — before the handoff counts as finished
 
-A handoff is done when a fresh reader can resume from it, not when it is saved. Run the Resume Protocol as that reader (yourself with the file only, or the `explorer` agent given the path and nothing else): AGENTS.md → TODO.md → this handoff → ROADMAP.md "Now" → the active plan's unticked boxes → the three newest `changes/` → `bugs/INDEX.md`. Ask for four things: the status and single next step as the trail states them, any named file that does not exist, any contradiction between handoff, ROADMAP, TODO, and plan, and anything still left to guess. Fix what comes back at the source (plan, ROADMAP, TODO via the dispatches above) and in the handoff itself while it is still this session's; then report.
+A handoff is done when a fresh reader can resume from it, not when it is saved. Run the Resume Protocol as that reader (yourself with the file only, or the `explorer` agent given the path and nothing else): AGENTS.md → TODO.md → this handoff → ROADMAP.md "Now" → the active plan's unticked boxes → the three newest `changes/` → `bugs/INDEX.md`. Ask for six things: the status and single next step as the trail states them, any named file that does not exist, any contradiction between handoff, ROADMAP, TODO, and plan, any plan with an unticked box outside its fenced blocks that `ROADMAP.md` "Now" does not name (``awk 'FNR==1{f=0} match($0,/^`{3,}/){n=RLENGTH; if(!f){f=n} else if(n==f && $0 ~ /^`+[[:space:]]*$/){f=0}; next} !f && /^- \[ \]/{print FILENAME; nextfile}' <docs-root>/plans/*.md``), any commit since the previous handoff that changed paths outside `<docs-root>` with no `changes/` entry covering it, and anything still left to guess. Fix what comes back at the source (plan, ROADMAP, TODO via the dispatches above) and in the handoff itself while it is still this session's; then report.
 
 ## Step 6: Commit and push
 

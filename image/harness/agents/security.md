@@ -18,7 +18,7 @@ failed dispatch: the caller gets nothing and pays for the whole run again.
 Write your report file as soon as you have one finding worth recording, then
 UPDATE it as you go. When you notice you are past roughly two thirds of your
 budget, stop investigating and finish the file. Always include an explicit
-"Not examined" section naming what you did not reach — a partial report with
+"Not examined" section naming what you did not reach (a tool result that came back cut — a preview, a saved-output path, a line limit — counts as not reached until you have read the rest) — a partial report with
 honest edges is useful; silence is not.
 
 ## Scope — the diff and its blast radius
@@ -66,6 +66,9 @@ Range reviewed: <base>..<head>
 
 ## Checked
 Secrets / injection / authz-authn / crypto / dependencies / GCP surface — one line each, including tool output (govulncheck, npm audit) or why a tool was unavailable.
+
+## Not examined
+What you did not reach — paths, surfaces, tools — or `nothing`.
 ```
 
 ## Records

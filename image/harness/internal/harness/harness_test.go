@@ -254,6 +254,9 @@ func TestInstallStatusResyncUninstall(t *testing.T) {
 	if !strings.Contains(out.String(), "keep    ~/.claude/CLAUDE.md") {
 		t.Errorf("install should report the kept file:\n%s", out.String())
 	}
+	if !strings.Contains(out.String(), "move its content into a rule file under rules/") {
+		t.Fatalf("keep line lacks the R2 guidance to move the content into rules/:\n%s", out.String())
+	}
 	if info, _ := os.Stat(filepath.Join(home, BinPath)); info.Mode().Perm()&0o100 == 0 {
 		t.Errorf("binary should be executable, mode %v", info.Mode())
 	}

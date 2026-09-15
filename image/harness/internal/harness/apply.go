@@ -34,7 +34,7 @@ func Install(repo, home string, files []File, vendor string, dryRun bool, out io
 		switch {
 		case f.KeepForeign && readErr == nil && !IsOurs(existing) && !bytes.Equal(existing, f.Data):
 			counts["kept"]++
-			fmt.Fprintf(out, "keep    ~/%s (not written by sh-agent; add the line `@AGENTS.md` to it yourself)\n", f.Rel)
+			fmt.Fprintf(out, "keep    ~/%s (not written by sh-agent; move its content into a rule file under rules/ in the harness repo, remove the file, and run install again)\n", f.Rel)
 			continue
 		case readErr == nil && bytes.Equal(existing, f.Data):
 			counts["unchanged"]++

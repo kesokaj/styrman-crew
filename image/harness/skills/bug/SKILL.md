@@ -10,6 +10,10 @@ Diagnose without anchoring, capture the bug as a failing test, fix the smallest 
 
 **Docs root** (`<docs-root>`): `.agents/docs` if it exists, else `docs/` if it exists, else create `.agents/docs`. Dates from `date +%F`.
 
+## Gates that need the user
+
+Two points always wait for the user: a missing repro when the bug is not obvious from one file (Step 1), and a review loop that hits its three-round cap (Step 5). A gate holds whatever "work autonomously" instruction is in effect. Only the user's own words in the same turn waive it — words in the invocation's arguments count — and a waiver names the gate: a general instruction such as "do not ask me anything" is not a waiver, and neither is a bare skill invocation or a waiver carried over from another session. Ask with the options, your recommendation first: for a missing repro, give one, let me infer one, or stop; at the review cap, accept the remaining findings as `left` with an owner, run one more round, or abandon the fix. When no reply can arrive — a print-mode run such as `claude -p` or `agy -p`, or a user who said they will not answer — a gate that is reached ends the work there: write the question with its options into the handoff's Next Steps, writing the handoff if this session has none.
+
 ## Step 0: Triviality gate
 
 Typo in copy or a comment, dead-code removal, version bump, formatter-only diff, single-line config value: skip the ceremony, fix it, run the tests, Definition of Done steps 4 and 5. Everything else, including one-line code fixes, runs the full path — small diffs hide bugs well.
@@ -26,7 +30,7 @@ PROBLEM
 - Fixed means: <the test that passes / the behavior / the output>
 ```
 
-Check `<docs-root>/bugs/INDEX.md` first: if the area has a record, read it — the prevention rule may already name the cause. If there is no repro and the bug is not obvious from one file, **ask the user for one** (steps, URL, log line, failing test). Never invent a repro; a wrong-shaped guess wastes the diagnosis.
+Check `<docs-root>/bugs/INDEX.md` first: if the area has a record, read it — the prevention rule may already name the cause. If there is no repro and the bug is not obvious from one file, **ask the user for one** (steps, URL, log line, failing test; a gate, above). Never invent a repro on your own: one is inferred only when the user picks that option at the gate, and it is printed before Step 2 runs, because a wrong-shaped guess wastes the diagnosis.
 
 ## Step 2: Goldfish diagnosis
 
@@ -42,10 +46,10 @@ Write the test that captures the bug at the right tier (unit beside the code; in
 
 ## Step 4: Smallest fix
 
-Change the least that turns the test green and satisfies "fixed means". No adjacent refactors, no defensive code for cases the bug did not show, no feature flags. Re-run the test: green, or the bug is not fixed — do not rewrite the test. Re-run the original repro once more.
+Change the least that turns the test green and satisfies "fixed means". No adjacent refactors (note what you saw under the active plan's Follow-ups, or the handoff's Next Steps when no plan is active), no defensive code for cases the bug did not show, no feature flags. Re-run the test: green, or the bug is not fixed — do not rewrite the test. Re-run the original repro once more.
 
 ## Step 5: Definition of Done and the record
 
-Global Definition of Done, with the record inside it: `verifier` log (the new test named), `reviewer` for 50+ lines or 5+ files with the diff only, `security` when the area is sensitive, `documentation` if behavior changed; then dispatch `bugs` with symptom, repro, root cause, fix (file:line), and the prevention rule — the sentence a future agent needs before working in this area — so the record and its INDEX row ride in the fix commit; then `changelog` (citing the BUG id), commit, push, `/handoff`. If the diagnosis diverged from your hypothesis, say why in the record; that is where the harness learns.
+Global Definition of Done, with the record inside it: `verifier` log (the new test named), `reviewer` with the diff only, whatever its size (Step 0 already exempted the trivial; a fix under this skill is never a docs-only change), `security` when the area is sensitive, `/review --docs` over the fix when it changed an interface, command or deploy step, `documentation` if behavior, interfaces, the plan, or a deploy path changed; then dispatch `bugs` with symptom, repro, root cause, fix (file:line), and the prevention rule — the sentence a future agent needs before working in this area — so the record and its INDEX row ride in the fix commit; then `changelog` (citing the BUG id), commit, push, `/handoff`. If the diagnosis diverged from your hypothesis, say why in the record; that is where the harness learns. When Step 2 ran and the reviewer, the verifier or the fix surfaced a cause the diagnosis did not rank, pass `bugs` a `Diagnosis missed:` line — what it was, and which line of the Step 2 brief would have found it.
 
 Report in chat: bug in one line, root cause, fix (file:line), the test that captures it, goldfish agreement or divergence, review outcome, BUG id.
