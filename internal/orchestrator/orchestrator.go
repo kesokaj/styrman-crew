@@ -344,6 +344,23 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 	switch {
 	case err == nil:
 		id = insp.ID
+		// Stop switched the restart policy off (stopLocked, BUG-063); a
+		// started project restarts with the host again. Asserted for EVERY
+		// existing container, running or not — before the start below, so a
+		// VM that comes up is never one the policy forgot, and on a running
+		// one too, because a stop that half-failed with the container still
+		// up (BUG-030's scenario: the marker is cleared, the project runs
+		// "exactly as before") would otherwise leave it pinned at "no" until
+		// its next Start. Idempotent, and it does not touch the guest
+		// (probed on a Kata VM 2026-09-16). Every attach passes through
+		// here, which is what makes this the invariant's home; the write is
+		// skipped when the inspect already shows the policy on.
+		if want := restartPolicy(false); insp.HostConfig == nil || insp.HostConfig.RestartPolicy.Name != want.Name {
+			if _, uerr := o.docker.ContainerUpdate(ctx, id, container.UpdateConfig{RestartPolicy: want}); uerr != nil {
+				o.logger.Warn("could not switch the restart policy back on; this VM will not restart with the host until its next attach (BUG-063)",
+					"project", project, "error", uerr)
+			}
+		}
 		if insp.State == nil || !insp.State.Running {
 			o.logger.Info("starting stopped project container", "project", project)
 			if err := o.docker.ContainerStart(ctx, id, container.StartOptions{}); err != nil {
@@ -1199,6 +1216,23 @@ func (o *Orchestrator) stopLocked(ctx context.Context, project string) error {
 	// Trigger it ourselves by signalling PID 1 inside the guest, give it a
 	// moment, then stop. Best effort: a failed exec (already stopping) just
 	// falls through to ContainerStop.
+	//
+	// The policy goes off FIRST (BUG-063): that TERM makes PID 1 exit 0
+	// before the daemon has been told the container is being stopped, and
+	// under `unless-stopped` a clean exit is a restart, not a stop — dockerd
+	// logged "restarting container … manualRestart=false", the VM booted a
+	// second time, and the ContainerStop below then hard-killed it. With
+	// the policy off the exit stays a stop; the start path switches it back
+	// on (ensureRunningLocked), so a started project still restarts with the
+	// host. Best effort too: a failed update leaves the old race for this
+	// one stop, nothing worse, and says so.
+	if _, err := o.docker.ContainerUpdate(ctx, name, container.UpdateConfig{RestartPolicy: restartPolicy(true)}); err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil
+		}
+		o.logger.Warn("stop: could not switch the restart policy off first; the daemon may restart the guest's clean exit once (BUG-063)",
+			"project", project, "error", err)
+	}
 	if code, _, err := o.Exec(ctx, name, ExecSpec{Cmd: []string{"kill", "-TERM", "1"}}); err == nil && code == 0 {
 		o.waitStopped(ctx, name, 12*time.Second)
 	}
@@ -1506,6 +1540,10 @@ func (o *Orchestrator) recreateMissingNetwork(ctx context.Context, containerID, 
 // restartPolicy picks the container restart policy. Project VMs restart with
 // the host (seamless recovery); the setup VM is ephemeral so it does not
 // come back after a reboot and can be reaped when onboarding is abandoned.
+// A project's policy is not fixed for life: Stop switches it to "no" before
+// the guest is told to exit and Start switches it back (BUG-063), so a
+// deliberately stopped project stays down and a running one still restarts
+// with the host.
 func restartPolicy(noRestart bool) container.RestartPolicy {
 	if noRestart {
 		return container.RestartPolicy{Name: "no"}

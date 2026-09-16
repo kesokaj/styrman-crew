@@ -443,6 +443,16 @@ check "live duplicate name refused" "[ \"${NEW2}\" = 409 ]"
 say "stop + delete (wipe)"
 curl -fsS -X POST "${API}/api/projects/${ID}/stop" >/dev/null
 check "container stopped" "! docker ps --format '{{.Names}}' | grep -q ${CN}"
+# BUG-063: Stop switches the restart policy off before the guest's own exit,
+# so the daemon does not restart the clean exit — the container ends exited
+# 0 with no restart on record, and its policy reads "no" while stopped. The
+# old ordering left RestartCount 1 (a second boot) and, on the live host, an
+# exit 255 after the real stop hard-killed the rebooted VM. Exit code and
+# RestartCount are the BEHAVIOUR (the daemon did not restart); the policy
+# name is the persisted HostConfig, what a host reboot reads — the check
+# after the boot=1 start below asserts that persisted value only.
+check "stop left the container exited 0, no restart, policy off (BUG-063)" \
+    "[ \"\$(docker inspect -f '{{.State.ExitCode}} {{.RestartCount}} {{.HostConfig.RestartPolicy.Name}}' ${CN})\" = '0 0 no' ]"
 check "terminals still listed while stopped" \
     "curl -fsS ${API}/api/projects/${ID}/terminals | grep -q '\"title\"'"
 # Sticky stop (v1.11.0): an automatic reconnect (no boot=1) must be answered
@@ -455,6 +465,8 @@ OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/${TID}?cols=
     -send "echo revived\r" -wait 8s || true)
 check "boot=1 reconnect boots the stopped VM" "echo '${OUT}' | grep -q revived"
 check "VM running again after boot=1" "docker ps --format '{{.Names}}' | grep -q ${CN}"
+check "start switched the restart policy back on (BUG-063)" \
+    "[ \"\$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' ${CN})\" = unless-stopped ]"
 # The BUG-062 undo above left the home without a stamp or a settings.json:
 # this boot seeds again and the file comes back with the key (ADR-072).
 check "re-seed after the BUG-062 undo recreates settings.json with the key" \

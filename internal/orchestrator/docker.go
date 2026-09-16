@@ -19,12 +19,15 @@ import (
 // modeRuntime seams — a caller-scoped subset, not a mirror of the SDK.
 // Generated from `grep -oh 'o\.docker\.[A-Za-z]*' internal/orchestrator/*.go`
 // on 2026-09-10 (19 methods; BUG-003's residual, plan
-// .agents/docs/plans/2026-09-10-todo-closeout.md item O).
+// .agents/docs/plans/2026-09-10-todo-closeout.md item O); ContainerUpdate
+// added 2026-09-16 (BUG-063: the restart policy is switched off for a Stop
+// and back on for a Start).
 type dockerAPI interface {
 	ContainerInspect(ctx context.Context, containerID string) (container.InspectResponse, error)
 	ContainerCreate(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *ocispec.Platform, containerName string) (container.CreateResponse, error)
 	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
 	ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error
+	ContainerUpdate(ctx context.Context, containerID string, updateConfig container.UpdateConfig) (container.UpdateResponse, error)
 	ContainerRemove(ctx context.Context, containerID string, options container.RemoveOptions) error
 	ContainerList(ctx context.Context, options container.ListOptions) ([]container.Summary, error)
 	ContainerLogs(ctx context.Context, containerID string, options container.LogsOptions) (io.ReadCloser, error)

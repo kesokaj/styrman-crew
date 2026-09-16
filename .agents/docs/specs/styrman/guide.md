@@ -360,7 +360,10 @@ Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudf
   used to boot the VM right back up, making Stop un-stick whenever a tab
   was open. Only explicit user intent boots it again: the Start button,
   opening/resuming a terminal (its first connect carries `?boot=1`), or
-  any API start. See terminal-protocol.md's close 4002.
+  any API start. See terminal-protocol.md's close 4002. Since v1.34.1, Stop
+  also switches the container's restart policy to `no` before the guest's
+  own shutdown, and the next Start or terminal attach switches it back to
+  `unless-stopped`, so Docker never restarts the clean exit (BUG-063).
 - **Caddy's ingress upstream is chosen deterministically**: the server
   container is multi-homed (the ingress network plus each project's `sdb-*`
   bridge, for the broker + preview proxy), so a naive "first network" pick
@@ -664,8 +667,9 @@ Deleting a project WITHOUT "wipe files" keeps its workspace dir under
 UI lists it anymore — reclaim disk by removing it manually if you never
 re-import it.
 
-- **Reboots**: containers restart themselves (`unless-stopped`); the server
-  re-adopts from labels. **A lost host is not recoverable**: there is no
+- **Reboots**: containers restart themselves (`unless-stopped`; a project
+  stopped from the UI or by the idle reaper stays stopped, its policy being
+  `no` while stopped — v1.34.1, BUG-063); the server re-adopts from labels. **A lost host is not recoverable**: there is no
   backup layer (operator decision 2026-09-01) — durability is git, commit
   and push. Rebuilding a host is `host-setup.sh` + a fresh `deploy/.env`
   (see deploy.md's "Durability" section); anything not committed to a

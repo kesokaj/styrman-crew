@@ -2,7 +2,7 @@
 owner: bugs
 date: 2026-09-16
 id: BUG-063
-status: open
+status: fixed
 area: internal/orchestrator/orchestrator.go (stopLocked, restartPolicy)
 ---
 # BUG-063: Stop's in-guest SIGTERM lets Docker's restart policy revive the project before ContainerStop runs, then the revived VM gets hard-killed
@@ -35,6 +35,12 @@ available. API now reports the project `"state":"stopped"`.
 ## Repro
 Not reproduced on demand; observed once, live, immediately after the
 v1.34.0 deploy while stopping project "google".
+Reproduced by a unit test before the fix: `TestStopTurnsTheRestartPolicyOffBeforeTheGuestExits`
+and `TestEnsureRunningTurnsTheRestartPolicyBackOnBeforeStart` (both in
+`internal/orchestrator/bug063_test.go`) failed for the defect's reason
+against the pre-fix code — `after Stop: running=false restarts=1 — the
+daemon restarted the clean exit (BUG-063)` and `after Start: running=true
+policy="no"` — before passing against the fix.
 
 ## Root cause
 `stopLocked` (orchestrator.go:1195-1210) first execs `kill -TERM 1` in the
@@ -56,11 +62,26 @@ Not introduced by v1.34.0: the v1.33.0..v1.34.0 commit range does not
 touch orchestrator.go.
 
 ## Fix
-Not fixed — open, a separate task. Direction to evaluate (not verified):
-make Docker aware of the stop before the guest exits — e.g. issue
-`ContainerStop` (which marks the container manually stopped so the restart
-policy stays quiet) concurrently with or before the in-guest TERM, or make
-the restart policy not restart on a clean guest-initiated exit.
+In the fix commit, `internal/orchestrator/orchestrator.go`: `stopLocked` now
+calls `o.docker.ContainerUpdate(ctx, name, container.UpdateConfig{RestartPolicy:
+restartPolicy(true)})` (policy "no") BEFORE the in-guest `kill -TERM 1` —
+a NotFound answer returns nil, any other error is logged as a Warn and the
+old sequence proceeds. `ensureRunningLocked` calls `ContainerUpdate(… restartPolicy(false))`
+("unless-stopped") for EVERY existing container, running or not, before
+any start — skipped when the inspect already shows the policy on, a Warn
+on error — so a stop that half-failed with the VM still up (BUG-030's
+scenario) cannot leave a running project pinned at "no" past its next
+attach (review round 1, finding 1).
+`internal/orchestrator/docker.go`: `ContainerUpdate` added to the
+`dockerAPI` seam. Tests added in `internal/orchestrator/bug063_test.go`
+(see Repro, plus `TestEnsureRunningRestoresTheRestartPolicyOnARunningContainer`
+for the running-and-pinned case); the fake in `fakedocker_test.go` gained `restart`/
+`restartCount` and a `ContainerUpdate`, and plays the daemon's restart
+manager on the `kill -TERM 1` exec. Tier 2
+(`.agents/docs/testing/styrman/integration.sh`) gained two checks in the
+"stop + delete" section asserting `docker inspect` reads exit 0, restart
+count 0, policy "no" after Stop, and policy "unless-stopped" again after
+the next Start. Ships as v1.34.1 (a PATCH).
 
 ## Prevention
 A container meant to power off gracefully from the inside must tell the

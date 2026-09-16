@@ -43,7 +43,8 @@ func plant(fd *fakeDocker, cfg *config.Config, running, lan bool) {
 	name := config.ContainerName(tProj)
 	net := config.NetworkName(tProj)
 	fd.containers[name] = &fakeContainer{id: "id-" + name, name: name, image: fd.imageID, running: running,
-		binds: []string{cfg.ProjectWorkspace(tUser, tProj) + ":/home/x/projects/p"}, netName: net}
+		binds: []string{cfg.ProjectWorkspace(tUser, tProj) + ":/home/x/projects/p"}, netName: net,
+		restart: "unless-stopped"}
 	fd.networks[net] = &fakeNetwork{name: net, bridge: config.BridgeNameFor(net, lan)}
 }
 

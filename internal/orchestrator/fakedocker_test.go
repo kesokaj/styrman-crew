@@ -51,6 +51,12 @@ type fakeContainer struct {
 	// ips: the container's address per network, as ContainerInspect reports
 	// it (BrowserPeer reads the server's own).
 	ips map[string]string
+	// restart is the restart policy name ("unless-stopped", "no"); the
+	// exec of stopLocked's in-guest TERM plays the daemon's restart manager
+	// against it (BUG-063), and restartCount is what `docker inspect` would
+	// show afterwards.
+	restart      string
+	restartCount int
 }
 
 type fakeNetwork struct {
@@ -118,8 +124,9 @@ func (f *fakeDocker) ContainerInspect(_ context.Context, id string) (container.I
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	resp := container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
-		ID: c.id, Image: c.image, State: &container.State{Running: c.running},
-		HostConfig: &container.HostConfig{Binds: append([]string(nil), c.binds...)},
+		ID: c.id, Image: c.image, State: &container.State{Running: c.running}, RestartCount: c.restartCount,
+		HostConfig: &container.HostConfig{Binds: append([]string(nil), c.binds...),
+			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(c.restart)}},
 	}}
 	if len(c.ips) > 0 {
 		resp.NetworkSettings = &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{}}
@@ -140,6 +147,7 @@ func (f *fakeDocker) ContainerCreate(_ context.Context, cfg *container.Config, h
 	}
 	if hc != nil {
 		c.binds = hc.Binds
+		c.restart = string(hc.RestartPolicy.Name)
 	}
 	if nc != nil {
 		for n := range nc.EndpointsConfig {
@@ -150,6 +158,20 @@ func (f *fakeDocker) ContainerCreate(_ context.Context, cfg *container.Config, h
 	f.containers[name] = c
 	f.mu.Unlock()
 	return container.CreateResponse{ID: c.id}, nil
+}
+
+func (f *fakeDocker) ContainerUpdate(_ context.Context, id string, cfg container.UpdateConfig) (container.UpdateResponse, error) {
+	if err := f.record("ContainerUpdate(" + id + ":" + string(cfg.RestartPolicy.Name) + ")"); err != nil {
+		return container.UpdateResponse{}, err
+	}
+	c, ok := f.byName(id)
+	if !ok {
+		return container.UpdateResponse{}, notFound("container")
+	}
+	f.mu.Lock()
+	c.restart = string(cfg.RestartPolicy.Name)
+	f.mu.Unlock()
+	return container.UpdateResponse{}, nil
 }
 
 func (f *fakeDocker) ContainerStart(_ context.Context, id string, _ container.StartOptions) error {
@@ -209,11 +231,28 @@ func (f *fakeDocker) ContainerLogs(_ context.Context, id string, _ container.Log
 }
 
 func (f *fakeDocker) ContainerExecCreate(_ context.Context, id string, opts container.ExecOptions) (container.ExecCreateResponse, error) {
-	if err := f.record("ContainerExecCreate(" + strings.Join(opts.Cmd, " ") + ")"); err != nil {
+	cmd := strings.Join(opts.Cmd, " ")
+	if err := f.record("ContainerExecCreate(" + cmd + ")"); err != nil {
 		return container.ExecCreateResponse{}, err
 	}
-	if _, ok := f.byName(id); !ok {
+	c, ok := f.byName(id)
+	if !ok {
 		return container.ExecCreateResponse{}, notFound("container")
+	}
+	// stopLocked's in-guest TERM (when it takes, execExit 0): PID 1 exits 0
+	// and the container's task ends. The daemon's restart manager then does
+	// what the policy says — a clean exit under `unless-stopped` with no
+	// stop on record is a RESTART, one more boot and RestartCount+1
+	// (BUG-063, dockerd: "restarting container … manualRestart=false");
+	// under "no" the container stays down.
+	if cmd == "kill -TERM 1" && f.execExit == 0 {
+		f.mu.Lock()
+		c.running = false
+		if c.restart == "unless-stopped" || c.restart == "always" {
+			c.running = true
+			c.restartCount++
+		}
+		f.mu.Unlock()
 	}
 	return container.ExecCreateResponse{ID: "exec-1"}, nil
 }
