@@ -83,6 +83,8 @@ only the living docs. A mirror refresh that changes what `install` writes
 into a home runs Tier 2 before its commit, and a mirror refresh of 50+
 lines gets the code lens every time, per the project's Definition of Done.
 
+This rule graduated into `.agents/rules/tests-describe-behaviour.md` on 2026-09-16.
+
 ## Related
 BUG-062 (same commit, same skipped code lens, same stale-comment family).
 Commit 6a0b39e; review `.agents/docs/reviews/2026-09-16-review-5418f19-9dab61d-code.md`

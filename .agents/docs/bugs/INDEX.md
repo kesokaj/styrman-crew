@@ -64,6 +64,11 @@
 | BUG-058 | 2026-09-14 | image/harness (vendored styrman-harness mirror) | fixed upstream (harness BUG-016, mirrored in v1.33.0) | vendored `go test ./...` FAILs `TestDryRunNeverBuilds` — expects a git-checkout dry-run message, mirror is a plain copy | a vendored dep's own tests are not this project's gate, report as observation; a tree-shape-dependent test must construct that shape itself, not inherit it |
 | BUG-059 | 2026-09-14 | image/Dockerfile | fixed | round-1 security fix's `test ! -e /styrman/harness/.git` RUN check can never fire — `.dockerignore` already strips `.git` from the build context | trust a new guard only after making it fail once on purpose; grep for a mechanism that already enforces the property before adding a second one |
 | BUG-060 | 2026-09-14 | internal/httpapi (terminal-WS boot) / internal/terminal | fixed | first terminal of a stopped project after a server restart got "broker did not answer" MOTD — server never joined the project bridge | terminal-WS boot is a boot path too — grep every `EnsureRunning(` caller when a self-attach step is added/moved; 3rd occurrence of the "mechanism reaches every caller" family (rule already existed, not consulted) |
-| BUG-061 | 2026-09-16 | .agents/docs/testing/styrman/integration.sh (Tier 2), image/entrypoint.sh comment | fixed | Tier 2 "no previous-harness artifacts" check failed (passed=93 failed=1) in the v1.34.0 release-range run — install now writes settings.json | a behaviour change includes the tests that describe it — grep test suites for the old assertion, not only living docs; code lens + Tier 2 required on a mirror refresh |
 | BUG-062 | 2026-09-16 | image/entrypoint.sh (install stdout filter) | fixed | boot-log filter `^settings:` drops the `note: `-prefixed lines for the refusal cases (non-regular/unreadable/non-JSON settings.json), so those refusals are silent | validate an added log filter in both the must-pass and must-fail state before trusting it |
 | BUG-063 | 2026-09-16 | internal/orchestrator/orchestrator.go (stopLocked, restartPolicy) | fixed | Stop's in-guest SIGTERM exits the VM cleanly before Docker is told to stop it; `unless-stopped` restarts it, then the delayed ContainerStop hard-kills the new boot (exit 255) | tell Docker the container is being stopped before the guest exits; verify Stop by RestartCount/exit code, not "not running" |
+
+## Graduated
+
+| ID | Area | Graduated into |
+|---|---|---|
+| BUG-061 | .agents/docs/testing/styrman/integration.sh (Tier 2), image/entrypoint.sh comment | `.agents/rules/tests-describe-behaviour.md` |
