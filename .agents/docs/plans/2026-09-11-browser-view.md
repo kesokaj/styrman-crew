@@ -493,7 +493,7 @@ this feature's.)
 - [x] `run.mjs`: the four checks inside the LAN window; README Tier 4 count 87→91 — `bash web/e2e/run.sh` solo: `passed=91 failed=0 skipped=2`, client-error gate green (2026-09-11; two earlier runs failed for a load blip, a `!` history expansion in the typed fixture, and BUG-039's 500 — all recorded in `testing/2026-09-11-verify-browser-phase4.md`); who: AI
 - [x] `guide.md` (§1, §2 "Browser view", §4 "Using the browser" with the shared-profile warning verbatim), `README.md`, `ROADMAP.md` — `documentation` agent 2026-09-11, text read back against the plan (no unmeasured claims); `terminal-protocol.md` was written in Phase 2; who: AI
 - [x] Definition of Done: `verifier` (Phases 1–2 and 1–3 logs, PASS; over the Phase 4 commit right after it), `reviewer` and `security` per phase (three rounds, every finding fixed or rebutted in the change entries; the Phase 4 commit gets its own pass), `changelog` per phase, `bugs` BUG-039/040 — who: AI
-- [ ] Manual agent walk by the operator (above), logged in `testing/` — who: user
+- [-] Manual agent walk by the operator (above), logged in `testing/` — who: user — moved to handoffs/2026-09-16-v1.35.0-harness-channel-live.md Next Steps (2026-09-16)
 - [x] Release: v1.28.0, MINOR, together with styrman-ctl — the operator said "ship it" 2026-09-11; gate `reviews/2026-09-11-preflight-v1.28.0.md`; who: user + AI
 
 ## Risks

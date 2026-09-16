@@ -384,7 +384,7 @@ a note saying the host is not reachable and how to opt in.
 - [x] Report `ingress_bridge=` in the status file — verify: unit, AI
 - [x] Allowed-bridge-subnet derivation excluding `sdb-*` and the ingress bridge — verify: `test.sh`, AI
 - [x] `lanpub` family with `-m conntrack --ctstate DNAT` — verify: `test.sh`, AI
-- [ ] Live proof with a real published container (`docker run -p`) — closes the "reasoned, not observed" gap from the v1.23.0 handoff — verify: `integration.sh`, both — **written, not yet run against an opted-in host**: the assertions exist in `integration.sh` and take their expectations from root's own status file, so they are correct on a host that has NOT opted in (and assert the host stays closed there). Actually exercising the reachability half needs `LAN_ALLOW_PUBLISHED_PORTS=1` in the production conf, which is the operator's deliberate act.
+- [-] Live proof with a real published container (`docker run -p`) — closes the "reasoned, not observed" gap from the v1.23.0 handoff — verify: `integration.sh`, both — **written, not yet run against an opted-in host**: the assertions exist in `integration.sh` and take their expectations from root's own status file, so they are correct on a host that has NOT opted in (and assert the host stays closed there). Actually exercising the reachability half needs `LAN_ALLOW_PUBLISHED_PORTS=1` in the production conf, which is the operator's deliberate act. — moved to handoffs/2026-09-16-v1.35.0-harness-channel-live.md Next Steps (2026-09-16)
 
 **Phase 3 result (2026-09-08):** `test.sh` **120 / 0** (was 102 after Phase 2;
 +18 checks). `go vet`, `go test ./...` and the ingress module clean.

@@ -28,4 +28,4 @@ Today `image/harness/` ships the previous harness (constitution `shared/AGENTS.m
 - [x] Recon brief: `.agents/docs/plans/2026-09-03-recon-image-harness.md` (`explorer`, 2026-09-03)
 - [x] Feature plan with phases and task boxes (the `feature` skill): `2026-09-03-image-harness-replacement.md`; design decisions stated for the operator: how the image obtains the harness (pinned snapshot at build vs clone at boot; private-repo access via the credential broker), re-seeding an existing home, the Antigravity rules path inside the VM, retiring hooks/scripts the product documents, test tiers (integration "Tier 5" harness checks, e2e)
 - [x] Cold-reader check of the plan (`reviewer`, 2026-09-03: `reviews/2026-09-03-review-plan-image-harness-replacement.md`, 3 medium / 4 low, all folded into the plan with the operator's answers)
-- [ ] Phases as checkpoints; e2e before done; `ROADMAP.md` "Next" (harness assertions) folded in or closed
+- [-] Phases as checkpoints; e2e before done; `ROADMAP.md` "Next" (harness assertions) folded in or closed — moved to handoffs/2026-09-16-v1.35.0-harness-channel-live.md Next Steps (2026-09-16)
