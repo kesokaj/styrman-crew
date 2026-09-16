@@ -145,6 +145,11 @@ check "guest sh-agent is the channel's binary (sha256 equals content/current/bin
     "[ \"\$(docker exec ${CN} sha256sum /styrman/bin/sh-agent | cut -d' ' -f1)\" = \"\$(sha256sum '${HARNESS_OUT}/content/current/bin/sh-agent' | cut -d' ' -f1)\" ]"
 check "no .git in the mounted harness (a plain copy, as the mirror was)" \
     "! docker exec ${CN} test -e /styrman/harness/.git"
+# The two `source channel tag` log greps (here and after the swap) are
+# diagnostics of the entrypoint's contract: the guest owns that stdout, so the
+# EVIDENCE that the channel was mounted is the neighbouring checks — the
+# guest's COMMIT equals the host's current, the binary's sha256, no .git
+# (security review 2026-09-16).
 check "boot log names the channel as the harness source (tag v1.0.0)" \
     "docker logs ${CN} 2>&1 | grep -F 'source channel tag v1.0.0' >/dev/null"
 check "sh-agent reports no drift in the project home" \
