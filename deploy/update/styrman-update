@@ -829,6 +829,31 @@ host_converge() {
     # (host-setup.sh), not the updater's — the updater only ever installs the
     # files the verified tree carries. A leftover .path unit watching a
     # directory nothing writes is inert.
+    # The harness channel's unit pair (ADR-073), on EVERY tick from the
+    # verified tree, exactly like the firewall files: self_install carries
+    # them too, but self_install runs only on the tick that deploys a
+    # release, and that tick executes the PREVIOUS updater, which does not
+    # know them — the release that ships a file cannot be the one that
+    # installs it (BUG-035's shape, BUG-064). Optional: a tree without them
+    # is a pre-ADR-073 release. Under --check: drift reported, nothing
+    # installed, like the firewall files below.
+    local hf hn=0 hchanged=0 hunits=()
+    for hf in styrman-harness-update.service styrman-harness-update.timer; do
+        git cat-file -e "${SELF_HEAD}:deploy/update/${hf}" 2>/dev/null && hunits+=("${hf}")
+    done
+    if [ "${#hunits[@]}" = 2 ]; then
+        for hf in "${hunits[@]}"; do
+            differs "deploy/update/${hf}" "${unitdir}/${hf}" || continue
+            if [ "${CHECK_ONLY}" = true ]; then hn=$((hn + 1)); continue; fi
+            rm -f "${unitdir}/${hf}.new."* 2>/dev/null || true
+            if atomic_install 644 "deploy/update/${hf}" "${unitdir}/${hf}"; then hchanged=1; else failed=1; log "WARN: could not install ${unitdir}/${hf}"; fi
+        done
+        if [ "${hn}" -gt 0 ]; then log "host-converge: ${hn} harness-channel unit(s) differ from the verified tree — a real run would install them (--check changes nothing)"; fi
+        if [ "${hchanged}" = "1" ]; then
+            if ! out="$(systemctl daemon-reload 2>&1)"; then log "WARN: daemon-reload after installing the harness-channel units: ${out}"; fi
+            log "host-converge: harness-channel units installed from ${SELF_HEAD:0:12} (enabled below once the clone exists)"
+        fi
+    fi
     # --check promises to change nothing (usage text above): report drift,
     # install nothing (review finding — the very drift this exists to fix is
     # when a preview run would otherwise silently apply it).
@@ -868,7 +893,10 @@ host_converge() {
     # its clone exist (BUG-035: a step gated on "changed this tick" never sees
     # the release that ships it). Without the clone the tick would only fail
     # — `styrman-ctl update --setup --harness-token-file` makes both.
-    if [ -f "${unitdir}/styrman-harness-update.timer" ] && [ -d "${STYRMAN_HARNESS_REPO_DIR:-/opt/styrman-harness}/.git" ]; then
+    # The clone's path comes from the crew unit (ADR-052: pinned there, never
+    # defaulted here); a unit from before this release leaves it unset, and
+    # the enable waits one tick for self_install to bring the unit current.
+    if [ -f "${unitdir}/styrman-harness-update.timer" ] && [ -n "${STYRMAN_HARNESS_REPO_DIR:-}" ] && [ -d "${STYRMAN_HARNESS_REPO_DIR}/.git" ]; then
         if ! out="$(systemctl enable --now styrman-harness-update.timer 2>&1)"; then log "WARN: enabling styrman-harness-update.timer: ${out}"; fi
     fi
     [ "${failed}" = "0" ] || log "WARN: host-converge incomplete — the previous firewall script may still be installed"

@@ -293,11 +293,16 @@ updater — `harness-version`, `harness-sha`, `harness-failed-version`,
 `STYRMAN_HARNESS_REPO_DIR=/opt/styrman-harness`,
 `STYRMAN_HARNESS_DIR=/var/lib/styrman/harness`,
 `STYRMAN_HARNESS_GH_TOKEN_FILE=/etc/styrman/gh-token-harness`. Both units are
-installed by `host-setup.sh` (beside the crew updater units) and by the
-updater's own `self_install` from each verified crew tree (optional there: a
-tree without them, a rollback to a pre-channel tag, skips the pair and still
-installs the crew files); `host_converge` enables the timer whenever the unit
-file and the harness clone both exist. `host-setup.sh`
+installed by `host-setup.sh` (beside the crew updater units) and, on EVERY
+updater tick, by `host_converge` from the verified crew tree when they differ
+from the installed copies (`--check` only reports the drift), the way the
+firewall files are — not only by the post-deploy `self_install`, which also
+carries them but runs under the PREVIOUS updater on the tick that deploys a
+release and so cannot install a file that release introduces (BUG-064,
+BUG-035's shape; a tree without the pair is a pre-channel release and skips
+it); `host_converge` then enables the timer whenever the unit file and the
+harness clone both exist, the clone's path pinned in the crew unit as
+`STYRMAN_HARNESS_REPO_DIR` (ADR-052: never defaulted in the script). `host-setup.sh`
 also creates `/var/lib/styrman/harness` root:root 0755 and refuses if it is a
 symlink.
 
