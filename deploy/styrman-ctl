@@ -978,8 +978,8 @@ styrman-ctl — install, update, edit, uninstall and inspect a styrman host
 
   sudo deploy/styrman-ctl                menu
   sudo deploy/styrman-ctl status [--json]
-  sudo deploy/styrman-ctl install [--user U] [--version X.Y.Z] [--env-file F] [--gh-token-file F] [--allowed-signers-file F] [--skip-auto-update]
-  sudo deploy/styrman-ctl update [--redeploy] | --setup [--gh-token-file F] [--allowed-signers-file F]
+  sudo deploy/styrman-ctl install [--user U] [--version X.Y.Z] [--env-file F] [--gh-token-file F] [--allowed-signers-file F] [--harness-token-file F] [--skip-auto-update]
+  sudo deploy/styrman-ctl update [--redeploy] | --setup [--gh-token-file F] [--allowed-signers-file F] [--harness-token-file F]
   sudo deploy/styrman-ctl edit [KEY=VALUE ...] [--no-apply]
   sudo deploy/styrman-ctl uninstall [--level 1|2|3] [--confirm WORD]
   deploy/styrman-ctl help

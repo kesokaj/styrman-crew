@@ -252,7 +252,8 @@ Steps, in order:
    derived for `agy`), writes its manifest to `~/.config/sh-agent/state.json`,
    and drops a copy of itself at `~/.local/bin/sh-agent` (`sh-agent status`
    inside a project is the drift check; `sh-agent update` is not used in
-   VMs — the image is the delivery path). It ships NO hooks, NO scripts, and
+   VMs — the seed is the delivery path: the host's channel, or the image's
+   mirror as its fallback, ADR-073). It ships NO hooks, NO scripts, and
    no settings file except the one `attribution` key in
    `~/.claude/settings.json` (commit and PR trailers off, written only when
    absent — ADR-072, the exception approved 2026-09-16; operator directive

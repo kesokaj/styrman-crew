@@ -48,7 +48,7 @@ executes nothing.
 | `update` | `systemctl start styrman-update.service` (one tick now) + `journalctl -u styrman-update.service -n 20` |
 | `update --redeploy` | `styrman-update --force` (clears a latched failed-version, rebuilds the current tag) |
 | `edit` | `env_set` on both `.env` copies (checkout's and the clone's, when it exists), then `docker compose -f <dir>/deploy/docker-compose.yml --env-file <dir>/.env up -d` at the currently deployed version — no `--build`, images are immutable per version |
-| `uninstall --level 1` | `docker compose … down --remove-orphans`; `docker rm -f` of every container labeled `styrman.managed=true` (project microVMs AND the hidden per-user setup VMs alike); `docker network rm` of every `sdb-*`/`lan-*` network; `systemctl disable --now` the four units |
+| `uninstall --level 1` | `docker compose … down --remove-orphans`; `docker rm -f` of every container labeled `styrman.managed=true` (project microVMs AND the hidden per-user setup VMs alike); `docker network rm` of every `sdb-*`/`lan-*` network; `systemctl disable --now` the six units in `UNITS[]` (firewall, updater and harness-channel pairs) |
 | `uninstall --level 2` | level 1, then: the IPv4 AND IPv6 firewall chains (`STYRMAN-FWD`/`STYRMAN-IN` and, when `ip6tables` exists, `STYRMAN-FWD6`/`STYRMAN-IN6`); the unit files + `daemon-reload`; `/usr/local/bin/styrman-update`; `/usr/local/sbin/styrman-firewall.sh`; `/etc/tmpfiles.d/styrman-ksm.conf`; `/etc/styrman`; `/opt/styrman`; the `styrman-runtime`/`styrman-server`/`styrman-caddy` images; `deploy/.env` moved to `deploy/.env.removed-<ts>` |
 | `uninstall --level 3` | level 2, then `/var/lib/styrman` |
 
