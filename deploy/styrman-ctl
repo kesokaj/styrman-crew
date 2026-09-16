@@ -583,7 +583,10 @@ setup_auto_update() {
     # an askpass that would answer any host's prompt (security review).
     local origin_host helper
     origin_host="${origin#https://}"; origin_host="https://${origin_host%%/*}"
-    helper="credential.${origin_host}.helper=!f() { echo username=x-access-token; printf 'password=%s\\n' \"\$(cat '${ETC_DIR}/gh-token')\"; }; f"
+    # The token path reaches the helper through the environment of the one
+    # git call (STYRMAN_GH_TOKEN_FILE on the env line), never interpolated
+    # into the snippet the helper's shell parses (security review 2026-09-16).
+    helper="credential.${origin_host}.helper=!f() { echo username=x-access-token; printf 'password=%s\\n' \"\$(cat \"\${STYRMAN_GH_TOKEN_FILE}\")\"; }; f"
 
     log "auto-update: token → ${ETC_DIR}/gh-token (root, 600)"
     run install -d -m 700 -o root -g root "${ETC_DIR}"
@@ -600,10 +603,10 @@ setup_auto_update() {
             die "the clone at ${DEPLOY_DIR} points at ${have_origin:-no origin}, not ${origin} — remove it or fix its remote first"
         fi
         log "auto-update: clone exists at ${DEPLOY_DIR} — fetching tags"
-        run env GIT_TERMINAL_PROMPT=0 git -C "${DEPLOY_DIR}" -c credential.helper= -c "${helper}" fetch --tags
+        run env GIT_TERMINAL_PROMPT=0 STYRMAN_GH_TOKEN_FILE="${ETC_DIR}/gh-token" git -C "${DEPLOY_DIR}" -c credential.helper= -c "${helper}" fetch --tags
     else
         log "auto-update: cloning ${origin} → ${DEPLOY_DIR} (https, token via a one-shot askpass)"
-        run env GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c "${helper}" clone -- "${origin}" "${DEPLOY_DIR}"
+        run env GIT_TERMINAL_PROMPT=0 STYRMAN_GH_TOKEN_FILE="${ETC_DIR}/gh-token" git -c credential.helper= -c "${helper}" clone -- "${origin}" "${DEPLOY_DIR}"
     fi
     run chown -R root:root "${DEPLOY_DIR}"
     if [ -f "${CLONE_ENV}" ] && [ -f "${ENV_FILE}" ] && ! cmp -s "${CLONE_ENV}" "${ENV_FILE}"; then
@@ -653,11 +656,14 @@ setup_harness_channel() {
     # The origin is cloned by root: only a plain https URL, the shape
     # https_origin() accepts for the crew clone — never a transport git would
     # execute (security review 2026-09-16).
-    printf '%s' "${HARNESS_ORIGIN}" | grep -qE '^https://[a-z0-9.-]+/[A-Za-z0-9._/-]+$' \
-        || die "STYRMAN_HARNESS_ORIGIN must be a plain https URL (got ${HARNESS_ORIGIN})"
+    # Whole-string match ([[ =~ ]], as https_origin does): a grep anchors per
+    # LINE and a two-line value with a valid second line would pass it
+    # (security review 2026-09-16).
+    [[ "${HARNESS_ORIGIN}" =~ ^https://[a-z0-9.-]+/[A-Za-z0-9._/-]+$ ]] \
+        || die "STYRMAN_HARNESS_ORIGIN must be a plain https URL (got ${HARNESS_ORIGIN//[^[:print:]]/?})"
     [ "${DRY}" = 1 ] || (umask 077; printf '%s' "${harness_token}" > "${tmpd}/gh-token-harness")
     origin_host="${HARNESS_ORIGIN#https://}"; origin_host="https://${origin_host%%/*}"
-    helper="credential.${origin_host}.helper=!f() { echo username=x-access-token; printf 'password=%s\\n' \"\$(cat '${ETC_DIR}/gh-token-harness')\"; }; f"
+    helper="credential.${origin_host}.helper=!f() { echo username=x-access-token; printf 'password=%s\\n' \"\$(cat \"\${STYRMAN_HARNESS_GH_TOKEN_FILE}\")\"; }; f"
     log "auto-update: harness token → ${ETC_DIR}/gh-token-harness (root, 600)"
     run install -m 600 -o root -g root "${tmpd}/gh-token-harness" "${ETC_DIR}/gh-token-harness"
     [ -L "${STATE_DIR}/harness" ] && die "${STATE_DIR}/harness is a symlink — refusing"
@@ -668,10 +674,10 @@ setup_harness_channel() {
         have_origin="$(to_https "$(git -C "${HARNESS_REPO_DIR}" remote get-url origin 2>/dev/null || true)")"
         [ "${have_origin}" = "${HARNESS_ORIGIN}" ] || die "the clone at ${HARNESS_REPO_DIR} points at ${have_origin:-no origin}, not ${HARNESS_ORIGIN} — remove it or fix its remote first"
         log "auto-update: harness clone exists at ${HARNESS_REPO_DIR} — fetching tags"
-        run env GIT_TERMINAL_PROMPT=0 git -C "${HARNESS_REPO_DIR}" -c credential.helper= -c "${helper}" fetch --tags
+        run env GIT_TERMINAL_PROMPT=0 STYRMAN_HARNESS_GH_TOKEN_FILE="${ETC_DIR}/gh-token-harness" git -C "${HARNESS_REPO_DIR}" -c credential.helper= -c "${helper}" fetch --tags
     else
         log "auto-update: cloning ${HARNESS_ORIGIN} → ${HARNESS_REPO_DIR} (https, token via a one-shot helper)"
-        run env GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c "${helper}" clone -- "${HARNESS_ORIGIN}" "${HARNESS_REPO_DIR}"
+        run env GIT_TERMINAL_PROMPT=0 STYRMAN_HARNESS_GH_TOKEN_FILE="${ETC_DIR}/gh-token-harness" git -c credential.helper= -c "${helper}" clone -- "${HARNESS_ORIGIN}" "${HARNESS_REPO_DIR}"
     fi
     run chown -R root:root "${HARNESS_REPO_DIR}"
     log "auto-update: harness channel dry check, then its timer"

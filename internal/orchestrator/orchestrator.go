@@ -15,6 +15,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -357,13 +358,19 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 		o.logger.Warn("harness channel refused — the image's baked harness seeds this project", "project", project, "error", herr)
 	}
 	if err == nil && (insp.State == nil || !insp.State.Running) {
-		has := insp.HostConfig != nil && hasHarnessBind(insp.HostConfig.Binds)
+		var got []string
+		if insp.HostConfig != nil {
+			got = harnessBindsOf(insp.HostConfig.Binds)
+		}
 		why := ""
 		switch {
-		case len(hbinds) > 0 && !has:
+		case slices.Equal(got, hbinds):
+		case len(got) == 0:
 			why = "to mount the harness channel"
-		case has && len(hbinds) == 0:
+		case len(hbinds) == 0:
 			why = "to drop the harness channel binds (channel absent, disabled or refused)"
+		default:
+			why = "to re-bind the harness channel at its current path"
 		}
 		if why != "" {
 			o.logger.Info("recreating stopped container "+why, "project", project)

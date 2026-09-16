@@ -9,8 +9,9 @@ import (
 
 // The harness channel's half of `styrman-ctl update --setup` (ADR-073), as a
 // dry-run plan: the harness token staged and installed root 600, the content
-// dir root 755, the styrman-harness clone beside the crew clone under the
-// same scoped credential helper, the channel's own --check with every input
+// dir root 755, the styrman-harness clone at its fixed path (the literal
+// /opt/styrman-harness in production; ctlSetup's seam points it into the
+// scratch root) under the same scoped credential helper, the channel's own --check with every input
 // named, and its timer — and, unattended without a token, the skip line that
 // names the command for later, with none of the harness steps planned.
 func TestStyrmanCtlUpdateSetupHarnessPlan(t *testing.T) {
@@ -39,7 +40,7 @@ func TestStyrmanCtlUpdateSetupHarnessPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.env = append(e.env, "STYRMAN_ENV_FILE="+envFile)
-	harnessClone := filepath.Join(e.root, "opt", "styrman-harness") // beside the crew clone, derived from it
+	harnessClone := filepath.Join(e.root, "opt", "styrman-harness") // the STYRMAN_HARNESS_REPO_DIR seam ctlSetup sets
 	etc := filepath.Join(e.root, "etc", "styrman")
 	content := filepath.Join(e.root, "var", "lib", "styrman", "harness")
 
@@ -124,5 +125,58 @@ func TestStyrmanCtlStatusLatchedHarnessTagIsDegraded(t *testing.T) {
 	}
 	if out, code := ctl(t, e, "status", "--dry-run"); code != 1 || !strings.Contains(out, "DEGRADED") || !strings.Contains(out, "FAILED LATCHED: v1.2.0") {
 		t.Fatalf("with a latched tag: code %d\n%s", code, out)
+	}
+}
+
+// The two controls on the harness origin, each in its must-fail state: a
+// non-https transport and a two-line value (a per-line grep would have
+// passed the second) are refused before any clone; and outside the test
+// seam the override itself is refused as a production knob.
+func TestStyrmanCtlHarnessOriginIsGated(t *testing.T) {
+	e := ctlSetup(t, true)
+	gitFake := "#!/usr/bin/env bash\necho \"git $*\" >> \"" + e.calls + "\"\ncase \"$*\" in *get-url*) echo git@github.com:owner/repo.git ;; *rev-parse*) echo 4686792 ;; *) echo v1.27.1 ;; esac\n"
+	if err := os.WriteFile(filepath.Join(e.bin, "git"), []byte(gitFake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tok := filepath.Join(e.root, "secrets", "tok")
+	htok := filepath.Join(e.root, "secrets", "harness-tok")
+	signers := filepath.Join(e.root, "secrets", "signers")
+	for f, c := range map[string]string{tok: "ghp_SECRETTOKEN\n", htok: "ghp_HARNESSSECRET\n", signers: "me@example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"} {
+		if err := os.WriteFile(f, []byte(c), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	envFile := filepath.Join(e.root, "checkout.env")
+	if err := os.WriteFile(envFile, []byte("BASE_DOMAIN=example.test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(e.root, "opt", "styrman", ".git")); err != nil {
+		t.Fatal(err)
+	}
+	base := append([]string(nil), e.env...)
+	for _, origin := range []string{"ext::sh -c id", "https://github.com/x/y\nhttps://github.com/kesokaj/styrman-harness.git", "file:///tmp/x"} {
+		e.env = append(append([]string(nil), base...), "STYRMAN_ENV_FILE="+envFile, "STYRMAN_HARNESS_ORIGIN="+origin)
+		out, code := ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", signers, "--harness-token-file", htok)
+		if code == 0 || !strings.Contains(out, "must be a plain https URL") {
+			t.Fatalf("origin %q: code %d\n%s", origin, code, out)
+		}
+		if strings.Contains(out, "clone -- ") && strings.Contains(out, "styrman-harness") && strings.Contains(out, "clone -- "+strings.Split(origin, "\n")[0]) {
+			t.Fatalf("origin %q reached a clone:\n%s", origin, out)
+		}
+	}
+	// Outside the seam: only the documented knobs, plus the override.
+	var prod []string
+	for _, kv := range base {
+		if strings.HasPrefix(kv, "PATH=") || strings.HasPrefix(kv, "STYRMAN_STATE_DIR=") || strings.HasPrefix(kv, "STYRMAN_DEPLOY_DIR=") || strings.HasPrefix(kv, "HOME=") {
+			prod = append(prod, kv)
+		}
+	}
+	e.env = append(prod, "STYRMAN_HARNESS_ORIGIN=https://github.com/kesokaj/styrman-harness.git")
+	if out, code := ctl(t, e, "help"); code != 1 || !strings.Contains(out, "STYRMAN_HARNESS_ORIGIN is a test seam") {
+		t.Fatalf("seam guard: code %d\n%s", code, out)
+	}
+	e.env = append(prod, "STYRMAN_HARNESS_REPO_DIR="+filepath.Join(e.root, "elsewhere"))
+	if out, code := ctl(t, e, "help"); code != 1 || !strings.Contains(out, "STYRMAN_HARNESS_REPO_DIR is a test seam") {
+		t.Fatalf("seam guard: code %d\n%s", code, out)
 	}
 }

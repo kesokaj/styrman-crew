@@ -126,16 +126,25 @@ func ownedAndPrivate(p string) error {
 	return nil
 }
 
-// hasHarnessBind reports whether a container's binds already mount the
-// channel's repo (the two binds travel together).
-func hasHarnessBind(binds []string) bool {
+// harnessBindsOf picks a container's harness binds out of its bind list, in
+// harnessBinds' order (repo, then the binary), so the recreate rule can
+// compare them with what harnessBinds answers now — sources included: a
+// channel moved to another dir must not keep an old source mounted.
+func harnessBindsOf(binds []string) []string {
+	var repo, bin []string
 	for _, b := range binds {
-		if strings.Contains(b, ":"+harnessGuestRepo+":") || strings.HasSuffix(b, ":"+harnessGuestRepo) {
-			return true
+		switch {
+		case strings.Contains(b, ":"+harnessGuestRepo+":") || strings.HasSuffix(b, ":"+harnessGuestRepo):
+			repo = append(repo, b)
+		case strings.Contains(b, ":"+harnessGuestBin+":") || strings.HasSuffix(b, ":"+harnessGuestBin):
+			bin = append(bin, b)
 		}
 	}
-	return false
+	return append(repo, bin...)
 }
+
+// hasHarnessBind reports whether a container's binds mount the channel at all.
+func hasHarnessBind(binds []string) bool { return len(harnessBindsOf(binds)) > 0 }
 
 // harnessChannelState is what the trusted channel currently delivers: the
 // export's TAG and COMMIT. The error is harnessBinds's.

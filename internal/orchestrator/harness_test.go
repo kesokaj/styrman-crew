@@ -276,6 +276,50 @@ func TestCreateBindsTheChannelForProjectsNotForTheSetupVM(t *testing.T) {
 	}
 }
 
+// A channel moved to another directory: the stopped container's binds name
+// the old source, so it is rebuilt with the current ones (the rule compares
+// the binds, sources included, not their presence).
+func TestEnsureRunningRecreatesAStoppedContainerWhenTheChannelMoved(t *testing.T) {
+	o, fd, cfg := seamOrch(t)
+	cfg.HarnessDir = t.TempDir()
+	src := plantChannel(t, cfg.HarnessDir)
+	plant(fd, cfg, false, false)
+	c, _ := fd.byName(configContainerName())
+	c.binds = append(c.binds, wantHarnessBinds(filepath.Join(t.TempDir(), "old", "current"))...)
+	if _, err := o.EnsureRunning(context.Background(), tUser, tProj, opts(false)); err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+	if fd.callsTo("ContainerRemove") != 1 || fd.callsTo("ContainerCreate") != 1 {
+		t.Fatalf("want one remove and one create, got %v", fd.calls)
+	}
+	c, _ = fd.byName(configContainerName())
+	for _, w := range wantHarnessBinds(src) {
+		if !contains(c.binds, w) {
+			t.Fatalf("recreated container lacks %q: %v", w, c.binds)
+		}
+	}
+	if got := harnessBindsOf(c.binds); len(got) != 2 {
+		t.Fatalf("the old binds must be gone: %v", c.binds)
+	}
+}
+
+// And a container whose binds already equal the channel's answer is left
+// alone: no churn on every start.
+func TestEnsureRunningLeavesAStoppedContainerWhoseHarnessBindsMatch(t *testing.T) {
+	o, fd, cfg := seamOrch(t)
+	cfg.HarnessDir = t.TempDir()
+	src := plantChannel(t, cfg.HarnessDir)
+	plant(fd, cfg, false, false)
+	c, _ := fd.byName(configContainerName())
+	c.binds = append(c.binds, wantHarnessBinds(src)...)
+	if _, err := o.EnsureRunning(context.Background(), tUser, tProj, opts(false)); err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+	if fd.callsTo("ContainerRemove") != 0 || fd.callsTo("ContainerCreate") != 0 || fd.callsTo("ContainerStart") != 1 {
+		t.Fatalf("want a plain start, got %v", fd.calls)
+	}
+}
+
 func contains(list []string, s string) bool {
 	for _, x := range list {
 		if x == s {
