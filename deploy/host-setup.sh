@@ -185,6 +185,13 @@ done
 mkdir -p "${STATE_DIR}/homes" "${STATE_DIR}/projects"
 chown -h "${OPERATOR}:${OPERATOR}" "${STATE_DIR}" "${STATE_DIR}/homes" "${STATE_DIR}/projects"
 log "state dir ready: ${STATE_DIR} (owner ${OPERATOR})"
+# ADR-073: the harness channel's content dir — ROOT-owned below the
+# operator-owned state root on purpose: the channel writes it as root and
+# every project mounts it read-only, so the dir itself is the trust boundary
+# (never a symlink; the channel and the server both assert that every run).
+if [[ -L "${STATE_DIR}/harness" ]]; then echo "FATAL: ${STATE_DIR}/harness is a symlink — refusing to provision through it"; exit 1; fi
+install -d -m 755 -o root -g root "${STATE_DIR}/harness"
+log "harness channel dir ready: ${STATE_DIR}/harness (root)"
 
 # ─── 5b. Deployment .env: computed identity values ──────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -273,6 +280,11 @@ fi
 install -m 755 "${SCRIPT_DIR}/update/styrman-update" /usr/local/bin/styrman-update
 install -m 644 "${SCRIPT_DIR}/update/styrman-update.service" /etc/systemd/system/
 install -m 644 "${SCRIPT_DIR}/update/styrman-update.timer" /etc/systemd/system/
+# The harness channel's unit pair (ADR-073): installed here, enabled by
+# `styrman-ctl update --setup --harness-token-file` once its clone and token
+# exist (and by the updater's host_converge from then on).
+install -m 644 "${SCRIPT_DIR}/update/styrman-harness-update.service" /etc/systemd/system/
+install -m 644 "${SCRIPT_DIR}/update/styrman-harness-update.timer" /etc/systemd/system/
 systemctl daemon-reload
 
 STYRMAN_DEPLOY_DIR="${STYRMAN_DEPLOY_DIR:-/opt/styrman}"

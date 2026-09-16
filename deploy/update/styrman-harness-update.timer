@@ -1,0 +1,13 @@
+[Unit]
+Description=Check for a new signed styrman-harness release tag
+
+[Timer]
+# The crew updater's cadence, offset by two minutes at boot so the two ticks
+# do not start together (they share a lock; a tick that finds it held skips).
+# The run is a no-op (one git fetch) unless a NEW verifying tag exists.
+OnBootSec=7min
+OnUnitActiveSec=5min
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

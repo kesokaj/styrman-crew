@@ -12,7 +12,7 @@ read that for the trust story; this doc is the day-to-day reference.
 |---|---|---|---|
 | `styrman-server` | `deploy/Dockerfile.server` | `docker compose build` (or `styrman-update`) | The Go binary + embedded SPA — the containerized server itself. |
 | `styrman-caddy` | `deploy/caddy/Dockerfile` | `docker compose build` (or `styrman-update`) | The vendored ingress: Caddy 2 + caddy-security (Google OAuth) + Cloudflare DNS + the styrman label-discovery module. |
-| `styrman-runtime` | `image/Dockerfile` | `docker build ... image/` — NOT a compose service, a separate step | The per-project microVM image every project boots: Kata guest, dotfiles, the agent harness (`claude`/`agy` — a mirror of `styrman-harness` at `image/harness/COMMIT`, ADR-062), toolchains. |
+| `styrman-runtime` | `image/Dockerfile` | `docker build ... image/` — NOT a compose service, a separate step | The per-project microVM image every project boots: Kata guest, dotfiles, the agent harness (`claude`/`agy`), toolchains. The harness itself is delivered by the host's harness channel (ADR-073) once that channel has run; the image's own mirror at `image/harness/COMMIT` (ADR-062) is the fallback until then (R5). |
 
 `styrman-runtime` is the odd one out: `docker compose build`/`up --build`
 never touches it. Forgetting to (re)build it at the release version is the
@@ -86,10 +86,14 @@ that section for why.
 
 1. Land the change (commit; the review/security/verifier gates and
    `/preflight` are a separate concern from this doc — see `AGENTS.md`'s
-   Definition of Done). A release that refreshed `image/harness/` names the
-   `styrman-harness` commit it ships (`image/harness/COMMIT`) in its
-   changelog entry — that pin, plus `STYRMAN_VERSION`, is what decides which
-   harness every project re-seeds on its next start (ADR-062).
+   Definition of Done). The agent harness itself is no longer shipped by a
+   crew release: since ADR-073 the host's harness channel
+   (`styrman-update harness`, `deploy.md` "Harness channel") delivers the
+   newest signed `styrman-harness` tag directly, independent of
+   `STYRMAN_VERSION`. `image/harness/` remains the fallback the image mirrors
+   (ADR-062) until the channel has delivered on a given host; a release that
+   refreshes it still names the `styrman-harness` commit it ships
+   (`image/harness/COMMIT`) in its changelog entry, recorded as before.
 2. **REQUIRED: verify the COMMIT, not the working tree, before tagging it —
    run `deploy/verify-commit.sh [commit-ish]` (default `HEAD`).**
    `go build`/`go test`/`docker build` run against whatever is currently

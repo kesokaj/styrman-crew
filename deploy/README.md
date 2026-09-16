@@ -27,10 +27,15 @@ Cloudflare DNS — `caddy/`) in front of the containerized server
 | Verb | Does |
 |---|---|
 | `status [--json]` | what is installed, deployed and running; exit 0 ok, 1 degraded, 2 nothing installed |
-| `install [--user U] [--version X.Y.Z] [--env-file F] [--gh-token-file F] [--allowed-signers-file F] [--skip-auto-update]` | `host-setup.sh`, the six must-fill `.env` keys (validated), build the runtime image, bring the stack up at the checkout's release tag (or `--version`), offer auto-update setup |
-| `update` / `update --redeploy` / `update --setup […]` | run one updater tick now; `--redeploy` forces the current tag and clears a latched failure; `--setup` performs the auto-update setup on its own (token, clone, `.env` copy, `allowed_signers`, timer) — the 8c prose below, as prompts |
+| `install [--user U] [--version X.Y.Z] [--env-file F] [--gh-token-file F] [--allowed-signers-file F] [--harness-token-file F] [--skip-auto-update]` | `host-setup.sh`, the six must-fill `.env` keys (validated), build the runtime image, bring the stack up at the checkout's release tag (or `--version`), offer auto-update setup |
+| `update` / `update --redeploy` / `update --setup […] [--harness-token-file F]` | run one updater tick now; `--redeploy` forces the current tag and clears a latched failure; `--setup` performs the auto-update setup on its own (token, clone, `.env` copy, `allowed_signers`, timer) — the 8c prose below, as prompts; `--harness-token-file` also sets up the harness channel (ADR-073) |
 | `edit [KEY=VALUE …] [--no-apply]` | edits `.env` (both copies when the clone exists, validated — a `KEY` not matching `[A-Z][A-Z0-9_]*` is refused outright) and recreates the stack at the deployed version |
 | `uninstall [--level 1|2|3] [--confirm WORD]` | tears down at one of three levels (below); prints the exact plan before asking |
+
+`status` also prints a `harness` line: the delivered tag and commit
+(`<tag> (<sha7>)`) plus the content dir, or "waiting for the first signed
+styrman-harness tag", or "not set up" with the `--harness-token-file`
+command to run — see the "harness channel" entry under `update/` below.
 
 Global flags: `--dry-run` prints every command a verb would run, as `+ cmd`,
 and runs nothing; `--yes` takes defaults and skips non-destructive
@@ -87,3 +92,12 @@ test-only internal verb exercising that same `verify_tag` function directly
 `STYRMAN_UPDATE_TEST=1` is set, which only the Go test sets. Runbook
 (prerequisites, signing, rollback): `../.agents/docs/specs/styrman/deploy.md`
 → Auto-update.
+
+The same `styrman-update` script also carries a `harness` verb — the
+harness channel (ADR-073) that delivers `styrman-harness` releases to the
+host without a crew release, run by its own
+`styrman-harness-update.service`/`.timer` pair (also installed by
+`host-setup.sh` step 8c, enabled by `styrman-ctl update --setup
+--harness-token-file <file>` once its own dedicated clone and read-only
+GitHub token exist). Full mechanics: `../.agents/docs/specs/styrman/deploy.md`
+→ Auto-update → "Harness channel (ADR-073)".

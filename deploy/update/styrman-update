@@ -72,7 +72,11 @@ trusted_dir() {
 # whose output is built and run as root (security review). The token block
 # below APPENDS its scoped helper to this.
 GIT_CRED_ARGS=(-c credential.helper=)
-git() { command git -c safe.directory="${DEPLOY_DIR}" "${GIT_CRED_ARGS[@]}" "$@"; }
+# GIT_SAFE_DIR: the safe.directory the wrapper passes — the deploy clone by
+# default; the harness channel points it at its own clone (ADR-073). Read at
+# CALL time, so the __verify-tag test hook's DEPLOY_DIR reassignment holds.
+GIT_SAFE_DIR=""
+git() { command git -c safe.directory="${GIT_SAFE_DIR:-${DEPLOY_DIR}}" "${GIT_CRED_ARGS[@]}" "$@"; }
 
 # verify_tag <tag> — refuse anything we cannot attribute to an ALLOWED signer.
 #
@@ -160,6 +164,249 @@ verify_tag() {
     log "${tag} signature OK (allowed signer)"
 }
 
+# ─── Harness channel (ADR-073): styrman-update harness [--check] [--force] ──
+# The host-side, signature-gated delivery of styrman-harness to every project
+# VM (plan .agents/docs/plans/2026-09-16-harness-channel.md): fetch the harness
+# clone, walk its vX.Y.Z tags DOWNWARD from the newest to the first that
+# verifies — verify_tag above, the same allowlist and the same refusals —
+# never below the installed version, export it as a plain copy plus a sh-agent
+# built offline in the Go builder image image/Dockerfile pins, smoke it inside
+# the deployed runtime image as an unprivileged user, and swap
+# ${HARNESS_DIR}/current by one rename. The server bind-mounts current
+# read-only into every project VM. Every refusal is an ALARM: a REFUSED line
+# here and a line in ${STATE_DIR}/harness-refused, which styrman-ctl status
+# reports as DEGRADED. Unlike crew's own deploy this mode has NO unsigned
+# opt-out (REQUIRE_SIGNED is forced to 1 in harness_main): what it installs
+# runs in every project. Two entry points: the production one after the
+# preamble (root, the ADR-052 state dir, the deploy clone's trust checks, the
+# shared lock), and a test one beside __verify-tag (STYRMAN_UPDATE_TEST=1,
+# every path a scratch path, unelevated — internal/config/styrman_harness_test.go).
+HARNESS_REPO_DIR="${STYRMAN_HARNESS_REPO_DIR:-}"
+HARNESS_DIR="${STYRMAN_HARNESS_DIR:-}"
+HARNESS_GH_TOKEN_FILE="${STYRMAN_HARNESS_GH_TOKEN_FILE:-/etc/styrman/gh-token-harness}"
+HARNESS_SMOKE_IMAGE="${STYRMAN_HARNESS_SMOKE_IMAGE:-}"   # honoured in test mode only
+MODE=""
+
+hlog() { log "harness: $*"; }
+
+# ver_gt A B — A is a strictly higher vX.Y.Z than B (sort -V order).
+ver_gt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]; }
+
+# harness_alarm <tag> <reason> — the REFUSED line and the marker file, capped
+# at the newest 50 lines, written through a temp file so a reader never sees
+# a partial line.
+harness_alarm() {
+    local tag="$1" reason="$2"
+    log "harness: REFUSED: ${tag} — ${reason}"
+    { cat "${HARNESS_REFUSED}" 2>/dev/null || true; printf '%s %s %s\n' "$(date -u +%FT%TZ)" "${tag}" "${reason}"; } \
+        | tail -n 50 > "${HARNESS_REFUSED}.new.$$" && mv -f "${HARNESS_REFUSED}.new.$$" "${HARNESS_REFUSED}" \
+        || log "WARN: could not write ${HARNESS_REFUSED}"
+}
+
+# harness_test_guard — STYRMAN_UPDATE_TEST=1 lets this mode run unelevated,
+# but only against scratch paths: nothing under the host's real trees.
+harness_test_guard() {
+    local p
+    for p in "${STATE_DIR}" "${HARNESS_DIR}" "${HARNESS_REPO_DIR}"; do
+        case "${p}" in
+            /|/etc|/etc/*|/var/lib/styrman|/var/lib/styrman/*|/opt|/opt/*|/usr|/usr/*|/root|/root/*|/run|/run/*)
+                fail "test mode refuses ${p} — every path must be a scratch path" ;;
+        esac
+    done
+    [ -n "${HARNESS_SMOKE_IMAGE}" ] || fail "test mode needs STYRMAN_HARNESS_SMOKE_IMAGE (the runtime image the smoke runs in)"
+}
+
+# harness_export <tag> — into ${HARNESS_DIR}/.tmp-<commit>: repo/ (the tag's
+# tree minus .agents, .gitignore and any .git, plus COMMIT, TAG and SHA256SUMS
+# in the mirror's shape — image/harness/VENDORED.md § Refresh) and
+# bin/sh-agent built offline. Sets EXPORT_TMP and EXPORT_COMMIT; on failure
+# EXPORT_ERR names the reason and the temp dir is gone.
+harness_export() {
+    local tag="$1" c tmp why
+    EXPORT_ERR=""; EXPORT_TMP=""; EXPORT_COMMIT=""
+    c="$(git rev-parse "${tag}^{commit}" 2>/dev/null)" || { EXPORT_ERR="cannot resolve ${tag}"; return 1; }
+    tmp="${HARNESS_DIR}/.tmp-${c}"
+    rm -rf "${tmp}"
+    mkdir -p "${tmp}/repo" "${tmp}/bin" || { EXPORT_ERR="cannot create ${tmp}"; return 1; }
+    if ! git archive --format=tar "${tag}" | tar -x -C "${tmp}/repo"; then
+        rm -rf "${tmp}"; EXPORT_ERR="git archive ${tag} failed"; return 1
+    fi
+    rm -rf "${tmp}/repo/.agents" "${tmp}/repo/.gitignore" "${tmp}/repo/.git"
+    if [ -n "$(find "${tmp}" -type l -print -quit 2>/dev/null)" ]; then
+        rm -rf "${tmp}"; EXPORT_ERR="export failed: a symlink inside the tree (a plain copy carries none)"; return 1
+    fi
+    printf '%s' "${c}" > "${tmp}/repo/COMMIT"
+    printf '%s' "${tag}" > "${tmp}/repo/TAG"
+    ( cd "${tmp}/repo" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | LC_ALL=C sort | xargs sha256sum > SHA256SUMS ) \
+        || { rm -rf "${tmp}"; EXPORT_ERR="export failed: SHA256SUMS"; return 1; }
+    # The same build line as image/Dockerfile's harness-builder stage, in the
+    # same pinned image, offline (the harness has no dependencies), as the
+    # invoking user so the output is ours to own and remove.
+    hlog "building sh-agent for ${tag} in ${HARNESS_BUILDER}"
+    if ! docker run --rm --user "$(id -u):$(id -g)" \
+            -v "${tmp}/repo:/src:ro" -v "${tmp}/bin:/out" -w /src \
+            -e HOME=/tmp -e GOCACHE=/tmp/gocache -e CGO_ENABLED=0 -e GOTOOLCHAIN=local -e GOPROXY=off \
+            "${HARNESS_BUILDER}" go build -trimpath -ldflags='-s -w' -o /out/sh-agent ./cmd/sh-agent >"${tmp}/build.log" 2>&1; then
+        why="$(tail -1 "${tmp}/build.log" | tr -cd '[:print:]' | cut -c1-200)"
+        rm -rf "${tmp}"; EXPORT_ERR="build failed: ${why}"; return 1
+    fi
+    rm -f "${tmp}/build.log"
+    find "${tmp}" -type d -exec chmod 755 {} + && find "${tmp}/repo" -type f -exec chmod 644 {} + && chmod 755 "${tmp}/bin/sh-agent" \
+        || { rm -rf "${tmp}"; EXPORT_ERR="export failed: chmod"; return 1; }
+    EXPORT_TMP="${tmp}"; EXPORT_COMMIT="${c}"
+    return 0
+}
+
+# harness_smoke <tmp> — the candidate as a project would see it: mounted
+# read-only into the runtime image, as uid 1000, `list` and a dry-run install
+# into a scratch home. Exit codes only; the counts are logged, never asserted
+# (a harness release that adds a skill needs no crew change).
+harness_smoke() {
+    local tmp="$1" home out
+    SMOKE_ERR=""
+    home="$(mktemp -d)" || { SMOKE_ERR="smoke failed: cannot create a scratch home"; return 1; }
+    chmod 777 "${home}"
+    if out="$(docker run --rm --user 1000:1000 -e HOME=/home/u \
+            -v "${tmp}/repo:/styrman/harness:ro" -v "${tmp}/bin/sh-agent:/styrman/bin/sh-agent:ro" -v "${home}:/home/u" \
+            --entrypoint sh "${HARNESS_SMOKE_IMAGE}" \
+            -c '/styrman/bin/sh-agent list --repo /styrman/harness && /styrman/bin/sh-agent install --dry-run --repo /styrman/harness --home /home/u' 2>&1)"; then
+        rm -rf "${home}"
+        printf '%s\n' "${out}" | grep -E '^### (Skills|Subagents)' | tr -cd '[:print:]\n' | cut -c1-120 \
+            | while IFS= read -r line; do hlog "  smoke: ${line}"; done
+        return 0
+    fi
+    rm -rf "${home}"
+    SMOKE_ERR="smoke failed: $(printf '%s\n' "${out}" | tail -1 | tr -cd '[:print:]' | cut -c1-200)"
+    return 1
+}
+
+# harness_swap <tmp> <commit> <tag> — the content dir takes the commit's name,
+# current is replaced by ONE rename, the previous target is kept beside it and
+# older ones removed, the state files follow. The failed-tag latch is cleared
+# only by a tag at or above the failed one: a lower tag installed under it
+# must not make the next tick retry the broken release.
+harness_swap() {
+    local tmp="$1" c="$2" tag="$3" dst prev_target d base failed
+    dst="${HARNESS_DIR}/${c}"
+    prev_target="$(readlink "${HARNESS_DIR}/current" 2>/dev/null || true)"
+    if [ -e "${dst}" ]; then   # --force: the same commit exported again
+        rm -rf "${dst}".prev-* 2>/dev/null || true
+        mv -T "${dst}" "${dst}.prev-$(date +%s)" || { rm -rf "${tmp}"; return 1; }
+    fi
+    mv -T "${tmp}" "${dst}" || { rm -rf "${tmp}"; return 1; }
+    ln -s "${c}" "${HARNESS_DIR}/current.new.$$" && mv -T "${HARNESS_DIR}/current.new.$$" "${HARNESS_DIR}/current" \
+        || { rm -f "${HARNESS_DIR}/current.new.$$"; return 1; }
+    printf '%s' "${tag}" > "${HARNESS_STATE}.new.$$" && mv -f "${HARNESS_STATE}.new.$$" "${HARNESS_STATE}"
+    printf '%s' "${c}" > "${HARNESS_SHA}.new.$$" && mv -f "${HARNESS_SHA}.new.$$" "${HARNESS_SHA}"
+    failed="$(cat "${HARNESS_FAILED}" 2>/dev/null || true)"
+    if [ -n "${failed}" ] && ! ver_gt "${failed}" "${tag}"; then rm -f "${HARNESS_FAILED}"; fi
+    for d in "${HARNESS_DIR}"/*; do
+        [ -e "${d}" ] || continue
+        base="$(basename "${d}")"
+        case "${base}" in
+            current|current.new.*|"${c}"|"${c}".prev-*) continue ;;
+            .tmp-*) rm -rf "${d}" ;;
+        esac
+        [ -n "${prev_target}" ] && case "${base}" in "${prev_target}"|"${prev_target}".prev-*) continue ;; esac
+        if printf '%s' "${base}" | grep -qE '^[0-9a-f]{40}(\.prev-[0-9]+)?$'; then rm -rf "${d}"; fi
+    done
+    return 0
+}
+
+harness_main() {
+    local want_owner=0 testmode=0 tags t first=1 dv
+    [ -n "${HARNESS_REPO_DIR}" ] || fail "STYRMAN_HARNESS_REPO_DIR is not set (styrman-harness-update.service sets it)"
+    [ -n "${HARNESS_DIR}" ] || fail "STYRMAN_HARNESS_DIR is not set (styrman-harness-update.service sets it)"
+    HARNESS_DIR="$(realpath -m -- "${HARNESS_DIR}")" || fail "cannot canonicalize STYRMAN_HARNESS_DIR"
+    HARNESS_REPO_DIR="$(realpath -m -- "${HARNESS_REPO_DIR}")" || fail "cannot canonicalize STYRMAN_HARNESS_REPO_DIR"
+    case "${HARNESS_DIR}" in
+        /var/lib/styrman) fail "STYRMAN_HARNESS_DIR=${HARNESS_DIR} is the state root itself — use a dedicated dir below it, e.g. /var/lib/styrman/harness" ;;
+        /) fail "STYRMAN_HARNESS_DIR=/ — refusing" ;;
+        /*/*) : ;;
+        /*) fail "STYRMAN_HARNESS_DIR=${HARNESS_DIR} is a top-level directory — refusing; use a dedicated dir, e.g. /var/lib/styrman/harness" ;;
+        *) fail "STYRMAN_HARNESS_DIR must be an absolute path" ;;
+    esac
+    if [ "${STYRMAN_UPDATE_TEST:-}" = 1 ]; then testmode=1; want_owner="$(id -u)"; harness_test_guard; fi
+    # The content dir is the trust boundary — its parent /var/lib/styrman is
+    # operator-owned by design (host-setup.sh) — so: never a symlink, owned by
+    # us, no group/world write, every run.
+    [ ! -L "${HARNESS_DIR}" ] || fail "${HARNESS_DIR} is a symlink — refusing"
+    [ -d "${HARNESS_DIR}" ] || install -d -m 755 "${HARNESS_DIR}" || fail "cannot create ${HARNESS_DIR}"
+    [ "$(stat -c %u "${HARNESS_DIR}")" = "${want_owner}" ] \
+        || fail "${HARNESS_DIR} is not owned by uid ${want_owner} — refusing to write the harness every project mounts"
+    [ -z "$(find "${HARNESS_DIR}" -maxdepth 0 -perm /022 2>/dev/null)" ] || fail "${HARNESS_DIR} is group/world-writable — refusing"
+    HARNESS_STATE="${STATE_DIR}/harness-version"; HARNESS_SHA="${STATE_DIR}/harness-sha"
+    HARNESS_FAILED="${STATE_DIR}/harness-failed-version"; HARNESS_REFUSED="${STATE_DIR}/harness-refused"
+    if [ -e "${HARNESS_DIR}/current" ] && [ ! -L "${HARNESS_DIR}/current" ]; then
+        harness_alarm current "${HARNESS_DIR}/current is a real directory, not a symlink — a planted bind source? refusing until it is removed"
+        fail "${HARNESS_DIR}/current is not a symlink"
+    fi
+    INSTALLED="$(cat "${HARNESS_STATE}" 2>/dev/null || true)"
+    if [ -n "${INSTALLED}" ] && ! printf '%s' "${INSTALLED}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+        log "WARN: ignoring malformed ${HARNESS_STATE} contents"; INSTALLED=""
+    fi
+    [ -n "${INSTALLED}" ] || INSTALLED=none
+    HARNESS_FAILED_TAG="$(cat "${HARNESS_FAILED}" 2>/dev/null || true)"
+    if [ "${FORCE}" = true ] && [ "${INSTALLED}" = none ]; then hlog "--force ignored: nothing installed yet"; FORCE=false; fi
+    # The harness clone: its own safe.directory and its own token; the crew
+    # token is never used here.
+    [ -d "${HARNESS_REPO_DIR}/.git" ] || fail "no harness clone at ${HARNESS_REPO_DIR} (styrman-ctl update --setup clones it)"
+    if [ "${testmode}" = 0 ]; then
+        trusted_dir "${HARNESS_REPO_DIR}" \
+            || fail "${HARNESS_REPO_DIR} is not a root-owned directory without group/world write — refusing to build from a tree another user can write"
+        [ "$(stat -c %u "${HARNESS_REPO_DIR}/.git" 2>/dev/null)" = "0" ] || fail "${HARNESS_REPO_DIR}/.git is not root-owned — refusing"
+        [ -z "$(find "${HARNESS_REPO_DIR}/.git" -maxdepth 0 -perm /022 2>/dev/null)" ] || fail "${HARNESS_REPO_DIR}/.git is group/world-writable — refusing"
+        if [ -f "${HARNESS_GH_TOKEN_FILE}" ]; then
+            [ "$(stat -c %u "${HARNESS_GH_TOKEN_FILE}")" = "0" ] \
+                || fail "${HARNESS_GH_TOKEN_FILE} is not root-owned — refusing to authenticate with a token another user controls"
+            [ -z "$(find "${HARNESS_GH_TOKEN_FILE}" -perm /077 2>/dev/null)" ] \
+                || fail "${HARNESS_GH_TOKEN_FILE} is readable or writable beyond root (chmod 600 it)"
+            export HARNESS_GH_TOKEN_FILE
+            GIT_CRED_ARGS+=(-c 'credential.https://github.com.helper=!f() { echo username=x-access-token; printf "password=%s\n" "$(cat "${HARNESS_GH_TOKEN_FILE}")"; }; f')
+        fi
+        dv="$(cat "${STATE_DIR}/deployed-version" 2>/dev/null || true)"
+        printf '%s' "${dv}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            || fail "no deployed crew version in ${STATE_DIR}/deployed-version — the smoke needs the deployed runtime image; deploy crew first"
+        HARNESS_SMOKE_IMAGE="styrman-runtime:${dv#v}"
+    fi
+    GIT_SAFE_DIR="${HARNESS_REPO_DIR}"
+    cd "${HARNESS_REPO_DIR}" || fail "cannot cd to ${HARNESS_REPO_DIR}"
+    REQUIRE_SIGNED=1   # no opt-out on this path: what it installs runs in every project VM
+    HARNESS_BUILDER="$(sed -n 's/^FROM \(golang:[^ ]*\) AS harness-builder$/\1/p' "${DEPLOY_DIR}/image/Dockerfile")"
+    [ -n "${HARNESS_BUILDER}" ] || fail "no harness-builder FROM line in ${DEPLOY_DIR}/image/Dockerfile"
+    if ! git fetch --tags --force --prune --prune-tags origin 2>&1; then
+        fail "git fetch failed — root cannot reach ${HARNESS_REPO_DIR}'s origin. For a private repo: mint a FINE-GRAINED GitHub token (styrman-harness only, Contents: Read-only) and install it at ${HARNESS_GH_TOKEN_FILE} (root:root, chmod 600); the origin must be an https:// URL. Expired token? Fine-grained tokens have an expiry — mint a fresh one."
+    fi
+    tags="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vr || true)"
+    if [ -z "${tags}" ]; then hlog "no vX.Y.Z tag yet — waiting for the first signed release (installed: ${INSTALLED})"; return 0; fi
+    [ "${FORCE}" = false ] || tags="${INSTALLED}"
+    for t in ${tags}; do
+        if [ "${FORCE}" = false ] && [ "${INSTALLED}" != none ] && ! ver_gt "${t}" "${INSTALLED}"; then
+            if [ "${first}" = 1 ] && ver_gt "${INSTALLED}" "${t}"; then
+                harness_alarm "${t}" "below the installed ${INSTALLED} (a deleted or moved tag?) — keeping ${INSTALLED}"
+            fi
+            break
+        fi
+        first=0
+        if [ "${FORCE}" = false ] && [ "${t}" = "${HARNESS_FAILED_TAG}" ]; then
+            hlog "${t} previously failed export or smoke — skipped (latched; a newer tag clears it, --force retries the installed tag)"; continue
+        fi
+        if ! verify_tag "${t}"; then harness_alarm "${t}" "not verified (the REFUSED line above says why)"; continue; fi
+        if [ "${CHECK_ONLY}" = true ]; then hlog "update AVAILABLE: ${INSTALLED} → ${t} (--check changes nothing)"; return 0; fi
+        if ! harness_export "${t}"; then
+            harness_alarm "${t}" "${EXPORT_ERR}"; printf '%s' "${t}" > "${HARNESS_FAILED}"; continue
+        fi
+        if ! harness_smoke "${EXPORT_TMP}"; then
+            harness_alarm "${t}" "${SMOKE_ERR}"; rm -rf "${EXPORT_TMP}"; printf '%s' "${t}" > "${HARNESS_FAILED}"; continue
+        fi
+        harness_swap "${EXPORT_TMP}" "${EXPORT_COMMIT}" "${t}" || fail "swap of ${t} failed — ${HARNESS_DIR}/current unchanged"
+        hlog "${t} (${EXPORT_COMMIT:0:7}) is current"
+        return 0
+    done
+    hlog "nothing newer than ${INSTALLED} verifies"
+    return 0
+}
+
 # ─── Test hook: styrman-update __verify-tag <tag> <allowed_signers> <repo> ──
 # Runs verify_tag against a scratch repo and allowed_signers, as a non-root
 # user, without the fetch/deploy flow — only under the Go test
@@ -174,6 +421,19 @@ if [ "${1:-}" = "__verify-tag" ]; then
     cd "$4" || fail "cannot cd to $4"
     if verify_tag "$2"; then exit 0; else exit 1; fi
 fi
+# The harness channel under the same test gate: unelevated, scratch paths only
+# (harness_test_guard), the smoke image from STYRMAN_HARNESS_SMOKE_IMAGE.
+if [ "${1:-}" = harness ] && [ "${STYRMAN_UPDATE_TEST:-}" = 1 ]; then
+    shift
+    CHECK_ONLY=false; FORCE=false
+    for arg in "$@"; do
+        case "${arg}" in --check) CHECK_ONLY=true ;; --force) FORCE=true ;; *) fail "unknown flag: ${arg}" ;; esac
+    done
+    [ -n "${STATE_DIR}" ] || fail "STYRMAN_UPDATE_STATE_DIR is not set — tests pass a NESTED scratch path (ADR-052)"
+    STATE_DIR="$(realpath -m -- "${STATE_DIR}")" || fail "cannot canonicalize STYRMAN_UPDATE_STATE_DIR"
+    mkdir -p "${STATE_DIR}" || fail "cannot create ${STATE_DIR}"
+    harness_main; exit $?
+fi
 
 CHECK_ONLY=false
 FORCE=false
@@ -181,6 +441,7 @@ for arg in "$@"; do
     case "${arg}" in
         --check) CHECK_ONLY=true ;;
         --force) FORCE=true ;;
+        harness) MODE=harness ;;   # the harness channel (ADR-073) — dispatched after the preamble below
         *) echo "unknown flag: ${arg}" >&2; exit 2 ;;
     esac
 done
@@ -295,6 +556,14 @@ trusted_dir "${DEPLOY_DIR}" \
 # every other trust input (review).
 [ -z "$(find "${DEPLOY_DIR}/.git" -maxdepth 0 -perm /022 2>/dev/null)" ] \
     || fail "${DEPLOY_DIR}/.git is group/world-writable — refusing to trust its objects"
+# The harness channel leaves here: it shares the lock (a crew deploy and a
+# harness tick never overlap), the state dir and the deploy clone's trust
+# checks (it reads image/Dockerfile there), and never touches the crew token,
+# the crew fetch, the crew LATEST or the update.env opt-out (ADR-073).
+if [ "${MODE}" = harness ]; then
+    harness_main
+    exit $?
+fi
 # deploy/.env survives both `checkout --force` and `git clean -d` (it is
 # gitignored) and supplies STYRMAN_ALLOWED_EMAILS to the stack, so it needs the
 # same ownership guarantee as the tree itself (security review).
@@ -471,14 +740,23 @@ self_install() {
     for f in styrman-update styrman-update.service styrman-update.timer; do
         git cat-file -e "${SELF_HEAD}:${src}/${f}" 2>/dev/null || { log "WARN: ${src}/${f} missing in the verified tree — self-install skipped"; return 0; }
     done
-    log "self-install targets: ${bin}, ${unitdir}/styrman-update.{service,timer}"
-    # Sweep orphans of ALL three targets up front (an earlier SIGKILLed
-    # attempt), not just the ones that drift this run (review).
-    rm -f "${bin}.new."* "${unitdir}/styrman-update.service.new."* "${unitdir}/styrman-update.timer.new."* 2>/dev/null || true
+    # The harness channel's unit pair (ADR-073) is OPTIONAL here: a verified
+    # tree without it (a rollback to a pre-channel tag) skips those two files
+    # and still installs the crew files, instead of the fail-closed return
+    # above (cold read of the plan, round 2).
+    local units=(styrman-update.service styrman-update.timer)
+    for f in styrman-harness-update.service styrman-harness-update.timer; do
+        if git cat-file -e "${SELF_HEAD}:${src}/${f}" 2>/dev/null; then units+=("${f}"); else log "self-install: ${src}/${f} not in the verified tree (pre-ADR-073 release) — skipped"; fi
+    done
+    log "self-install targets: ${bin}, ${unitdir}/{${units[*]}}"
+    # Sweep orphans of ALL targets up front (an earlier SIGKILLed attempt),
+    # not just the ones that drift this run (review).
+    rm -f "${bin}.new."* 2>/dev/null || true
+    for f in "${units[@]}"; do rm -f "${unitdir}/${f}.new."* 2>/dev/null || true; done
     if differs "${src}/styrman-update" "${bin}"; then
         if atomic_install 755 "${src}/styrman-update" "${bin}"; then changed=1; else failed=1; log "WARN: could not self-install ${bin}"; fi
     fi
-    for f in styrman-update.service styrman-update.timer; do
+    for f in "${units[@]}"; do
         if differs "${src}/${f}" "${unitdir}/${f}"; then
             # Keep going on a failure: a partially updated pair still needs the
             # daemon-reload below for whatever DID land (review).
@@ -586,6 +864,13 @@ host_converge() {
     # tick saw nothing changed — so the unit stayed disabled until the
     # operator's install.sh. `systemctl enable` is idempotent and cheap.
     if ! out="$(systemctl enable styrman-firewall.service 2>&1)"; then log "WARN: enabling styrman-firewall.service at boot: ${out}"; fi
+    # The harness channel's timer (ADR-073), unconditionally once its unit and
+    # its clone exist (BUG-035: a step gated on "changed this tick" never sees
+    # the release that ships it). Without the clone the tick would only fail
+    # — `styrman-ctl update --setup --harness-token-file` makes both.
+    if [ -f "${unitdir}/styrman-harness-update.timer" ] && [ -d "${STYRMAN_HARNESS_REPO_DIR:-/opt/styrman-harness}/.git" ]; then
+        if ! out="$(systemctl enable --now styrman-harness-update.timer 2>&1)"; then log "WARN: enabling styrman-harness-update.timer: ${out}"; fi
+    fi
     [ "${failed}" = "0" ] || log "WARN: host-converge incomplete — the previous firewall script may still be installed"
     return 0
 }

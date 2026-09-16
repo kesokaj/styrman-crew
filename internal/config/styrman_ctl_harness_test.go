@@ -1,0 +1,108 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// The harness channel's half of `styrman-ctl update --setup` (ADR-073), as a
+// dry-run plan: the harness token staged and installed root 600, the content
+// dir root 755, the styrman-harness clone beside the crew clone under the
+// same scoped credential helper, the channel's own --check with every input
+// named, and its timer — and, unattended without a token, the skip line that
+// names the command for later, with none of the harness steps planned.
+func TestStyrmanCtlUpdateSetupHarnessPlan(t *testing.T) {
+	e := ctlSetup(t, true)
+	gitFake := "#!/usr/bin/env bash\necho \"git $* GIT_ASKPASS=${GIT_ASKPASS:-} GIT_TERMINAL_PROMPT=${GIT_TERMINAL_PROMPT:-}\" >> \"" + e.calls + "\"\ncase \"$*\" in *get-url*) echo git@github.com:owner/repo.git ;; *rev-parse*) echo 4686792 ;; *) echo v1.27.1 ;; esac\n"
+	if err := os.WriteFile(filepath.Join(e.bin, "git"), []byte(gitFake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tok := filepath.Join(e.root, "secrets", "tok")
+	if err := os.WriteFile(tok, []byte("ghp_SECRETTOKEN\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	htok := filepath.Join(e.root, "secrets", "harness-tok")
+	if err := os.WriteFile(htok, []byte("ghp_HARNESSSECRET\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	signers := filepath.Join(e.root, "secrets", "signers")
+	if err := os.WriteFile(signers, []byte("me@example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(e.root, "checkout.env")
+	if err := os.WriteFile(envFile, []byte("BASE_DOMAIN=example.test\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(e.root, "opt", "styrman", ".git")); err != nil {
+		t.Fatal(err)
+	}
+	e.env = append(e.env, "STYRMAN_ENV_FILE="+envFile)
+	harnessClone := filepath.Join(e.root, "opt", "styrman-harness") // beside the crew clone, derived from it
+	etc := filepath.Join(e.root, "etc", "styrman")
+	content := filepath.Join(e.root, "var", "lib", "styrman", "harness")
+
+	out, code := ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", signers, "--harness-token-file", htok)
+	if code != 0 {
+		t.Fatalf("update --setup with the harness token: %d\n%s", code, out)
+	}
+	if strings.Contains(out, "HARNESSSECRET") || strings.Contains(out, "SECRETTOKEN") {
+		t.Fatalf("a token leaked into the plan:\n%s", out)
+	}
+	lines := planLines(out)
+	want := []string{
+		"systemctl start styrman-update.service", // the crew half comes first
+		"install -m 600 -o root -g root <tmpdir>/gh-token-harness " + filepath.Join(etc, "gh-token-harness"),
+		"install -d -m 755 -o root -g root " + content,
+		"clone -- https://github.com/kesokaj/styrman-harness.git " + harnessClone,
+		"chown -R root:root " + harnessClone,
+		"styrman-update harness --check",
+		"systemctl enable --now styrman-harness-update.timer",
+	}
+	last := -1
+	for _, w := range want {
+		i := indexOf(lines, w)
+		if i < 0 {
+			t.Fatalf("plan lacks %q:\n%s", w, out)
+		}
+		if i < last {
+			t.Fatalf("plan out of order at %q:\n%s", w, out)
+		}
+		last = i
+	}
+	check := lines[indexOf(lines, "styrman-update harness --check")]
+	for _, w := range []string{"STYRMAN_HARNESS_REPO_DIR=" + harnessClone, "STYRMAN_HARNESS_DIR=" + content, "STYRMAN_HARNESS_GH_TOKEN_FILE=" + filepath.Join(etc, "gh-token-harness"), "STYRMAN_UPDATE_STATE_DIR=" + filepath.Join(etc, "update")} {
+		if !strings.Contains(check, w) {
+			t.Fatalf("harness --check lacks %q: %s", w, check)
+		}
+	}
+	clone := lines[indexOf(lines, "clone -- https://github.com/kesokaj/styrman-harness.git")]
+	for _, w := range []string{"-c credential.helper= ", "credential.https://github.com.helper=", "gh-token-harness", "GIT_TERMINAL_PROMPT=0"} {
+		if !strings.Contains(clone, w) {
+			t.Fatalf("harness clone line lacks %q: %s", w, clone)
+		}
+	}
+	if strings.Contains(clone, "gh-token ") || strings.Contains(clone, "gh-token\"") {
+		t.Fatalf("the harness clone must read its own token, not the crew one: %s", clone)
+	}
+	if strings.Contains(out, "=/opt/") || strings.Contains(out, " /opt/") {
+		t.Fatalf("a production path leaked into a scratch-prefixed plan:\n%s", out)
+	}
+
+	// Unattended without a harness token: the crew half is planned, the
+	// harness half is skipped with the command that does it later.
+	out, code = ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", signers)
+	if code != 0 {
+		t.Fatalf("update --setup without the harness token: %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "harness channel not set up (no token)") || !strings.Contains(out, "--harness-token-file") {
+		t.Fatalf("the skip must name the later command:\n%s", out)
+	}
+	// The crew updater's own env still names the harness paths (the same
+	// script serves both verbs); what must be absent is the harness TOKEN
+	// install and the harness timer.
+	if strings.Contains(out, "styrman-harness-update.timer") || strings.Contains(out, "<tmpdir>/gh-token-harness") || strings.Contains(out, "styrman-harness.git") {
+		t.Fatalf("harness steps planned without a token:\n%s", out)
+	}
+}

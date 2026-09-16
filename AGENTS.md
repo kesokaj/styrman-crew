@@ -54,6 +54,7 @@ STYRMAN_VERSION=<x.y.z> docker compose -f deploy/docker-compose.yml up -d --buil
 # builds/tests a detached worktree of that exact commit; see versioning.md's
 # "Release procedure"
 deploy/verify-commit.sh [commit-ish]   # default HEAD; SKIP_WEB_FRESHNESS=1 skips the npm-dependent steps
+sudo styrman-ctl update --setup --harness-token-file <file>   # harness channel (ADR-073): styrman-harness releases reach the host without a crew release
 
 # Test suites
 bash .agents/docs/testing/styrman/integration.sh   # vs real Kata; check counts live in .agents/docs/testing/styrman/README.md (the source of truth)

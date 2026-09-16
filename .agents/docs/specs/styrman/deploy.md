@@ -273,6 +273,101 @@ commit to git."
 
 ## Auto-update (tag-gated, ADR-050/051)
 
+### Harness channel (ADR-073)
+
+The agent harness reaches the host without a crew release: the same
+`deploy/update/styrman-update` script gained a `harness` verb
+(`styrman-update harness [--check] [--force]`), run by
+`styrman-harness-update.service` (oneshot, `After=`/`Requires=docker.service`,
+its own `RuntimeDirectory=styrman-harness-update`,
+`DOCKER_CONFIG=%t/styrman-harness-update/docker`, `TimeoutStartSec=45min`,
+`Nice=10`, idle IO — its own runtime dir rather than sharing the crew
+updater's, since systemd removes a `RuntimeDirectory` when any unit
+declaring it stops) on `styrman-harness-update.timer` (`OnBootSec=7min`,
+`OnUnitActiveSec=5min`, `RandomizedDelaySec=60` — offset two minutes at boot
+from the crew updater's cadence so the two ticks, which share a lock, don't
+start together). The unit pins every path itself, the ADR-052 shape:
+`STYRMAN_UPDATE_STATE_DIR=/etc/styrman/update` (shared with the crew
+updater — `harness-version`, `harness-sha`, `harness-failed-version`,
+`harness-refused` live beside `deployed-version`), `STYRMAN_DEPLOY_DIR=/opt/styrman`,
+`STYRMAN_HARNESS_REPO_DIR=/opt/styrman-harness`,
+`STYRMAN_HARNESS_DIR=/var/lib/styrman/harness`,
+`STYRMAN_HARNESS_GH_TOKEN_FILE=/etc/styrman/gh-token-harness`. Both units are
+installed by `host-setup.sh` (beside the crew updater units) and by the
+updater's own `self_install` from each verified crew tree (optional there: a
+tree without them, a rollback to a pre-channel tag, skips the pair and still
+installs the crew files); `host_converge` enables the timer whenever the unit
+file and the harness clone both exist. `host-setup.sh`
+also creates `/var/lib/styrman/harness` root:root 0755 and refuses if it is a
+symlink.
+
+**Selection.** The script fetches tags of the root-owned clone at
+`/opt/styrman-harness` (its own fine-grained GitHub token at
+`/etc/styrman/gh-token-harness`, root 600, `Contents: read-only` on
+`styrman-harness` only — the crew token is never used here), lists `vX.Y.Z`
+tags newest first, and walks DOWN to the newest one that verifies
+(`verify_tag`: annotated, SSH-signed, signer in `/etc/styrman/allowed_signers`
+— `REQUIRE_SIGNED` is forced to 1 on this path, the crew updater's opt-out
+does not apply). Every refused tag is an alarm: a `harness: REFUSED: <tag> —
+<reason>` log line and a line appended to `/etc/styrman/update/harness-refused`
+(newest 50 kept). It refuses to go below the installed version — when the
+newest tag is lower than `harness-version` it alarms "below the installed …"
+and keeps the current one. No `vX.Y.Z` tag at all logs "no vX.Y.Z tag yet —
+waiting for the first signed release". A tag that fails export or smoke is
+latched at `/etc/styrman/update/harness-failed-version` and skipped until a
+newer tag appears (`--force` re-exports the installed tag and clears the
+latch when the installed tag is at or above the failed one). `--check`
+reports `update AVAILABLE: <installed> → <tag>` and changes nothing.
+
+**Export.** `git archive` of the tag (minus `.agents`, `.gitignore`, any
+`.git`; a symlink anywhere in the tree fails the export) plus `COMMIT`,
+`TAG`, `SHA256SUMS` in the mirror's shape (`image/harness/VENDORED.md` §
+Refresh), and `bin/sh-agent` built offline in the same pinned Go builder
+image the runtime image uses (`FROM golang:… AS harness-builder` in
+`image/Dockerfile`), as the invoking user, `GOPROXY=off`,
+`GOTOOLCHAIN=local`.
+
+**Smoke.** The candidate is mounted read-only into the DEPLOYED runtime
+image (`styrman-runtime:<deployed-version>` from
+`/etc/styrman/update/deployed-version` — the channel refuses to run before
+crew is deployed) as uid 1000, and `sh-agent list --repo /styrman/harness`
+plus `sh-agent install --dry-run --repo … --home …` must both exit 0; counts
+are logged, never asserted.
+
+**Swap.** Content lands at `/var/lib/styrman/harness/<commit>/{repo,bin/sh-agent}`;
+`current` is a symlink replaced by one rename; the previous target is kept
+beside it, older ones removed; state files are `/etc/styrman/update/harness-version`
+(tag) and `harness-sha` (commit). The content dir is a trust boundary: never
+a symlink, root-owned, no group/world write, and `current` must be a symlink
+— a real directory there is refused with an alarm.
+
+**styrman-ctl.** `install` and `update --setup` accept
+`--harness-token-file <file>` (interactive setup asks for the token; an
+empty answer skips the channel with "harness channel not set up (no token);
+`styrman-ctl update --setup --harness-token-file <file>` does it later").
+Setup installs the token (root 600), creates the content dir (root 755,
+refuses a symlink), clones `https://github.com/kesokaj/styrman-harness.git`
+(override `STYRMAN_HARNESS_ORIGIN`) to `/opt/styrman-harness` (override
+`STYRMAN_HARNESS_REPO_DIR`, default beside the crew clone) with the same
+scoped one-shot credential helper as the crew clone, runs
+`styrman-update harness --check`, then
+`systemctl enable --now styrman-harness-update.timer`.
+
+`styrman-ctl status` prints a `harness` line: `<tag> (<sha7>)
+/var/lib/styrman/harness/current` when delivered, "waiting for the first
+signed styrman-harness tag" when the clone exists but no tag has landed, or
+"not set up — `styrman-ctl update --setup --harness-token-file <file>`"
+otherwise, plus the timer/service states, `FAILED LATCHED: <tag>` and "last
+refusal: <line>" when present; a refusal newer than the last delivery marks
+the host DEGRADED (exit 1). The JSON output carries a `harness` object with
+`version`, `sha`, `failed`, `refused`, `service`, `timer`. `UNITS` (the
+uninstall list) is now six entries, the two harness units added.
+
+Phase 1 (host side) is what exists today; the server-side mount and the
+runtime entrypoint clause that consumes `/var/lib/styrman/harness/current`
+are later phases of the same release — until they land, the image's pinned
+mirror (`image/harness/`) remains what every project boots (R5).
+
 Day-to-day "how do I ship a release / update one image" reference:
 `.agents/docs/specs/styrman/versioning.md`. This section is the full
 mechanics + security model.

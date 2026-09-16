@@ -1,0 +1,39 @@
+[Unit]
+Description=styrman harness channel (newest SSH-signed styrman-harness tag)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# ADR-073, the same ADR-052 shape as styrman-update.service: every path is
+# pinned HERE, the script defaults none of them. The state dir is shared with
+# the crew updater (harness-version, harness-sha, harness-failed-version,
+# harness-refused live beside deployed-version); the clone and the content
+# dir are the channel's own.
+Environment=STYRMAN_UPDATE_STATE_DIR=/etc/styrman/update
+Environment=STYRMAN_DEPLOY_DIR=/opt/styrman
+Environment=STYRMAN_HARNESS_REPO_DIR=/opt/styrman-harness
+Environment=STYRMAN_HARNESS_DIR=/var/lib/styrman/harness
+Environment=STYRMAN_HARNESS_GH_TOKEN_FILE=/etc/styrman/gh-token-harness
+# Its OWN runtime dir: systemd removes a RuntimeDirectory when any unit
+# declaring it stops, so sharing styrman-update's would let a one-second
+# "lock held" tick delete /run/styrman-update under a crew build (cold read
+# of the plan, round 3).
+RuntimeDirectory=styrman-harness-update
+RuntimeDirectoryMode=0700
+Environment=DOCKER_CONFIG=%t/styrman-harness-update/docker
+ExecStart=/usr/local/bin/styrman-update harness
+# The export builds sh-agent in the Go builder image and smokes it in the
+# runtime image; both must never starve the running platform.
+Nice=10
+IOSchedulingClass=idle
+# A build plus a smoke can take minutes; the flock shared with the crew
+# updater is what prevents overlap.
+TimeoutStartSec=45min
+# Modest hardening, as the crew unit says: the real control is the tag
+# SIGNATURE check in the script.
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
