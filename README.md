@@ -106,11 +106,18 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.34.0**, deployed: https://crew.styrman.xyz (Google sign-in).
+**v1.34.1**, deployed: https://crew.styrman.xyz (Google sign-in).
 
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
 
+- **v1.34.1** (2026-09-16): stopping a project (the Stop button or the idle
+  reaper) now switches its container's restart policy to `no` before the
+  guest's own shutdown, and the next Start or terminal attach switches it
+  back to `unless-stopped`, so Docker no longer restarts the clean exit and
+  then hard-kills the rebooted VM (BUG-063, seen on the live host right
+  after the v1.34.0 deploy); the integration suite asserts it (106 checks).
+  Full entry: `.agents/docs/changes/2026-09-16-v1.34.1-release.md`.
 - **v1.34.0** (2026-09-16): every project home's agent harness refreshes to
   styrman-harness `4aa19be` (27 skills / 7 subagents; on its next seed
   `sh-agent install` writes the `attribution` key into
