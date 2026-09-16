@@ -127,6 +127,10 @@ func New(cfg *config.Config, logger *slog.Logger) (*Orchestrator, error) {
 	if err != nil {
 		return nil, fmt.Errorf("docker client: %w", err)
 	}
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	logHarnessChannel(logger, cfg.HarnessDir)
 	return &Orchestrator{docker: cli, cfg: cfg, logger: logger}, nil
 }
 
@@ -330,6 +334,38 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 			err = errdefs.NotFound(fmt.Errorf("recreated"))
 		}
 	}
+	// Harness channel (ADR-073): its two read-only binds are fixed at create,
+	// so a STOPPED container is rebuilt to gain them once the channel has
+	// delivered, or to drop them once the channel is absent — Docker creates
+	// a missing bind SOURCE as a root-owned real directory, which would plant
+	// current/repo and current/bin inside the content dir and turn current
+	// into a directory the channel can never swap again. A present but
+	// refused channel is NOT a trigger: the WARN says why and the container
+	// starts as it is (the dir is root-written; a transient fault must not
+	// churn every stopped project). A running container upgrades on its next
+	// stop/start, as with an image upgrade. The same binds go to the create
+	// below.
+	hbinds, herr := harnessBinds(o.cfg.HarnessDir)
+	if herr != nil && !errors.Is(herr, fs.ErrNotExist) {
+		o.logger.Warn("harness channel refused — the image's baked harness seeds this project", "project", project, "error", herr)
+	}
+	if err == nil && (insp.State == nil || !insp.State.Running) {
+		has := insp.HostConfig != nil && hasHarnessBind(insp.HostConfig.Binds)
+		why := ""
+		switch {
+		case len(hbinds) > 0 && !has:
+			why = "to mount the harness channel"
+		case has && errors.Is(herr, fs.ErrNotExist):
+			why = "to drop the absent harness channel"
+		}
+		if why != "" {
+			o.logger.Info("recreating stopped container "+why, "project", project)
+			if rerr := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); rerr != nil {
+				return "", fmt.Errorf("recreate for harness channel: %w", rerr)
+			}
+			err = errdefs.NotFound(fmt.Errorf("recreated"))
+		}
+	}
 	// Every path below hands the project home to Docker as a bind SOURCE:
 	// create passes it in Binds, and START re-resolves the stored, unresolved
 	// source on every start (verified on Engine 29.7.2) — so a symlink the
@@ -430,6 +466,7 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 			homePath:      phome,
 			workspacePath: ws,
 			workspaceDst:  "/home/" + opts.GuestUser + "/projects/" + opts.Dir,
+			harnessBinds:  hbinds,
 			extraEnv: []string{
 				config.EnvProject + "=" + project,
 				config.EnvProjectDir + "=" + opts.Dir,
@@ -903,6 +940,10 @@ type createSpec struct {
 	labels        map[string]string
 	noRestart     bool // ephemeral (setup VM): don't auto-restart after reboot
 	lan           bool // ADR-067 network mode; always false for system VMs
+	// harnessBinds: the harness channel's two read-only binds (ADR-073),
+	// from harnessBinds(); nil for the setup VM and when the channel is
+	// disabled, absent or refused (the image's baked harness seeds then).
+	harnessBinds []string
 }
 
 // createBridgeNetwork is the ONLY place a styrman bridge network is created.
@@ -1067,7 +1108,7 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 				if spec.workspacePath != "" {
 					b = append(b, spec.workspacePath+":"+spec.workspaceDst)
 				}
-				return b
+				return append(b, spec.harnessBinds...)
 			}(),
 			RestartPolicy: restartPolicy(spec.noRestart),
 			// Per-project sizing: 0 leaves Kata's own default (1 vCPU / 2 GB);

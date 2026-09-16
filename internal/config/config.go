@@ -98,12 +98,17 @@ type Config struct {
 	StateDir    string // root state dir (default /var/lib/styrman)
 	HomesDir    string // per-user homes root (StateDir/homes)
 	HomeDir     string // LEGACY single-user home; migrated to HomesDir on boot
-	Image       string // runtime image for project containers
-	Runtime     string // docker runtime (mvm = Kata)
-	VCPUs       int    // per-project vCPU limit, 0 = Kata's default (STYRMAN_VCPUS)
-	MemoryMB    int    // per-project memory MiB, 0 = Kata's default (STYRMAN_MEMORY_MB)
-	Username    string // in-guest username; owns the shared home
-	UID, GID    int    // host uid/gid the guest user must match
+	// HarnessDir is the host's harness channel content dir (ADR-073):
+	// <HarnessDir>/current/{repo,bin/sh-agent} is bind-mounted read-only into
+	// every project VM when it is present and trusted. Empty = disabled; the
+	// image's baked mirror seeds projects then (R5's fallback).
+	HarnessDir string
+	Image      string // runtime image for project containers
+	Runtime    string // docker runtime (mvm = Kata)
+	VCPUs      int    // per-project vCPU limit, 0 = Kata's default (STYRMAN_VCPUS)
+	MemoryMB   int    // per-project memory MiB, 0 = Kata's default (STYRMAN_MEMORY_MB)
+	Username   string // in-guest username; owns the shared home
+	UID, GID   int    // host uid/gid the guest user must match
 
 	// Operator-tunable settings (Settings → Runtime). Env supplies the
 	// defaults; StateDir/settings.json overrides them and PATCH
@@ -165,6 +170,7 @@ func Load() (*Config, error) {
 		PreviewBase: envOr("STYRMAN_PREVIEW_BASE", ""),
 		PrivateBase: envOr("STYRMAN_PRIVATE_BASE", ""),
 		StateDir:    envOr("STYRMAN_STATE_DIR", "/var/lib/styrman"),
+		HarnessDir:  envOr("STYRMAN_HARNESS_DIR", ""),
 		Image:       os.Getenv("STYRMAN_IMAGE"), // required — validated below
 		Runtime:     envOr("STYRMAN_RUNTIME", "mvm"),
 		VCPUs:       envIntOr("STYRMAN_VCPUS", 0),

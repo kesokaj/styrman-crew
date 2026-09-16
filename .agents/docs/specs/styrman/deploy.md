@@ -363,10 +363,31 @@ the host DEGRADED (exit 1). The JSON output carries a `harness` object with
 `version`, `sha`, `failed`, `refused`, `service`, `timer`. `UNITS` (the
 uninstall list) is now six entries, the two harness units added.
 
-Phase 1 (host side) is what exists today; the server-side mount and the
-runtime entrypoint clause that consumes `/var/lib/styrman/harness/current`
-are later phases of the same release — until they land, the image's pinned
-mirror (`image/harness/`) remains what every project boots (R5).
+**Server side.** `STYRMAN_HARNESS_DIR` (compose: `/var/lib/styrman/harness`,
+the same path inside the server container as on the host through the
+`/var/lib/styrman` volume; empty = disabled, a local dev run) names the
+content dir. On every project create the server computes the channel's two
+binds — `<dir>/current/repo:/styrman/harness:ro` and
+`<dir>/current/bin/sh-agent:/styrman/bin/sh-agent:ro`, on the UNRESOLVED
+`current` path, so Docker re-resolves the symlink on every start and a
+stopped VM picks up a swapped harness on its next start, as it picks up an
+image upgrade — and mounts them only when the channel is present AND
+trusted: the content dir itself not a symlink, owned by root or the server,
+no group/world write; `current` a symlink resolving inside the dir to a
+directory under the same rules holding `repo/COMMIT` and `bin/sh-agent` as
+regular files. Absent (nothing at `current`) means the image's baked mirror
+seeds the project (R5's fallback); refused means the same plus a WARN naming
+the reason. The setup VM never mounts the channel. A STOPPED container is
+recreated on its next start to gain the binds once the channel has
+delivered, and to drop them once the channel is absent (Docker would create
+a missing bind source as a root-owned real directory at `current/`, which
+the channel could never swap again); a refused channel rebuilds nothing, and
+a running container upgrades on its next stop/start. One line per server
+start says which applies: `harness channel tag=… commit=… path=…`,
+`harness channel absent; the image's baked harness seeds projects`,
+`harness channel refused; …`, or `harness channel disabled
+(STYRMAN_HARNESS_DIR unset); …`. What the guest does with the mount is the
+entrypoint's seed (`runtime-image.md`).
 
 Day-to-day "how do I ship a release / update one image" reference:
 `.agents/docs/specs/styrman/versioning.md`. This section is the full
