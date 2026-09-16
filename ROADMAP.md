@@ -12,9 +12,9 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-<!-- Nothing in progress. Every shipped release is recorded in .agents/docs/changes/
-(newest: 2026-09-14-v1.33.0-release.md) and in git tags; operator steps live in
-the newest handoff's Next Steps. -->
+Active plan: `.agents/docs/plans/2026-09-16-harness-channel.md` — the host-side,
+signature-gated harness channel (styrman-harness releases reach every project
+without a crew release), then v1.35.0. Its unticked boxes are the remaining work.
 
 ## Next
 

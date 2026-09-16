@@ -45,13 +45,19 @@
    agents for testing what they build, is a testing surface and not an IDE
    (ADR-068, operator approval 2026-09-11).
 5. **R5 — Agents**: `claude` (Claude Code) and `agy` (Antigravity CLI), selected per
-   project at creation. The agent harness (a mirror of `styrman-harness` at
-   `image/harness/COMMIT`, installed by `sh-agent`; no hooks or scripts, and no settings file
-   except the one key the harness's own R4 allows — `attribution` in `~/.claude/settings.json`,
-   commit and PR trailers off, written only when absent — ADR-062, operator approval 2026-09-04,
-   the exception approved 2026-09-16 (ADR-072); was "vendored from `devshell_prompt/harness`") and
-   the default shell config are carried by the **base image** and seeded identically into
-   every project home (ADR-030, revised 2026-08-28; was "deployed into the shared home").
+   project at creation. The agent harness (`styrman-harness`, installed by `sh-agent`;
+   no hooks or scripts, and no settings file except the one key the harness's own R4
+   allows — `attribution` in `~/.claude/settings.json`, commit and PR trailers off,
+   written only when absent — ADR-062, operator approval 2026-09-04, the exception
+   approved 2026-09-16 (ADR-072); was "vendored from `devshell_prompt/harness`") is
+   carried by the **host's verified harness channel**: the newest SSH-signed
+   `styrman-harness` tag that verifies against `/etc/styrman/allowed_signers`, exported
+   under `/var/lib/styrman/harness/current` and mounted read-only into every project VM
+   (ADR-073, operator approval 2026-09-16), the base image's pinned mirror at
+   `image/harness/COMMIT` remaining the fallback until the channel has delivered; the
+   default shell config is carried by the **base image**; both are seeded identically
+   into every project home (ADR-030, revised 2026-08-28; was "deployed into the shared
+   home").
 6. **R6 — Terminals are durable records over tmux sessions** (ADR-016):
    survive browser disconnects; single active WebSocket per terminal
    (close-code 4001 replaces); pause keeps record + transcript.
