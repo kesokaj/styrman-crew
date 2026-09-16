@@ -120,8 +120,9 @@ check "27 skills and 7 agy agents seeded" \
 # The mirror has no .git, so the harness installs it as a plain copy: never a
 # `go build` in a root-owned tree, never a git call (harness BUG-015, fixed in
 # 2c8990e). `status` labels it so; the boot log's own pass line names the
-# mirror commit (install's stdout is discarded, so the log line is the only
-# in-guest evidence that install succeeded this boot). The commit it must
+# mirror commit (of install's stdout only its settings.json lines reach the
+# boot log, so the pass line is still the in-guest evidence that install
+# succeeded this boot). The commit it must
 # name is the one THIS tree pins, read from the host file — not from the
 # container, which would compare a constant with itself (review 2026-09-14);
 # ensure-test-image is what makes the image and the tree the same commit.
@@ -134,8 +135,16 @@ check "sh-agent status labels the image mirror a plain copy" \
     "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/sh-agent status --repo /styrman/harness --home ${GH} | grep -F '/styrman/harness (plain copy, not its own git checkout; update is refused)' >/dev/null"
 check "boot log records the harness deployed at the mirror's commit" \
     "c=\"\$(cut -c1-7 '${REPO}/image/harness/COMMIT')\" && v=\"\$(docker exec ${CN} cat /styrman/VERSION)\" && [ \${#c} = 7 ] && [ -n \"\$v\" ] && docker logs ${CN} 2>&1 | grep -F \"agent harness deployed (version \$v, styrman-harness \$c\" >/dev/null"
-check "no previous-harness artifacts (shell gates, GEMINI.md, settings.json)" \
-    "! docker exec ${CN} sh -c 'test -e ${GH}/.agents/bin || test -e ${GH}/.gemini/GEMINI.md || test -e ${GH}/.claude/settings.json'"
+# ADR-072 (BUG-061): the harness now WRITES one file outside its own
+# directories — ~/.claude/settings.json with the attribution key — and the
+# entrypoint logs the installer's line about it; both are asserted, and the
+# old "settings.json absent" clause is gone with the behaviour it described.
+check "boot log carries the installer's settings: line for the created file (ADR-072)" \
+    "docker logs ${CN} 2>&1 | grep -F \"settings: ${GH}/.claude/settings.json created with\" >/dev/null"
+check "no previous-harness artifacts (shell gates, GEMINI.md)" \
+    "! docker exec ${CN} sh -c 'test -e ${GH}/.agents/bin || test -e ${GH}/.gemini/GEMINI.md'"
+check "settings.json holds exactly the attribution key, trailers off (ADR-072)" \
+    "docker exec ${CN} runuser -u ${ME} -- jq -e '.attribution.commit == \"\" and .attribution.pr == \"\" and (keys == [\"attribution\"])' ${GH}/.claude/settings.json >/dev/null"
 
 say "browser (ADR-068: one headless Chromium per project, MCP-registered for both agents)"
 # The registration is the seeding block's third step; both files are the
@@ -384,6 +393,16 @@ say "persistence across container destruction (R3/R5)"
 "${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/1" \
     -send "echo persisted > ~/projects/itest/proof.txt\r" -wait 2s >/dev/null || true
 sleep 1
+# BUG-062: a settings.json the installer cannot judge — here a directory in
+# its place — is reported on the installer's stdout with a `note: ` prefix,
+# and the entrypoint must carry that line into the boot log (the key is not
+# written then, and only this line says so). Removing the stamp makes the
+# seed run again on the recreate below (the home persists, nothing else
+# changes); the plant is undone after the check so the stop/start section
+# proves the file comes back with the key. Checked, not bare (see the LAN
+# section): a failed setup must read as one FAIL, not abort the suite.
+check "BUG-062 setup: stamp removed, a directory planted in settings.json's place" \
+    "docker exec ${CN} runuser -u ${ME} -- sh -c 'rm -f ${GH}/.styrman/.harness-version ${GH}/.claude/settings.json && mkdir ${GH}/.claude/settings.json'"
 docker rm -f "${CN}" >/dev/null
 curl -fsS -X POST "${API}/api/projects/${ID}/start" >/dev/null
 OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/1" \
@@ -393,6 +412,12 @@ check "file survives container recreate" "echo '${OUT}' | grep -q persisted"
 check "docker.img persisted" "[ -f '${STATE}/homes/${ME}/p/${ID}/.dockerd/${ID}.img' ]"
 check "transcript survives recreate" \
     "curl -fsS ${API}/api/projects/${ID}/history/conv-1 | grep -q '${MARK}'"
+check "boot log carries the installer's note: line for a settings.json it could not judge (BUG-062)" \
+    "docker logs ${CN} 2>&1 | grep -F \"note: ${GH}/.claude/settings.json is not a regular file, so the attribution setting could not be checked\" >/dev/null"
+check "the seed still completed around the refused key (stamp rewritten)" \
+    "docker exec ${CN} runuser -u ${ME} -- sh -c 'test \"\$(cat ${GH}/.styrman/.harness-version)\" = \"\$(cat /styrman/VERSION)\"'"
+check "BUG-062 undo: plant removed, stamp removed for one more seed" \
+    "docker exec ${CN} runuser -u ${ME} -- sh -c 'rmdir ${GH}/.claude/settings.json && rm -f ${GH}/.styrman/.harness-version'"
 
 say "terminal pause + close-all"
 curl -fsS -X POST "${API}/api/projects/${ID}/terminals" -d '{"title":"second"}' -o /dev/null
@@ -430,6 +455,10 @@ OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/${TID}?cols=
     -send "echo revived\r" -wait 8s || true)
 check "boot=1 reconnect boots the stopped VM" "echo '${OUT}' | grep -q revived"
 check "VM running again after boot=1" "docker ps --format '{{.Names}}' | grep -q ${CN}"
+# The BUG-062 undo above left the home without a stamp or a settings.json:
+# this boot seeds again and the file comes back with the key (ADR-072).
+check "re-seed after the BUG-062 undo recreates settings.json with the key" \
+    "docker logs ${CN} 2>&1 | grep -F \"settings: ${GH}/.claude/settings.json created with\" >/dev/null && docker exec ${CN} runuser -u ${ME} -- jq -e '.attribution.commit == \"\" and .attribution.pr == \"\"' ${GH}/.claude/settings.json >/dev/null"
 # Re-enable LAN mode right before the delete so the destroy path is
 # exercised on a LAN project, not only a sandboxed one.
 # Checked, not bare: under `set -euo pipefail` a 503 here aborted the whole

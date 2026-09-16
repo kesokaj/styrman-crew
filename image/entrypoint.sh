@@ -125,8 +125,9 @@ fi
 # /styrman/harness is a plain copy with no .git, it neither rebuilds itself
 # with `go build` nor runs git (the harness's BUG-015 rule: only a checkout
 # rebuilds; a plain copy installs the running binary as is and says so on
-# its stdout, which is discarded below — the "agent harness deployed" line
-# is this boot's pass signal). So the PATH trim ADR-047 needed for the old
+# its stdout, of which only the settings.json lines are logged below — the
+# "agent harness deployed" line is this boot's pass signal). So the PATH
+# trim ADR-047 needed for the old
 # harness's `agy -p` self-check is gone; measured 0.02 s into an empty home
 # on the host and ~0.5 s through `docker run` including container start
 # (testing/2026-09-03-verify-harness-phase2.md).
@@ -159,14 +160,26 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
         # 2026-09-14 round 3).
         HM_OK=1; HI_OK=1; HR_OK=1; HR_FAIL=""
         timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" bash /styrman/configs/harness-migrate.sh || HM_OK=0
-        # stdout is KEPT for one thing: the installer's `settings:` lines — its
-        # one write outside the customization directories (the attribution
-        # key, ADR-072) — so a created, refused or failed ~/.claude/settings.json
-        # is visible in the boot log (security review of the 4aa19be refresh);
-        # stderr passes through as before, everything else it prints stays out.
+        # stdout is KEPT for one thing: what the installer says about
+        # ~/.claude/settings.json — its one write outside the customization
+        # directories (the attribution key, ADR-072). That is the `settings:`
+        # line of the create, add and could-not-write paths, and the
+        # `note: … attribution …` advisory it prints INSTEAD when the file
+        # cannot be judged (not a regular file, unreadable, not a JSON
+        # object): the key is not written then and only that line says so
+        # (BUG-062 — the first filter kept `settings:` alone). The note is
+        # matched on the hint's own wording, not on the word "attribution",
+        # which a terminal username could carry into the PATH hint's path.
+        # Its other note, that PATH hint printed on every seed, stays out,
+        # as does everything else; stderr passes through as before (security
+        # review of the 4aa19be refresh, finding 2). These lines are a
+        # DIAGNOSTIC, not an attestation: the project user is root inside
+        # its own VM and can write anything to this stdout, so a check that
+        # needs the fact reads ~/.claude/settings.json itself (Tier 2 does).
         HI_OUT="$(timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" \
             /styrman/bin/sh-agent install --repo /styrman/harness --home "${HOME_DIR}")" || HI_OK=0
-        printf '%s\n' "${HI_OUT}" | grep '^settings:' | tr -cd '[:print:]\n' | cut -c1-200 \
+        printf '%s\n' "${HI_OUT}" | grep -E '^settings:|^note: .*(attribution setting could not be checked|does not set "attribution")' \
+            | tr -cd '[:print:]\n' | cut -c1-200 \
             | while IFS= read -r line; do log "  ${line}"; done
         # Third step (ADR-068 D4): register the project's browser as an MCP
         # server with each agent's OWN command — the tools' MCP registries

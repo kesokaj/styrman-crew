@@ -2,7 +2,7 @@
 owner: bugs
 date: 2026-09-16
 id: BUG-061
-status: open
+status: fixed
 area: .agents/docs/testing/styrman/integration.sh (Tier 2), image/entrypoint.sh comment, testing README
 ---
 # BUG-061: Tier 2 "no previous-harness artifacts" check must fail against every home seeded at 4aa19be
@@ -50,15 +50,30 @@ writing); README.md:448 still names "the ~/.agents/bin gates" among
 retired checks in a sentence needing the same update.
 
 ## Fix
-Not fixed — pending. Keep the `.agents/bin` and `GEMINI.md` clauses;
-replace the settings.json clause with a positive assertion that
-`~/.claude/settings.json` holds the attribution key with both values empty
-and no other key (e.g. `jq -e '.attribution.commit == "" and .attribution.pr
-== "" and (keys == ["attribution"])'`); rename the check; fix the two
-stale "stdout discarded" comments and README.md:448; re-measure the Tier 2
-count (README's source-of-truth line currently reads
-`passed=94 failed=0 skipped=3`; replacing rather than adding a check keeps
-the total the same, but must be confirmed by an actual Tier 2 run).
+Fixed 2026-09-16 under the bug skill, main agent, in the working tree (the
+fix commit; not yet committed at time of writing). In
+`.agents/docs/testing/styrman/integration.sh`: the old check (previously
+lines 137-138) is replaced by `no previous-harness artifacts (shell gates,
+GEMINI.md)` (line 144, keeping the `.agents/bin` and `GEMINI.md` clauses,
+dropping the settings.json clause) plus two new checks — `boot log carries
+the installer's settings: line for the created file (ADR-072)` (line 142,
+greps the first boot log for `settings: /home/<user>/.claude/settings.json
+created with`) and `settings.json holds exactly the attribution key,
+trailers off (ADR-072)` (line 146, `docker exec <container> jq -e
+'.attribution.commit == "" and .attribution.pr == "" and (keys ==
+["attribution"])' /home/<user>/.claude/settings.json`). The jq assertion
+was validated must-pass and must-fail on the host before the run:
+`{"attribution":{"commit":"","pr":""}}` → 0; `{}` → 1; the key plus an
+extra key → 1; `"commit":"x"` → 1; a missing file → 2. The stale "stdout
+discarded" comment (previously integration.sh:119-124) now says only the
+settings.json lines reach the boot log; the matching sentence in
+`image/entrypoint.sh` (previously lines 126-129) was rewritten the same
+way. Tier 2 run on this tree: `passed=101 failed=0 skipped=3 aborted=0`,
+exit 0 (log `.agents/scratch/bug-061-062/integration-run1.txt`) — 104
+checks total (7 added, 1 replaced; a green run previously printed 94/0/3).
+The testing README's count line and the retired-checks sentence at
+README.md:448 were updated by the documentation agent in the same change
+(the runtime-image spec statement was already fixed in 6bdbe02).
 
 ## Prevention
 A behaviour change includes the TESTS that describe it — when a

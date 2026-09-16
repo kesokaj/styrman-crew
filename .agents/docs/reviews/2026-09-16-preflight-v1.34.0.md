@@ -210,3 +210,11 @@ version bump, a tag, or a deploy.
 
 `## Outcome` is appended by that task, one line per blocking finding, in
 the same commit as the fix.
+
+## Outcome
+
+- Blocking 1 (reviewer high, BUG-061) — fixed in the fix commit: `.agents/docs/testing/styrman/integration.sh` — the `settings.json` clause dropped from "no previous-harness artifacts", the positive assertion "settings.json holds exactly the attribution key, trailers off (ADR-072)" and the boot-log check "boot log carries the installer's settings: line for the created file (ADR-072)" added; the two "stdout is discarded" comments and the testing README's count, harness text and retired-checks sentence rewritten. Record: `bugs/BUG-061-harness-refresh-settings-check-stale.md` (fixed).
+- Blocking 2 (verifier FAIL) — fixed by the same change: Tier 2 prints `passed=101 failed=0 skipped=3 aborted=0` (104 checks; `testing/2026-09-16-verify-bug-061-062.md` PASS, plus two bare runs by the main agent in `.agents/scratch/bug-061-062/`).
+- Blocking 3 (security row partial by the letter) — left to the re-gate: not a code defect; the second `/preflight v1.34.0` run dispatches security over the full range with the instruction to read every path, trail files included, and its report is the record.
+- BUG-062 (reviewer medium) — fixed in the fix commit: `image/entrypoint.sh` logs the installer's `settings:` lines and its attribution `note:` lines (matched on the hint's wording), the comment says what is and is not visible and that the lines are a diagnostic, not an attestation; Tier 2 proves the note path and the recovery around a planted directory. Record: `bugs/BUG-062-entrypoint-settings-filter-drops-note-lines.md` (fixed).
+- The fix's own rows: reviewer APPROVE (`reviews/2026-09-16-review-worktree-bug-061-062-code.md`), security three low, all fixed (`reviews/2026-09-16-security-worktree-bug-061-062.md` § Outcome), verifier PASS.

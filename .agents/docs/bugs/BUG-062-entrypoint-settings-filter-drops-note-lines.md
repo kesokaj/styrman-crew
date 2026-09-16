@@ -2,7 +2,7 @@
 owner: bugs
 date: 2026-09-16
 id: BUG-062
-status: open
+status: fixed
 area: image/entrypoint.sh (install stdout filter, lines 159-170)
 ---
 # BUG-062: entrypoint's `^settings:` boot-log filter drops the advisory-path lines it was added to surface
@@ -36,16 +36,39 @@ only — the advisory (`note: `-prefixed) path was not checked against the
 filter before it shipped.
 
 ## Fix
-Not fixed — pending. Match `^settings:` and `^note: ` (or log every line
-the installer prints on stdout, bounded as now); update the comment to say
-precisely what is and is not visible in the boot log.
+Fixed 2026-09-16 under the bug skill, main agent, in the working tree (the
+fix commit; not yet committed at time of writing). In `image/entrypoint.sh`,
+the `printf '%s\n' "${HI_OUT}" | grep '^settings:'` filter became `grep -E
+'^settings:|^note: .*attribution'`, still followed by `tr -cd
+'[:print:]\n' | cut -c1-200`. The comment above it now says which lines are
+logged: the `settings:` line of the create, add and could-not-write paths,
+and the `note: … attribution …` advisory printed instead when the file
+cannot be judged (not a regular file, unreadable, not a JSON object) — and
+that the installer's separate PATH-hint note (`note: <home>/.local/bin is
+not on PATH; add it so \`sh-agent\` is available everywhere`, printed on
+every seed in this image) is deliberately not logged. Must-fail evidence
+before the fix: the installer's stdout for a home with a directory planted
+at `~/.claude/settings.json` (captured from `styrman-runtime:test`,
+`.agents/scratch/bug-061-062/install-dir-case.txt`; installer exit 0)
+contains `note: /tmp/h2/.claude/settings.json is not a regular file, so the
+attribution setting could not be checked; Claude Code adds a Co-Authored-By
+trailer …` — the old filter yielded 0 lines against it, the new filter
+yields that line. Tier 2 checks added in `integration.sh`: `BUG-062 setup:
+stamp removed, a directory planted in settings.json's place` (line 404),
+`boot log carries the installer's note: line for a settings.json it could
+not judge (BUG-062)` (line 415), `the seed still completed around the
+refused key (stamp rewritten)` (line 417), `BUG-062 undo: plant removed,
+stamp removed for one more seed` (line 419), and `re-seed after the
+BUG-062 undo recreates settings.json with the key` (line 460) — all PASS
+in the Tier 2 run recorded on BUG-061 (`passed=101 failed=0 skipped=3
+aborted=0`).
 
 ## Prevention
 A log filter added so that a condition is visible is validated once in
 the must-pass state and once in the must-fail state — the project's
-"silence from your own instrumentation" rule. Here, one boot with a
-directory at `~/.claude/settings.json` would have shown the empty log
-before the fix shipped.
+"silence from your own instrumentation" rule. This fix did exactly that;
+the must-pass and must-fail states are now permanent Tier 2 checks
+(above), not a one-off manual capture.
 
 ## Related
 BUG-061 (same commit 6a0b39e, same skipped code-lens review, same
