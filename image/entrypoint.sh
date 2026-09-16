@@ -134,8 +134,23 @@ fi
 # Non-fatal: a harness hiccup must never block the project from booting.
 if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
     HARNESS_VER="$(cat /styrman/VERSION 2>/dev/null || echo dev)"
+    # ADR-073: /styrman/harness and /styrman/bin/sh-agent are the host's
+    # harness channel export when the server bind-mounted one (its TAG file
+    # says which styrman-harness tag), else the image's own mirror. Either
+    # way the stamp keys on the image version AND the harness commit, so a
+    # channel swapped while the VM was stopped re-seeds on the next boot the
+    # way an image bump always did; an old stamp holding only the version
+    # differs once and re-seeds once.
+    HARNESS_COMMIT="$(head -c 40 /styrman/harness/COMMIT 2>/dev/null | tr -cd '0-9a-f')"
+    [ -n "${HARNESS_COMMIT}" ] || HARNESS_COMMIT=unknown
+    HARNESS_ID="${HARNESS_VER}+${HARNESS_COMMIT}"
+    if [ -s /styrman/harness/TAG ]; then
+        HARNESS_SRC="channel tag $(head -c 64 /styrman/harness/TAG | tr -cd '[:print:]')"
+    else
+        HARNESS_SRC="image"
+    fi
     HARNESS_STAMP="${HOME_DIR}/.styrman/.harness-version"
-    if [ "$(cat "${HARNESS_STAMP}" 2>/dev/null || true)" != "${HARNESS_VER}" ]; then
+    if [ "$(cat "${HARNESS_STAMP}" 2>/dev/null || true)" != "${HARNESS_ID}" ]; then
         runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/.styrman" 2>/dev/null || true
         # Both steps run as the user, each under a timeout: this block sits
         # ahead of /run/styrman/ready and the home is user-controlled, so a
@@ -202,8 +217,8 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
             # The version and the path travel as ARGUMENTS, never interpolated
             # into the sh -c string: a quote in a hand-built STYRMAN_VERSION
             # would otherwise run as the project user (audit 2026-09-13).
-            runuser -u "${USERNAME}" -- sh -c 'printf "%s" "$1" > "$2"' _ "${HARNESS_VER}" "${HARNESS_STAMP}" 2>/dev/null || true
-            log "agent harness deployed (version ${HARNESS_VER}, styrman-harness $(cut -c1-7 /styrman/harness/COMMIT 2>/dev/null || echo '?'); browser MCP registered for claude and agy)"
+            runuser -u "${USERNAME}" -- sh -c 'printf "%s" "$1" > "$2"' _ "${HARNESS_ID}" "${HARNESS_STAMP}" 2>/dev/null || true
+            log "agent harness deployed (version ${HARNESS_VER}, styrman-harness $(printf '%s' "${HARNESS_COMMIT}" | cut -c1-7), source ${HARNESS_SRC}; browser MCP registered for claude and agy)"
         else
             [ "${HM_OK}" = 1 ] || log "WARN: previous-harness migration reported errors or timed out (see the [harness-migrate] lines above)"
             [ "${HI_OK}" = 1 ] || log "WARN: sh-agent install reported errors or timed out — harness not deployed this boot (continuing)"

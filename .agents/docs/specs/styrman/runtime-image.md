@@ -223,15 +223,26 @@ Steps, in order:
    unconditionally, even in minimal mode. (The `~/.local/share/keyrings` mkdir
    and the dbus/gnome-keyring packages were dropped with the keyring tier,
    ADR-040.)
-6. Seed the per-project home (ADR-031) write-once from the image: shell
+6. Seed the per-project home (ADR-031) write-once: shell
    dotfiles from `image/skel/` (`~/.bashrc`, `~/.profile`, `~/.bash_*`, and
    `~/.npmrc` — the last referencing `${NPM_TOKEN}` from the broker) and the
-   agent harness from `image/harness/` — a verbatim mirror of the
-   `styrman-harness` repository at the commit in `image/harness/COMMIT`
-   (refresh procedure in `image/harness/VENDORED.md`; ADR-062, superseding
-   ADR-046's source and ADR-047's PATH trim). The image builds `sh-agent`
-   from that mirror in a builder stage pinned to the same Go toolchain as
+   agent harness from `/styrman/harness`, which is one of two things
+   (ADR-073, source order): the host's harness channel export — the newest
+   SSH-signed `styrman-harness` tag the host verified, bind-mounted read-only
+   by the server at `/styrman/harness` (its tree, with `COMMIT`, `TAG` and
+   `SHA256SUMS`) and `/styrman/bin/sh-agent` (built on the host from that
+   tag, in this image's own pinned Go builder image) — or, when the server
+   mounted nothing (no channel delivered yet, or a channel it refused), the
+   image's own `image/harness/` — a verbatim mirror of the `styrman-harness`
+   repository at the commit in `image/harness/COMMIT` (refresh procedure in
+   `image/harness/VENDORED.md`; ADR-062, superseding ADR-046's source and
+   ADR-047's PATH trim; R5's fallback). The image builds `sh-agent` from
+   that mirror in a builder stage pinned to the same Go toolchain as
    `deploy/Dockerfile.server` and ships it as `/styrman/bin/sh-agent`. The
+   entrypoint tells the two apart by `/styrman/harness/TAG`, which only a
+   channel export carries, and says which on its pass line: `agent harness
+   deployed (version <STYRMAN_VERSION>, styrman-harness <sha7>, source
+   channel tag <tag>; …)` or `… source image; …`. The
    harness is 27 skills and 7 subagents (`bugs`, `changelog`,
    `documentation`, `explorer`, `reviewer`, `security`, `verifier`) plus the
    global context (`AGENTS.md`); `sh-agent install --repo /styrman/harness
@@ -255,9 +266,15 @@ Steps, in order:
    its manifest records no commit for the same reason); that is WHY the
    ADR-047 PATH trim is gone and the copy takes 0.02 s into an empty home on
    the host, and why the entrypoint's 20 s cap bounds only a stall. Write-once,
-   keyed on `/styrman/VERSION` versus the per-home `~/.styrman/.harness-version`
-   stamp: bumping `STYRMAN_VERSION` and rebuilding the image is what RE-SEEDS
-   an already-onboarded project's home. A home seeded by the previous harness
+   keyed on `<STYRMAN_VERSION>+<harness COMMIT>` (the image's `/styrman/VERSION`
+   plus the 40-hex `COMMIT` of whatever is at `/styrman/harness`) versus the
+   per-home `~/.styrman/.harness-version` stamp: bumping `STYRMAN_VERSION`
+   and rebuilding the image RE-SEEDS an already-onboarded project's home, and
+   so does a channel delivery — the server rebuilds a stopped VM to mount a
+   newly delivered channel, and Docker re-resolves the `current` symlink on
+   every start, so a swapped export is what the next boot mounts and its new
+   commit is what makes the stamp differ (ADR-073). A stamp written before
+   this release holds the version alone, differs once, and re-seeds once. A home seeded by the previous harness
    (≤ v1.19.x: stamp present, no sh-agent manifest) is migrated first by
    `image/configs/harness-migrate.sh`, which MOVES every path the old
    `setup.sh` wrote — `~/.claude/{CLAUDE.md,settings.json,skills,agents,
