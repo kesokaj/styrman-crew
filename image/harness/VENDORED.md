@@ -27,6 +27,15 @@ ADR-047's PATH trim):
   has moved the artifacts of the previous harness aside. Styrman-side
   workarounds belong there, at the call site, never in this tree.
 
+## This file is under SHA256SUMS too
+
+`SHA256SUMS` lists every file in this directory except itself — `COMMIT`
+and this note included — and `deploy/verify-commit.sh` refuses a release
+whose mirror does not match it. Editing this file (or `COMMIT`) means
+re-running the `sha256sum` line of the recipe below in the same change
+(BUG-065: the v1.35.0 docs sweep edited this note and the release's own
+verify-commit caught the stale sums).
+
 ## Refresh
 
 ```sh

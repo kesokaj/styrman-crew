@@ -67,6 +67,7 @@
 | BUG-062 | 2026-09-16 | image/entrypoint.sh (install stdout filter) | fixed | boot-log filter `^settings:` drops the `note: `-prefixed lines for the refusal cases (non-regular/unreadable/non-JSON settings.json), so those refusals are silent | validate an added log filter in both the must-pass and must-fail state before trusting it |
 | BUG-063 | 2026-09-16 | internal/orchestrator/orchestrator.go (stopLocked, restartPolicy) | fixed | Stop's in-guest SIGTERM exits the VM cleanly before Docker is told to stop it; `unless-stopped` restarts it, then the delayed ContainerStop hard-kills the new boot (exit 255) | tell Docker the container is being stopped before the guest exits; verify Stop by RestartCount/exit code, not "not running" |
 | BUG-064 | 2026-09-16 | deploy/update (styrman-update, styrman-update.service) | fixed | new harness-channel systemd units installed only by `self_install`, which runs the release tick's OLD updater binary — never lands on the host | a new file a self-updating tool must ship goes into the every-tick converge path, not only the post-deploy self-install; grep both `self_install` and `host_converge` call sites |
+| BUG-065 | 2026-09-16 | image/harness (vendored styrman-harness mirror) | fixed | release gate's `verify-commit.sh` failed `sha256sum -c`: `VENDORED.md: FAILED` after a docs edit | `image/harness/` is a checksummed tree — any edit under it (VENDORED.md, COMMIT included) regenerates `SHA256SUMS` in the same change; run `verify-commit.sh` before the mirror commit, not only at the tag |
 
 ## Graduated
 
