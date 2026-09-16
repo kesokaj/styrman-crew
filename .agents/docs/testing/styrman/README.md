@@ -400,10 +400,13 @@ status/start/stop routes round-trip with the 9222 forwarder up and hidden):
 (the mirror has no `.git`, so install never rebuilds and never runs git —
 harness BUG-015); the boot log carries `agent harness deployed (version
 <image VERSION>, styrman-harness <COMMIT sha7>)` — install's own stdout is
-discarded, so that line is the in-guest proof install succeeded;
+kept only for its `settings:` lines, which the boot log carries; the
+`agent harness deployed` line remains the in-guest proof install succeeded;
 `~/.claude/CLAUDE.md` is the
 two-line import stub; 27 skills and 7 agy agents; none of `~/.agents/bin`,
-`~/.gemini/GEMINI.md`, `~/.claude/settings.json`; boot→ready under R1's 15 s
+`~/.gemini/GEMINI.md`; `~/.claude/settings.json` holds exactly the
+`attribution` key (one `"attribution"` match) and nothing else the harness
+wrote; boot→ready under R1's 15 s
 hard limit from the container's own timestamps (the value is printed — watch
 it against the 5 s soft target; ~2.7 s measured 2026-09-01 on the old
 harness, the new install is ~0.02 s on the host).

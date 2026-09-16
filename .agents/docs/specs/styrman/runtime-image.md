@@ -242,8 +242,11 @@ Steps, in order:
    and drops a copy of itself at `~/.local/bin/sh-agent` (`sh-agent status`
    inside a project is the drift check; `sh-agent update` is not used in
    VMs — the image is the delivery path). It ships NO hooks, NO scripts, and
-   NO `settings.json` for either tool (operator directive 2026-09-03), so
-   Claude Code runs in its default permission mode inside a project. `install`
+   no settings file except the one `attribution` key in
+   `~/.claude/settings.json` (commit and PR trailers off, written only when
+   absent — ADR-072, the exception approved 2026-09-16; operator directive
+   2026-09-03 for the rest). Claude Code still runs in its default
+   permission mode inside a project. `install`
    is a file copier — no network, no `agy`/`claude` call — and, the mirror
    being a plain copy with no `.git`, it never rebuilds the binary with `go
    build` and never runs git either (the harness's BUG-015 rule: only a
