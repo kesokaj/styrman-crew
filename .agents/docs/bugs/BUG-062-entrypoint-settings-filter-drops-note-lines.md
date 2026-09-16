@@ -39,7 +39,8 @@ filter before it shipped.
 Fixed 2026-09-16 under the bug skill, main agent, in the working tree (the
 fix commit; not yet committed at time of writing). In `image/entrypoint.sh`,
 the `printf '%s\n' "${HI_OUT}" | grep '^settings:'` filter became `grep -E
-'^settings:|^note: .*attribution'`, still followed by `tr -cd
+'^settings:|^note: .*(attribution setting could not be checked|does not set "attribution")'`
+(anchored on the hint's wording after the security review of the fix), still followed by `tr -cd
 '[:print:]\n' | cut -c1-200`. The comment above it now says which lines are
 logged: the `settings:` line of the create, add and could-not-write paths,
 and the `note: … attribution …` advisory printed instead when the file

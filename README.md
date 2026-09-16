@@ -106,11 +106,20 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.33.0**, deployed: https://crew.styrman.xyz (Google sign-in).
+**v1.34.0**, deployed: https://crew.styrman.xyz (Google sign-in).
 
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
 
+- **v1.34.0** (2026-09-16): every project home's agent harness refreshes to
+  styrman-harness `4aa19be` (27 skills / 7 subagents; on its next seed
+  `sh-agent install` writes the `attribution` key into
+  `~/.claude/settings.json` when absent, so a commit made by Claude Code
+  inside a project carries no Co-Authored-By trailer — R5 amended, ADR-072);
+  the boot log carries the installer's `settings:` line for that file and
+  its `note:` line when the file cannot be judged; the Tier 2 suite asserts
+  the file and those lines (104 checks; BUG-061, BUG-062). Full entry:
+  `.agents/docs/changes/2026-09-16-v1.34.0-release.md`.
 - **v1.33.0** (2026-09-14): a containerized server refuses to start when
   `ip_forward` is on inside its container — R12's no-routing guarantee is
   asserted at boot, not assumed from the compose file (`STYRMAN_ALLOW_IP_FORWARD=1`
