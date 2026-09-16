@@ -145,3 +145,13 @@ None blocking.
 - A rejected `ContainerUpdate` from a real Kata shim (only the fake's).
 - The release commit itself: verified by `deploy/verify-commit.sh` on it
   after it exists (recorded below).
+
+## Deploy (observed after the tag)
+
+Release commit `f7d1b15` (gate report, the four range rows, release entry, README, the fix entry's Correction) verified by `deploy/verify-commit.sh f7d1b15` on a detached worktree (rc 0, `SKIP_WEB_FRESHNESS=1` because `web/` is untouched since the full run on c26a723): `OK: commit f7d1b159dfaa builds and tests clean in isolation — safe to tag`, runtime image 27/7 at 4aa19be, plain copy. Tagged `v1.34.1`, SSH-signed with `git -c gpg.format=ssh -c user.signingkey=… tag -s` (no git config changed); `git tag -v` against the root-read copy of `/etc/styrman/allowed_signers`: `Good "git" signature … ED25519 key SHA256:5HpYQJjpG+yE1xXBTOIZPsTkbkgkVnV8z0eG8hBawyU`. Branch and tag pushed 16:05:18 local.
+
+Updater tick 16:06:40: "v1.34.1 signature OK (allowed signer)", "deployed=v1.34.0 latest-stable=v1.34.1", "deploying v1.34.1 as 1.34.1", "building runtime image (styrman-runtime:1.34.1)", 16:06:43 "building + starting the stack (server + ingress) at 1.34.1", 16:07:07 "OK — v1.34.1 is live". No rollback, no latch. `styrman-server:1.34.1` healthy, label `styrman.version=1.34.1`, `deployed-version` v1.34.1, `deployed-sha` f7d1b159dfaa1619c2be94911606860b6e57b9d7; in-container `/api/health` → `{"status":"ok"}`; the public URL answers 302; the server log: "styrman listening" with `styrman-runtime:1.34.1`.
+
+Post-release verification: `.agents/docs/testing/2026-09-16-verify-release-v1.34.1.md` — PASS. On the throwaway project: Stop through the API returned in about two seconds and left the container `exited 0, RestartCount 0, policy no` with one shutdown line, no "restarting container" in the daemon journal and no inspect timeouts in the server log; Start recreated it on `styrman-runtime:1.34.1` (the image-upgrade path, logged) with `unless-stopped`, one boot, ready in four seconds. The operator's projects were not touched.
+
+The verifier's log `testing/2026-09-16-verify-v1.34.1-release.md` finalized to `## Status: PASS` after the release commit (its wait loop released at 16:08; root 354/0/1, ingress 57/0/0, mirror 79/0/1, verify-commit safe to tag, Tier 2 103/0/3 — the same outputs this report read from its scratch); the finalized log is committed with these records.
