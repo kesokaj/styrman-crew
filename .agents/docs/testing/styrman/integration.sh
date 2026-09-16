@@ -139,11 +139,16 @@ check "guest /styrman/harness is read-only (a :ro bind, even for root)" \
 # guest's mount to rw, and the write still fails — and nothing lands in the
 # host's export (security review 2026-09-16; the rw control: the same touch
 # on a :rw bind succeeds).
-# The remount must SUCCEED and show rw in the guest's /proc/mounts before the
-# failed write counts — otherwise a missing or refusing mount would turn this
-# into the plain read-only check above and still read PASS (BUG-034 shape).
-check "guest cannot write the channel even after remounting it rw (host-side ro, R12)" \
-    "docker exec ${CN} sh -c 'mount -o remount,rw /styrman/harness && grep -E \" /styrman/harness [^ ]+ rw[, ]\" /proc/mounts >/dev/null && ! touch /styrman/harness/.probe 2>/dev/null' && ! test -e '${HARNESS_OUT}/content/current/repo/.probe'"
+# The remount's own outcome is REPORTED in the check's name (remounted-rw, or
+# remount-refused), never folded into the verdict: the property under test
+# is that the write fails and nothing lands on the host, and the name says
+# whether the guest got as far as a rw flag (a kernel that refuses the
+# remount proves a stronger property, not a weaker one — security review
+# 2026-09-16, round 3). Must-fail state: the same touch on a :rw bind
+# succeeds (the rw control, deploy.md).
+RM_OUT="$(docker exec "${CN}" sh -c 'mount -o remount,rw /styrman/harness 2>/dev/null && grep -qE " /styrman/harness [^ ]+ rw[, ]" /proc/mounts && echo remounted-rw || echo remount-refused' 2>/dev/null || echo remount-probe-failed)"
+check "guest cannot write the channel after a rw remount attempt (${RM_OUT}; host-side ro, R12)" \
+    "! docker exec ${CN} touch /styrman/harness/.probe 2>/dev/null && ! test -e '${HARNESS_OUT}/content/current/repo/.probe'"
 check "guest sh-agent is the channel's binary (sha256 equals content/current/bin/sh-agent)" \
     "[ \"\$(docker exec ${CN} sha256sum /styrman/bin/sh-agent | cut -d' ' -f1)\" = \"\$(sha256sum '${HARNESS_OUT}/content/current/bin/sh-agent' | cut -d' ' -f1)\" ]"
 check "no .git in the mounted harness (a plain copy, as the mirror was)" \

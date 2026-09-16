@@ -659,8 +659,10 @@ setup_harness_channel() {
     # Whole-string match ([[ =~ ]], as https_origin does): a grep anchors per
     # LINE and a two-line value with a valid second line would pass it
     # (security review 2026-09-16).
-    [[ "${HARNESS_ORIGIN}" =~ ^https://[a-z0-9.-]+/[A-Za-z0-9._/-]+$ ]] \
-        || die "STYRMAN_HARNESS_ORIGIN must be a plain https URL (got ${HARNESS_ORIGIN//[^[:print:]]/?})"
+    # The host is pinned too: the helper hands a GitHub token to whatever host
+    # the origin names (security review 2026-09-16, round 3).
+    [[ "${HARNESS_ORIGIN}" =~ ^https://github\.com/[A-Za-z0-9._/-]+$ ]] \
+        || die "STYRMAN_HARNESS_ORIGIN must be a plain https://github.com/ URL (got ${HARNESS_ORIGIN//[^[:print:]]/?})"
     [ "${DRY}" = 1 ] || (umask 077; printf '%s' "${harness_token}" > "${tmpd}/gh-token-harness")
     origin_host="${HARNESS_ORIGIN#https://}"; origin_host="https://${origin_host%%/*}"
     helper="credential.${origin_host}.helper=!f() { echo username=x-access-token; printf 'password=%s\\n' \"\$(cat \"\${STYRMAN_HARNESS_GH_TOKEN_FILE}\")\"; }; f"

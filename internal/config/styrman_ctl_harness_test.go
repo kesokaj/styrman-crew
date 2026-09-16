@@ -87,6 +87,12 @@ func TestStyrmanCtlUpdateSetupHarnessPlan(t *testing.T) {
 	if strings.Contains(clone, "gh-token ") || strings.Contains(clone, "gh-token\"") {
 		t.Fatalf("the harness clone must read its own token, not the crew one: %s", clone)
 	}
+	// The snippet the helper's shell parses is constant: the token path is one
+	// env word of the git call, never interpolated (a re-interpolated
+	// `cat '<path>'` would pass every assertion above).
+	if !strings.Contains(clone, `cat "${STYRMAN_HARNESS_GH_TOKEN_FILE}"`) || strings.Contains(clone, "cat '") || !strings.Contains(clone, "STYRMAN_HARNESS_GH_TOKEN_FILE="+filepath.Join(etc, "gh-token-harness")+" git") {
+		t.Fatalf("the harness clone's helper must read the token path from its env word: %s", clone)
+	}
 	if strings.Contains(out, "=/opt/") || strings.Contains(out, " /opt/") {
 		t.Fatalf("a production path leaked into a scratch-prefixed plan:\n%s", out)
 	}
@@ -154,10 +160,10 @@ func TestStyrmanCtlHarnessOriginIsGated(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := append([]string(nil), e.env...)
-	for _, origin := range []string{"ext::sh -c id", "https://github.com/x/y\nhttps://github.com/kesokaj/styrman-harness.git", "file:///tmp/x"} {
+	for _, origin := range []string{"ext::sh -c id", "https://github.com/x/y\nhttps://github.com/kesokaj/styrman-harness.git", "file:///tmp/x", "https://evil.test/kesokaj/styrman-harness.git"} {
 		e.env = append(append([]string(nil), base...), "STYRMAN_ENV_FILE="+envFile, "STYRMAN_HARNESS_ORIGIN="+origin)
 		out, code := ctl(t, e, "update", "--setup", "--dry-run", "--yes", "--gh-token-file", tok, "--allowed-signers-file", signers, "--harness-token-file", htok)
-		if code == 0 || !strings.Contains(out, "must be a plain https URL") {
+		if code == 0 || !strings.Contains(out, "must be a plain https://github.com/ URL") {
 			t.Fatalf("origin %q: code %d\n%s", origin, code, out)
 		}
 		if strings.Contains(out, "clone -- ") && strings.Contains(out, "styrman-harness") && strings.Contains(out, "clone -- "+strings.Split(origin, "\n")[0]) {
