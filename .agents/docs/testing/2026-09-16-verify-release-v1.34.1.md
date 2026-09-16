@@ -99,3 +99,43 @@ Matched: the stopped container on the old image was recreated on 1.34.1 (the ima
 - The v1.34.0 brief's Claude Code trailer check: still blocked on the expired brokered OAuth session (`testing/2026-09-16-verify-release-v1.34.0.md`); the throwaway project stays for it.
 
 Scratch: `.agents/scratch/verify-release-v1.34.1/` (stop-check.txt, start-check.txt), `.agents/scratch/preflight-v1.34.1/` (verify-commit-f7d1b15.txt, sizing-probe.txt).
+
+## Operator-requested follow-up (16:11 local)
+
+"start google and delete the throwaway project" — both through the API from inside the server container, as the operator's identity.
+
+```
+$ … curl -X POST … /api/projects/f8e77d67-04bf-4099-a933-16f8aa4bfc3d/start     # 16:11:30; before: exited exit=255 restarts=1 image=styrman-runtime:1.33.0
+200                                                                             # ready at 16:11:33
+$ docker inspect … styrman-f8e77d67-…
+status=running exit=0 restarts=0 policy=unless-stopped image=styrman-runtime:1.34.1 created=2026-09-16T14:11:30.309875419Z
+$ docker logs -t styrman-f8e77d67-…
+2026-09-16T14:11:31.362518300Z [harness-migrate] sh-agent manifest present — already migrated
+2026-09-16T14:11:31.525582391Z [styrman]   settings: /home/ostling-simon/.claude/settings.json created with "attribution": {"commit": "", "pr": ""}  Claude Code's commit and PR trailers are off
+2026-09-16T14:11:32.547866110Z [styrman] agent harness deployed (version 1.34.1, styrman-harness 4aa19be; browser MCP registered for claude and agy)
+2026-09-16T14:11:33.498292274Z [styrman] dockerd ready (overlay2 on /var/lib/docker-project)
+2026-09-16T14:11:33.501376693Z [styrman] project f8e77d67-… ready (user=ostling-simon uid=1000)
+$ docker logs styrman-server 2>&1 | grep f8e77d67 | tail -2
+… "msg":"recreating stopped container for image upgrade","project":"f8e77d67-…","old":"sha256:9510f15f9a7e","new":"sha256:…"
+… "msg":"creating microVM","container":"styrman-f8e77d67-…","image":"styrman-runtime:1.34.1","runtime":"mvm"
+$ docker exec … 'ls -la ~/.claude/settings.json; grep -c "\"attribution\"" ~/.claude/settings.json'
+-rw-r--r-- 1 ostling-simon ostling-simon 46 Sep 16 14:11 /home/ostling-simon/.claude/settings.json
+1
+```
+
+The BUG-063 casualty recovered on its next Start exactly as the image-upgrade path promises, and its home — seeded at 1.33.0 without the key — received the attribution key on that boot: the `settings: … created with` line on the operator's own project, which the v1.34.0 brief asked for.
+
+```
+$ … curl -X DELETE … "/api/projects/ea28256e-0534-482b-aa33-c54464b58a9c?wipe=true"   # 16:11:35
+202
+$ docker ps -a | grep -c styrman-ea28256e; docker network ls | grep -c ea28256e
+0
+0
+$ jq '.projects[] | {id, name}' users/ostling-simon/projects.json
+{"id":"f8e77d67-…","name":"google"}
+{"id":"fae465b5-…","name":"asdasdasd"}
+$ ls -d projects/ostling-simon/ea28256e-… homes/ostling-simon/p/ea28256e-…
+(both: No such file or directory)
+```
+
+The throwaway project, its network, its record, its workspace and its home are gone. The pending Claude Code trailer check therefore runs in any project after the re-sign-in ("google" now has the key).
