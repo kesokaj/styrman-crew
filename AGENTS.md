@@ -72,6 +72,14 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
 - Per-project Kata microVMs (runtime `mvm`), containers `styrman-<uuid>`;
   state from labels + per-user JSON stores (`/var/lib/styrman/users/<u>/`)
   — no database. Project creation is async (instant 201, background boot).
+- Agent harness delivery (ADR-073): the host's harness channel
+  (`styrman-update harness`, on its own timer) walks the `styrman-harness`
+  repo's tags down to the newest SSH-signed one that verifies against
+  `/etc/styrman/allowed_signers`, exports it, and the server bind-mounts
+  `/var/lib/styrman/harness/current` read-only into every project VM (never
+  the setup VM). The image's own `image/harness/` mirror is the fallback
+  when the channel has mounted nothing. Full mechanics:
+  `.agents/docs/specs/styrman/deploy.md` → "Harness channel (ADR-073)".
 - Multi-tenant: identity from the ingress header → username slug; each
   PROJECT mounts its own home at `/var/lib/styrman/homes/<u>/p/<uuid>`
   (ADR-031); the setup VM's home is `homes/<u>/base`, and `homes/<u>` itself

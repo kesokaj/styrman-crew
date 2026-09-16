@@ -196,6 +196,18 @@ ip -o link show | grep -E ' (sdb|lan)-'      # each project's live mode
 journalctl -u styrman-firewall -n 20         # one line per change; quiet runs log nothing
 ```
 
+Harness channel half (ADR-073, once enabled — `deploy.md` "Harness channel"):
+
+```bash
+systemctl is-enabled styrman-harness-update.timer
+sudo styrman-ctl status                       # the `harness` line: <tag> (<sha7>) /var/lib/styrman/harness/current
+                                               # (or "waiting for the first signed styrman-harness tag" / "not set up …")
+```
+
+and the server log's `harness channel …` line at start, plus a project's
+boot log ending in `… source channel tag <tag>` (delivered) or `… source
+image` (the image's mirror still seeding it).
+
 ## Rollback
 
 `versioning.md` "Rollback" and "If the deploy fails". There is no backup layer: durability is git plus `host-setup.sh` (operator decision 2026-09-01, `deploy.md` "Durability").

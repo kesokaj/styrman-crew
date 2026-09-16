@@ -9,7 +9,10 @@ Both [Claude Code](https://claude.ai/code) (`claude`) and
 (`agy`) are preinstalled — run either, in as many terminals as you like.
 Projects are truly individual — each its own home, so no tool state leaks
 between them — while credentials are shared once and kept current by a broker;
-containers disposable always.
+containers disposable always. Since the harness channel (ADR-073), a
+`styrman-harness` release reaches every project directly, without a crew
+release; the image's own mirror is the fallback until the channel has
+delivered.
 
 *Styrman* (Swedish): helmsman / first mate — commanding a crew of agents.
 

@@ -24,8 +24,13 @@ Load-bearing ideas:
    (R12, verified adversarially).
 2. **1 project = 1 home** (ADR-031, revising ADR-019; R3). Each project
    mounts its OWN home at `/var/lib/styrman/homes/<user>/p/<uuid>`, seeded
-   identically from the base image (dotfiles + agent harness) — no tool
-   state leaks between projects. The workspace additionally lives in its own
+   identically (dotfiles from the base image; the agent harness normally
+   from the host's harness channel — the newest signed `styrman-harness`
+   tag, bind-mounted read-only into every project VM by the server, R5,
+   ADR-073 — falling back to the image's own mirror when the channel has
+   mounted nothing; mechanics in `deploy.md` → "Harness channel
+   (ADR-073)") — no tool state leaks between projects. The workspace
+   additionally lives in its own
    storage dir (`/var/lib/styrman/projects/<user>/<uuid>`, ADR-027),
    bind-mounted at `~/projects/<dir>`. The ONLY thing shared across a
    user's projects is credentials, via the broker (ADR-030/032): sign in

@@ -99,5 +99,8 @@ host without a crew release, run by its own
 `styrman-harness-update.service`/`.timer` pair (also installed by
 `host-setup.sh` step 8c, enabled by `styrman-ctl update --setup
 --harness-token-file <file>` once its own dedicated clone and read-only
-GitHub token exist). Full mechanics: `../.agents/docs/specs/styrman/deploy.md`
+GitHub token exist). The server side of the channel is separate: on every
+project create (and on rebuild of a stopped container) it bind-mounts
+`/var/lib/styrman/harness/current` read-only into the project VM whenever
+the content dir is present and trusted. Full mechanics: `../.agents/docs/specs/styrman/deploy.md`
 → Auto-update → "Harness channel (ADR-073)".

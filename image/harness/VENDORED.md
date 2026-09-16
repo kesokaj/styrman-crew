@@ -4,6 +4,17 @@ This directory is a verbatim copy of the `styrman-harness` repository
 (`~/workspace/styrman-harness`, private) at the commit in `COMMIT`. Nothing in
 it is styrman's own; every file is edited in that repository and re-mirrored.
 
+## Superseded as the delivery path (ADR-073)
+
+Since ADR-073 this mirror is no longer how a `styrman-harness` release
+normally reaches a project: the host's harness channel
+(`styrman-update harness`) delivers the newest signed tag directly, and the
+server bind-mounts it into every project VM. This mirror is now the
+FALLBACK the entrypoint seeds from when the server mounted no channel (no
+channel delivered yet, or one it refused). The refresh procedure below is
+unchanged and still what a crew release records
+(`image/harness/COMMIT`).
+
 What the image does with it (ADR-062, superseding ADR-046's source and
 ADR-047's PATH trim):
 
