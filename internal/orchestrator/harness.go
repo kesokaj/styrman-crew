@@ -34,8 +34,9 @@ const (
 // server, group/world-writable, the content dir or current not what a
 // symlink-free channel leaves there, current resolving outside the content
 // dir, the export missing repo/COMMIT or bin/sh-agent — is nil and an error
-// that is NOT fs.ErrNotExist: untrusted, which the caller treats differently
-// from absent (a refused channel never rebuilds a container).
+// that is NOT fs.ErrNotExist: refused, which the caller logs by reason. For
+// the recreate rule the three no-bind answers are one: the binds a stopped
+// container carries must equal what this returns now (D26).
 func harnessBinds(dir string) ([]string, error) {
 	if dir == "" {
 		return nil, nil

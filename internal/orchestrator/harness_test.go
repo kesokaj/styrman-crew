@@ -16,10 +16,11 @@ import (
 // <HarnessDir>/current/{repo,bin/sh-agent} read-only when the channel has
 // delivered and the content dir is trusted; the setup VM never does; and a
 // STOPPED container is recreated to gain the binds once the channel is
-// present, or to drop them once it is absent (a missing bind source would
-// otherwise be created by Docker as a root-owned real directory at
-// current/, which the channel could then never swap). An untrusted channel
-// changes nothing.
+// present, or to drop them once it is absent, disabled or refused (a missing
+// bind source would otherwise be created by Docker as a root-owned real
+// directory at current/, which the channel could then never swap; a refused
+// source must not be re-resolved on start either — D26). A refused channel
+// with no binds to drop changes nothing.
 
 const tSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 

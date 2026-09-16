@@ -853,10 +853,12 @@ host_converge() {
         git cat-file -e "${SELF_HEAD}:deploy/update/${hf}" 2>/dev/null && hunits+=("${hf}")
     done
     if [ "${#hunits[@]}" = 2 ]; then
+        # Orphans of a SIGKILLed attempt are swept for both targets up front,
+        # not only for the one that drifts this run (as self_install does).
+        [ "${CHECK_ONLY}" = true ] || for hf in "${hunits[@]}"; do rm -f "${unitdir}/${hf}.new."* 2>/dev/null || true; done
         for hf in "${hunits[@]}"; do
             differs "deploy/update/${hf}" "${unitdir}/${hf}" || continue
             if [ "${CHECK_ONLY}" = true ]; then hn=$((hn + 1)); continue; fi
-            rm -f "${unitdir}/${hf}.new."* 2>/dev/null || true
             if atomic_install 644 "deploy/update/${hf}" "${unitdir}/${hf}"; then hchanged=1; else failed=1; log "WARN: could not install ${unitdir}/${hf}"; fi
         done
         if [ "${hn}" -gt 0 ]; then log "host-converge: ${hn} harness-channel unit(s) differ from the verified tree — a real run would install them (--check changes nothing)"; fi

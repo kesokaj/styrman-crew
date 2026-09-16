@@ -86,6 +86,7 @@ case "$2" in STYRMAN-FWD) printf -- '-N STYRMAN-FWD\n-A STYRMAN-FWD -j DROP\n-A 
 		"PATH="+bin+":"+os.Getenv("PATH"),
 		"STYRMAN_STATE_DIR="+filepath.Join(root, "var", "lib", "styrman"),
 		"STYRMAN_DEPLOY_DIR="+filepath.Join(root, "opt", "styrman"),
+		"STYRMAN_HARNESS_REPO_DIR="+filepath.Join(root, "opt", "styrman-harness"), // a test seam: the script's default is the literal /opt/styrman-harness
 		"STYRMAN_ETC_DIR="+filepath.Join(root, "etc", "styrman"),
 		"STYRMAN_UNIT_DIR="+filepath.Join(root, "units"),
 		"STYRMAN_BIN_DIR="+filepath.Join(root, "bin"),

@@ -337,7 +337,12 @@ image (`styrman-runtime:<deployed-version>` from
 `/etc/styrman/update/deployed-version` — the channel refuses to run before
 crew is deployed) as uid 1000, and `sh-agent list --repo /styrman/harness`
 plus `sh-agent install --dry-run --repo … --home …` must both exit 0; counts
-are logged, never asserted.
+are logged, never asserted. The scratch home is a 0700 `mktemp -d` under the
+root-owned content dir (`.smoke-XXXXXX`, chowned to the smoke uid; never a
+world-writable dir on the shared `/tmp`), removed afterwards; the smoke and
+the builder containers run `--network none --cap-drop ALL --security-opt
+no-new-privileges`, the builder also `--read-only --tmpfs /tmp` (security
+review 2026-09-16).
 
 **Swap.** Content lands at `/var/lib/styrman/harness/<commit>/{repo,bin/sh-agent}`;
 `current` is a symlink replaced by one rename; the previous target is kept
@@ -351,10 +356,13 @@ a symlink, root-owned, no group/world write, and `current` must be a symlink
 empty answer skips the channel with "harness channel not set up (no token);
 `styrman-ctl update --setup --harness-token-file <file>` does it later").
 Setup installs the token (root 600), creates the content dir (root 755,
-refuses a symlink), clones `https://github.com/kesokaj/styrman-harness.git`
-(override `STYRMAN_HARNESS_ORIGIN`) to `/opt/styrman-harness` (override
-`STYRMAN_HARNESS_REPO_DIR`, default beside the crew clone) with the same
-scoped one-shot credential helper as the crew clone, runs
+refuses a symlink), clones `https://github.com/kesokaj/styrman-harness.git` to
+`/opt/styrman-harness` — both fixed: `STYRMAN_HARNESS_ORIGIN` and
+`STYRMAN_HARNESS_REPO_DIR` are test seams the script refuses as production
+knobs, like its other path overrides, and the clone path is a literal rather
+than derived from the `STYRMAN_DEPLOY_DIR` knob (security review
+2026-09-16); the origin must be a plain https URL — with the same scoped one-shot credential
+helper as the crew clone, runs
 `styrman-update harness --check`, then
 `systemctl enable --now styrman-harness-update.timer`.
 
@@ -379,8 +387,8 @@ stopped VM picks up a swapped harness on its next start, as it picks up an
 image upgrade — and mounts them only when the channel is present AND
 trusted: the content dir itself not a symlink, owned by root or the server,
 no group/world write; `current` a symlink resolving inside the dir to a
-directory under the same rules holding `repo/COMMIT` and `bin/sh-agent` as
-regular files. Absent (nothing at `current`) means the image's baked mirror
+directory under the same rules whose `repo` and `bin` are real directories
+(never symlinks) holding `repo/COMMIT` and `bin/sh-agent` as regular files. Absent (nothing at `current`) means the image's baked mirror
 seeds the project (R5's fallback); refused means the same plus a WARN naming
 the reason. The setup VM never mounts the channel. A STOPPED container is
 recreated on its next start to gain the binds once the channel has

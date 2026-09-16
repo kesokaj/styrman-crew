@@ -139,8 +139,11 @@ check "guest /styrman/harness is read-only (a :ro bind, even for root)" \
 # guest's mount to rw, and the write still fails — and nothing lands in the
 # host's export (security review 2026-09-16; the rw control: the same touch
 # on a :rw bind succeeds).
+# The remount must SUCCEED and show rw in the guest's /proc/mounts before the
+# failed write counts — otherwise a missing or refusing mount would turn this
+# into the plain read-only check above and still read PASS (BUG-034 shape).
 check "guest cannot write the channel even after remounting it rw (host-side ro, R12)" \
-    "docker exec ${CN} sh -c 'mount -o remount,rw /styrman/harness 2>/dev/null; ! touch /styrman/harness/.probe 2>/dev/null' && ! test -e '${HARNESS_OUT}/content/current/repo/.probe'"
+    "docker exec ${CN} sh -c 'mount -o remount,rw /styrman/harness && grep -E \" /styrman/harness [^ ]+ rw[, ]\" /proc/mounts >/dev/null && ! touch /styrman/harness/.probe 2>/dev/null' && ! test -e '${HARNESS_OUT}/content/current/repo/.probe'"
 check "guest sh-agent is the channel's binary (sha256 equals content/current/bin/sh-agent)" \
     "[ \"\$(docker exec ${CN} sha256sum /styrman/bin/sh-agent | cut -d' ' -f1)\" = \"\$(sha256sum '${HARNESS_OUT}/content/current/bin/sh-agent' | cut -d' ' -f1)\" ]"
 check "no .git in the mounted harness (a plain copy, as the mirror was)" \

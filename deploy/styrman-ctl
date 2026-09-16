@@ -24,7 +24,10 @@ STATE_DIR="${STYRMAN_STATE_DIR:-/var/lib/styrman}"
 DEPLOY_DIR="${STYRMAN_DEPLOY_DIR:-/opt/styrman}"
 # The harness channel (ADR-073): its own root clone and the repository it
 # follows by signed tags — private, so setup asks for a read-only token.
-HARNESS_REPO_DIR="${STYRMAN_HARNESS_REPO_DIR:-$(dirname "${DEPLOY_DIR}")/styrman-harness}"   # beside the crew clone: /opt/styrman-harness
+# A literal, never derived from STYRMAN_DEPLOY_DIR (a documented knob): root
+# clones into and chowns this path, so nothing an environment can set may
+# choose it (security review 2026-09-16); the Go test sets the seam.
+HARNESS_REPO_DIR="${STYRMAN_HARNESS_REPO_DIR:-/opt/styrman-harness}"
 HARNESS_ORIGIN="${STYRMAN_HARNESS_ORIGIN:-https://github.com/kesokaj/styrman-harness.git}"
 ETC_DIR="${STYRMAN_ETC_DIR:-/etc/styrman}"
 UNIT_DIR="${STYRMAN_UNIT_DIR:-/etc/systemd/system}"
