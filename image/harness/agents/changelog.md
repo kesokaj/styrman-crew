@@ -80,6 +80,7 @@ Number sequentially. To reverse an old decision, append a new ADR and mark the o
 ## Rules
 
 - Read the actual diff / session context before writing — record reality, not assumptions.
+- Commits: for every SHA you name, run `git show --stat <sha>` and say what it IS (fix / docs / handoff). The range's HEAD is not "the change".
 - Don't duplicate: if a changelog entry already exists for this task, add an ADR if one is due rather than creating a conflicting entry.
 - Keep an entry under ~80 lines: what changed, why, files, verification, requirements. Finding-by-finding narratives and remediation rounds belong in `reviews/` or `testing/` — link them, never inline them. The Resume Protocol reads the three newest entries at every session start, so length here is a per-session tax.
 

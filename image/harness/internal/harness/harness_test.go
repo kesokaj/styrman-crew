@@ -254,8 +254,8 @@ func TestInstallStatusResyncUninstall(t *testing.T) {
 	if !strings.Contains(out.String(), "keep    ~/.claude/CLAUDE.md") {
 		t.Errorf("install should report the kept file:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "move its content into a rule file under rules/") {
-		t.Fatalf("keep line lacks the R2 guidance to move the content into rules/:\n%s", out.String())
+	if !strings.Contains(out.String(), "move only rules meant for every machine into a rule file under rules/") || !strings.Contains(out.String(), "never credentials or personal or host-specific notes") {
+		t.Fatalf("keep line lacks the rules/ guidance or its exclusion of credentials and personal notes:\n%s", out.String())
 	}
 	if info, _ := os.Stat(filepath.Join(home, BinPath)); info.Mode().Perm()&0o100 == 0 {
 		t.Errorf("binary should be executable, mode %v", info.Mode())
@@ -856,6 +856,100 @@ func TestNoTmpInHarnessProse(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+// A source that resolves to the repo, to skills/, or to the destination must
+// never become the deletion target: ".", ".." and a relative "skills/<name>"
+// reached Base unchanged and named the deletion root itself (BUG-037).
+func TestAdoptRefusesDestructiveSources(t *testing.T) {
+	home := t.TempDir()
+	skillDir := func(t *testing.T) string {
+		t.Helper()
+		d := filepath.Join(t.TempDir(), "delta")
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "SKILL.md"), []byte("---\nname: delta\ndescription: d\n---\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+
+	t.Run("dot adopts the directory itself, never skills/", func(t *testing.T) {
+		repo := newRepo(t)
+		t.Chdir(skillDir(t))
+		dest, err := Adopt(repo, home, ".", true)
+		if err != nil {
+			t.Fatalf("adopt . --force: %v", err)
+		}
+		if dest != filepath.Join(repo, "skills", "delta") {
+			t.Errorf("dest = %s", dest)
+		}
+		if _, err := os.Stat(filepath.Join(repo, "skills", "alpha", "SKILL.md")); err != nil {
+			t.Errorf("skills/ was removed: %v", err)
+		}
+	})
+
+	t.Run("dotdot adopts the parent, never the repo", func(t *testing.T) {
+		repo := newRepo(t)
+		sub := filepath.Join(skillDir(t), "sub")
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(sub)
+		dest, err := Adopt(repo, home, "..", true)
+		if err != nil {
+			t.Fatalf("adopt .. --force: %v", err)
+		}
+		if dest != filepath.Join(repo, "skills", "delta") {
+			t.Errorf("dest = %s", dest)
+		}
+		if _, err := os.Stat(filepath.Join(repo, "context", "AGENTS.md")); err != nil {
+			t.Errorf("the repo was removed: %v", err)
+		}
+	})
+
+	t.Run("a skill adopted onto itself", func(t *testing.T) {
+		repo := newRepo(t)
+		src := filepath.Join(repo, "skills", "alpha")
+		if _, err := Adopt(repo, home, src, true); err == nil {
+			t.Error("adopting a skill onto itself should fail")
+		}
+		if _, err := os.Stat(filepath.Join(src, "SKILL.md")); err != nil {
+			t.Errorf("the source was removed: %v", err)
+		}
+	})
+
+	t.Run("a relative path into the repo's own skills/", func(t *testing.T) {
+		repo := newRepo(t)
+		t.Chdir(repo)
+		if _, err := Adopt(repo, home, filepath.Join("skills", "alpha"), true); err == nil {
+			t.Error("adopting skills/alpha from the repo root should fail")
+		}
+		if _, err := os.Stat(filepath.Join(repo, "skills", "alpha", "SKILL.md")); err != nil {
+			t.Errorf("the source was removed: %v", err)
+		}
+	})
+}
+
+func TestWithin(t *testing.T) {
+	for _, c := range []struct {
+		parent, child string
+		want          bool
+	}{
+		{"/a/skills", "/a/skills", true},
+		{"/a/skills", "/a/skills/", true},
+		{"/a/skills", "/a/skills/delta", true},
+		{"/a/skills/delta", "/a/skills", false},
+		{"/a/skills", "/a/skills-old", false},
+		{"/a/skills", "/a/skillsdelta", false},
+		{"/a/skills", "/b/skills/delta", false},
+		{"/a", "/a/skills/delta", true},
+	} {
+		if got := within(c.parent, c.child); got != c.want {
+			t.Errorf("within(%q, %q) = %v, want %v", c.parent, c.child, got, c.want)
 		}
 	}
 }

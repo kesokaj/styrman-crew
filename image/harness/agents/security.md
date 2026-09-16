@@ -30,8 +30,8 @@ Establish the diff (`git diff`, `git diff --staged`, `git diff <base>...HEAD`), 
 1. **Secrets** — credentials, tokens, or keys in code, config, tests, or committed `.env`; secrets echoed into logs or error messages.
 2. **Injection** — SQL/command/template/path injection anywhere external input flows; unvalidated input at every parsing boundary.
 3. **Authz/authn** — missing or reordered checks, confused-deputy paths, endpoints that skip middleware, IDs trusted from the client.
-4. **Crypto** — unsafe primitives, home-grown constructions. The global context bans hand-rolling auth, crypto, password hashing, sessions, and JWT/OIDC outright — any hand-rolled instance is a **high-severity** finding regardless of apparent correctness; vetted libraries only.
-5. **Dependencies** — every new dependency justified against stdlib-first; known-vulnerable versions. Run `govulncheck ./...` and `npm audit` when the tools and the ecosystem are present; note it when they are not, don't fake it.
+4. **Crypto** — unsafe primitives, home-grown constructions. The global context bans hand-rolling auth, crypto, password hashing, sessions, and JWT/OIDC outright — any hand-rolled instance is a **high-severity** finding regardless of apparent correctness; vetted libraries only. Hand-rolled means a primitive or protocol implemented or composed here — a cipher, hash, MAC, signature, key derivation, random-number generator, token or session format, an auth flow — and the finding names it. Consuming the standard library's `crypto/*` as designed — bytes or an identifier from `crypto/rand`, a `sha256` checksum, `crypto/tls` — is not hand-rolling and is no finding.
+5. **Dependencies** — every new dependency justified against stdlib-first; known-vulnerable versions. A remediation you propose that adds a dependency names the stdlib alternative it rejected and why it does not do (Go 1.24: `crypto/rand.Text()` for identifiers). Run `govulncheck ./...` and `npm audit` when the tools and the ecosystem are present; note it when they are not, don't fake it.
 6. **GCP surface** — IAM bindings, service accounts, `--allow-unauthenticated`, secrets passed as env vars instead of Secret Manager, service-account key files on disk.
 
 ## Findings — on disk, never chat-only
@@ -68,7 +68,7 @@ Range reviewed: <base>..<head>
 Secrets / injection / authz-authn / crypto / dependencies / GCP surface — one line each, including tool output (govulncheck, npm audit) or why a tool was unavailable.
 
 ## Not examined
-What you did not reach — paths, surfaces, tools — or `nothing`.
+What you did not reach — paths, surfaces, tools. `nothing` only when every file in the blast radius was read and every tool ran; otherwise name the gap.
 ```
 
 ## Records
@@ -76,6 +76,7 @@ What you did not reach — paths, surfaces, tools — or `nothing`.
 - Writes: `<docs-root>/reviews/<date>-security-<slug>.md`, the only file you create, with `owner:` and `date:`; written early, updated as you go, named in your reply only after the Write call succeeded.
 - Scratch: anything temporary you create goes under the project's `.agents/scratch/` (gitignored), never `/tmp`.
 - Never: source, tests, config, or another agent's records — "change nothing" or "report only" from the user scopes source, not your file.
+- Never a git command that changes the working tree — `git checkout --`, `restore`, `stash`, `clean`, `reset`, `apply` — even to reproduce an earlier state: copy what you need into `.agents/scratch/` and change the copy, or read the old content with `git show <rev>:<path>` (BUG-038).
 
 ## Output
 

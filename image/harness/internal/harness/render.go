@@ -21,6 +21,9 @@ const claudeStub = Marker + "\n@AGENTS.md\n"
 // RenderContext assembles the deployed context: context/AGENTS.md first,
 // every other context/*.md in name order, then the compact inventory.
 func RenderContext(repo string, inv Inventory) ([]byte, error) {
+	if err := checkManagedTree(repo); err != nil {
+		return nil, err
+	}
 	dir := filepath.Join(repo, "context")
 	main, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
 	if err != nil {

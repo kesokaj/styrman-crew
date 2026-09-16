@@ -14,7 +14,9 @@
 package main
 
 import (
+	"bytes"
 	"debug/buildinfo"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -157,7 +159,14 @@ func run(args []string, out io.Writer) error {
 		if err := harness.Install(repo, home, files, vendor, *dryRun, out); err != nil {
 			return err
 		}
-		return pathHint(home, out)
+		if err := pathHint(home, out); err != nil {
+			return err
+		}
+		if vendor == harness.VendorAll || vendor == harness.VendorClaude {
+			attributionSet(home, *dryRun, out)
+			return attributionHint(home, "note: ", out)
+		}
+		return nil
 
 	case "status":
 		return status(repo, home, *vendorFlag, out)
@@ -306,7 +315,12 @@ func status(repo, home, vendorFlag string, out io.Writer) error {
 		}
 	}
 	if report.Counts["foreign"] > 0 {
-		fmt.Fprintln(out, "note       ~/.claude/CLAUDE.md is yours; move its content into a rule file under rules/ in the harness repo, remove it, and run install to write the one-line import")
+		fmt.Fprintln(out, "note       ~/.claude/CLAUDE.md is yours; move only rules meant for every machine into a rule file under rules/ in the harness repo — rules/ ships to every install and mirror, never credentials or personal or host-specific notes — then remove it and run install to write the one-line import")
+	}
+	if vendor == harness.VendorAll || vendor == harness.VendorClaude {
+		if err := attributionHint(home, "note       ", out); err != nil {
+			return err
+		}
 	}
 	if !report.Drift() {
 		fmt.Fprintf(out, "drift      none — %d files match the repo\n", report.Counts["ok"])
@@ -458,6 +472,227 @@ func pathHint(home string, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "note: %s is not on PATH; add it so `sh-agent` is available everywhere\n", bin)
 	return nil
+}
+
+// attributionSet writes the one vendor setting the harness owns (R4,
+// ADR-025): Claude Code's attribution off, so no commit or PR carries the
+// trailer the context's Git rule forbids. Only an absent key is written — a
+// present value of any kind is the operator's and attributionHint says when
+// it is on. The write is a textual insertion before the object's closing
+// brace, re-parsed before it lands, because encoding/json would reorder the
+// operator's keys; every byte up to the object's last value stays, and the
+// file keeps its own line endings. No state of the file
+// fails the install: the deployment already succeeded and this file is
+// advisory. dryRun prints what would be written and touches nothing.
+func attributionSet(home string, dryRun bool, out io.Writer) {
+	const fragment = `"attribution": {"commit": "", "pr": ""}`
+	path := filepath.Join(home, harness.ClaudeRoot, "settings.json")
+	// Lstat, not Stat: a settings.json that is a symlink (a dotfiles checkout)
+	// is never written through — a rename would replace the link with a file.
+	info, err := os.Lstat(path)
+	switch {
+	case err == nil && info.Mode()&os.ModeSymlink != 0:
+		fmt.Fprintf(out, "settings: %s is a symlink; add the key to its target by hand\n", path)
+		return
+	case errors.Is(err, os.ErrNotExist):
+		if dryRun {
+			fmt.Fprintf(out, "[dry-run] would create %s with %s\n", path, fragment)
+			return
+		}
+		content := []byte("{\n  " + fragment + "\n}\n")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			fmt.Fprintf(out, "settings: %s could not be written (%v); add the key by hand\n", path, err)
+			return
+		}
+		// O_EXCL: the Lstat above is advisory; whatever appears at the path
+		// between the two calls (a planted link, a FIFO) makes this fail
+		// instead of being written through or blocked on.
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			fmt.Fprintf(out, "settings: %s could not be written (%v); add the key by hand\n", path, err)
+			return
+		}
+		if _, err := f.Write(content); err != nil {
+			f.Close()
+			fmt.Fprintf(out, "settings: %s could not be written (%v); add the key by hand\n", path, err)
+			return
+		}
+		if err := f.Sync(); err != nil {
+			f.Close()
+			fmt.Fprintf(out, "settings: %s could not be written (%v); add the key by hand\n", path, err)
+			return
+		}
+		if err := f.Close(); err != nil {
+			fmt.Fprintf(out, "settings: %s could not be written (%v); add the key by hand\n", path, err)
+			return
+		}
+		fmt.Fprintf(out, "settings: %s created with %s — Claude Code's commit and PR trailers are off\n", path, fragment)
+		return
+	case err != nil, !info.Mode().IsRegular():
+		return // attributionHint names it
+	case info.Size() > 1<<20:
+		fmt.Fprintf(out, "settings: %s is larger than 1 MiB, more than this tool will rewrite; add the key by hand\n", path)
+		return
+	}
+	data, problem := readSettings(path)
+	if problem != "" {
+		return // attributionHint names it
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil || top == nil {
+		// malformed, not an object, or the bare value null (a nil map with no
+		// error): attributionHint names each with one line
+		return
+	}
+	if _, present := top["attribution"]; present {
+		return
+	}
+	// Insert after the last byte of the object's body, keeping the operator's
+	// indentation style (two spaces, the file's own newline before the brace)
+	// and whatever follows the closing brace.
+	trimmed := bytes.TrimRight(data, " \t\r\n")
+	closing := bytes.LastIndexByte(trimmed, '}')
+	opening := bytes.IndexByte(trimmed, '{')
+	if closing <= opening {
+		fmt.Fprintf(out, "settings: %s could not be edited safely (the result would not parse); add the key by hand\n", path)
+		return
+	}
+	nl := "\n"
+	if bytes.Contains(data, []byte("\r\n")) {
+		nl = "\r\n" // keep the file's own line endings
+	}
+	body := bytes.TrimRight(trimmed[:closing], " \t\r\n")
+	insert := "," + nl + "  " + fragment + nl
+	if len(bytes.TrimSpace(trimmed[opening+1:closing])) == 0 {
+		body = trimmed[:opening+1]
+		insert = nl + "  " + fragment + nl
+	}
+	result := make([]byte, 0, len(data)+len(insert))
+	result = append(result, body...)
+	result = append(result, insert...)
+	result = append(result, trimmed[closing:]...)
+	result = append(result, data[len(trimmed):]...)
+	if !json.Valid(result) {
+		fmt.Fprintf(out, "settings: %s could not be edited safely (the result would not parse); add the key by hand\n", path)
+		return
+	}
+	if dryRun {
+		fmt.Fprintf(out, "[dry-run] would add %s to %s\n", fragment, path)
+		return
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".settings-*.json")
+	if err != nil {
+		fmt.Fprintf(out, "settings: %s could not be written (%v); add the key by hand\n", path, err)
+		return
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(result); err != nil {
+		tmp.Close() // the file is discarded on the next line; its close result changes nothing
+		abandonTemp(tmpName, path, err, out)
+		return
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		abandonTemp(tmpName, path, err, out)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		abandonTemp(tmpName, path, err, out)
+		return
+	}
+	if err := os.Chmod(tmpName, info.Mode().Perm()); err != nil {
+		abandonTemp(tmpName, path, err, out)
+		return
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		abandonTemp(tmpName, path, err, out)
+		return
+	}
+	fmt.Fprintf(out, "settings: %s — %s added; other keys untouched\n", path, fragment)
+}
+
+// abandonTemp reports a failed settings write and removes its temp file,
+// naming the temp file when even that fails so nothing is left behind unseen.
+func abandonTemp(tmpName, path string, cause error, out io.Writer) {
+	fmt.Fprintf(out, "settings: %s could not be written (%v); add the key by hand\n", path, cause)
+	if err := os.Remove(tmpName); err != nil {
+		fmt.Fprintf(out, "settings: temp file %s left behind (%v)\n", tmpName, err)
+	}
+}
+
+// readSettings reads the operator's settings file, bounded to a regular file
+// of at most one megabyte; problem names why it could not be read, without a
+// byte of its contents.
+func readSettings(path string) (data []byte, problem string) {
+	info, err := os.Stat(path)
+	switch {
+	case err != nil:
+		return nil, "could not be read"
+	case !info.Mode().IsRegular():
+		return nil, "is not a regular file"
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, "could not be read"
+	}
+	defer f.Close()
+	data, err = io.ReadAll(io.LimitReader(f, 1<<20))
+	if err != nil {
+		return nil, "could not be read"
+	}
+	return data, ""
+}
+
+// attributionHint says when Claude Code will still add its Co-Authored-By
+// trailer. The context's Git rule forbids the trailer, but in the sandbox the
+// rule alone did not hold (three of three headless commits carried it); the
+// CLI's own setting is what stops it, and settings.json is the operator's
+// file, so install and status only say so. prefix is each command's note
+// style ("note: " for install, "note       " for status). Advisory only: no
+// state of that file may fail install or status, and nothing from it is
+// echoed.
+func attributionHint(home, prefix string, out io.Writer) error {
+	path := filepath.Join(home, harness.ClaudeRoot, "settings.json")
+	off, problem := attributionOff(path)
+	switch {
+	case problem != "":
+		fmt.Fprintf(out, "%s%s %s, so the attribution setting could not be checked; Claude Code adds a Co-Authored-By trailer to every commit unless it sets \"attribution\": {\"commit\": \"\"} (context § Git)\n", prefix, path, problem)
+	case !off:
+		fmt.Fprintf(out, "%s%s does not set \"attribution\": {\"commit\": \"\"}; Claude Code adds a Co-Authored-By trailer to every commit until it does (context § Git)\n", prefix, path)
+	}
+	return nil
+}
+
+// attributionOff reads the operator's settings file, bounded to a regular
+// file of at most one megabyte. off is true when attribution.commit is "" or
+// false; problem names why the file could not be judged, without a byte of
+// its contents (a JSON error string carries the input it choked on).
+func attributionOff(path string) (off bool, problem string) {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return false, ""
+	}
+	data, problem := readSettings(path)
+	if problem != "" {
+		return false, problem
+	}
+	var settings struct {
+		Attribution struct {
+			Commit any `json:"commit"`
+		} `json:"attribution"`
+	}
+	if err := json.Unmarshal(data, &settings); err != nil {
+		if json.Valid(data) {
+			return false, "is not a JSON object"
+		}
+		return false, "is not valid JSON"
+	}
+	switch v := settings.Attribution.Commit.(type) {
+	case string:
+		return v == "", ""
+	case bool:
+		return !v, ""
+	}
+	return false, ""
 }
 
 // buildVersion describes the running process, for `sh-agent version`.

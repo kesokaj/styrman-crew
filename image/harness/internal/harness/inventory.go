@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -77,9 +78,68 @@ func validName(kind, file, name string) error {
 	return nil
 }
 
+// readRegular reads a file the repo ships, refusing a link. checkManagedTree
+// covers the managed directories and every entry in them; this guards the one
+// read it cannot reach, skills/<name>/SKILL.md, because skills/<name> may
+// itself be a link that LoadSkills resolves (BUG-036).
+func readRegular(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s is a symlink — the repo ships regular files only", path)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file — the repo ships regular files only", path)
+	}
+	return os.ReadFile(path)
+}
+
 // LoadInventory reads every customization directory of the repo.
+// checkManagedTree refuses a symbolic link anywhere sh-agent reads the repo's
+// own bytes: each managed directory, and every entry directly inside the flat
+// ones. os.ReadDir and filepath.Glob follow a directory link and os.ReadFile
+// follows a file link, so either deploys bytes from outside the repo into
+// every consumer home — and for context/ into the AGENTS.md both CLIs send to
+// the model (BUG-036). One check at the boundary, so no reader can forget it.
+func checkManagedTree(repo string) error {
+	for _, dir := range []string{"context", "agents", "commands", "rules", "workflows", "skills"} {
+		p := filepath.Join(repo, dir)
+		info, err := os.Lstat(p)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink — the repo ships regular directories only", p)
+		}
+		if !info.IsDir() || dir == "skills" {
+			// skills/<name> may be a link: `npx skills add -g` leaves one and
+			// LoadSkills resolves it. A skill's own files are walked in
+			// plan.go, and its SKILL.md is read with readRegular.
+			continue
+		}
+		entries, err := os.ReadDir(p)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			if e.Type()&os.ModeSymlink != 0 {
+				return fmt.Errorf("%s is a symlink — the repo ships regular files only", filepath.Join(p, e.Name()))
+			}
+		}
+	}
+	return nil
+}
+
 func LoadInventory(repo string) (Inventory, error) {
 	var inv Inventory
+	if err := checkManagedTree(repo); err != nil {
+		return inv, err
+	}
 	var err error
 	if inv.Skills, err = LoadSkills(repo); err != nil {
 		return inv, err
@@ -114,9 +174,16 @@ func LoadSkills(repo string) ([]Skill, error) {
 		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+		data, err := readRegular(filepath.Join(dir, "SKILL.md"))
 		if err != nil {
-			continue
+			// No SKILL.md means the directory is not a skill. Any other
+			// error, a symlinked SKILL.md above all, is refused out loud:
+			// plan.go's walk only visits skills this loader returned, so a
+			// silent skip would drop the refusal altogether (BUG-036).
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
 		}
 		front, _, err := Split(string(data))
 		if err != nil {

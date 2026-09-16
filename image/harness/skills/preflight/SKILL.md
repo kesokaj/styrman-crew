@@ -45,7 +45,7 @@ Untracked or modified files **under `<docs-root>`** need no commit of their own 
 
 ## Step 2: Review the release diff — reviewer, security, verifier
 
-Never self-review, self-verify, or self-audit. Dispatch in parallel, each with the range `<base>..HEAD`, today's date, and the instruction to record a `Range reviewed: <base>..<head>` line in its artifact:
+Never self-review, self-verify, or self-audit. Before dispatching, look for a project agent that shadows a harness review agent — a file under `.claude/agents/` or `.agents/agents/` named `reviewer.md`, `security.md`, `verifier.md` or `explorer.md`, or whose frontmatter `name:` is one of those four. Claude Code loads the project copy in place of the harness one, so its report would stand in for the independent one: one found means stop before any dispatch and go to Step 5 with NO-SHIP, the file named in the gate report (BUG-033). Otherwise dispatch in parallel, each with the range `<base>..HEAD`, today's date, and the instruction to record a `Range reviewed: <base>..<head>` line in its artifact:
 
 - **Reviewer** — dispatch the `reviewer` agent on the strongest model (Claude Code: pass `model: opus` in the dispatch; Antigravity: subagents inherit the session model, so run release sessions with `agy --model pro`; it loads the `review-standards` skill) when the release diff is 50+ lines or 5+ files, over the commits **not already covered** by a prior `reviews/*-review-*` or `reviews/*-preflight-*` report. Coverage is your judgement: read each candidate report's `Range reviewed:` line and decide whether it subsumes the commits in question; when it does, cite the covering report in the gate report instead of re-reviewing. Below threshold, read the diff yourself or run `/review` and note that in the gate report.
 - **Security** — dispatch the `security` agent whenever a changed path in the release diff touches auth, IAM, secrets, input parsing, or dependencies, regardless of diff size — every such surface, always. A release that touches none of those has no security row; say so in the gate report rather than skipping it silently.
@@ -74,7 +74,7 @@ Write to `<docs-root>/reviews/$(date +%F)-preflight-<version>.md` with frontmatt
 - An explicit verdict line: `VERDICT: SHIP` or `VERDICT: NO-SHIP`.
 - A **"What was not checked"** section — name the gaps honestly.
 
-Never restate a failure as success. Any blocking finding means NO-SHIP. Blocking means any of: a verifier FAIL or BLOCKED; a security finding of high severity; a Step 2 reviewer REQUEST CHANGES verdict or high-severity finding; a `REQUIREMENTS.md` violation. Step 4's docs gaps never block. A project's `AGENTS.md` may add blocking conditions; it cannot remove these.
+Never restate a failure as success. Any blocking finding means NO-SHIP. Blocking means any of: a verifier FAIL or BLOCKED; a security finding of high severity; a security report that Step 2 owes and that is missing, has no `## Not examined` section, or names a path from the release diff under `## Not examined` (BUG-034); a Step 2 reviewer REQUEST CHANGES verdict or high-severity finding; a `REQUIREMENTS.md` violation; a project agent that shadows a harness review agent (BUG-033). Step 4's docs gaps never block. A project's `AGENTS.md` may add blocking conditions; it cannot remove these.
 
 ## Step 6: Ship or stop
 

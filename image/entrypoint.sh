@@ -113,8 +113,12 @@ fi
 # project gets IDENTICAL defaults. Seeded write-once, keyed on the image
 # version, as the user: `sh-agent install` copies the context, skills and
 # agents into ~/.claude and ~/.gemini/config and writes its manifest to
-# ~/.config/sh-agent/ — NOT credentials, and NO settings.json for either tool
-# (operator directive 2026-09-03). A home seeded by the previous harness
+# ~/.config/sh-agent/ — NOT credentials, and no settings.json for either tool
+# beyond one key: since harness 42ba2f5 it writes `"attribution": {"commit":
+# "", "pr": ""}` into ~/.claude/settings.json when that key is absent (a
+# present key is left alone), so no commit from a project carries a
+# Co-Authored-By trailer (operator directive 2026-09-03, the exception
+# approved 2026-09-16, ADR-072). A home seeded by the previous harness
 # (≤ v1.19.x) is migrated first: configs/harness-migrate.sh moves its
 # artifacts to ~/.styrman/harness-backup-<ts>/, never deletes.
 # install is a file copier — no network, no agy/claude call — and, because
@@ -155,8 +159,15 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
         # 2026-09-14 round 3).
         HM_OK=1; HI_OK=1; HR_OK=1; HR_FAIL=""
         timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" bash /styrman/configs/harness-migrate.sh || HM_OK=0
-        timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" \
-            /styrman/bin/sh-agent install --repo /styrman/harness --home "${HOME_DIR}" >/dev/null || HI_OK=0
+        # stdout is KEPT for one thing: the installer's `settings:` lines — its
+        # one write outside the customization directories (the attribution
+        # key, ADR-072) — so a created, refused or failed ~/.claude/settings.json
+        # is visible in the boot log (security review of the 4aa19be refresh);
+        # stderr passes through as before, everything else it prints stays out.
+        HI_OUT="$(timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" \
+            /styrman/bin/sh-agent install --repo /styrman/harness --home "${HOME_DIR}")" || HI_OK=0
+        printf '%s\n' "${HI_OUT}" | grep '^settings:' | tr -cd '[:print:]\n' | cut -c1-200 \
+            | while IFS= read -r line; do log "  ${line}"; done
         # Third step (ADR-068 D4): register the project's browser as an MCP
         # server with each agent's OWN command — the tools' MCP registries
         # (~/.claude.json, ~/.gemini/config/mcp_config.json), still no

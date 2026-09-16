@@ -46,8 +46,10 @@
    (ADR-068, operator approval 2026-09-11).
 5. **R5 — Agents**: `claude` (Claude Code) and `agy` (Antigravity CLI), selected per
    project at creation. The agent harness (a mirror of `styrman-harness` at
-   `image/harness/COMMIT`, installed by `sh-agent`; no hooks, scripts, or settings files —
-   ADR-062, operator approval 2026-09-04; was "vendored from `devshell_prompt/harness`") and
+   `image/harness/COMMIT`, installed by `sh-agent`; no hooks or scripts, and no settings file
+   except the one key the harness's own R4 allows — `attribution` in `~/.claude/settings.json`,
+   commit and PR trailers off, written only when absent — ADR-062, operator approval 2026-09-04,
+   the exception approved 2026-09-16 (ADR-072); was "vendored from `devshell_prompt/harness`") and
    the default shell config are carried by the **base image** and seeded identically into
    every project home (ADR-030, revised 2026-08-28; was "deployed into the shared home").
 6. **R6 — Terminals are durable records over tmux sessions** (ADR-016):

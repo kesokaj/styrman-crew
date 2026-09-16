@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Adopt copies a skill installed somewhere else — by hand, or by
@@ -34,7 +35,24 @@ func Adopt(repo, home, src string, force bool) (string, error) {
 		return "", fmt.Errorf("no skill directory with a SKILL.md found for %q", src)
 	}
 
-	dest := filepath.Join(repo, "skills", filepath.Base(from))
+	// EvalSymlinks leaves a relative path relative, so ".", ".." and
+	// "skills/<name>" reached Base unchanged and named the deletion root
+	// itself, or the source (BUG-037).
+	from, err := filepath.Abs(from)
+	if err != nil {
+		return "", err
+	}
+	name := filepath.Base(from)
+	if err := validName("skill", src, name); err != nil {
+		return "", err
+	}
+	dest, err := filepath.Abs(filepath.Join(repo, "skills", name))
+	if err != nil {
+		return "", err
+	}
+	if within(from, dest) || within(dest, from) {
+		return "", fmt.Errorf("%s and %s overlap; adopt copies a skill directory from outside the repo's skills/", from, dest)
+	}
 	if _, err := os.Stat(dest); err == nil {
 		if !force {
 			return "", fmt.Errorf("%s already exists; pass --force to replace it", dest)
@@ -49,6 +67,16 @@ func Adopt(repo, home, src string, force bool) (string, error) {
 		return "", err
 	}
 	return dest, nil
+}
+
+// within reports whether child is parent itself or lies inside it. Adopt
+// removes dest before copying, so neither path may contain the other.
+func within(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func copyTree(src, dest string) error {

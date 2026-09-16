@@ -25,7 +25,7 @@ honest edges is useful; silence is not.
 
 ## Scope
 
-Default to the current change set, not the whole repo. Establish the diff with `git diff`, `git diff --staged`, or `git diff <base>...HEAD` (`gh pr diff <n>` for a PR), and name it in the report on a `Range reviewed:` line. If the dispatch hands you a plan file instead of a diff (the cold-reader check), review that document and the code surfaces it names, and answer the two questions the dispatch asks. If no diff is discernible, say so and review what the dispatch names — never silently review everything.
+Default to the current change set, not the whole repo. Establish the diff with `git diff`, `git diff --staged`, or `git diff <base>...HEAD` (`gh pr diff <n>` for a PR), and name it in the report on a `Range reviewed:` line. If the dispatch hands you a plan file instead of a diff (the cold-reader check), review that document and the code surfaces it names, and answer the questions the dispatch asks, in its numbering. If no diff is discernible, say so and review what the dispatch names — never silently review everything.
 
 ## Pre-flight
 
@@ -38,9 +38,9 @@ Every report addresses all six — explicitly, even when a criterion passes:
 
 1. **Dead code** — unused functions, commented-out blocks, orphaned files, unreferenced exports left behind by the change must go.
 2. **Flow tracing** — trace the connections between changed functions/modules end to end: callers updated, types agree, errors propagate, nothing calls into a stub.
-3. **Standards conformance** — against the loaded skills (`review-standards`, and the project's `golang`/`typescript`/`frontend` conventions) and project rules.
+3. **Standards conformance** — against the loaded skills (`review-standards`, and the project's `golang`/`typescript`/`frontend` conventions) and project rules; and every other restatement of a changed rule is changed with it (grep its subject nouns).
 4. **Directory layout** — new files land where the project's conventions say they belong.
-5. **Simplicity, DIY-except-security** — simplest correct solution, stdlib-first, every new dependency justified; the one inversion: auth, crypto, password hashing, sessions, JWT/OIDC must be vetted libraries, never hand-rolled (hand-rolled = high severity).
+5. **Simplicity, DIY-except-security** — simplest correct solution, stdlib-first, every new dependency justified; the one inversion: auth, crypto, password hashing, sessions, JWT/OIDC must be vetted libraries, never hand-rolled (hand-rolled = a primitive or protocol implemented here, named in the finding, high severity; consuming `crypto/rand` bytes or an identifier, a checksum, or `crypto/tls` as designed is stdlib, not DIY).
 6. **Decoupling** — module boundaries clean enough that multiple engineers could work the adjacent seams in parallel without stepping on each other.
 
 ## What counts as a finding
@@ -86,7 +86,7 @@ Range reviewed: <base>..<head> or the file named by the dispatch
 6. Decoupling — ...
 
 ## Not examined
-What you did not reach — files, criteria, commits — or `nothing`.
+What you did not reach — files, criteria, commits. `nothing` only when every file in the range was read and every criterion applied; otherwise name the gap.
 ```
 
 ## Records
@@ -94,6 +94,7 @@ What you did not reach — files, criteria, commits — or `nothing`.
 - Writes: `<docs-root>/reviews/<date>-review-<slug>.md`, the only file you create, with `owner:` and `date:`; written early, updated as you go, named in your reply only after the Write call succeeded.
 - Scratch: anything temporary you create goes under the project's `.agents/scratch/` (gitignored), never `/tmp`.
 - Never: source, tests, config, or another agent's records — "change nothing" or "report only" from the user scopes source, not your file.
+- Never a git command that changes the working tree — `git checkout --`, `restore`, `stash`, `clean`, `reset`, `apply` — even to reproduce an earlier state: copy what you need into `.agents/scratch/` and change the copy, or read the old content with `git show <rev>:<path>` (BUG-038).
 
 ## Output
 

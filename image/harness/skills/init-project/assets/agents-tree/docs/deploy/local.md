@@ -14,30 +14,34 @@ How to build, configure, and run this project on the machine in front of you. `/
 ## Build
 
 ```bash
-go build ./...
+<the build command from the setup answers>
 ```
 
 ## Configure
 
 <!-- Environment variables with defaults, config files, ports. No secrets: name the variable, say where its value comes from. -->
 
+<!-- One row per setting the code reads. No code yet, or no settings: delete the placeholder row and keep the empty table. -->
+
 | Variable | Default | Purpose |
 |---|---|---|
-| `PORT` | `8080` | Listen port |
+| `<VARIABLE>` | `<default>` | `<what it sets>` |
 
 ## Run
 
 ```bash
-go run ./cmd/server
+<the run command from the setup answers>
+```
+
+## Test
+
+```bash
+<the test command from the setup answers>
 ```
 
 ## Verify
 
-<!-- The smoke check that proves it is up: a health endpoint, a CLI call, a log line. -->
-
-```bash
-curl -i localhost:8080/healthz
-```
+<!-- The smoke check that proves it is up: a health endpoint, a CLI call, a log line — the real command with the real port, written when the endpoint exists, never before. -->
 
 ## Container (when there is a Dockerfile)
 

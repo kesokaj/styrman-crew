@@ -126,3 +126,125 @@ func TestSkillFilesAndAdoptCopiesRefuseSymlinks(t *testing.T) {
 		t.Fatalf("copyTree err = %v, want a symlink refusal", err)
 	}
 }
+
+// context/, agents/, rules/, commands/ and workflows/ are read with
+// os.ReadFile, which follows a link and would deploy the TARGET'S bytes into
+// every consumer home — and for context/ into the AGENTS.md both CLIs send to
+// the model. The skill walk and adopt's copy already refuse links; these
+// readers must too (BUG-036).
+func TestContextAgentsAndDocsRefuseSymlinks(t *testing.T) {
+	valid := map[string]string{
+		"context":   "# extra\n\nbytes that must not be deployed\n",
+		"agents":    "---\nname: shadow\ndescription: \"an agent\"\n---\nbody\n",
+		"rules":     "---\ndescription: \"a rule\"\n---\nbody\n",
+		"commands":  "---\ndescription: \"a command\"\n---\nbody\n",
+		"workflows": "---\ndescription: \"a workflow\"\n---\nbody\n",
+	}
+	for _, tc := range []struct{ dir, file string }{
+		{"context", "extra.md"},
+		{"context", "AGENTS.md"},
+		{"agents", "shadow.md"},
+		{"rules", "rule.md"},
+		{"commands", "cmd.md"},
+		{"workflows", "flow.md"},
+	} {
+		t.Run(tc.dir+"/"+tc.file, func(t *testing.T) {
+			repo := t.TempDir()
+			writeFile(t, filepath.Join(repo, "context", "AGENTS.md"), "# ctx\n")
+			writeFile(t, filepath.Join(repo, "skills", "s", "SKILL.md"), "---\nname: s\ndescription: \"x\"\n---\nbody\n")
+			outside := filepath.Join(t.TempDir(), "target.md")
+			writeFile(t, outside, valid[tc.dir])
+			link := filepath.Join(repo, tc.dir, tc.file)
+			if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			os.Remove(link)
+			if err := os.Symlink(outside, link); err != nil {
+				t.Skip("symlinks unavailable here")
+			}
+			_, err := Plan(repo, nil, "")
+			if err == nil || !strings.Contains(err.Error(), "symlink") {
+				t.Errorf("Plan err = %v, want a symlink refusal naming %s", err, link)
+			}
+		})
+	}
+}
+
+// A symlinked skills/<name>/SKILL.md is refused where it is read: plan.go's
+// walk only visits skills LoadSkills returned, so swallowing the read error
+// would drop the skill silently instead of refusing the link (BUG-036).
+func TestSymlinkedSkillMdIsRefused(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, "context", "AGENTS.md"), "# ctx\n")
+	dir := filepath.Join(repo, "skills", "s")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "SKILL.md")
+	writeFile(t, outside, "---\nname: s\ndescription: \"x\"\n---\nbody\n")
+	if err := os.Symlink(outside, filepath.Join(dir, "SKILL.md")); err != nil {
+		t.Skip("symlinks unavailable here")
+	}
+	if _, err := LoadSkills(repo); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("LoadSkills err = %v, want a symlink refusal", err)
+	}
+	if _, err := Plan(repo, nil, ""); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("Plan err = %v, want a symlink refusal", err)
+	}
+}
+
+// A directory under skills/ with no SKILL.md is not a skill and is skipped,
+// which the refusal above must not turn into an error.
+func TestSkillDirWithoutSkillMdIsSkipped(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, "context", "AGENTS.md"), "# ctx\n")
+	writeFile(t, filepath.Join(repo, "skills", "real", "SKILL.md"), "---\nname: real\ndescription: \"x\"\n---\nbody\n")
+	if err := os.MkdirAll(filepath.Join(repo, "skills", "notaskill"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skills, err := LoadSkills(repo)
+	if err != nil {
+		t.Fatalf("LoadSkills: %v", err)
+	}
+	if len(skills) != 1 || skills[0].Name != "real" {
+		t.Errorf("skills = %+v, want only real", skills)
+	}
+}
+
+// A managed directory that is itself a symlink is refused too: os.ReadDir and
+// filepath.Glob follow a directory link, so guarding the leaf files alone let
+// the same payload through one path segment up (BUG-036, review round 2).
+func TestManagedDirsRefuseSymlinks(t *testing.T) {
+	skillMD := "---\nname: s\ndescription: \"x\"\n---\nbody\n"
+	content := map[string]string{
+		"context":   "# ctx\n",
+		"agents":    "---\nname: shadow\ndescription: \"an agent\"\n---\nbody\n",
+		"rules":     "---\ndescription: \"a rule\"\n---\nbody\n",
+		"commands":  "---\ndescription: \"a command\"\n---\nbody\n",
+		"workflows": "---\ndescription: \"a workflow\"\n---\nbody\n",
+	}
+	for _, dir := range []string{"context", "agents", "rules", "commands", "workflows", "skills"} {
+		t.Run(dir, func(t *testing.T) {
+			repo := t.TempDir()
+			outside := t.TempDir()
+			switch dir {
+			case "context":
+				writeFile(t, filepath.Join(outside, "AGENTS.md"), content["context"])
+				writeFile(t, filepath.Join(repo, "skills", "s", "SKILL.md"), skillMD)
+			case "skills":
+				writeFile(t, filepath.Join(outside, "s", "SKILL.md"), skillMD)
+				writeFile(t, filepath.Join(repo, "context", "AGENTS.md"), content["context"])
+			default:
+				writeFile(t, filepath.Join(outside, "x.md"), content[dir])
+				writeFile(t, filepath.Join(repo, "context", "AGENTS.md"), content["context"])
+				writeFile(t, filepath.Join(repo, "skills", "s", "SKILL.md"), skillMD)
+			}
+			if err := os.Symlink(outside, filepath.Join(repo, dir)); err != nil {
+				t.Skip("symlinks unavailable here")
+			}
+			if _, err := Plan(repo, nil, ""); err == nil || !strings.Contains(err.Error(), "symlink") {
+				t.Errorf("Plan err = %v, want a symlink refusal naming %s", err, filepath.Join(repo, dir))
+			}
+		})
+	}
+}

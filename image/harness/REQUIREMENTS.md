@@ -16,7 +16,7 @@ The harness is context, skills, and subagents. Behaviour comes from what is writ
 
 ## R4 — One binary, stdlib only, easy on and off
 
-`sh-agent` is a single Go binary with no dependencies. `install` is idempotent and overwrites only files it manages; `uninstall` removes exactly what its manifest lists; `update` pulls the repo from git and reinstalls. A hand-written `~/.claude/CLAUDE.md` is never overwritten.
+`sh-agent` is a single Go binary with no dependencies. `install` is idempotent and overwrites only files it manages; `uninstall` removes exactly what its manifest lists; `update` pulls the repo from git and reinstalls. A hand-written `~/.claude/CLAUDE.md` is never overwritten. `install` also sets one key in the operator's `~/.claude/settings.json`, `attribution` (commit and PR trailers off), only when the key is absent; it never changes or removes another key, and `uninstall` leaves it.
 
 ## R5 — Hand-added customizations are first class
 
@@ -40,5 +40,5 @@ Every project keeps its scratch in `.agents/scratch/` (gitignored), its failures
 
 - Hooks of any kind, on either vendor. Researched and rejected 2026-09-03 (ADR-007, `.agents/docs/plans/2026-09-03-research-hooks.md`); the harness is enforced by reading, not by gates.
 - Plugin or marketplace packaging on either vendor: both namespace skills and agents, which would rename all of them.
-- Editing `settings.json` or any vendor setting: the harness is files in the customization directories, nothing else.
+- Editing `settings.json` or any vendor setting: the harness is files in the customization directories, nothing else — with one exception, R4's `attribution` key, which `install` writes only when absent because that setting exists solely to switch off a vendor behaviour the context's Git rule forbids; never a permission, never another key.
 - Symlinking the vendor directories to one shared store: neither CLI documents reading the other's directory, and a copy has no dangling-symlink failure mode.

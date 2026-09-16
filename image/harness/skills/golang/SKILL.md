@@ -25,6 +25,7 @@ These rules apply to all Go code in this environment.
 - Exported symbols must have a doc comment following `godoc` conventions.
 - No global mutable state — pass dependencies explicitly, wired by hand in `main()`.
 - No `init()` functions unless absolutely required (e.g., registering database drivers).
+- An HTTP service reads `references/golang-io-web.md` (routing, JSON helpers, timeouts, shutdown) before its first handler and `references/golang-testing.md` before its first test; the other references are read when their domain comes up.
 
 ### Logging
 - Use `log/slog` with **JSON output** for all structured logging.
