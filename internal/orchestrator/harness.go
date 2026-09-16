@@ -143,9 +143,6 @@ func harnessBindsOf(binds []string) []string {
 	return append(repo, bin...)
 }
 
-// hasHarnessBind reports whether a container's binds mount the channel at all.
-func hasHarnessBind(binds []string) bool { return len(harnessBindsOf(binds)) > 0 }
-
 // harnessChannelState is what the trusted channel currently delivers: the
 // export's TAG and COMMIT. The error is harnessBinds's.
 func harnessChannelState(dir string) (tag, commit string, err error) {

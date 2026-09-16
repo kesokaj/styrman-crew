@@ -15,12 +15,13 @@ import (
 // The harness channel's server side (ADR-073): a project container mounts
 // <HarnessDir>/current/{repo,bin/sh-agent} read-only when the channel has
 // delivered and the content dir is trusted; the setup VM never does; and a
-// STOPPED container is recreated to gain the binds once the channel is
-// present, or to drop them once it is absent, disabled or refused (a missing
-// bind source would otherwise be created by Docker as a root-owned real
-// directory at current/, which the channel could then never swap; a refused
-// source must not be re-resolved on start either — D26). A refused channel
-// with no binds to drop changes nothing.
+// STOPPED container is rebuilt whenever the harness binds it carries differ
+// from what harnessBinds answers now — gained once the channel is present,
+// dropped once it is absent, disabled or refused (a missing bind source would
+// otherwise be created by Docker as a root-owned real directory at current/,
+// which the channel could then never swap; a refused source must not be
+// re-resolved on start either — D26), re-bound when the channel moved to
+// another directory. Equal binds start without churn.
 
 const tSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
@@ -212,7 +213,7 @@ func TestEnsureRunningRecreatesAStoppedContainerToDropTheHarnessBindsWhenTheChan
 		t.Fatalf("want one remove and one create, got %v", fd.calls)
 	}
 	c, _ = fd.byName(configContainerName())
-	if hasHarnessBind(c.binds) {
+	if len(harnessBindsOf(c.binds)) > 0 {
 		t.Fatalf("recreated container still binds the absent channel: %v", c.binds)
 	}
 	if _, err := os.Lstat(filepath.Join(cfg.HarnessDir, "current")); !errors.Is(err, fs.ErrNotExist) {
@@ -271,7 +272,7 @@ func TestCreateBindsTheChannelForProjectsNotForTheSetupVM(t *testing.T) {
 		t.Fatalf("create setup: %v", err)
 	}
 	s, ok := fd.byName(setupSpec(cfg).name)
-	if !ok || hasHarnessBind(s.binds) {
+	if !ok || len(harnessBindsOf(s.binds)) > 0 {
 		t.Fatalf("the setup VM must not mount the channel: %v", s.binds)
 	}
 }
@@ -361,7 +362,7 @@ func TestEnsureRunningRecreatesAStoppedContainerToDropTheHarnessBindsWhenTheChan
 		t.Fatalf("want one remove and one create, got %v", fd.calls)
 	}
 	c, _ = fd.byName(configContainerName())
-	if hasHarnessBind(c.binds) {
+	if len(harnessBindsOf(c.binds)) > 0 {
 		t.Fatalf("recreated container still binds the disabled channel: %v", c.binds)
 	}
 }
@@ -386,7 +387,7 @@ func TestEnsureRunningRecreatesAStoppedContainerToDropTheHarnessBindsWhenTheChan
 		t.Fatalf("want one remove and one create, got %v", fd.calls)
 	}
 	c, _ = fd.byName(configContainerName())
-	if hasHarnessBind(c.binds) {
+	if len(harnessBindsOf(c.binds)) > 0 {
 		t.Fatalf("recreated container still binds the refused channel: %v", c.binds)
 	}
 }
