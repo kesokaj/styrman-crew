@@ -114,6 +114,19 @@ stores — a restart or reboot recovers everything by adoption.
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
 
+- **v1.35.0** (2026-09-16): the agent harness now reaches every project
+  through the host's HARNESS CHANNEL (ADR-073): a root timer walks the
+  `styrman-harness` tags down to the newest SSH-signed one that verifies
+  against the host's pinned signers, exports it as a plain copy with an
+  offline-built `sh-agent`, smokes it in the deployed runtime image, and
+  swaps it in under `/var/lib/styrman/harness/current`; the server mounts it
+  read-only into every project VM and a stopped VM picks a new export up on
+  its next start, so a styrman-harness release no longer needs a crew
+  release. The image's mirror stays the fallback until the channel has
+  delivered. Setup: `sudo styrman-ctl update --setup --harness-token-file
+  <file>` (a fine-grained read-only token for the styrman-harness repo);
+  `styrman-ctl status` gained a `harness` line. Full entry:
+  `.agents/docs/changes/2026-09-16-v1.35.0-release.md`.
 - **v1.34.1** (2026-09-16): stopping a project (the Stop button or the idle
   reaper) now switches its container's restart policy to `no` before the
   guest's own shutdown, and the next Start or terminal attach switches it
