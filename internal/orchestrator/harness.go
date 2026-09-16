@@ -89,6 +89,11 @@ func harnessTrusted(dir, src string) error {
 	if err := ownedAndPrivate(target); err != nil {
 		return err
 	}
+	for _, d := range []string{"repo", "bin"} { // real directories, as the exporter leaves them (no symlink component)
+		if st, err := os.Lstat(filepath.Join(target, d)); err != nil || !st.IsDir() {
+			return fmt.Errorf("harness channel: %s/%s is not a directory — refusing", target, d)
+		}
+	}
 	for _, f := range []string{"repo/COMMIT", "bin/sh-agent"} {
 		if st, err := os.Lstat(filepath.Join(target, f)); err != nil || !st.Mode().IsRegular() {
 			return fmt.Errorf("harness channel: %s/%s is not a regular file — refusing an incomplete export", target, f)

@@ -46,7 +46,7 @@ KATA_DIR="${STYRMAN_KATA_DIR:-/opt/kata}"
 # under sudo -E it would otherwise choose which binaries root runs and which
 # trees root deletes (security review), so outside the harness it is refused.
 if [ "${STYRMAN_CTL_TEST:-}" != 1 ]; then
-    for _ov in STYRMAN_ETC_DIR STYRMAN_UNIT_DIR STYRMAN_BIN_DIR STYRMAN_SBIN_DIR STYRMAN_TMPFILES_DIR STYRMAN_KATA_DIR STYRMAN_ENV_FILE; do
+    for _ov in STYRMAN_ETC_DIR STYRMAN_UNIT_DIR STYRMAN_BIN_DIR STYRMAN_SBIN_DIR STYRMAN_TMPFILES_DIR STYRMAN_KATA_DIR STYRMAN_ENV_FILE STYRMAN_HARNESS_REPO_DIR STYRMAN_HARNESS_ORIGIN; do
         [ -z "${!_ov:-}" ] || { echo "styrman-ctl: ERROR ${_ov} is a test seam, not a production knob (unset it)" >&2; exit 1; }
     done
 fi
@@ -326,6 +326,9 @@ cmd_status() {
     hfail="$(printable "$(cat "${ETC_DIR}/update/harness-failed-version" 2>/dev/null || true)")"
     href="$(printable "$(tail -n 1 "${ETC_DIR}/update/harness-refused" 2>/dev/null || true)" | cut -c1-160)"
     if [ -n "${href}" ] && [ "${ETC_DIR}/update/harness-refused" -nt "${ETC_DIR}/update/harness-version" ]; then hdegraded=1; fi
+    # A latched failed tag is a stuck channel whatever installed under it
+    # (a lower tag can, ADR-073): DEGRADED until a newer tag clears it.
+    [ -z "${hfail}" ] || hdegraded=1
     if [ -n "${hver}" ]; then hline="${hver}${hsha:+ (${hsha:0:7})}    ${STATE_DIR}/harness/current"
     elif [ -d "${HARNESS_REPO_DIR}/.git" ]; then hline="waiting for the first signed styrman-harness tag"
     else hline="not set up — styrman-ctl update --setup --harness-token-file <file>"; fi
@@ -577,7 +580,7 @@ setup_auto_update() {
     # an askpass that would answer any host's prompt (security review).
     local origin_host helper
     origin_host="${origin#https://}"; origin_host="https://${origin_host%%/*}"
-    helper="credential.${origin_host}.helper=!f() { echo username=x-access-token; printf 'password=%s\\n' \"\$(cat ${ETC_DIR}/gh-token)\"; }; f"
+    helper="credential.${origin_host}.helper=!f() { echo username=x-access-token; printf 'password=%s\\n' \"\$(cat '${ETC_DIR}/gh-token')\"; }; f"
 
     log "auto-update: token → ${ETC_DIR}/gh-token (root, 600)"
     run install -d -m 700 -o root -g root "${ETC_DIR}"
@@ -644,9 +647,14 @@ setup_auto_update() {
 # clone; the content dir is root 0755 below the operator-owned state root.
 setup_harness_channel() {
     local harness_token="$1" tmpd="$2" origin_host helper have_origin
+    # The origin is cloned by root: only a plain https URL, the shape
+    # https_origin() accepts for the crew clone — never a transport git would
+    # execute (security review 2026-09-16).
+    printf '%s' "${HARNESS_ORIGIN}" | grep -qE '^https://[a-z0-9.-]+/[A-Za-z0-9._/-]+$' \
+        || die "STYRMAN_HARNESS_ORIGIN must be a plain https URL (got ${HARNESS_ORIGIN})"
     [ "${DRY}" = 1 ] || (umask 077; printf '%s' "${harness_token}" > "${tmpd}/gh-token-harness")
     origin_host="${HARNESS_ORIGIN#https://}"; origin_host="https://${origin_host%%/*}"
-    helper="credential.${origin_host}.helper=!f() { echo username=x-access-token; printf 'password=%s\\n' \"\$(cat ${ETC_DIR}/gh-token-harness)\"; }; f"
+    helper="credential.${origin_host}.helper=!f() { echo username=x-access-token; printf 'password=%s\\n' \"\$(cat '${ETC_DIR}/gh-token-harness')\"; }; f"
     log "auto-update: harness token → ${ETC_DIR}/gh-token-harness (root, 600)"
     run install -m 600 -o root -g root "${tmpd}/gh-token-harness" "${ETC_DIR}/gh-token-harness"
     [ -L "${STATE_DIR}/harness" ] && die "${STATE_DIR}/harness is a symlink — refusing"

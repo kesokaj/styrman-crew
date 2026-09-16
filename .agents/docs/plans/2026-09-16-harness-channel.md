@@ -1,3 +1,6 @@
+D26 — 2026-09-16 — a REFUSED channel drops a stopped container's harness binds like an absent one (the recreate rule is one comparison: the binds carried must equal what `harnessBinds` answers now); the WARN stays and the project boots from the image — supersedes the Interfaces clause "a trust failure on a present channel is NOT a recreate trigger" (cold read rounds 1 and 2) — by: security finding, `reviews/2026-09-16-security-567b81f-43dc991.md`
+D27 — 2026-09-16 — the export's `:ro` binds are enforced on the host side of Kata's virtiofs share: probed with guest root (CAP_SYS_ADMIN, AppArmor off) remounting rw — the write fails, nothing lands on the host, the rw control succeeds; Tier 2 repeats the probe every run; no per-project copy and no guest-side manifest verification needed — by: security finding (medium/low, resolved by the probe), implementer
+D25 — 2026-09-16 — a DISABLED channel (empty `STYRMAN_HARNESS_DIR`) drops a stopped container's stale harness binds like an absent one; it still mounts nothing and warns nothing — supersedes D23's "no recreate" clause — by: review finding, `reviews/2026-09-16-review-567b81f-43dc991-code.md`
 ---
 owner: main
 date: 2026-09-16

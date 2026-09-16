@@ -336,13 +336,20 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 	}
 	// Harness channel (ADR-073): its two read-only binds are fixed at create,
 	// so a STOPPED container is rebuilt to gain them once the channel has
-	// delivered, or to drop them once the channel is absent — Docker creates
-	// a missing bind SOURCE as a root-owned real directory, which would plant
-	// current/repo and current/bin inside the content dir and turn current
-	// into a directory the channel can never swap again. A present but
-	// refused channel is NOT a trigger: the WARN says why and the container
-	// starts as it is (the dir is root-written; a transient fault must not
-	// churn every stopped project). A running container upgrades on its next
+	// delivered, or to drop them once the channel is absent or disabled —
+	// Docker creates a missing bind SOURCE as a root-owned real directory,
+	// which would plant current/repo and current/bin inside the content dir
+	// and turn current into a directory the channel can never swap again
+	// (a disabled channel names no dir to check, so its stale binds go the
+	// same way — review 2026-09-16). A present but REFUSED channel drops the
+	// binds too: its refusal reasons (a symlinked content dir, a real
+	// directory at current, a foreign owner, an escaping link, a
+	// half-export) are tamper or misconfiguration signatures, and a bind
+	// source the server would not mount fresh must not be re-resolved by
+	// Docker on start either (security review 2026-09-16); the WARN says
+	// why and the project boots from the image's mirror. So the rule is one
+	// comparison: the binds a STOPPED container carries must equal what
+	// harnessBinds answers now. A running container upgrades on its next
 	// stop/start, as with an image upgrade. The same binds go to the create
 	// below.
 	hbinds, herr := harnessBinds(o.cfg.HarnessDir)
@@ -355,8 +362,8 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 		switch {
 		case len(hbinds) > 0 && !has:
 			why = "to mount the harness channel"
-		case has && errors.Is(herr, fs.ErrNotExist):
-			why = "to drop the absent harness channel"
+		case has && len(hbinds) == 0:
+			why = "to drop the harness channel binds (channel absent, disabled or refused)"
 		}
 		if why != "" {
 			o.logger.Info("recreating stopped container "+why, "project", project)

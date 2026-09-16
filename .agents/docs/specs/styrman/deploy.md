@@ -363,8 +363,8 @@ scoped one-shot credential helper as the crew clone, runs
 signed styrman-harness tag" when the clone exists but no tag has landed, or
 "not set up — `styrman-ctl update --setup --harness-token-file <file>`"
 otherwise, plus the timer/service states, `FAILED LATCHED: <tag>` and "last
-refusal: <line>" when present; a refusal newer than the last delivery marks
-the host DEGRADED (exit 1). The JSON output carries a `harness` object with
+refusal: <line>" when present; a refusal newer than the last delivery, or a
+latched failed tag, marks the host DEGRADED (exit 1). The JSON output carries a `harness` object with
 `version`, `sha`, `failed`, `refused`, `service`, `timer`. `UNITS` (the
 uninstall list) is now six entries, the two harness units added.
 
@@ -384,10 +384,18 @@ regular files. Absent (nothing at `current`) means the image's baked mirror
 seeds the project (R5's fallback); refused means the same plus a WARN naming
 the reason. The setup VM never mounts the channel. A STOPPED container is
 recreated on its next start to gain the binds once the channel has
-delivered, and to drop them once the channel is absent (Docker would create
-a missing bind source as a root-owned real directory at `current/`, which
-the channel could never swap again); a refused channel rebuilds nothing, and
-a running container upgrades on its next stop/start. One line per server
+delivered, and to drop them once the channel is absent or disabled (Docker
+would create a missing bind source as a root-owned real directory at
+`current/`, which the channel could never swap again) or refused (a bind
+source the server would not mount fresh is not re-resolved by Docker on
+start either: the project boots from the image's mirror, the WARN says why)
+— one comparison, the binds a stopped container carries must equal what the
+server would mount now; a running container upgrades on its next stop/start.
+The `:ro` is enforced on the HOST side of Kata's virtiofs share: guest root
+can flip the guest mount to rw and a write still fails with "Read-only file
+system", and nothing lands in the host's export (probed 2026-09-16 on Kata
+3.31.0 / Docker 29.7.2 with `CAP_SYS_ADMIN` and AppArmor off; the rw control
+succeeds; Tier 2 repeats the probe in every run). One line per server
 start says which applies: `harness channel tag=… commit=… path=…`,
 `harness channel absent; the image's baked harness seeds projects`,
 `harness channel refused; …`, or `harness channel disabled

@@ -134,6 +134,13 @@ check "guest /styrman/harness is the channel's export (COMMIT equals the host's 
     "[ -n '${HARNESS_C1}' ] && [ \"\$(docker exec ${CN} cat /styrman/harness/COMMIT)\" = '${HARNESS_C1}' ]"
 check "guest /styrman/harness is read-only (a :ro bind, even for root)" \
     "! docker exec ${CN} touch /styrman/harness/.probe 2>/dev/null"
+# The :ro is enforced on the HOST side of the virtiofs share, not only as a
+# guest mount flag: guest root (CAP_SYS_ADMIN, apparmor off) can flip the
+# guest's mount to rw, and the write still fails — and nothing lands in the
+# host's export (security review 2026-09-16; the rw control: the same touch
+# on a :rw bind succeeds).
+check "guest cannot write the channel even after remounting it rw (host-side ro, R12)" \
+    "docker exec ${CN} sh -c 'mount -o remount,rw /styrman/harness 2>/dev/null; ! touch /styrman/harness/.probe 2>/dev/null' && ! test -e '${HARNESS_OUT}/content/current/repo/.probe'"
 check "guest sh-agent is the channel's binary (sha256 equals content/current/bin/sh-agent)" \
     "[ \"\$(docker exec ${CN} sha256sum /styrman/bin/sh-agent | cut -d' ' -f1)\" = \"\$(sha256sum '${HARNESS_OUT}/content/current/bin/sh-agent' | cut -d' ' -f1)\" ]"
 check "no .git in the mounted harness (a plain copy, as the mirror was)" \
@@ -160,7 +167,7 @@ check "27 skills and 7 agy agents seeded" \
 # `grep -F … >/dev/null`, never `grep -q`: under this script's pipefail a -q
 # that exits on the first line leaves the writer with SIGPIPE (141) and the
 # pipeline red on a matching output (BUG-057).
-check "sh-agent status labels the image mirror a plain copy" \
+check "sh-agent status labels the mounted harness a plain copy" \
     "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/sh-agent status --repo /styrman/harness --home ${GH} | grep -F '/styrman/harness (plain copy, not its own git checkout; update is refused)' >/dev/null"
 check "boot log records the harness deployed at the channel's commit" \
     "c=\"\$(cut -c1-7 '${HARNESS_OUT}/content/current/repo/COMMIT')\" && v=\"\$(docker exec ${CN} cat /styrman/VERSION)\" && [ \${#c} = 7 ] && [ -n \"\$v\" ] && docker logs ${CN} 2>&1 | grep -F \"agent harness deployed (version \$v, styrman-harness \$c\" >/dev/null"

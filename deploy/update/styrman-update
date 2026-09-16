@@ -243,7 +243,8 @@ harness_export() {
     # same pinned image, offline (the harness has no dependencies), as the
     # invoking user so the output is ours to own and remove.
     hlog "building sh-agent for ${tag} in ${HARNESS_BUILDER}"
-    if ! docker run --rm --user "$(id -u):$(id -g)" \
+    if ! docker run --rm --user "$(id -u):$(id -g)" --network none --cap-drop ALL --security-opt no-new-privileges \
+            --read-only --tmpfs /tmp \
             -v "${tmp}/repo:/src:ro" -v "${tmp}/bin:/out" -w /src \
             -e HOME=/tmp -e GOCACHE=/tmp/gocache -e CGO_ENABLED=0 -e GOTOOLCHAIN=local -e GOPROXY=off \
             "${HARNESS_BUILDER}" go build -trimpath -ldflags='-s -w' -o /out/sh-agent ./cmd/sh-agent >"${tmp}/build.log" 2>&1; then
@@ -264,9 +265,16 @@ harness_export() {
 harness_smoke() {
     local tmp="$1" home out
     SMOKE_ERR=""
-    home="$(mktemp -d)" || { SMOKE_ERR="smoke failed: cannot create a scratch home"; return 1; }
-    chmod 777 "${home}"
-    if out="$(docker run --rm --user 1000:1000 -e HOME=/home/u \
+    # The scratch home lives under the root-owned content dir, never on the
+    # shared /tmp (a world-writable home there would let any local user fail
+    # a good tag into the latch — review 2026-09-16), and is owned by the
+    # uid the smoke runs as: 1000 in production, the invoking user in test
+    # mode (SMOKE_UID, set by harness_main).
+    home="$(mktemp -d "${HARNESS_DIR}/.smoke-XXXXXX")" || { SMOKE_ERR="smoke failed: cannot create a scratch home"; return 1; }
+    if [ "${SMOKE_UID}" != "$(id -u):$(id -g)" ] && ! chown "${SMOKE_UID}" "${home}"; then
+        rm -rf "${home}"; SMOKE_ERR="smoke failed: cannot hand the scratch home to uid ${SMOKE_UID}"; return 1
+    fi
+    if out="$(docker run --rm --user "${SMOKE_UID}" --network none --cap-drop ALL --security-opt no-new-privileges -e HOME=/home/u \
             -v "${tmp}/repo:/styrman/harness:ro" -v "${tmp}/bin/sh-agent:/styrman/bin/sh-agent:ro" -v "${home}:/home/u" \
             --entrypoint sh "${HARNESS_SMOKE_IMAGE}" \
             -c '/styrman/bin/sh-agent list --repo /styrman/harness && /styrman/bin/sh-agent install --dry-run --repo /styrman/harness --home /home/u' 2>&1)"; then
@@ -300,12 +308,14 @@ harness_swap() {
     printf '%s' "${c}" > "${HARNESS_SHA}.new.$$" && mv -f "${HARNESS_SHA}.new.$$" "${HARNESS_SHA}"
     failed="$(cat "${HARNESS_FAILED}" 2>/dev/null || true)"
     if [ -n "${failed}" ] && ! ver_gt "${failed}" "${tag}"; then rm -f "${HARNESS_FAILED}"; fi
-    for d in "${HARNESS_DIR}"/*; do
+    # Dot-dirs are named explicitly: a bare glob skips them (no dotglob),
+    # which left interrupted exports' .tmp-* behind (review 2026-09-16).
+    for d in "${HARNESS_DIR}"/* "${HARNESS_DIR}"/.tmp-* "${HARNESS_DIR}"/.smoke-*; do
         [ -e "${d}" ] || continue
         base="$(basename "${d}")"
         case "${base}" in
             current|current.new.*|"${c}"|"${c}".prev-*) continue ;;
-            .tmp-*) rm -rf "${d}" ;;
+            .tmp-*|.smoke-*) rm -rf "${d}"; continue ;;
         esac
         [ -n "${prev_target}" ] && case "${base}" in "${prev_target}"|"${prev_target}".prev-*) continue ;; esac
         if printf '%s' "${base}" | grep -qE '^[0-9a-f]{40}(\.prev-[0-9]+)?$'; then rm -rf "${d}"; fi
@@ -326,7 +336,8 @@ harness_main() {
         /*) fail "STYRMAN_HARNESS_DIR=${HARNESS_DIR} is a top-level directory — refusing; use a dedicated dir, e.g. /var/lib/styrman/harness" ;;
         *) fail "STYRMAN_HARNESS_DIR must be an absolute path" ;;
     esac
-    if [ "${STYRMAN_UPDATE_TEST:-}" = 1 ]; then testmode=1; want_owner="$(id -u)"; harness_test_guard; fi
+    SMOKE_UID="1000:1000"
+    if [ "${STYRMAN_UPDATE_TEST:-}" = 1 ]; then testmode=1; want_owner="$(id -u)"; SMOKE_UID="$(id -u):$(id -g)"; harness_test_guard; fi
     # The content dir is the trust boundary — its parent /var/lib/styrman is
     # operator-owned by design (host-setup.sh) — so: never a symlink, owned by
     # us, no group/world write, every run.

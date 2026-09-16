@@ -122,6 +122,16 @@ func TestHarnessBindsRefuseAnUntrustedChannel(t *testing.T) {
 				t.Fatal(err)
 			}
 		},
+		"repo is a symlink": func(t *testing.T, dir string) {
+			plantChannel(t, dir)
+			real := filepath.Join(dir, tSha, "repo.real")
+			if err := os.Rename(filepath.Join(dir, tSha, "repo"), real); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink("repo.real", filepath.Join(dir, tSha, "repo")); err != nil {
+				t.Fatal(err)
+			}
+		},
 		"no COMMIT": func(t *testing.T, dir string) {
 			plantChannel(t, dir)
 			if err := os.Remove(filepath.Join(dir, tSha, "repo", "COMMIT")); err != nil {
@@ -209,9 +219,9 @@ func TestEnsureRunningRecreatesAStoppedContainerToDropTheHarnessBindsWhenTheChan
 	}
 }
 
-// An untrusted channel (present, but a mode the server refuses) is not a
-// recreate trigger: the stopped container starts as it is.
-func TestEnsureRunningLeavesAStoppedContainerWhenTheChannelIsUntrusted(t *testing.T) {
+// An untrusted channel (present, but a mode the server refuses) mounts
+// nothing: a stopped container WITHOUT the binds starts as it is …
+func TestEnsureRunningLeavesAStoppedContainerWithoutBindsWhenTheChannelIsUntrusted(t *testing.T) {
 	o, fd, cfg := seamOrch(t)
 	cfg.HarnessDir = t.TempDir()
 	plantChannel(t, cfg.HarnessDir)
@@ -287,5 +297,51 @@ func setupSpec(cfg *config.Config) createSpec {
 		extraEnv:  []string{config.EnvProject + "=setup", "STYRMAN_MINIMAL=1"},
 		labels:    map[string]string{config.LabelManaged: "true", config.LabelSystem: "setup", config.LabelUser: tUser},
 		noRestart: true,
+	}
+}
+
+// A DISABLED channel (empty HarnessDir) drops stale binds the same way an
+// absent one does: the server cannot check the old dir, and a vanished bind
+// source would be recreated by Docker as a root-owned directory (D25).
+func TestEnsureRunningRecreatesAStoppedContainerToDropTheHarnessBindsWhenTheChannelIsDisabled(t *testing.T) {
+	o, fd, cfg := seamOrch(t)
+	cfg.HarnessDir = ""
+	plant(fd, cfg, false, false)
+	c, _ := fd.byName(configContainerName())
+	c.binds = append(c.binds, wantHarnessBinds(filepath.Join(t.TempDir(), "current"))...)
+	if _, err := o.EnsureRunning(context.Background(), tUser, tProj, opts(false)); err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+	if fd.callsTo("ContainerRemove") != 1 || fd.callsTo("ContainerCreate") != 1 {
+		t.Fatalf("want one remove and one create, got %v", fd.calls)
+	}
+	c, _ = fd.byName(configContainerName())
+	if hasHarnessBind(c.binds) {
+		t.Fatalf("recreated container still binds the disabled channel: %v", c.binds)
+	}
+}
+
+// … and one WITH the binds is rebuilt without them: a bind source the server
+// would not mount fresh is not re-resolved by Docker on start either
+// (security review 2026-09-16, D26).
+func TestEnsureRunningRecreatesAStoppedContainerToDropTheHarnessBindsWhenTheChannelIsUntrusted(t *testing.T) {
+	o, fd, cfg := seamOrch(t)
+	cfg.HarnessDir = t.TempDir()
+	src := plantChannel(t, cfg.HarnessDir)
+	if err := os.Chmod(filepath.Join(cfg.HarnessDir, tSha), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	plant(fd, cfg, false, false)
+	c, _ := fd.byName(configContainerName())
+	c.binds = append(c.binds, wantHarnessBinds(src)...)
+	if _, err := o.EnsureRunning(context.Background(), tUser, tProj, opts(false)); err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+	if fd.callsTo("ContainerRemove") != 1 || fd.callsTo("ContainerCreate") != 1 {
+		t.Fatalf("want one remove and one create, got %v", fd.calls)
+	}
+	c, _ = fd.byName(configContainerName())
+	if hasHarnessBind(c.binds) {
+		t.Fatalf("recreated container still binds the refused channel: %v", c.binds)
 	}
 }

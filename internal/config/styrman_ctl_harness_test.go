@@ -106,3 +106,23 @@ func TestStyrmanCtlUpdateSetupHarnessPlan(t *testing.T) {
 		t.Fatalf("harness steps planned without a token:\n%s", out)
 	}
 }
+
+// A latched failed harness tag is a stuck channel whatever installed under
+// it: `status` is DEGRADED (exit 1) and names the tag; without the latch the
+// same host reads OK.
+func TestStyrmanCtlStatusLatchedHarnessTagIsDegraded(t *testing.T) {
+	e := ctlSetup(t, true)
+	update := filepath.Join(e.root, "etc", "styrman", "update")
+	if err := os.MkdirAll(update, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := ctl(t, e, "status", "--dry-run"); code != 0 || strings.Contains(out, "FAILED LATCHED") {
+		t.Fatalf("without a latch: code %d\n%s", code, out)
+	}
+	if err := os.WriteFile(filepath.Join(update, "harness-failed-version"), []byte("v1.2.0"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, code := ctl(t, e, "status", "--dry-run"); code != 1 || !strings.Contains(out, "DEGRADED") || !strings.Contains(out, "FAILED LATCHED: v1.2.0") {
+		t.Fatalf("with a latched tag: code %d\n%s", code, out)
+	}
+}
