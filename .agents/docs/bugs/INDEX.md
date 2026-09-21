@@ -70,6 +70,7 @@
 | BUG-065 | 2026-09-16 | image/harness (vendored styrman-harness mirror) | fixed | release gate's `verify-commit.sh` failed `sha256sum -c`: `VENDORED.md: FAILED` after a docs edit | `image/harness/` is a checksummed tree — any edit under it (VENDORED.md, COMMIT included) regenerates `SHA256SUMS` in the same change; run `verify-commit.sh` before the mirror commit, not only at the tag |
 | BUG-066 | 2026-09-21 | .agents/docs/testing/styrman/ensure-test-image.sh | fixed | Tier 2 image rebuild failed: new build secret in `image/Dockerfile` (ADR-074) not passed by the test suite's own builder | grep every `docker build` of `image/` when the Dockerfile gains a build-time input; the test suite's builder is a caller too |
 | BUG-067 | 2026-09-21 | image/entrypoint.sh (ADR-074 never-downgrade guard) | fixed | skipped harness install logged "deployed"; `sort -V` ranked sentinel `unknown` above a real version, permanently suppressing install | assert the shape of BOTH sides before a version comparison (a sentinel must lose, never win); a pass line must name deployed vs kept |
+| BUG-068 | 2026-09-21 | deploy/verify-commit.sh (shellcheck step) / styrman-update, host-setup.sh, styrman-ctl | fixed | release gate's `shellcheck -S warning` failed SC2054 on an unquoted `--secret id=...,src=...` array element the change's own `-S error` verification had missed | verifier dispatch runs shellcheck at the gate's severity (`-S warning`); quote a comma-bearing array element the day it's written |
 
 ## Graduated
 
