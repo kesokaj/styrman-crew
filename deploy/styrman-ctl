@@ -449,6 +449,16 @@ cmd_install() {
     version="$(resolve_version "${version}")"
 
     log "install: host-setup.sh as root for operator ${OPERATOR}"
+    # host-setup.sh's step 7 builds the runtime image (the sh-agent download,
+    # ADR-074) BEFORE this script installs the token file, so a first install
+    # needs the token now: from --gh-token-file it travels in the environment
+    # — never on a command line, which sudo would log and /proc would show
+    # (security review 2026-09-21, BUG-069's family).
+    if [ -n "${gh_token_file}" ]; then
+        private_file "${gh_token_file}"
+        GH_TOKEN="$(tr -d '\n' < "${gh_token_file}")"; export GH_TOKEN
+        log "install: GH_TOKEN for host-setup.sh exported from --gh-token-file (environment only)"
+    fi
     run bash "${REPO}/deploy/host-setup.sh" --user "${OPERATOR}"
 
     log "install: deploy/.env — the must-fill keys"

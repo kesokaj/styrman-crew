@@ -238,7 +238,8 @@ Since v1.22.0, one line per release; the full entry for each is
 
 ## Requirements
 
-- Debian 13 host (baremetal, or a GCP VM with nested virtualization) — Docker,
+- Debian 13 host (baremetal, or a GCP Compute Engine VM with nested
+  virtualization — `deploy/gcp/`, `.agents/docs/deploy/gcp.md`) — Docker,
   Kata, and everything else is installed by `deploy/host-setup.sh`
 - Go 1.25+ to build/run the server
 - Node 22+ / npm (only to rebuild the frontend; `web/dist` ships committed)

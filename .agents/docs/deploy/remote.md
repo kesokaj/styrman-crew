@@ -68,7 +68,11 @@ Run both once, after deploying the next tag:
 sudo bash deploy/firewall/install.sh    # from /opt/styrman at the deployed tag
 # a token that reads kesokaj/styrman-harness: host-setup.sh's runtime-image build
 # downloads the sh-agent release with it (ADR-074) and no /etc/styrman/gh-token
-# exists yet on a fresh host
+# exists yet on a fresh host. This form works but puts the token on a
+# sudo-logged command line; prefer
+# `sudo deploy/styrman-ctl install --gh-token-file <600 file>` (the token
+# travels as a file), or `sudo --preserve-env=GH_TOKEN bash deploy/host-setup.sh`
+# with GH_TOKEN exported beforehand, for a bare host-setup.sh run.
 sudo GH_TOKEN=$(gh auth token) bash deploy/host-setup.sh --user $USER
 ```
 

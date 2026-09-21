@@ -13,6 +13,11 @@
 set -euo pipefail
 
 KATA_VERSION="${KATA_VERSION:-3.31.0}"
+# The publisher's SHA256 of kata-static-3.31.0-amd64.tar.zst — GitHub's release
+# asset digest, read 2026-09-21 and matched against a download the same day.
+# Another KATA_VERSION takes its digest from the same API at run time, or is
+# pinned with KATA_SHA256.
+KATA_SHA256_3_31_0=68c2786a0b97023f62f3eca02dc868b78a794e5469d4ddd6cc9e0bd4a7212b0b
 # Pin Docker too (like Kata) so a fresh install is reproducible; override to
 # match/upgrade. The convenience script reads $VERSION.
 DOCKER_VERSION="${DOCKER_VERSION:-29.7.2}"
@@ -56,15 +61,28 @@ usermod -aG docker "${OPERATOR}"
 # ─── 2. Kata Containers → /opt/kata, runtime 'mvm' ──────────────────────────
 if [[ ! -x /opt/kata/bin/kata-runtime ]]; then
     log "installing Kata ${KATA_VERSION}"
-    KATA_URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/kata-static-${KATA_VERSION}-amd64.tar.xz"
+    # Kata ships zstd tarballs since 3.x (the .tar.xz + .sha256sum pair the
+    # first hosts downloaded no longer exists — BUG-070, found by the first
+    # GCP bring-up; this host had Kata installed already, so the step was
+    # skipped here and the breakage went unseen).
+    KATA_ASSET="kata-static-${KATA_VERSION}-amd64.tar.zst"
+    KATA_URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/${KATA_ASSET}"
     KATA_TMP="$(mktemp)"
     curl -fsSL "${KATA_URL}" -o "${KATA_TMP}"
-    # Verify against the release's published SHA256 before extracting into / as
-    # root — a tampered/MITM'd asset would otherwise write arbitrary files.
-    # Pin via KATA_SHA256 env; otherwise fetch the sums file from the release.
+    # Verify against the publisher's SHA256 before extracting into / as root —
+    # a tampered/MITM'd asset would otherwise write arbitrary files. Pin via
+    # KATA_SHA256 env; the pinned version has its digest above; any other
+    # version reads GitHub's asset digest from the release API.
     EXPECT="${KATA_SHA256:-}"
+    if [[ -z "${EXPECT}" && "${KATA_VERSION}" == "3.31.0" ]]; then
+        EXPECT="${KATA_SHA256_3_31_0}"
+    fi
     if [[ -z "${EXPECT}" ]]; then
-        EXPECT=$(curl -fsSL "https://github.com/kata-containers/kata-containers/releases/download/${KATA_VERSION}/kata-static-${KATA_VERSION}-amd64.tar.xz.sha256sum" 2>/dev/null | awk '{print $1}')
+        EXPECT=$(curl -fsSL "https://api.github.com/repos/kata-containers/kata-containers/releases/tags/${KATA_VERSION}" 2>/dev/null \
+            | python3 -c 'import json,sys
+a=[x for x in json.load(sys.stdin).get("assets",[]) if x.get("name")==sys.argv[1]]
+d=(a[0].get("digest") or "") if a else ""
+print(d[7:] if d.startswith("sha256:") else "")' "${KATA_ASSET}" 2>/dev/null || true)
     fi
     if [[ -z "${EXPECT}" ]]; then
         # Fail CLOSED (M15): extracting an unverified tarball as root into / is a
@@ -77,7 +95,8 @@ if [[ ! -x /opt/kata/bin/kata-runtime ]]; then
     ACTUAL=$(sha256sum "${KATA_TMP}" | awk '{print $1}')
     [[ "${ACTUAL}" == "${EXPECT}" ]] || { echo "FATAL: Kata tarball checksum mismatch (expected ${EXPECT}, got ${ACTUAL})"; rm -f "${KATA_TMP}"; exit 1; }
     log "Kata tarball checksum verified"
-    tar -xJf "${KATA_TMP}" -C /
+    command -v zstd >/dev/null 2>&1 || sh -c 'DEBIAN_FRONTEND=noninteractive apt-get -y -qq install zstd >/dev/null'
+    tar --zstd -xf "${KATA_TMP}" -C /
     rm -f "${KATA_TMP}"
 else
     log "Kata present: $(/opt/kata/bin/kata-runtime version | head -1)"

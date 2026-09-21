@@ -33,6 +33,11 @@ project microVMs cannot reach.
 
 ## Production mode (Google OAuth, HTTPS, survives reboots)
 
+Two hosts run this mode today: the operator's own Debian 13 box
+(`remote.md`) and a disposable GCP Compute Engine VM, same Debian 13 host
+path, brought up with `deploy/gcp/vm.sh` + `deploy/gcp/install.sh` instead
+of by hand — ADR-075, `.agents/docs/deploy/gcp.md`.
+
 ### styrman-ctl (one front door)
 
 `sudo deploy/styrman-ctl` (plan
@@ -195,7 +200,12 @@ and a Cloudflare API token scoped Zone:DNS:Edit on the zone.
 ```bash
 # host-setup.sh's step 7 builds the runtime image, which downloads the sh-agent
 # release from the private styrman-harness repo (ADR-074): on a fresh host no
-# /etc/styrman/gh-token exists yet, so pass a token that reads that repo
+# /etc/styrman/gh-token exists yet, so pass a token that reads that repo.
+# This form works but puts the token on a sudo-logged command line; prefer
+# `sudo deploy/styrman-ctl install --gh-token-file <600 file>` (the token
+# travels as a file — `styrman-ctl` exports GH_TOKEN for host-setup.sh in its
+# own process), or `sudo --preserve-env=GH_TOKEN bash deploy/host-setup.sh`
+# with GH_TOKEN exported beforehand, for a bare host-setup.sh run.
 sudo GH_TOKEN=$(gh auth token) bash deploy/host-setup.sh --user $USER   # also seeds deploy/.env identity values
 vi deploy/.env                                # fill: BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET,
                                               #       CLOUDFLARE_API_TOKEN, ADMIN_EMAIL,
@@ -224,10 +234,15 @@ why this rule exists (two concrete 2026-09-01 incidents).
 - **Docker CE**: installed at a pinned `DOCKER_VERSION` (currently `29.7.2`,
   override via env) via `get.docker.com`, not whatever is currently latest —
   reproducible installs (#11).
-- **Kata Containers**: the release tarball is SHA256-verified before being
-  extracted as root into `/`; if no checksum can be obtained (network issue,
-  or the release has none published) the script **fails closed** rather than
-  warning and continuing — pin `KATA_SHA256` to proceed offline (M15).
+- **Kata Containers**: downloads `kata-static-${KATA_VERSION}-amd64.tar.zst`
+  (Kata's releases are zstd tarballs with no `.sha256sum` sidecar any more —
+  BUG-070) and extracts with `tar --zstd` (installing `zstd` first when it's
+  absent). The tarball is SHA256-verified before extraction as root into `/`,
+  checked in order against `KATA_SHA256` (an env pin), the pinned constant
+  `KATA_SHA256_3_31_0` for the default `3.31.0`, or GitHub's release-asset
+  digest for any other version; if none of those resolve (network issue, or
+  the release has no digest published) the script **fails closed** rather
+  than warning and continuing — pin `KATA_SHA256` to proceed offline (M15).
 - **`/etc/docker/daemon.json`** merge (idempotent, only restarts Docker if it
   actually changed): the `mvm` runtime + `time-namespaces: false` (ADR-009,
   Docker ≥29.5 vs Kata ≤3.31), `ipv6`/`ip6tables: false` (the project-isolation

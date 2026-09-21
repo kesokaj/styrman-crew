@@ -887,3 +887,39 @@ func TestStyrmanCtlDisplayValuesArePrintable(t *testing.T) {
 		t.Fatalf("control bytes reached the status output:\n%q", out)
 	}
 }
+
+// host-setup.sh's step 7 needs the GitHub token before styrman-ctl installs
+// the token file; from --gh-token-file it reaches host-setup.sh through the
+// environment, never on a command line (sudo logs argv — security review
+// 2026-09-21). The plan names the export and never the token's content.
+func TestStyrmanCtlInstallExportsTokenForHostSetup(t *testing.T) {
+	e := ctlSetup(t, true)
+	tok := filepath.Join(e.root, "secrets", "tok")
+	if err := os.WriteFile(tok, []byte("ghp_SECRETTOKEN\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	signers := filepath.Join(e.root, "secrets", "signers")
+	if err := os.WriteFile(signers, []byte("me@example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// --skip-auto-update: the export under test happens before host-setup.sh;
+	// the auto-update setup afterwards is TestStyrmanCtlUpdateSetup's subject.
+	out, code := ctl(t, e, "install", "--dry-run", "--yes", "--user", "u", "--version", "1.0.0", "--gh-token-file", tok, "--allowed-signers-file", signers, "--skip-auto-update")
+	if code != 0 {
+		t.Fatalf("install dry run: %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "exported from --gh-token-file") {
+		t.Fatalf("the plan does not say the token is exported for host-setup.sh:\n%s", out)
+	}
+	if strings.Contains(out, "ghp_SECRETTOKEN") {
+		t.Fatalf("the token's content reached the output:\n%s", out)
+	}
+	if strings.Contains(out, "GH_TOKEN=ghp") || strings.Contains(out, "env GH_TOKEN") {
+		t.Fatalf("the token travels on a command line:\n%s", out)
+	}
+	// Without --gh-token-file nothing is exported and the plan says so.
+	out, _ = ctl(t, e, "install", "--dry-run", "--yes", "--user", "u", "--version", "1.0.0", "--skip-auto-update")
+	if strings.Contains(out, "exported from --gh-token-file") {
+		t.Fatalf("export claimed without a token file:\n%s", out)
+	}
+}

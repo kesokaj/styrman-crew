@@ -159,7 +159,7 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
 
 ## Deploy
 
-Two targets exist: local (loopback dev run) and the production host. Procedures live in `.agents/docs/deploy/` — `local.md`, `remote.md` (points at `deploy/README.md`, `specs/styrman/deploy.md`, and `versioning.md`), `gcp.md` (not applicable: self-hosted). `/preflight` deploys only by these guides.
+Three targets exist: local (loopback dev run), the production host (the operator's NUC), and a disposable GCP Compute Engine VM running the same host path (`deploy/gcp/vm.sh`, `deploy/gcp/install.sh`, ADR-075). Procedures live in `.agents/docs/deploy/` — `local.md`, `remote.md` (points at `deploy/README.md`, `specs/styrman/deploy.md`, and `versioning.md`), `gcp.md` (the GCP target's defaults, prerequisites and procedure). `/preflight` deploys only by these guides.
 
 ## Key Files
 
@@ -180,6 +180,7 @@ Two targets exist: local (loopback dev run) and the production host. Procedures 
 | `internal/config/` | Env config, paths, operator-tunable settings |
 | `image/` | Runtime microVM image: Dockerfile (downloads + verifies the `sh-agent` release at build time, ADR-074), entrypoint, styrman-setup |
 | `deploy/` | host-setup, compose, vendored caddy ingress, server Dockerfile |
+| `deploy/gcp/` | GCP Compute Engine target: `vm.sh` (instance lifecycle over IAP), `install.sh` (bring-up on the VM), `vm.conf` (non-secret defaults) |
 | `web/` | TanStack Start SPA (dist/client committed + embedded) |
 | `REQUIREMENTS.md` | Non-negotiable requirements (R1–R13) |
 | `.agents/docs/specs/styrman/guide.md` | The living full guide |

@@ -165,10 +165,10 @@ fi
 # unit that systemd rejects must fail here, not on the host. Its behavioural
 # test is deploy/firewall/test.sh, which needs root and runs out of band.
 echo "==> host scripts: bash -n, shellcheck, systemd-analyze verify"
-( cd "${WT}" && bash -n deploy/host-setup.sh deploy/firewall/styrman-firewall.sh deploy/firewall/install.sh deploy/firewall/test.sh deploy/update/styrman-update )
+( cd "${WT}" && bash -n deploy/host-setup.sh deploy/firewall/styrman-firewall.sh deploy/firewall/install.sh deploy/firewall/test.sh deploy/update/styrman-update deploy/gcp/*.sh )
 if command -v shellcheck >/dev/null 2>&1; then
-    ( cd "${WT}" && shellcheck -S warning deploy/firewall/*.sh deploy/update/styrman-update )
-    echo "    shellcheck clean: deploy/firewall/*.sh deploy/update/styrman-update"
+    ( cd "${WT}" && shellcheck -S warning deploy/firewall/*.sh deploy/update/styrman-update deploy/gcp/*.sh )
+    echo "    shellcheck clean: deploy/firewall/*.sh deploy/update/styrman-update deploy/gcp/*.sh"
 else
     echo "    shellcheck not installed — skipped"
 fi
