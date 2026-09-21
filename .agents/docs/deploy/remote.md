@@ -66,7 +66,10 @@ Run both once, after deploying the next tag:
 
 ```bash
 sudo bash deploy/firewall/install.sh    # from /opt/styrman at the deployed tag
-sudo bash deploy/host-setup.sh --user $USER
+# a token that reads kesokaj/styrman-harness: host-setup.sh's runtime-image build
+# downloads the sh-agent release with it (ADR-074) and no /etc/styrman/gh-token
+# exists yet on a fresh host
+sudo GH_TOKEN=$(gh auth token) bash deploy/host-setup.sh --user $USER
 ```
 
 `install.sh` now also ENABLES `styrman-firewall.service` at boot (`WantedBy=

@@ -678,7 +678,7 @@ deploy() {
     # that repository too, goes in as a build SECRET, never a layer (the one
     # rule every build site follows: GH_TOKEN, else the token file, else stop).
     local secret_args=()
-    if [ -n "${GH_TOKEN:-}" ]; then export GH_TOKEN; secret_args=(--secret "id=gh_token,env=GH_TOKEN")
+    if [ -n "${GH_TOKEN:-}" ]; then secret_args=(--secret "id=gh_token,env=GH_TOKEN")   # already in the environment docker inherits
     elif [ -f "${GH_TOKEN_FILE}" ]; then secret_args=(--secret "id=gh_token,src=${GH_TOKEN_FILE}")
     else log "no GitHub token for the styrman-harness download — install ${GH_TOKEN_FILE} (root, 600; a token that reads kesokaj/styrman-harness)"; return 1; fi
     docker build -t "${runtime_image}" "${secret_args[@]}" --build-arg "STYRMAN_VERSION=${ver}" "${DEPLOY_DIR}/image" \

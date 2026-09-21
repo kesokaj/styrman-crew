@@ -193,7 +193,10 @@ Services → Credentials): Web application, redirect URI
 and a Cloudflare API token scoped Zone:DNS:Edit on the zone.
 
 ```bash
-sudo bash deploy/host-setup.sh --user $USER   # also seeds deploy/.env identity values
+# host-setup.sh's step 7 builds the runtime image, which downloads the sh-agent
+# release from the private styrman-harness repo (ADR-074): on a fresh host no
+# /etc/styrman/gh-token exists yet, so pass a token that reads that repo
+sudo GH_TOKEN=$(gh auth token) bash deploy/host-setup.sh --user $USER   # also seeds deploy/.env identity values
 vi deploy/.env                                # fill: BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET,
                                               #       CLOUDFLARE_API_TOKEN, ADMIN_EMAIL,
                                               #       STYRMAN_ALLOWED_EMAILS
@@ -265,7 +268,7 @@ commit to git."
   irreversible** — it removes the workspace, the project home, and the
   docker disk with no safety net. The UI's "type delete to confirm" dialog
   is the only gate; there is nothing to restore from afterward.
-- **Rebuilding a host** is: clone the repo, `sudo bash deploy/host-setup.sh
+- **Rebuilding a host** is: clone the repo, `sudo GH_TOKEN=$(gh auth token) bash deploy/host-setup.sh
   --user $USER`, fill in a fresh `deploy/.env` (see "Bring-up" above), bring
   the stack up. There is no state to restore — only project workspaces that
   were actually committed and pushed come back; anything left uncommitted
@@ -334,7 +337,13 @@ files, `daemon-reload`, and removes `harness-version`, `harness-sha`,
 `harness-failed-version`, `harness-refused` from `/etc/styrman/update`.
 Under `--check` it only reports. The now-empty content dir
 `/var/lib/styrman/harness` is an operator `sudo rmdir /var/lib/styrman/harness`
-— it is not removed automatically.
+— it is not removed automatically. A host that ever ran the channel's setup
+(`styrman-ctl update --setup --harness-token-file`, v1.35.0) also holds its
+read-only token at `/etc/styrman/gh-token-harness` and its clone at
+`/opt/styrman-harness`: revoke that fine-grained token at GitHub, then
+`sudo rm -f /etc/styrman/gh-token-harness` and `sudo rm -rf /opt/styrman-harness`
+— the updater names no production path of its own (ADR-052), so neither is
+removed automatically; the production host never ran that setup.
 
 Day-to-day "how do I ship a release / update one image" reference:
 `.agents/docs/specs/styrman/versioning.md`.

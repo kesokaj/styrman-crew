@@ -470,8 +470,8 @@ cmd_install() {
     # build site follows — --gh-token-file, else GH_TOKEN, else the installed
     # token file, else stop. The same token serves auto-update below.
     local secret_args=()
-    if [ -n "${gh_token_file}" ]; then secret_args=(--secret "id=gh_token,src=${gh_token_file}")
-    elif [ -n "${GH_TOKEN:-}" ]; then export GH_TOKEN; secret_args=(--secret "id=gh_token,env=GH_TOKEN")
+    if [ -n "${gh_token_file}" ]; then private_file "${gh_token_file}"; secret_args=(--secret "id=gh_token,src=${gh_token_file}")
+    elif [ -n "${GH_TOKEN:-}" ]; then secret_args=(--secret "id=gh_token,env=GH_TOKEN")   # already in the environment docker inherits
     elif [ -f "${ETC_DIR}/gh-token" ]; then private_file "${ETC_DIR}/gh-token"; secret_args=(--secret "id=gh_token,src=${ETC_DIR}/gh-token")
     elif [ "${DRY}" = 1 ]; then secret_args=(--secret "id=gh_token,src=${ETC_DIR}/gh-token"); log "install: (dry run) a real run needs --gh-token-file F or GH_TOKEN — the token that reads kesokaj/styrman-harness"
     else die "no GitHub token for the styrman-harness download — pass --gh-token-file F (a token that reads kesokaj/styrman-harness) or run with GH_TOKEN set"; fi

@@ -209,7 +209,7 @@ echo "==> server image (the build the updater runs)"
 # every build site: GH_TOKEN, else /etc/styrman/gh-token, else stop).
 echo "==> runtime image (image/) and the sh-agent release it carries"
 ( cd "${WT}" && GH_TOKEN="${BUILD_TOKEN}" build_image "${LOGDIR}/runtime-build.log" -q "${SECRET_ARGS[@]}" --build-arg STYRMAN_VERSION=verify -t "${RIMG}" image/ )
-want_rel="$(sed -n 's/^ARG HARNESS_VERSION=\(v[0-9][0-9.]*\)$/\1/p' "${WT}/image/Dockerfile")"
+want_rel="$(sed -n -E 's/^ARG HARNESS_VERSION=(v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$/\1/p' "${WT}/image/Dockerfile")"
 [ -n "${want_rel}" ] || { echo "FAIL: image/Dockerfile has no 'ARG HARNESS_VERSION=vX.Y.Z' line" >&2; exit 1; }
 got_rel="$(docker run --rm --entrypoint /styrman/bin/sh-agent "${RIMG}" version 2>&1)"
 if [ "${got_rel}" != "sh-agent ${want_rel}" ]; then
