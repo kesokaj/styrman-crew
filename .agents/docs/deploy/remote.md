@@ -1,6 +1,6 @@
 ---
 owner: documentation
-date: 2026-09-09
+date: 2026-09-21
 target: remote
 ---
 # Deploy — remote machine (production host)
@@ -22,12 +22,13 @@ The host is provisioned and operated with `sudo deploy/styrman-ctl`
 
 `sudo bash deploy/host-setup.sh --user $USER` (Docker, Kata `mvm`, tuning, state dirs, runtime image, `.env` scaffold — idempotent). Bring-up and production mode: `.agents/docs/specs/styrman/deploy.md` "Production mode" and "Bring-up".
 
-**Harness channel token (ADR-073).** The harness channel needs its own
-fine-grained GitHub token, scoped to the `styrman-harness` repository only,
-`Contents: read-only`, installed to `/etc/styrman/gh-token-harness` by
-`styrman-ctl update --setup --harness-token-file <file>` (or the
-`install`/`update --setup` prompt). Mechanics: `.agents/docs/specs/styrman/deploy.md`
-"Harness channel (ADR-073)".
+**Agent harness token (ADR-074).** The harness now reaches every project
+through the runtime image, not a host channel: the crew token at
+`/etc/styrman/gh-token` must also read `kesokaj/styrman-harness` (grant it
+in that fine-grained GitHub token's settings — no separate harness token).
+`sh-agent update`, run inside a project terminal, is the per-project update.
+Mechanics: `.agents/docs/specs/styrman/deploy.md`
+"Agent harness in the image (ADR-074)".
 
 **Host firewall half (ADR-036/067, once per host):** `sudo bash deploy/firewall/install.sh` — run from the deploy clone (`/opt/styrman`) at the deployed tag, never from a working tree. Installs the isolation script and its timer unit only. Since ADR-067 the per-project LAN switch is not a firewall rule at all — see "Per-project network mode" below — so this script has one job: keep every `sdb-*` (sandbox) bridge isolated from the host, the LAN, other projects, cloud metadata and the tailnet, while leaving the internet and the same-bridge broker/port-preview proxy reachable. On a host upgrading from v1.23/v1.24, `install.sh` also REMOVES the ADR-065/066 machinery it left behind — the `.path` unit, the spool tmpfs mount and its tmpfiles entry, the run dir, the service drop-in — because a leftover `.path` unit pointing at a deleted spool fails on every boot; `/etc/styrman/firewall.conf` is left in place untouched (its keys are no longer read by anything, and this script does not edit an operator-owned file). From then on the auto-updater's `host_converge` re-applies the script and unit from every verified release tag.
 
@@ -196,17 +197,11 @@ ip -o link show | grep -E ' (sdb|lan)-'      # each project's live mode
 journalctl -u styrman-firewall -n 20         # one line per change; quiet runs log nothing
 ```
 
-Harness channel half (ADR-073, once enabled — `deploy.md` "Harness channel"):
-
-```bash
-systemctl is-enabled styrman-harness-update.timer
-sudo styrman-ctl status                       # the `harness` line: <tag> (<sha7>) /var/lib/styrman/harness/current
-                                               # (or "waiting for the first signed styrman-harness tag" / "not set up …")
-```
-
-and the server log's `harness channel …` line at start, plus a project's
-boot log ending in `… source channel tag <tag>` (delivered) or `… source
-image` (the image's mirror still seeding it).
+Agent harness (ADR-074 — `deploy.md` "Agent harness in the image"): a
+project's boot log line names the deployed `sh-agent` release
+(`agent harness deployed (version <VERSION>, sh-agent vX.Y.Z; …)`), and
+inside a project terminal `sh-agent version` shows what is currently
+installed there — `sh-agent update` refreshes it per project.
 
 ## Rollback
 

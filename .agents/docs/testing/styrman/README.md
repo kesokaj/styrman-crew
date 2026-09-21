@@ -12,7 +12,7 @@ close surfacing as `CdpError`/`CDP_CLOSED`), `web/src/lib/browserInput.test.ts`
 AltGr case 2026-09-13: `Ctrl+Alt` is NOT a chord, so an AltGr-composed
 character types into the page instead of being swallowed as a shortcut),
 `web/src/lib/lan.test.ts` (8 tests, rewritten for ADR-067's two-state model — `off`/`pending`/`error`/`unavailable` are gone, so this file no longer tests them: `lanChip` renders nothing for a sandboxed or field-absent project and flags "LAN" with warn colours when on; `lanLine` states what LAN mode grants and its limits, and that sandbox is internet-only; three for `preferOverride`, BUG-020 — the optimistic PUT reply is shown until the poll CATCHES UP with it, an ordering comparison on the one `lanAccess` boolean rather than the timestamp-equality test that used to latch the component to a stale reply forever once anything changed the record out of band — the latch is now structurally impossible since there is no clock to compare), `web/src/lib/api.test.ts` (`projectNameFromRepoURL`, `cloneURLError`, `projectNameError` — pure, security- or UX-load-bearing string logic that was the frontend's entire test-coverage story before this), `web/src/lib/api.encoding.test.ts` (added 2026-09-09, closing the security review of 2026-09-03, round 2: every `api.ts` call that interpolates a caller-supplied value into a REST or WS path is exercised with a path-climbing (`../..`) and a query-injecting (`?wipe=true`) value, asserting the RESOLVED path never leaves its intended prefix and never contains a bare `..` segment — written against the call sites rather than the `u` template tag itself, so a new call site that forgets to use it fails the suite instead of a test of the tag passing regardless; also covers `termSocketUrl`'s project/terminal-id encoding and that legitimate query strings built outside the tag still work; its `browserStatus`/`browserStop` rows were deleted 2026-09-13 along with the dead SPA wrappers they covered — the pane calls `browserExec` directly and the REST `api.browserStart` is the only wrapper still live, for Retry), `web/src/lib/editorPane.test.ts` (`basename`; the 8 diffReveal tests, v1.22.0, moved to `diffReveal.test.ts` above — `reveal` makes bidi overrides/isolates, invisible directional marks and C0/C1 controls VISIBLE as `<U+202E>`-style markers instead of passing them through, since the diff pane's job is reviewing a change before committing it and a Trojan-Source line renders differently from how it applies; TAB is deliberately kept), `web/src/lib/recentsPanel.test.ts` (14 tests, v1.22.0: the Recent strip's persisted geometry — height clamped to 48..320 on the way IN and OUT so a hand-edited key cannot collapse the panel to nothing, a stored string parsed since localStorage holds only strings, the collapsed flag REMOVED rather than set to "0" when expanded, and a private window throwing on access), `web/src/lib/explorerHistory.test.ts` (13 tests, v1.22.0: the file explorer's back/forward reducer — the forward tail dropped on a new navigation, object IDENTITY preserved on a redundant push so it cannot re-render or refetch, the 50-entry cap dropping oldest-first while keeping the current entry reachable, and `crumbTrail`'s middle elision keeping each shown crumb's REAL full path rather than an offset into the shortened list), `web/src/lib/appearance.test.ts` (17 tests, v1.22.0: the Settings font store — the two surfaces' differing defaults, per-FIELD fallback so one bad value never discards the others, size clamping to 8..32, a numeric string and a prototype key (`"toString"`) both rejected as font families, corrupt JSON, and a private window whose `localStorage` throws on ACCESS rather than only on write; plus a guard that `FONT_STACKS["google-sans-code"]` is still byte-identical to `terminal.ts`'s historical stack, since a dropped fallback silently changes what renders), `web/src/lib/api.session.test.ts` (6 tests, BUG-001: `request()`/`uploadFiles` against a stubbed browser facing the ingress's cross-origin session-expiry redirect — re-auth once, the reload cap under partial failure, the deferred counter clear, malformed and corrupt counter records), `web/src/lib/sshKey.test.ts` (added 2026-09-10, TODO close-out item H: `\p{C}` control/formatting rejection — RLO, ZWSP, BOM, U+00AD — and `abbreviateKey`'s `\p{Zs}` space-run collapse, plus the full-OpenSSH-type-token enum matching the server's `publicKeyLine`), and `web/src/lib/projectBadge.test.ts` (added 2026-09-10, item 29: the pure `projectBadge(p)` function's precedence over `deleteError`/`provisionError`/`deleting`/`provisioning`, extracted out of `Sidebar.tsx` so the badge choice is unit-tested rather than left to the component). `editorPane.test.ts` also covers the pane store's `discard(req)` (item K9): the parked draft and dirty flag clear and the loaded doc drops on discard. Deliberately NOT unit-tested: the editor pane store's per-terminal draft behavior (parked on unmount, restored only for the file it belongs to, dropped when that file closes or is evicted) — its state lives in a module-level `Map` that is not exported, so reaching it from a unit test would mean either widening the module's API just for tests or pulling in a React renderer; `editorPane.test.ts`'s own header comment says so explicitly rather than faking coverage with an assertion that would always pass. That behavior is covered by Tier 4 e2e instead. Outside these two files, most TypeScript/React logic is still covered only by type-checking + lint plus, where applicable, Tier 4 e2e — a changed function/component with no unit test and no e2e exercise has no automated coverage at all, note it explicitly when verifying.
-2. **Integration (117 checks; 3 auto-SKIP on firewall-hardened hosts — a green run against a CURRENT runtime image prints `passed=114 failed=0 skipped=3` (2026-09-16, security review of the harness channel: one check added — guest root remounts `/styrman/harness` rw and the write still fails, nothing lands in the host's export (the `:ro` is enforced on the host side of the virtiofs share), for 117 total; 2026-09-16, ADR-073 harness channel Phase 3: ten checks added — the scratch channel delivered before the server starts, the server's start-up line naming its tag and commit, five guest checks in the harness section (the channel's COMMIT, the read-only mount, the binary's sha256, no `.git`, the boot log's `source channel tag v1.0.0`), and three in the stop+delete section (the swap to `v1.0.1` while stopped, the restarted VM mounting the new export, the re-seed from it); the mirror-commit check now reads the channel's `COMMIT` and the two stamp checks compare against version+commit, for 116 total then; 2026-09-16, BUG-061/BUG-062: the harness section's `settings.json` clause dropped from the "no previous-harness artifacts" check and two checks were added in its place — the boot log carries the installer's `settings:` line for the created file (ADR-072), and the guest `settings.json` holds exactly the attribution key with trailers off; the persistence-across-destruction section gained four checks around the recreate — planting a non-regular file at `~/.claude/settings.json` before recreate, the boot log's `note:` line for a settings.json it could not judge, the seed still completing around the refused key, and the plant/stamp undo for one more seed; the stop+delete (wipe) section gained one check confirming the re-seed after that undo recreates `settings.json` with the key; net seven checks added, one replaced, for 104 total; 2026-09-16, BUG-063: the "stop + delete (wipe)" section gained two checks for the Stop-path restart-policy race — "stop left the container exited 0, no restart, policy off (BUG-063)" (`docker inspect` must read exit 0, `RestartCount` 0, policy `no`) and "start switched the restart policy back on (BUG-063)" (policy `unless-stopped` after the `boot=1` start), for 106 total; 2026-09-14: the harness section gained "sh-agent status labels the image mirror a plain copy" and "boot log records the harness deployed at the mirror's commit"; 2026-09-13: the browser section gained "a second start keeps the running forwarder" and the harness section "harness stamp equals the image version after boot"). Pass the image explicitly: the default `styrman-runtime:test` goes stale and its pre-v1.22.0 skel fails three GOPATH checks for image reasons, not code reasons)** — `bash .agents/docs/testing/styrman/integration.sh [image]` (port `STYRMAN_ITEST_PORT`, default 18080; the run REFUSES to start when that port is already bound, since its health probe cannot tell its own server from another — BUG-040, 2026-09-11)
+2. **Integration (115 checks; 3 auto-SKIP on firewall-hardened hosts — a green run against a CURRENT runtime image prints `passed=112 failed=0 skipped=3` (2026-09-21, ADR-074: the harness channel's fifteen checks went with the channel — the scratch delivery, the server's start-up line, the guest COMMIT/read-only/remount/sha256/no-`.git`/`source channel tag` checks, the plain-copy `status` label, the commit-named boot line, the swap-while-stopped pair — and twelve came in their place: the image's `sh-agent version` is a canonical release, the home's `~/.local/bin/sh-agent` reports the same release, the manifest records `embedded:vX.Y.Z`, the roster equals the binary's `list`, the boot log's release-named line, the stamp as version+release, and the seven-check never-downgrade case in the stop+delete section (stopped again, manifest planted `embedded:v99.0.0` from the host with the stamp cleared, `boot=1`, the `left alone` log line, a `kept` pass line with no new `deployed` line, binary and manifest untouched, stamp rewritten), for 115 total; 2026-09-16, security review of the harness channel: one check added — guest root remounts `/styrman/harness` rw and the write still fails, nothing lands in the host's export (the `:ro` is enforced on the host side of the virtiofs share), for 117 total; 2026-09-16, ADR-073 harness channel Phase 3: ten checks added — the scratch channel delivered before the server starts, the server's start-up line naming its tag and commit, five guest checks in the harness section (the channel's COMMIT, the read-only mount, the binary's sha256, no `.git`, the boot log's `source channel tag v1.0.0`), and three in the stop+delete section (the swap to `v1.0.1` while stopped, the restarted VM mounting the new export, the re-seed from it); the mirror-commit check now reads the channel's `COMMIT` and the two stamp checks compare against version+commit, for 116 total then; 2026-09-16, BUG-061/BUG-062: the harness section's `settings.json` clause dropped from the "no previous-harness artifacts" check and two checks were added in its place — the boot log carries the installer's `settings:` line for the created file (ADR-072), and the guest `settings.json` holds exactly the attribution key with trailers off; the persistence-across-destruction section gained four checks around the recreate — planting a non-regular file at `~/.claude/settings.json` before recreate, the boot log's `note:` line for a settings.json it could not judge, the seed still completing around the refused key, and the plant/stamp undo for one more seed; the stop+delete (wipe) section gained one check confirming the re-seed after that undo recreates `settings.json` with the key; net seven checks added, one replaced, for 104 total; 2026-09-16, BUG-063: the "stop + delete (wipe)" section gained two checks for the Stop-path restart-policy race — "stop left the container exited 0, no restart, policy off (BUG-063)" (`docker inspect` must read exit 0, `RestartCount` 0, policy `no`) and "start switched the restart policy back on (BUG-063)" (policy `unless-stopped` after the `boot=1` start), for 106 total; 2026-09-14: the harness section gained "sh-agent status labels the image mirror a plain copy" and "boot log records the harness deployed at the mirror's commit"; 2026-09-13: the browser section gained "a second start keeps the running forwarder" and the harness section "harness stamp equals the image version after boot"). Pass the image explicitly: the default `styrman-runtime:test` goes stale and its pre-v1.22.0 skel fails three GOPATH checks for image reasons, not code reasons)** — `bash .agents/docs/testing/styrman/integration.sh [image]` (port `STYRMAN_ITEST_PORT`, default 18080; the run REFUSES to start when that port is already bound, since its health probe cannot tell its own server from another — BUG-040, 2026-09-11)
    (default `styrman-runtime:test` — see the warning under Prereqs about
    `:dev`). Isolated server (own state dir, port
    18080; the port guard itself now REFUSES to start the run at all when `ss`
@@ -25,18 +25,13 @@ lifecycle: legacy-layout migration, async create
    sticky stop (close 4002 refusal vs `?boot=1` revive), settings,
    persistence across container destruction, UUID identity + friendly
    rename, wipe, and (since ADR-062) the seeded agent harness, which since
-   ADR-073 comes from a scratch HARNESS CHANNEL the suite delivers before the
-   server starts (`make-scratch-harness.sh <outdir> <image> [<tag>]`: a
-   signed `v1.0.0` on a scratch origin built from `image/harness/`, exported,
-   smoked in the image and swapped in by `styrman-update harness` in test
-   mode, all under the run's state dir; the server gets it as
-   `STYRMAN_HARNESS_DIR`): the server's start-up line names its tag and
-   commit; in the guest `/styrman/harness/COMMIT` equals the host's
-   `current`, the mount is read-only even for root, `/styrman/bin/sh-agent`
-   is the channel's binary by sha256, no `.git`, and the boot log's `source
-   channel tag v1.0.0`; `sh-agent status` no drift and labelling the mount a
-   plain copy (never rebuilt, never a git call — harness BUG-015), the
-   two-line `CLAUDE.md`, 27 skills / 7 agy agents, the boot log's `agent
+   ADR-074 is the image's own `sh-agent` release binary (no scratch channel,
+   no mirror: the image under test carries the release its Dockerfile
+   pins): in the guest the image's `sh-agent version` is a canonical
+   `vX.Y.Z`, `~/.local/bin/sh-agent` reports the same release, the manifest
+   records `embedded:vX.Y.Z`, `sh-agent status` from the home's binary
+   reports no drift, the seeded skill and agy-agent counts equal the
+   binary's own `list`, the two-line `CLAUDE.md`, the boot log's `agent
    harness deployed` line at the channel's commit, the stamp equal to
    version+commit, no previous-harness artifacts; and, in the stop+delete
    section, the channel swapped to `v1.0.1` while the VM is stopped and the
@@ -80,9 +75,10 @@ lifecycle: legacy-layout migration, async create
    - type `exit` in a shell conversation → "session exited" (4000)
    - resize the window → TUI reflows (tmux + ContainerExecResize)
 4. **Browser e2e (Playwright)** — see the Tier 4 section below.
-5. **Vendored agent harness (`image/harness/`)** — see the Tier 5 section
-   below: the in-guest assertions are Tier 2 checks since ADR-062; what
-   remains manual is the mirror refresh itself and the agent-CLI smoke.
+5. **Agent harness in the image (`/styrman/bin/sh-agent`)** — see the Tier 5
+   section below: the in-guest assertions are Tier 2 checks since ADR-062;
+   what remains manual is the guard controls on a Dockerfile change and the
+   agent-CLI smoke.
 6. **Security (govulncheck)** — `bash deploy/vulncheck.sh`. Runs
    `govulncheck@v1.7.0` for BOTH Go modules (root, and the vendored Caddy
    ingress at `deploy/caddy/ingress`) inside the SAME pinned `golang`
@@ -120,7 +116,7 @@ lifecycle: legacy-layout migration, async create
 - Both `integration.sh` and `web/e2e/run.sh` now run
   `.agents/docs/testing/styrman/ensure-test-image.sh <tag>` FIRST (TODO
   close-out 2026-09-10, item L): it rebuilds `styrman-runtime:test` when the
-  image is missing or `image/` (excluding `image/harness/.git`) has a file
+  image is missing or `image/` has a file
   newer than the image's `Created` timestamp, so a stale `:test` tag can
   never masquerade as a source regression (BUG-026). `STYRMAN_TEST_IMAGE_NO_REBUILD=1`
   skips the check entirely for fast iteration. It refuses to rebuild a
@@ -387,18 +383,20 @@ To point the Playwright checks at an already-running server instead, call
 `node web/e2e/run.mjs [--base http://127.0.0.1:8080] [--shots /tmp/styrman-shots]`
 directly.
 
-## Tier 5 — Vendored agent harness (`image/harness/`)
+## Tier 5 — Agent harness in the image (`/styrman/bin/sh-agent`, ADR-074)
 
-The image carries a verbatim mirror of `styrman-harness` at the commit in
-`image/harness/COMMIT` and the `sh-agent` binary built from it; the
-entrypoint seeds every project home with `sh-agent install` (write-once,
-keyed on `/styrman/VERSION`), after `image/configs/harness-migrate.sh` has
-moved a previous harness's artifacts to `~/.styrman/harness-backup-<ts>/`
-(ADR-062; plan `plans/2026-09-03-image-harness-replacement.md`). Fires on
-every mirror refresh and every `STYRMAN_VERSION` bump.
+The image carries the `styrman-harness` RELEASE binary named by
+`image/Dockerfile`'s `ARG HARNESS_VERSION`, downloaded from GitHub Releases
+at build and verified against the harness's signer; the entrypoint seeds
+every project home with `sh-agent install` (write-once, keyed on
+`/styrman/VERSION` plus the binary's release), after
+`image/configs/harness-migrate.sh` has moved a previous harness's artifacts
+to `~/.styrman/harness-backup-<ts>/`, and never over a home whose manifest
+names a newer release (the user's `sh-agent update` inside the project).
+Fires on every `HARNESS_VERSION` bump and every `STYRMAN_VERSION` bump.
 
-Automated (Tier 2, `integration.sh`, eight checks inside the booted project,
-plus six browser checks added 2026-09-11 for ADR-068 — guest side: the
+Automated (Tier 2, `integration.sh`, inside the booted project, plus the
+browser checks added 2026-09-11 for ADR-068 — guest side: the
 `styrman-browser` MCP server is registered in `~/.claude.json` and
 `~/.gemini/config/mcp_config.json` (both asserted with `jq` on the command
 field, agy's also on `disabled == false`); `styrman-browser start` as the
@@ -408,46 +406,46 @@ reads the live process's cmdline and fails on `--no-sandbox`; `stop` leaves
 9229 while a bare-exec'd browser listens (loopback-only by design without a
 peer), `/proxy/{id}/9222/` and the share PUT answer 400, and the owner's
 status/start/stop routes round-trip with the 9222 forwarder up and hidden):
-`sh-agent status` exits 0 with no drift and its `repo` line reads
-`/styrman/harness (plain copy, not its own git checkout; update is refused)`
-(the mirror has no `.git`, so install never rebuilds and never runs git —
-harness BUG-015); the boot log carries `agent harness deployed (version
-<image VERSION>, styrman-harness <COMMIT sha7>)` — install's own stdout is
-kept only for its `settings:` lines, which the boot log carries; the
-`agent harness deployed` line remains the in-guest proof install succeeded;
-`~/.claude/CLAUDE.md` is the
-two-line import stub; 27 skills and 7 agy agents; none of `~/.agents/bin`,
-`~/.gemini/GEMINI.md`; `~/.claude/settings.json` holds exactly the
-`attribution` key (one `"attribution"` match) and nothing else the harness
-wrote — the boot log's `settings: /home/<user>/.claude/settings.json created
-with …` line and the `jq -e` assertion on the guest file are both Tier 2
-checks (ADR-072); the persistence-section checks (BUG-062) separately prove
-that when a non-regular file sits at `settings.json` at recreate time, the
-boot log instead carries `note: /home/<user>/.claude/settings.json is not a
-regular file, so the attribution setting could not be checked` and the seed
-still completes around the refused key; boot→ready under R1's 15 s
-hard limit from the container's own timestamps (the value is printed — watch
-it against the 5 s soft target; ~2.7 s measured 2026-09-01 on the old
-harness, the new install is ~0.02 s on the host).
+the image's `sh-agent version` is a canonical `vX.Y.Z`; the home's
+`~/.local/bin/sh-agent` reports the same release; `~/.config/sh-agent/state.json`
+records `"repo": "embedded:vX.Y.Z"` (the shape the entrypoint's never-downgrade
+guard reads); `sh-agent status` from the home's binary exits 0 with no drift;
+the seeded skill and agy-agent counts equal the binary's own `sh-agent list`;
+the boot log carries `agent harness deployed (version <image VERSION>,
+sh-agent vX.Y.Z;` — install's own stdout is kept only for its `settings:`
+lines, which the boot log carries; the `agent harness deployed` line remains
+the in-guest proof install succeeded; `~/.claude/CLAUDE.md` is the two-line
+import stub; none of `~/.agents/bin`, `~/.gemini/GEMINI.md`;
+`~/.claude/settings.json` holds exactly the `attribution` key (one
+`"attribution"` match) and nothing else the harness wrote — the boot log's
+`settings: /home/<user>/.claude/settings.json created with …` line and the
+`jq -e` assertion on the guest file are both Tier 2 checks (ADR-072); the
+persistence-section checks (BUG-062) separately prove that when a
+non-regular file sits at `settings.json` at recreate time, the boot log
+instead carries `note: /home/<user>/.claude/settings.json is not a regular
+file, so the attribution setting could not be checked` and the seed still
+completes around the refused key; the stop+delete section's never-downgrade
+case plants `embedded:v99.0.0` into the stopped project's manifest from the
+host, clears the stamp, boots, and asserts the `left alone` log line, a
+`kept` pass line with no new `deployed` line, the binary and manifest
+untouched and the stamp rewritten; boot→ready under
+R1's 15 s hard limit from the container's own timestamps (the value is
+printed — watch it against the 5 s soft target; ~2.7 s measured 2026-09-01
+on the old harness, the new install is ~0.02 s on the host).
 
-Manual, on every mirror refresh:
+Manual, on every `HARNESS_VERSION` bump:
 
-1. Mirror fidelity: `diff -rq --exclude .git --exclude .agents --exclude
-   .gitignore ~/workspace/styrman-harness image/harness` → exactly three
-   lines, `Only in image/harness: COMMIT`, `Only in image/harness:
-   SHA256SUMS` and `Only in image/harness: VENDORED.md`; `cat
-   image/harness/COMMIT` equals `git -C ~/workspace/styrman-harness
-   rev-parse HEAD` (the refresh procedure is `image/harness/VENDORED.md`
-   § Refresh; `sha256sum -c SHA256SUMS` in the mirror is what
-   `deploy/verify-commit.sh` checks).
-2. Image contents: `docker run --rm --entrypoint /styrman/bin/sh-agent
-   <image> list --repo /styrman/harness` shows `Skills (27)` and
-   `Subagents (7)`; `docker run --rm --entrypoint /styrman/bin/sh-agent
-   <image> install --dry-run --repo /styrman/harness --home /check` prints
-   `[dry-run] plain copy, not its own git checkout: the running binary
-   would be installed as is` (the mirror has no `.git`; harness BUG-015);
-   `docker run --rm --entrypoint sh <image> -c 'cat
-   /styrman/harness/COMMIT; ls /styrman/configs/harness-migrate.sh'`.
+1. Image contents: `docker run --rm --entrypoint /styrman/bin/sh-agent
+   <image> version` prints `sh-agent <HARNESS_VERSION>` (what
+   `deploy/verify-commit.sh` asserts on the release path);
+   `docker run --rm --entrypoint /styrman/bin/sh-agent <image> list` shows
+   the release's `Skills (N)` and `Subagents (N)`; `docker run --rm
+   --entrypoint sh <image> -c 'ls /styrman/configs/harness-migrate.sh'`.
+2. Guard controls, once per Dockerfile change: a build with
+   `--build-arg HARNESS_SIGNER='<a wrong key line>'` fails at `ssh-keygen -Y
+   verify` (`Could not verify signature.`); a build with
+   `--build-arg HARNESS_VERSION=<an older published release>` builds and its
+   `version` prints that release.
 3. Old-home migration on the host, no VM (the exact procedure, with the
    asserted outcomes, is `testing/2026-09-03-verify-harness-phase2.md`): seed
    a scratch home with `git archive v1.19.1 image/harness`'s `setup.sh`,

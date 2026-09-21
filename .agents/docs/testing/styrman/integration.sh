@@ -73,23 +73,9 @@ cd "${REPO}"
 go build -o "${STATE}/styrman" ./cmd/styrman/
 go build -o "${STATE}/wsprobe" ./cmd/wsprobe/
 
-say "harness channel (ADR-073: a scratch channel, signed and delivered the production way)"
-# make-scratch-harness.sh runs `styrman-update harness` in test mode against
-# ${STATE}/harness-channel: a signed v1.0.0 on a scratch origin built from
-# image/harness/, exported, smoked in ${IMAGE}, swapped in as content/current.
-# The server below mounts it into the project (STYRMAN_HARNESS_DIR); the
-# harness section asserts the guest sees the channel, not the image's copy,
-# and the stop+delete section swaps it to v1.0.1 while the VM is stopped.
-HARNESS_OUT="${STATE}/harness-channel"
-HARNESS_CUR="$(bash "${REPO}/.agents/docs/testing/styrman/make-scratch-harness.sh" "${HARNESS_OUT}" "${IMAGE}" 2>"${STATE}/harness-channel.log" | tail -1 || true)"
-check "scratch channel delivered v1.0.0 (make-scratch-harness.sh; log: ${STATE}/harness-channel.log)" \
-    "[ -L '${HARNESS_CUR}' ] && [ \"\$(cat '${HARNESS_CUR}/repo/TAG')\" = v1.0.0 ]"
-HARNESS_C1="$(cat "${HARNESS_CUR}/repo/COMMIT" 2>/dev/null || true)"
-
 say "start server (state=${STATE}, port=${PORT})"
 mkdir -p "${STATE}/home/projects"   # legacy layout: exercises the migration
 STYRMAN_STATE_DIR="${STATE}" STYRMAN_IMAGE="${IMAGE}" STYRMAN_ADDR="127.0.0.1:${PORT}" \
-    STYRMAN_HARNESS_DIR="${HARNESS_C1:+${HARNESS_OUT}/content}" \
     "${STATE}/styrman" > "${STATE}/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 20); do
@@ -101,8 +87,6 @@ check "embedded SPA served" "curl -fsS ${API}/ | grep -q '<title>crew</title>'"
 check "SPA deep-link fallback" "curl -fsS ${API}/p/x/1 | grep -q '<title>crew</title>'"
 check "unknown API path is a JSON 404" \
     "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/api/nope) = 404 ]"
-check "server start logged the harness channel (tag v1.0.0, its commit)" \
-    "grep -q '\"msg\":\"harness channel\"' ${STATE}/server.log && grep -q '\"tag\":\"v1.0.0\"' ${STATE}/server.log && grep -q '\"commit\":\"${HARNESS_C1}\"' ${STATE}/server.log"
 
 say "create project (boots microVM, git init)"
 T0=$(date +%s)
@@ -125,65 +109,40 @@ check "git repo initialized" "docker exec ${CN} test -d /home/$(id -un)/projects
 check "in-guest dockerd runs overlay2" \
     "docker exec ${CN} docker info --format '{{.Driver}}' | grep -q overlay2"
 
-say "agent harness (ADR-062/ADR-073: sh-agent seeded write-once from the mounted channel)"
+say "agent harness (ADR-074: the image's sh-agent release binary, installed write-once into the home)"
 GH="/home/${ME}"
-# The stamp is version+commit (ADR-073): read once from the guest, as the
+# The stamp is version+release (ADR-074): read once from the guest, as the
 # entrypoint composes it, and compared verbatim below and after the recreate.
-HID="$(docker exec "${CN}" sh -c 'printf "%s+%s" "$(cat /styrman/VERSION)" "$(cat /styrman/harness/COMMIT)"' 2>/dev/null || true)"
-check "guest /styrman/harness is the channel's export (COMMIT equals the host's current)" \
-    "[ -n '${HARNESS_C1}' ] && [ \"\$(docker exec ${CN} cat /styrman/harness/COMMIT)\" = '${HARNESS_C1}' ]"
-check "guest /styrman/harness is read-only (a :ro bind, even for root)" \
-    "! docker exec ${CN} touch /styrman/harness/.probe 2>/dev/null"
-# The :ro is enforced on the HOST side of the virtiofs share, not only as a
-# guest mount flag: guest root (CAP_SYS_ADMIN, apparmor off) can flip the
-# guest's mount to rw, and the write still fails — and nothing lands in the
-# host's export (security review 2026-09-16; the rw control: the same touch
-# on a :rw bind succeeds).
-# The remount's own outcome is REPORTED in the check's name (remounted-rw, or
-# remount-refused), never folded into the verdict: the property under test
-# is that the write fails and nothing lands on the host, and the name says
-# whether the guest got as far as a rw flag (a kernel that refuses the
-# remount proves a stronger property, not a weaker one — security review
-# 2026-09-16, round 3). Must-fail state: the same touch on a :rw bind
-# succeeds (the rw control, deploy.md).
-RM_OUT="$(docker exec "${CN}" sh -c 'mount -o remount,rw /styrman/harness 2>/dev/null && grep -qE " /styrman/harness [^ ]+ rw[, ]" /proc/mounts && echo remounted-rw || echo remount-refused' 2>/dev/null || echo remount-probe-failed)"
-check "guest cannot write the channel after a rw remount attempt (${RM_OUT}; host-side ro, R12)" \
-    "! docker exec ${CN} touch /styrman/harness/.probe 2>/dev/null && ! test -e '${HARNESS_OUT}/content/current/repo/.probe'"
-check "guest sh-agent is the channel's binary (sha256 equals content/current/bin/sh-agent)" \
-    "[ \"\$(docker exec ${CN} sha256sum /styrman/bin/sh-agent | cut -d' ' -f1)\" = \"\$(sha256sum '${HARNESS_OUT}/content/current/bin/sh-agent' | cut -d' ' -f1)\" ]"
-check "no .git in the mounted harness (a plain copy, as the mirror was)" \
-    "! docker exec ${CN} test -e /styrman/harness/.git"
-# The two `source channel tag` log greps (here and after the swap) are
-# diagnostics of the entrypoint's contract: the guest owns that stdout, so the
-# EVIDENCE that the channel was mounted is the neighbouring checks — the
-# guest's COMMIT equals the host's current, the binary's sha256, no .git
-# (security review 2026-09-16).
-check "boot log names the channel as the harness source (tag v1.0.0)" \
-    "docker logs ${CN} 2>&1 | grep -F 'source channel tag v1.0.0' >/dev/null"
+HREL="$(docker exec "${CN}" sh -c '/styrman/bin/sh-agent version | cut -d" " -f2' 2>/dev/null || true)"
+HID="$(docker exec "${CN}" sh -c 'printf "%s+%s" "$(cat /styrman/VERSION)" "$(/styrman/bin/sh-agent version | cut -d" " -f2)"' 2>/dev/null || true)"
+check "image sh-agent is a release binary (version is a canonical vX.Y.Z)" \
+    "printf '%s' '${HREL}' | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'"
+# install copies the running binary into the home: that copy is what the
+# shell resolves (~/.local/bin is first on PATH, skel/bashrc) and what
+# `sh-agent update` later replaces. Same release as the image's on a fresh seed.
+check "home sh-agent (~/.local/bin) is the image's release" \
+    "[ \"\$(docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} ${GH}/.local/bin/sh-agent version)\" = 'sh-agent ${HREL}' ]"
+# The manifest names the release the harness came from — the shape the
+# entrypoint's never-downgrade guard reads (embedded:vX.Y.Z, a path would be
+# a pre-ADR-074 install).
+check "manifest records the embedded release (state.json repo = embedded:${HREL})" \
+    "docker exec ${CN} runuser -u ${ME} -- jq -e '.repo == \"embedded:${HREL}\"' ${GH}/.config/sh-agent/state.json >/dev/null"
 check "sh-agent reports no drift in the project home" \
-    "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/sh-agent status --repo /styrman/harness --home ${GH} >/dev/null"
+    "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} ${GH}/.local/bin/sh-agent status --home ${GH} >/dev/null"
 check "CLAUDE.md is the two-line import stub" \
     "docker exec ${CN} grep -qx '@AGENTS.md' ${GH}/.claude/CLAUDE.md"
-check "27 skills and 7 agy agents seeded" \
-    "[ \"\$(docker exec ${CN} sh -c 'ls ${GH}/.claude/skills | wc -l')\" = 27 ] && [ \"\$(docker exec ${CN} sh -c 'ls ${GH}/.gemini/config/agents | wc -l')\" = 7 ]"
-# The mirror has no .git, so the harness installs it as a plain copy: never a
-# `go build` in a root-owned tree, never a git call (harness BUG-015, fixed in
-# 2c8990e). `status` labels it so; the boot log's own pass line names the
-# mirror commit (of install's stdout only its settings.json lines reach the
-# boot log, so the pass line is still the in-guest evidence that install
-# succeeded this boot). The commit it must
-# name is the one THIS tree pins, read from the host file — not from the
-# container, which would compare a constant with itself (review 2026-09-14);
-# ensure-test-image is what makes the image and the tree the same commit.
-# Both values are captured first and length-checked so a failed read cannot
-# leave a truncated pattern that still matches.
-# `grep -F … >/dev/null`, never `grep -q`: under this script's pipefail a -q
-# that exits on the first line leaves the writer with SIGPIPE (141) and the
-# pipeline red on a matching output (BUG-057).
-check "sh-agent status labels the mounted harness a plain copy" \
-    "docker exec ${CN} runuser -u ${ME} -- env HOME=${GH} /styrman/bin/sh-agent status --repo /styrman/harness --home ${GH} | grep -F '/styrman/harness (plain copy, not its own git checkout; update is refused)' >/dev/null"
-check "boot log records the harness deployed at the channel's commit" \
-    "c=\"\$(cut -c1-7 '${HARNESS_OUT}/content/current/repo/COMMIT')\" && v=\"\$(docker exec ${CN} cat /styrman/VERSION)\" && [ \${#c} = 7 ] && [ -n \"\$v\" ] && docker logs ${CN} 2>&1 | grep -F \"agent harness deployed (version \$v, styrman-harness \$c\" >/dev/null"
+# The seeded roster equals what the binary carries: the counts come from the
+# binary's own `list` and from the directories, never from a constant.
+check "skills and agy agents seeded equal the binary's inventory" \
+    "n=\"\$(docker exec ${CN} /styrman/bin/sh-agent list | sed -n 's/^### Skills (\\([0-9]*\\))$/\\1/p')\" && a=\"\$(docker exec ${CN} /styrman/bin/sh-agent list | sed -n 's/^### Subagents (\\([0-9]*\\))$/\\1/p')\" && [ -n \"\$n\" ] && [ -n \"\$a\" ] && [ \"\$(docker exec ${CN} sh -c 'ls ${GH}/.claude/skills | wc -l')\" = \"\$n\" ] && [ \"\$(docker exec ${CN} sh -c 'ls ${GH}/.gemini/config/agents | wc -l')\" = \"\$a\" ]"
+# The boot log's own pass line names the release (of install's stdout only
+# its settings.json lines reach the boot log, so the pass line is still the
+# in-guest evidence that install succeeded this boot). Both values are
+# captured first and length-checked so a failed read cannot leave a
+# truncated pattern that still matches. `grep -F … >/dev/null`, never
+# `grep -q` (BUG-057).
+check "boot log records the harness deployed from the image's sh-agent release" \
+    "v=\"\$(docker exec ${CN} cat /styrman/VERSION)\" && [ -n \"\$v\" ] && [ -n '${HREL}' ] && docker logs ${CN} 2>&1 | grep -F \"agent harness deployed (version \$v, sh-agent ${HREL};\" >/dev/null"
 # ADR-072 (BUG-061): the harness now WRITES one file outside its own
 # directories — ~/.claude/settings.json with the attribution key — and the
 # entrypoint logs the installer's line about it; both are asserted, and the
@@ -200,9 +159,9 @@ say "browser (ADR-068: one headless Chromium per project, MCP-registered for bot
 # tools' OWN MCP registries, not settings.json (ADR-062 D8 still holds).
 # The harness stamp is what makes the next boot skip re-seeding; its write
 # passes the id as an argument (audit 2026-09-13), so it must equal the
-# image's VERSION plus the mounted harness's COMMIT exactly (ADR-073) — a
-# quoting slip would show here as a mismatch or a missing stamp.
-check "harness stamp equals version+commit after boot" \
+# image's VERSION plus the binary's release exactly (ADR-074) — a quoting
+# slip would show here as a mismatch or a missing stamp.
+check "harness stamp equals version+release after boot" \
     "v=\"\$(docker exec ${CN} cat ${GH}/.styrman/.harness-version)\" && [ -n \"\$v\" ] && [ \"\$v\" = '${HID}' ]"
 check "browser MCP server registered for claude and agy" \
     "docker exec ${CN} sh -c 'jq -e \".mcpServers[\\\"styrman-browser\\\"].command == \\\"/styrman/bin/styrman-browser\\\"\" ${GH}/.claude.json >/dev/null && jq -e \".mcpServers[\\\"styrman-browser\\\"].command == \\\"/styrman/bin/styrman-browser\\\" and .mcpServers[\\\"styrman-browser\\\"].disabled == false\" ${GH}/.gemini/config/mcp_config.json >/dev/null'"
@@ -492,13 +451,6 @@ check "live duplicate name refused" "[ \"${NEW2}\" = 409 ]"
 say "stop + delete (wipe)"
 curl -fsS -X POST "${API}/api/projects/${ID}/stop" >/dev/null
 check "container stopped" "! docker ps --format '{{.Names}}' | grep -q ${CN}"
-# ADR-073, plan Risk (b): Docker re-resolves a bind SOURCE on every start,
-# so a channel swapped while the VM is stopped is what the next start mounts
-# — no recreate, the container keeps its binds on the unresolved `current`.
-HARNESS_CUR2="$(bash "${REPO}/.agents/docs/testing/styrman/make-scratch-harness.sh" "${HARNESS_OUT}" "${IMAGE}" v1.0.1 2>>"${STATE}/harness-channel.log" | tail -1 || true)"
-HARNESS_C2="$(cat "${HARNESS_OUT}/content/current/repo/COMMIT" 2>/dev/null || true)"
-check "scratch channel swapped current to v1.0.1 while the VM is stopped (a new commit)" \
-    "[ -L '${HARNESS_CUR2}' ] && [ \"\$(cat '${HARNESS_OUT}/content/current/repo/TAG')\" = v1.0.1 ] && [ -n '${HARNESS_C2}' ] && [ '${HARNESS_C2}' != '${HARNESS_C1}' ]"
 # BUG-063: Stop switches the restart policy off before the guest's own exit,
 # so the daemon does not restart the clean exit — the container ends exited
 # 0 with no restart on record, and its policy reads "no" while stopped. The
@@ -523,14 +475,40 @@ check "boot=1 reconnect boots the stopped VM" "echo '${OUT}' | grep -q revived"
 check "VM running again after boot=1" "docker ps --format '{{.Names}}' | grep -q ${CN}"
 check "start switched the restart policy back on (BUG-063)" \
     "[ \"\$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' ${CN})\" = unless-stopped ]"
-check "restarted VM mounts the swapped channel (guest COMMIT is v1.0.1's, Docker re-resolved current)" \
-    "[ \"\$(docker exec ${CN} cat /styrman/harness/COMMIT)\" = '${HARNESS_C2}' ] && docker exec ${CN} cat /styrman/harness/TAG | grep -qx v1.0.1"
-check "the swap re-seeded the home from the new tag (boot log: source channel tag v1.0.1)" \
-    "docker logs ${CN} 2>&1 | grep -F 'source channel tag v1.0.1' >/dev/null"
 # The BUG-062 undo above left the home without a stamp or a settings.json:
 # this boot seeds again and the file comes back with the key (ADR-072).
 check "re-seed after the BUG-062 undo recreates settings.json with the key" \
     "docker logs ${CN} 2>&1 | grep -F \"settings: ${GH}/.claude/settings.json created with\" >/dev/null && docker exec ${CN} runuser -u ${ME} -- jq -e '.attribution.commit == \"\" and .attribution.pr == \"\"' ${GH}/.claude/settings.json >/dev/null"
+# ADR-074 never-downgrade (plan D4): a home whose manifest names a NEWER
+# release than the image carries — what `sh-agent update` inside the project
+# leaves behind — is left alone by the next boot: no install, the binary and
+# manifest untouched, the stamp rewritten so it is not retried every boot.
+# Planted on the HOST as the owner while the VM is stopped (the shape the
+# Phase 1 smoke proved against the real binary's output), then restored.
+HOSTHOME="${STATE}/homes/${ME}/p/${ID}"
+curl -fsS -X POST "${API}/api/projects/${ID}/stop" >/dev/null
+check "stopped again for the never-downgrade case" "! docker ps --format '{{.Names}}' | grep -q ${CN}"
+SHA_BEFORE="$(sha256sum "${HOSTHOME}/.local/bin/sh-agent" | cut -d' ' -f1)"
+DEPLOYED_BEFORE="$(docker logs "${CN}" 2>&1 | grep -cF 'agent harness deployed (version' || true)"
+sed -i "s/\"repo\": \"embedded:${HREL}\"/\"repo\": \"embedded:v99.0.0\"/" "${HOSTHOME}/.config/sh-agent/state.json"
+rm -f "${HOSTHOME}/.styrman/.harness-version"
+check "manifest planted newer than the image (v99.0.0), stamp cleared" \
+    "grep -q '\"repo\": \"embedded:v99.0.0\"' '${HOSTHOME}/.config/sh-agent/state.json' && [ ! -e '${HOSTHOME}/.styrman/.harness-version' ]"
+OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/${TID}?cols=120&rows=30&boot=1" \
+    -send "echo revived2\r" -wait 8s || true)
+check "boot=1 boots the VM for the never-downgrade case" "echo '${OUT}' | grep -q revived2"
+check "boot log says the newer home was left alone (no install, ADR-074)" \
+    "docker logs ${CN} 2>&1 | grep -F 'agent harness: home has sh-agent v99.0.0 (sh-agent update), image carries ${HREL}; left alone' >/dev/null"
+# The pass line of a skipped install says "kept", never "deployed": the
+# count of deployed lines is what it was before this boot (code review
+# 2026-09-21, finding 3).
+check "the left-alone boot logs 'kept', not a new 'deployed' line" \
+    "docker logs ${CN} 2>&1 | grep -F 'agent harness kept (version' >/dev/null && [ \"\$(docker logs ${CN} 2>&1 | grep -cF 'agent harness deployed (version')\" = '${DEPLOYED_BEFORE}' ]"
+check "home sh-agent and manifest untouched by the boot" \
+    "[ \"\$(sha256sum '${HOSTHOME}/.local/bin/sh-agent' | cut -d' ' -f1)\" = '${SHA_BEFORE}' ] && grep -q '\"repo\": \"embedded:v99.0.0\"' '${HOSTHOME}/.config/sh-agent/state.json'"
+check "stamp rewritten after the left-alone boot (not retried every boot)" \
+    "[ \"\$(cat '${HOSTHOME}/.styrman/.harness-version')\" = '${HID}' ]"
+sed -i "s/\"repo\": \"embedded:v99.0.0\"/\"repo\": \"embedded:${HREL}\"/" "${HOSTHOME}/.config/sh-agent/state.json"
 # Re-enable LAN mode right before the delete so the destroy path is
 # exercised on a LAN project, not only a sandboxed one.
 # Checked, not bare: under `set -euo pipefail` a 503 here aborted the whole

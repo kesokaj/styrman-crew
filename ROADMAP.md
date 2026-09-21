@@ -11,8 +11,7 @@ matching empty-slate Inbox and **ADR-045**
 closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
-<!-- Nothing in progress. The harness channel (ADR-073) shipped as v1.35.0 on
-2026-09-16; its plan is closed (.agents/docs/plans/2026-09-16-harness-channel.md). -->
+- `.agents/docs/plans/2026-09-21-sh-agent-release-binary.md` — the harness reaches a project as the sh-agent release binary (in progress)
 
 ## Next
 

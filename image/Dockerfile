@@ -1,17 +1,9 @@
 # styrman-runtime — the per-project microVM image (AMD64 only, R11/ADR-001).
 # Pure tooling: no server binary inside (ADR-002); the styrman server drives
 # everything via docker exec.
-# sh-agent, the harness installer, is built from the vendored styrman-harness
-# mirror (harness/, see harness/VENDORED.md) in a builder stage pinned to the
-# same Go toolchain as deploy/Dockerfile.server. Static binary; the runtime
-# stage only copies it (ADR-062).
-FROM golang:1.25.13-trixie@sha256:6be3daa12135c38c177e2fbbf38ef2ad000d09b34bfa9f73dd7ca785bff134a5 AS harness-builder
-WORKDIR /src
-COPY harness/ /src/
-# GOPROXY=off: the module has no requirements; make that a build failure,
-# not a network fetch, if it ever changes.
-RUN CGO_ENABLED=0 GOTOOLCHAIN=local GOPROXY=off go build -trimpath -ldflags='-s -w' -o /out/sh-agent ./cmd/sh-agent
-
+# sh-agent, the agent harness installer with the harness embedded, is the
+# styrman-harness RELEASE binary named by HARNESS_VERSION, downloaded from
+# GitHub Releases below and verified against the harness's signer (ADR-074).
 FROM debian:trixie@sha256:6788062a1b42ac281f053ac876170b79a3eaed5d61383b8ed7eaca6c6965f3b1
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -145,6 +137,28 @@ RUN mkdir -p /styrman && apt-get update && apt-get install --no-install-recommen
     && npm ls -g --all --json > /styrman/npm-global.tree.json \
     && chromium --version && chrome-devtools-mcp --help >/dev/null
 
+# Agent harness (R5/ADR-074): the sh-agent release binary, harness embedded.
+# The repository is private, so the download takes a GitHub token as a BUILD
+# SECRET (never a layer): `--secret id=gh_token,env=GH_TOKEN` locally, the
+# updater's token file on the host. The signed SHA256SUMS must name exactly
+# HARNESS_VERSION and the binary must report it: a genuinely signed OLDER
+# release would otherwise pass (the harness's README § Install without
+# cloning). HARNESS_VERSION must be a canonical vX.Y.Z — only such a build
+# installs the harness built into it. Nothing but the binary stays.
+ARG HARNESS_VERSION=v1.6.0
+ARG HARNESS_SIGNER='ostling.simon@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBkx0BICH1xG18f0a0F/02Vw0OvBTfSOVNXkPkO62NCR'
+RUN --mount=type=secret,id=gh_token,required=true \
+    set -eu; mkdir -p /styrman/bin; d="$(mktemp -d)"; cd "$d"; \
+    GH_TOKEN="$(cat /run/secrets/gh_token)" gh release download "${HARNESS_VERSION}" --repo kesokaj/styrman-harness \
+        --pattern sh-agent-linux-amd64 --pattern SHA256SUMS --pattern SHA256SUMS.sig --dir "$d"; \
+    printf '%s\n' "${HARNESS_SIGNER}" > allowed_signers; \
+    ssh-keygen -Y verify -f allowed_signers -I "${HARNESS_SIGNER%% *}" -n sh-agent-release -s SHA256SUMS.sig < SHA256SUMS; \
+    grep -qxF "# styrman-harness ${HARNESS_VERSION}" SHA256SUMS; \
+    grep -v '^#' SHA256SUMS | sha256sum -c - --ignore-missing; \
+    install -m 755 sh-agent-linux-amd64 /styrman/bin/sh-agent; \
+    test "$(/styrman/bin/sh-agent version)" = "sh-agent ${HARNESS_VERSION}"; \
+    cd /; rm -r "$d"
+
 # In-guest defaults: DNS template (Kata has no embedded Docker DNS) and a
 # package snapshot for drift debugging.
 RUN printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" > /etc/resolv.conf.styrman && \
@@ -156,22 +170,8 @@ COPY configs/ /styrman/configs/
 # source of truth since internal/dotfiles was removed); the entrypoint seeds
 # each per-project home write-once.
 COPY skel/ /styrman/skel/
-# Agent harness (claude + agy): a mirror of styrman-harness at harness/COMMIT
-# (R5/ADR-030, ADR-062) plus the sh-agent binary built from it above. The base
-# image carries identical defaults for every project; the entrypoint seeds
-# them into each home write-once with `sh-agent install`. See harness/VENDORED.md.
-COPY harness/ /styrman/harness/
-COPY --from=harness-builder /out/sh-agent /styrman/bin/sh-agent
 ARG STYRMAN_VERSION=0.0.0
-# The mirror in the image is built as a plain copy: .dockerignore keeps every
-# `.git` out of the build context, so no refresh can ship one here, and
-# sh-agent tells a checkout from a plain copy by exactly that entry (harness
-# BUG-015). That is the property the entrypoint's install path rests on — no
-# `go build` in this root-owned tree, no git call at boot — and why it needs
-# no assertion of its own (security review 2026-09-14, round 2: a `test ! -e`
-# here could never fire).
 RUN echo "${STYRMAN_VERSION}" > /styrman/VERSION && chmod +x /styrman/entrypoint.sh && \
-    chmod -R go-w /styrman/harness && \
     install -m 755 /styrman/configs/styrman-setup /usr/local/bin/styrman-setup && \
     install -m 755 /styrman/configs/styrman-git-credential /usr/local/bin/styrman-git-credential && \
     install -m 755 /styrman/configs/styrman-browser /styrman/bin/styrman-browser

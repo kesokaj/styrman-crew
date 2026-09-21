@@ -15,7 +15,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -131,7 +130,6 @@ func New(cfg *config.Config, logger *slog.Logger) (*Orchestrator, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	logHarnessChannel(logger, cfg.HarnessDir)
 	return &Orchestrator{docker: cli, cfg: cfg, logger: logger}, nil
 }
 
@@ -335,51 +333,6 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 			err = errdefs.NotFound(fmt.Errorf("recreated"))
 		}
 	}
-	// Harness channel (ADR-073): its two read-only binds are fixed at create,
-	// so a STOPPED container is rebuilt to gain them once the channel has
-	// delivered, or to drop them once the channel is absent or disabled —
-	// Docker creates a missing bind SOURCE as a root-owned real directory,
-	// which would plant current/repo and current/bin inside the content dir
-	// and turn current into a directory the channel can never swap again
-	// (a disabled channel names no dir to check, so its stale binds go the
-	// same way — review 2026-09-16). A present but REFUSED channel drops the
-	// binds too: its refusal reasons (a symlinked content dir, a real
-	// directory at current, a foreign owner, an escaping link, a
-	// half-export) are tamper or misconfiguration signatures, and a bind
-	// source the server would not mount fresh must not be re-resolved by
-	// Docker on start either (security review 2026-09-16); the WARN says
-	// why and the project boots from the image's mirror. So the rule is one
-	// comparison: the binds a STOPPED container carries must equal what
-	// harnessBinds answers now. A running container upgrades on its next
-	// stop/start, as with an image upgrade. The same binds go to the create
-	// below.
-	hbinds, herr := harnessBinds(o.cfg.HarnessDir)
-	if herr != nil && !errors.Is(herr, fs.ErrNotExist) {
-		o.logger.Warn("harness channel refused — the image's baked harness seeds this project", "project", project, "error", herr)
-	}
-	if err == nil && (insp.State == nil || !insp.State.Running) {
-		var got []string
-		if insp.HostConfig != nil {
-			got = harnessBindsOf(insp.HostConfig.Binds)
-		}
-		why := ""
-		switch {
-		case slices.Equal(got, hbinds):
-		case len(got) == 0:
-			why = "to mount the harness channel"
-		case len(hbinds) == 0:
-			why = "to drop the harness channel binds (channel absent, disabled or refused)"
-		default:
-			why = "to re-bind the harness channel at its current path"
-		}
-		if why != "" {
-			o.logger.Info("recreating stopped container "+why, "project", project)
-			if rerr := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); rerr != nil {
-				return "", fmt.Errorf("recreate for harness channel: %w", rerr)
-			}
-			err = errdefs.NotFound(fmt.Errorf("recreated"))
-		}
-	}
 	// Every path below hands the project home to Docker as a bind SOURCE:
 	// create passes it in Binds, and START re-resolves the stored, unresolved
 	// source on every start (verified on Engine 29.7.2) — so a symlink the
@@ -480,7 +433,6 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 			homePath:      phome,
 			workspacePath: ws,
 			workspaceDst:  "/home/" + opts.GuestUser + "/projects/" + opts.Dir,
-			harnessBinds:  hbinds,
 			extraEnv: []string{
 				config.EnvProject + "=" + project,
 				config.EnvProjectDir + "=" + opts.Dir,
@@ -954,10 +906,6 @@ type createSpec struct {
 	labels        map[string]string
 	noRestart     bool // ephemeral (setup VM): don't auto-restart after reboot
 	lan           bool // ADR-067 network mode; always false for system VMs
-	// harnessBinds: the harness channel's two read-only binds (ADR-073),
-	// from harnessBinds(); nil for the setup VM and when the channel is
-	// disabled, absent or refused (the image's baked harness seeds then).
-	harnessBinds []string
 }
 
 // createBridgeNetwork is the ONLY place a styrman bridge network is created.
@@ -1122,7 +1070,7 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 				if spec.workspacePath != "" {
 					b = append(b, spec.workspacePath+":"+spec.workspaceDst)
 				}
-				return append(b, spec.harnessBinds...)
+				return b
 			}(),
 			RestartPolicy: restartPolicy(spec.noRestart),
 			// Per-project sizing: 0 leaves Kata's own default (1 vCPU / 2 GB);

@@ -122,3 +122,143 @@ func TestStyrmanUpdateVerifyTagMarkers(t *testing.T) {
 		t.Fatalf("ungated verb: %v\n%s", err, out)
 	}
 }
+
+// The retired harness channel (ADR-073 → ADR-074): a host that still carries
+// the styrman-harness-update unit pair and the channel's state files sheds
+// them on every updater tick, through `retire_harness_units`, run here via
+// its test verb against scratch dirs with a fake systemctl first on PATH.
+// Timer first, then the service, then one daemon-reload; a second run finds
+// nothing and calls systemctl not at all; the hook is refused outside the
+// test gate.
+func TestStyrmanUpdateRetiresHarnessUnits(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("no bash on this host")
+	}
+	script, err := filepath.Abs("../../deploy/update/styrman-update")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	unitDir := filepath.Join(root, "units")
+	stateDir := filepath.Join(root, "state")
+	binDir := filepath.Join(root, "bin")
+	calls := filepath.Join(root, "systemctl.calls")
+	for _, d := range []string{unitDir, stateDir, binDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"" + calls + "\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "systemctl"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plant := func() {
+		t.Helper()
+		for _, f := range []string{"styrman-harness-update.service", "styrman-harness-update.timer"} {
+			if err := os.WriteFile(filepath.Join(unitDir, f), []byte("[Unit]\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, f := range []string{"harness-version", "harness-sha", "harness-failed-version", "harness-refused"} {
+			if err := os.WriteFile(filepath.Join(stateDir, f), []byte("x"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	runArgs := func(gated bool, extra ...string) (int, string) {
+		t.Helper()
+		cmd := exec.Command("bash", append([]string{script, "__retire-harness-units", unitDir, stateDir}, extra...)...)
+		cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+		if gated {
+			cmd.Env = append(cmd.Env, "STYRMAN_UPDATE_TEST=1")
+		}
+		out, err := cmd.CombinedOutput()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else if err != nil {
+			t.Fatalf("run: %v\n%s", err, out)
+		}
+		return code, string(out)
+	}
+	run := func(gated bool) (int, string) { t.Helper(); return runArgs(gated) }
+
+	plant()
+	if code, out := run(false); code == 0 || !strings.Contains(out, "test hooks are disabled") {
+		t.Fatalf("hook usable without STYRMAN_UPDATE_TEST=1: %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(unitDir, "styrman-harness-update.timer")); err != nil {
+		t.Fatalf("the refused hook still removed a unit: %v", err)
+	}
+
+	if code, out := run(true); code != 0 {
+		t.Fatalf("retire: %d\n%s", code, out)
+	}
+	for _, f := range []string{"styrman-harness-update.service", "styrman-harness-update.timer"} {
+		if _, err := os.Stat(filepath.Join(unitDir, f)); !os.IsNotExist(err) {
+			t.Fatalf("%s still present after retire (err=%v)", f, err)
+		}
+	}
+	for _, f := range []string{"harness-version", "harness-sha", "harness-failed-version", "harness-refused"} {
+		if _, err := os.Stat(filepath.Join(stateDir, f)); !os.IsNotExist(err) {
+			t.Fatalf("state file %s still present after retire (err=%v)", f, err)
+		}
+	}
+	got, err := os.ReadFile(calls)
+	if err != nil {
+		t.Fatalf("the fake systemctl was never called: %v", err)
+	}
+	want := "disable --now styrman-harness-update.timer\ndisable --now styrman-harness-update.service\ndaemon-reload\n"
+	if string(got) != want {
+		t.Fatalf("systemctl calls:\n%s\nwant:\n%s", got, want)
+	}
+
+	// Idempotent: nothing left to do, and systemctl is not touched.
+	if err := os.Remove(calls); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := run(true); code != 0 {
+		t.Fatalf("second retire: %d\n%s", code, out)
+	}
+	if _, err := os.Stat(calls); !os.IsNotExist(err) {
+		t.Fatalf("second run called systemctl (err=%v)", err)
+	}
+
+	// --check: reports and changes nothing — units, state files, systemctl.
+	plant()
+	if err := os.Remove(calls); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if code, out := runArgs(true, "--check"); code != 0 || !strings.Contains(out, "would remove") {
+		t.Fatalf("--check: %d\n%s", code, out)
+	}
+	for _, f := range []string{"styrman-harness-update.service", "styrman-harness-update.timer"} {
+		if _, err := os.Stat(filepath.Join(unitDir, f)); err != nil {
+			t.Fatalf("--check removed %s: %v", f, err)
+		}
+	}
+	for _, f := range []string{"harness-version", "harness-sha", "harness-failed-version", "harness-refused"} {
+		if _, err := os.Stat(filepath.Join(stateDir, f)); err != nil {
+			t.Fatalf("--check removed state file %s: %v", f, err)
+		}
+	}
+	if _, err := os.Stat(calls); !os.IsNotExist(err) {
+		t.Fatalf("--check called systemctl (err=%v)", err)
+	}
+
+	// An untrusted unit dir (group/world-writable) is refused: WARN, nothing removed.
+	if err := os.Chmod(unitDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := run(true); code != 0 || !strings.Contains(out, "harness-retire skipped") {
+		t.Fatalf("untrusted unit dir: %d\n%s", code, out)
+	}
+	for _, f := range []string{"styrman-harness-update.service", "styrman-harness-update.timer"} {
+		if _, err := os.Stat(filepath.Join(unitDir, f)); err != nil {
+			t.Fatalf("untrusted unit dir still lost %s: %v", f, err)
+		}
+	}
+	if _, err := os.Stat(calls); !os.IsNotExist(err) {
+		t.Fatalf("untrusted unit dir called systemctl (err=%v)", err)
+	}
+}

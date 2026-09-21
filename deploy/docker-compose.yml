@@ -90,12 +90,6 @@ services:
       # overridden — never a mutable tag (the 2026-09-01 audit caught the
       # testing guide silently re-stamping the :dev tag production booted).
       - STYRMAN_IMAGE=${STYRMAN_IMAGE:-styrman-runtime:${STYRMAN_VERSION}}
-      # Harness channel (ADR-073): the host's content dir, delivered by
-      # styrman-harness-update.timer; <dir>/current/{repo,bin/sh-agent} is
-      # bind-mounted read-only into every project VM when present and
-      # trusted (same path inside as on the host, through the /var/lib/styrman
-      # volume below). Absent = the image's baked mirror seeds projects (R5).
-      - STYRMAN_HARNESS_DIR=/var/lib/styrman/harness
       - STYRMAN_IDLE_TIMEOUT=${STYRMAN_IDLE_TIMEOUT:-8h}
       - STYRMAN_TRANSCRIPT_TTL=${STYRMAN_TRANSCRIPT_TTL:-720h}
       - HOME=/var/lib/styrman # user.Current() needs a home for uid lookups

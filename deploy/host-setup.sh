@@ -185,13 +185,6 @@ done
 mkdir -p "${STATE_DIR}/homes" "${STATE_DIR}/projects"
 chown -h "${OPERATOR}:${OPERATOR}" "${STATE_DIR}" "${STATE_DIR}/homes" "${STATE_DIR}/projects"
 log "state dir ready: ${STATE_DIR} (owner ${OPERATOR})"
-# ADR-073: the harness channel's content dir — ROOT-owned below the
-# operator-owned state root on purpose: the channel writes it as root and
-# every project mounts it read-only, so the dir itself is the trust boundary
-# (never a symlink; the channel and the server both assert that every run).
-if [[ -L "${STATE_DIR}/harness" ]]; then echo "FATAL: ${STATE_DIR}/harness is a symlink — refusing to provision through it"; exit 1; fi
-install -d -m 755 -o root -g root "${STATE_DIR}/harness"
-log "harness channel dir ready: ${STATE_DIR}/harness (root)"
 
 # ─── 5b. Deployment .env: computed identity values ──────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -240,7 +233,7 @@ docker pull -q debian:trixie >/dev/null
 GUEST=$(docker run --runtime mvm --rm debian:trixie uname -r)
 log "OK — guest kernel ${GUEST}, host kernel $(uname -r)"
 
-# ─── 7. Build the runtime image (image-only; no secrets needed) ──────────────
+# ─── 7. Build the runtime image (needs a GitHub token as a build secret) ─────
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # Versioned tag, never :latest (operator rule, no mutable tags): the version is
 # the newest release tag sans "v" — the SAME string compose interpolates into
@@ -259,7 +252,19 @@ if ! docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
     # STYRMAN_VERSION stamps /styrman/VERSION, which keys the write-once
     # harness seeding in each home — without it every build stamps 0.0.0 and
     # existing homes never re-seed (audit finding).
-    docker build -t "${RUNTIME_IMAGE}" \
+    # The image downloads the sh-agent release from the private styrman-harness
+    # repository (ADR-074): a token as a build SECRET, by the one rule every
+    # build site follows — GH_TOKEN, else /etc/styrman/gh-token, else stop.
+    SECRET_ARGS=()
+    if [ -n "${GH_TOKEN:-}" ]; then export GH_TOKEN; SECRET_ARGS=(--secret id=gh_token,env=GH_TOKEN)
+    elif [ -f /etc/styrman/gh-token ]; then
+        # The updater's own bar for this file (root-owned, no group/world access): a
+        # root build must not authenticate with a token another user controls.
+        [ "$(stat -c %u /etc/styrman/gh-token)" = 0 ] && [ -z "$(find /etc/styrman/gh-token -perm /077 2>/dev/null)" ] \
+            || { echo "FATAL: /etc/styrman/gh-token is not root-owned or is readable beyond root (chmod 600 it)"; exit 1; }
+        SECRET_ARGS=(--secret id=gh_token,src=/etc/styrman/gh-token)
+    else echo "FATAL: no GitHub token for the styrman-harness download — run with GH_TOKEN=\$(gh auth token) in the environment, or install /etc/styrman/gh-token (root, 600) first"; exit 1; fi
+    docker build -t "${RUNTIME_IMAGE}" "${SECRET_ARGS[@]}" \
         --build-arg STYRMAN_VERSION="${SETUP_VERSION}" \
         "${REPO_ROOT}/image" \
         || { echo "FATAL: runtime image build failed"; exit 1; }
@@ -280,11 +285,6 @@ fi
 install -m 755 "${SCRIPT_DIR}/update/styrman-update" /usr/local/bin/styrman-update
 install -m 644 "${SCRIPT_DIR}/update/styrman-update.service" /etc/systemd/system/
 install -m 644 "${SCRIPT_DIR}/update/styrman-update.timer" /etc/systemd/system/
-# The harness channel's unit pair (ADR-073): installed here, enabled by
-# `styrman-ctl update --setup --harness-token-file` once its clone and token
-# exist (and by the updater's host_converge from then on).
-install -m 644 "${SCRIPT_DIR}/update/styrman-harness-update.service" /etc/systemd/system/
-install -m 644 "${SCRIPT_DIR}/update/styrman-harness-update.timer" /etc/systemd/system/
 systemctl daemon-reload
 
 STYRMAN_DEPLOY_DIR="${STYRMAN_DEPLOY_DIR:-/opt/styrman}"

@@ -38,8 +38,12 @@ bash deploy/vulncheck.sh   # govulncheck for both modules inside the pinned buil
 cd web && npm run check && npm run lint && npm test   # tsc -b / oxlint / vitest — counts + scope: testing README's Tier 1
 cd -
 
-# Build runtime image (AMD64, local only)
-docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/  # the version keys harness re-seeding
+# Build runtime image (AMD64, local only). The image downloads the sh-agent
+# release named by image/Dockerfile's `ARG HARNESS_VERSION` from the private
+# styrman-harness repository, so the build takes a GitHub token as a build
+# SECRET (ADR-074); the version keys harness re-seeding
+GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN \
+  -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/
 bash image/bump-pins.sh [--apply]   # refresh the image's pinned Go/Node/claude-code versions + base digests from the publishers (ADR-069)
 
 # Run locally (loopback, no auth) / deploy production
@@ -54,7 +58,6 @@ STYRMAN_VERSION=<x.y.z> docker compose -f deploy/docker-compose.yml up -d --buil
 # builds/tests a detached worktree of that exact commit; see versioning.md's
 # "Release procedure"
 deploy/verify-commit.sh [commit-ish]   # default HEAD; SKIP_WEB_FRESHNESS=1 skips the npm-dependent steps
-sudo styrman-ctl update --setup --harness-token-file <file>   # harness channel (ADR-073): styrman-harness releases reach the host without a crew release
 
 # Test suites
 bash .agents/docs/testing/styrman/integration.sh   # vs real Kata; check counts live in .agents/docs/testing/styrman/README.md (the source of truth)
@@ -72,14 +75,15 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
 - Per-project Kata microVMs (runtime `mvm`), containers `styrman-<uuid>`;
   state from labels + per-user JSON stores (`/var/lib/styrman/users/<u>/`)
   — no database. Project creation is async (instant 201, background boot).
-- Agent harness delivery (ADR-073): the host's harness channel
-  (`styrman-update harness`, on its own timer) walks the `styrman-harness`
-  repo's tags down to the newest SSH-signed one that verifies against
-  `/etc/styrman/allowed_signers`, exports it, and the server bind-mounts
-  `/var/lib/styrman/harness/current` read-only into every project VM (never
-  the setup VM). The image's own `image/harness/` mirror is the fallback
-  when the channel has mounted nothing. Full mechanics:
-  `.agents/docs/specs/styrman/deploy.md` → "Harness channel (ADR-073)".
+- Agent harness delivery (ADR-074): the `sh-agent` release binary, harness
+  embedded, is downloaded from `kesokaj/styrman-harness` and verified at
+  image build time (`image/Dockerfile`, `ARG HARNESS_VERSION`); every
+  project seeds from it on first boot (`sh-agent install --home`, no repo
+  mount), and a user pulls a newer release into their own project any time
+  with `sh-agent update`. Superseded ADR-062's `image/harness/` mirror and
+  ADR-073's host harness channel. Full mechanics:
+  `.agents/docs/specs/styrman/deploy.md` → "Agent harness in the image
+  (ADR-074)".
 - Multi-tenant: identity from the ingress header → username slug; each
   PROJECT mounts its own home at `/var/lib/styrman/homes/<u>/p/<uuid>`
   (ADR-031); the setup VM's home is `homes/<u>/base`, and `homes/<u>` itself
@@ -174,7 +178,7 @@ Two targets exist: local (loopback dev run) and the production host. Procedures 
 | `internal/links/` | Public/private preview-link store |
 | `internal/credstore/`, `internal/credbroker/` | Credential broker: store + bridge-only HTTP (ADR-030/032) |
 | `internal/config/` | Env config, paths, operator-tunable settings |
-| `image/` | Runtime microVM image: Dockerfile, entrypoint, styrman-setup |
+| `image/` | Runtime microVM image: Dockerfile (downloads + verifies the `sh-agent` release at build time, ADR-074), entrypoint, styrman-setup |
 | `deploy/` | host-setup, compose, vendored caddy ingress, server Dockerfile |
 | `web/` | TanStack Start SPA (dist/client committed + embedded) |
 | `REQUIREMENTS.md` | Non-negotiable requirements (R1–R13) |

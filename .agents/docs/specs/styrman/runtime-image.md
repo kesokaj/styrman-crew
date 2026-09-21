@@ -226,56 +226,37 @@ Steps, in order:
 6. Seed the per-project home (ADR-031) write-once: shell
    dotfiles from `image/skel/` (`~/.bashrc`, `~/.profile`, `~/.bash_*`, and
    `~/.npmrc` — the last referencing `${NPM_TOKEN}` from the broker) and the
-   agent harness from `/styrman/harness`, which is one of two things
-   (ADR-073, source order): the host's harness channel export — the newest
-   SSH-signed `styrman-harness` tag the host verified, bind-mounted read-only
-   by the server at `/styrman/harness` (its tree, with `COMMIT`, `TAG` and
-   `SHA256SUMS`) and `/styrman/bin/sh-agent` (built on the host from that
-   tag, in this image's own pinned Go builder image) — or, when the server
-   mounted nothing (no channel delivered yet, or a channel it refused), the
-   image's own `image/harness/` — a verbatim mirror of the `styrman-harness`
-   repository at the commit in `image/harness/COMMIT` (refresh procedure in
-   `image/harness/VENDORED.md`; ADR-062, superseding ADR-046's source and
-   ADR-047's PATH trim; R5's fallback). The image builds `sh-agent` from
-   that mirror in a builder stage pinned to the same Go toolchain as
-   `deploy/Dockerfile.server` and ships it as `/styrman/bin/sh-agent`. The
-   entrypoint tells the two apart by `/styrman/harness/TAG`, which only a
-   channel export carries, and says which on its pass line: `agent harness
-   deployed (version <STYRMAN_VERSION>, styrman-harness <sha7>, source
-   channel tag <tag>; …)` or `… source image; …`. The
-   harness is 27 skills and 7 subagents (`bugs`, `changelog`,
-   `documentation`, `explorer`, `reviewer`, `security`, `verifier`) plus the
-   global context (`AGENTS.md`); `sh-agent install --repo /styrman/harness
-   --home <home>` copies it into `~/.claude` (`AGENTS.md`, a two-line
-   `CLAUDE.md` stub importing it, `skills/`, `agents/`) and
-   `~/.gemini/config` (`rules/AGENTS.md`, `skills/`, `agents/<name>/agent.md`
-   derived for `agy`), writes its manifest to `~/.config/sh-agent/state.json`,
-   and drops a copy of itself at `~/.local/bin/sh-agent` (`sh-agent status`
-   inside a project is the drift check; `sh-agent update` is not used in
-   VMs — the seed is the delivery path: the host's channel, or the image's
-   mirror as its fallback, ADR-073). It ships NO hooks, NO scripts, and
-   no settings file except the one `attribution` key in
-   `~/.claude/settings.json` (commit and PR trailers off, written only when
-   absent — ADR-072, the exception approved 2026-09-16; operator directive
-   2026-09-03 for the rest). Claude Code still runs in its default
-   permission mode inside a project. `install`
-   is a file copier — no network, no `agy`/`claude` call — and, the mirror
-   being a plain copy with no `.git`, it never rebuilds the binary with `go
-   build` and never runs git either (the harness's BUG-015 rule: only a
-   git checkout rebuilds itself; a plain copy installs the running binary
-   as is — `sh-agent status` in a project says so on its `repo` line, and
-   its manifest records no commit for the same reason); that is WHY the
-   ADR-047 PATH trim is gone and the copy takes 0.02 s into an empty home on
-   the host, and why the entrypoint's 20 s cap bounds only a stall. Write-once,
-   keyed on `<STYRMAN_VERSION>+<harness COMMIT>` (the image's `/styrman/VERSION`
-   plus the 40-hex `COMMIT` of whatever is at `/styrman/harness`) versus the
-   per-home `~/.styrman/.harness-version` stamp: bumping `STYRMAN_VERSION`
-   and rebuilding the image RE-SEEDS an already-onboarded project's home, and
-   so does a channel delivery — the server rebuilds a stopped VM to mount a
-   newly delivered channel, and Docker re-resolves the `current` symlink on
-   every start, so a swapped export is what the next boot mounts and its new
-   commit is what makes the stamp differ (ADR-073). A stamp written before
-   this release holds the version alone, differs once, and re-seeds once. A home seeded by the previous harness
+   agent harness from `/styrman/bin/sh-agent` — the `sh-agent` RELEASE
+   binary with the harness embedded, downloaded and verified at image build
+   time from `kesokaj/styrman-harness` (ADR-074, superseding ADR-062's
+   `image/harness/` mirror and ADR-073's host harness channel; mechanics:
+   `.agents/docs/specs/styrman/deploy.md` "Agent harness in the image
+   (ADR-074)"). The harness is 27 skills and 7 subagents (`bugs`,
+   `changelog`, `documentation`, `explorer`, `reviewer`, `security`,
+   `verifier`) plus the global context (`AGENTS.md`); `sh-agent install
+   --home <home>` (no `--repo` — the harness travels inside the binary)
+   copies it into `~/.claude` (`AGENTS.md`, a two-line `CLAUDE.md` stub
+   importing it, `skills/`, `agents/`) and `~/.gemini/config`
+   (`rules/AGENTS.md`, `skills/`, `agents/<name>/agent.md` derived for
+   `agy`), writes its manifest to `~/.config/sh-agent/state.json` with
+   `"repo": "embedded:vX.Y.Z"`, and drops a copy of itself at
+   `~/.local/bin/sh-agent`, first on `PATH` (`sh-agent status` inside a
+   project is the drift check; `sh-agent update`, run by the user inside a
+   project terminal, downloads and installs the newest release directly —
+   projects may end up on different harness releases from the image's own
+   and from each other). It ships NO hooks, NO scripts, and no settings
+   file except the one `attribution` key in `~/.claude/settings.json`
+   (commit and PR trailers off, written only when absent — ADR-072, the
+   exception approved 2026-09-16; operator directive 2026-09-03 for the
+   rest). Claude Code still runs in its default permission mode inside a
+   project. Write-once, keyed on `<image VERSION>+<sh-agent release>`
+   versus the per-home `~/.styrman/.harness-version` stamp: bumping either
+   the image `VERSION` or `HARNESS_VERSION` and rebuilding the image
+   RE-SEEDS an already-onboarded project's home on its next boot — unless
+   the home's manifest already names a release NEWER than the image's
+   (the user ran `sh-agent update`), in which case install is skipped and
+   the entrypoint logs `agent harness: home has sh-agent vA (sh-agent
+   update), image carries vB; left alone`. A home seeded by the previous harness
    (≤ v1.19.x: stamp present, no sh-agent manifest) is migrated first by
    `image/configs/harness-migrate.sh`, which MOVES every path the old
    `setup.sh` wrote — `~/.claude/{CLAUDE.md,settings.json,skills,agents,

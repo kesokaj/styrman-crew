@@ -2,14 +2,18 @@
 
 The per-project Kata microVM image: pure tooling, no server binary
 (ADR-002). The entrypoint seeds each project's OWN home write-once from
-`skel/` (dotfiles) and `harness/` (the agent harness — a mirror of
-`styrman-harness` at `harness/COMMIT`, installed by the `sh-agent` binary
-the Dockerfile builds from it into `~/.claude` and `~/.gemini/config`: global
-context, 27 skills, 7 subagents; no hooks, no scripts, no settings files —
-ADR-062; the mirror has no `.git`, so `sh-agent install` treats it as a plain
-copy — it never rebuilds the binary and never runs git (harness BUG-015); a home carrying the previous harness is migrated first by
+`skel/` (dotfiles) and installs the agent harness with `/styrman/bin/sh-agent`
+— the `styrman-harness` RELEASE binary, harness embedded (global context, 27
+skills, 7 subagents; no hooks, no scripts, no settings file but the one
+`attribution` key), downloaded from GitHub Releases at image build at the
+version `ARG HARNESS_VERSION` names and verified against the harness's
+signer (ADR-074, replacing the ADR-062 mirror and the ADR-073 channel).
+`sh-agent install` runs once per image version + harness release into each
+home and never downgrades a home whose user ran `sh-agent update` inside the
+project — that command is how a project moves to a newer harness between
+image bumps; a home carrying the pre-ADR-062 harness is migrated first by
 `configs/harness-migrate.sh`, which moves its artifacts to
-`~/.styrman/harness-backup-<ts>/`), sets up per-project Docker-in-Docker on
+`~/.styrman/harness-backup-<ts>/`, sets up per-project Docker-in-Docker on
 a loop-mounted ext4 disk, and
 installs the credential materialization snippet
 (`configs/styrman-credentials.sh`, ADR-032). Also carries the per-language
@@ -26,13 +30,19 @@ registers for `claude` and `agy` — the "Browser" section of the spec has the
 ports, sandbox and registration details.
 
 ```bash
-docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> .
+GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN \
+  -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> .
 ```
+
+The token is a build SECRET (never a layer) and must read the private
+`kesokaj/styrman-harness` repository; on the host the updater passes its own
+token file the same way. Bumping the harness a release ships is editing the
+`ARG HARNESS_VERSION=vX.Y.Z` line in the Dockerfile.
 
 `STYRMAN_VERSION` matters: it stamps `/styrman/VERSION`, which keys the
 write-once harness seeding in existing homes — a version bump is what
 RE-SEEDS an already-onboarded project (`sh-agent install` rewrites the files
-it manages and removes the ones it wrote that the harness has since dropped;
-`harness/VENDORED.md` has the refresh procedure).
+it manages and removes the ones it wrote that the harness has since dropped)
+— unless the home already holds a newer release than the image carries.
 
 Full spec: `../.agents/docs/specs/styrman/runtime-image.md`.

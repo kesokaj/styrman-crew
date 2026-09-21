@@ -15,10 +15,6 @@ Environment=STYRMAN_UPDATER_UNIT_DIR=/etc/systemd/system
 # Where host_converge installs the firewall script from the verified tag
 # (ADR-065; same ADR-052 shape). The units go to STYRMAN_UPDATER_UNIT_DIR.
 Environment=STYRMAN_FW_INSTALL_BIN=/usr/local/sbin/styrman-firewall.sh
-# ADR-073: where host_converge looks for the harness channel's clone before
-# enabling its timer (the channel's own unit pins the same path); the clone
-# is made by `styrman-ctl update --setup --harness-token-file`.
-Environment=STYRMAN_HARNESS_REPO_DIR=/opt/styrman-harness
 # The docker CLI insists on creating $DOCKER_CONFIG (/root/.docker by default)
 # and ProtectHome=yes (below) makes /root INACCESSIBLE and empty — which killed
 # the first real end-to-end deploy at `docker build`, and its rollback with it

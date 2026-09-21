@@ -27,15 +27,10 @@ Cloudflare DNS — `caddy/`) in front of the containerized server
 | Verb | Does |
 |---|---|
 | `status [--json]` | what is installed, deployed and running; exit 0 ok, 1 degraded, 2 nothing installed |
-| `install [--user U] [--version X.Y.Z] [--env-file F] [--gh-token-file F] [--allowed-signers-file F] [--harness-token-file F] [--skip-auto-update]` | `host-setup.sh`, the six must-fill `.env` keys (validated), build the runtime image, bring the stack up at the checkout's release tag (or `--version`), offer auto-update setup |
-| `update` / `update --redeploy` / `update --setup […] [--harness-token-file F]` | run one updater tick now; `--redeploy` forces the current tag and clears a latched failure; `--setup` performs the auto-update setup on its own (token, clone, `.env` copy, `allowed_signers`, timer) — the 8c prose below, as prompts; `--harness-token-file` also sets up the harness channel (ADR-073) |
+| `install [--user U] [--version X.Y.Z] [--env-file F] [--gh-token-file F] [--allowed-signers-file F] [--skip-auto-update]` | `host-setup.sh`, the six must-fill `.env` keys (validated), build the runtime image (the `--gh-token-file` token is also the docker build secret for the image's `sh-agent` download, ADR-074 — it must read `kesokaj/styrman-harness` too), bring the stack up at the checkout's release tag (or `--version`), offer auto-update setup |
+| `update` / `update --redeploy` / `update --setup […]` | run one updater tick now; `--redeploy` forces the current tag and clears a latched failure; `--setup` performs the auto-update setup on its own (token, clone, `.env` copy, `allowed_signers`, timer) — the 8c prose below, as prompts |
 | `edit [KEY=VALUE …] [--no-apply]` | edits `.env` (both copies when the clone exists, validated — a `KEY` not matching `[A-Z][A-Z0-9_]*` is refused outright) and recreates the stack at the deployed version |
 | `uninstall [--level 1|2|3] [--confirm WORD]` | tears down at one of three levels (below); prints the exact plan before asking |
-
-`status` also prints a `harness` line: the delivered tag and commit
-(`<tag> (<sha7>)`) plus the content dir, or "waiting for the first signed
-styrman-harness tag", or "not set up" with the `--harness-token-file`
-command to run — see the "harness channel" entry under `update/` below.
 
 Global flags: `--dry-run` prints every command a verb would run, as `+ cmd`,
 and runs nothing; `--yes` takes defaults and skips non-destructive
@@ -93,14 +88,11 @@ test-only internal verb exercising that same `verify_tag` function directly
 (prerequisites, signing, rollback): `../.agents/docs/specs/styrman/deploy.md`
 → Auto-update.
 
-The same `styrman-update` script also carries a `harness` verb — the
-harness channel (ADR-073) that delivers `styrman-harness` releases to the
-host without a crew release, run by its own
-`styrman-harness-update.service`/`.timer` pair (also installed by
-`host-setup.sh` step 8c, enabled by `styrman-ctl update --setup
---harness-token-file <file>` once its own dedicated clone and read-only
-GitHub token exist). The server side of the channel is separate: on every
-project create (and on rebuild of a stopped container) it bind-mounts
-`/var/lib/styrman/harness/current` read-only into the project VM whenever
-the content dir is present and trusted. Full mechanics: `../.agents/docs/specs/styrman/deploy.md`
-→ Auto-update → "Harness channel (ADR-073)".
+The agent harness (`styrman-harness`) no longer has a host channel or
+updater verb (ADR-073 deleted, superseded by ADR-074): the `sh-agent`
+release binary is downloaded and verified straight into the runtime image
+at build time (`image/Dockerfile`), and a project pulls a newer release
+itself with `sh-agent update`. The updater's `retire_harness_units` step
+runs on every tick to remove any leftover ADR-073 units and state on an
+upgrading host. Full mechanics: `../.agents/docs/specs/styrman/deploy.md`
+→ Auto-update → "Agent harness in the image (ADR-074)".

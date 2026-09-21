@@ -48,7 +48,7 @@ executes nothing.
 | `update` | `systemctl start styrman-update.service` (one tick now) + `journalctl -u styrman-update.service -n 20` |
 | `update --redeploy` | `styrman-update --force` (clears a latched failed-version, rebuilds the current tag) |
 | `edit` | `env_set` on both `.env` copies (checkout's and the clone's, when it exists), then `docker compose -f <dir>/deploy/docker-compose.yml --env-file <dir>/.env up -d` at the currently deployed version — no `--build`, images are immutable per version |
-| `uninstall --level 1` | `docker compose … down --remove-orphans`; `docker rm -f` of every container labeled `styrman.managed=true` (project microVMs AND the hidden per-user setup VMs alike); `docker network rm` of every `sdb-*`/`lan-*` network; `systemctl disable --now` the six units in `UNITS[]` (firewall, updater and harness-channel pairs) |
+| `uninstall --level 1` | `docker compose … down --remove-orphans`; `docker rm -f` of every container labeled `styrman.managed=true` (project microVMs AND the hidden per-user setup VMs alike); `docker network rm` of every `sdb-*`/`lan-*` network; `systemctl disable --now` the four units in `UNITS[]` (the firewall and updater pairs; the ADR-073 harness-channel pair is retired by the updater, ADR-074) |
 | `uninstall --level 2` | level 1, then: the IPv4 AND IPv6 firewall chains (`STYRMAN-FWD`/`STYRMAN-IN` and, when `ip6tables` exists, `STYRMAN-FWD6`/`STYRMAN-IN6`); the unit files + `daemon-reload`; `/usr/local/bin/styrman-update`; `/usr/local/sbin/styrman-firewall.sh`; `/etc/tmpfiles.d/styrman-ksm.conf`; `/etc/styrman`; `/opt/styrman`; the `styrman-runtime`/`styrman-server`/`styrman-caddy` images; `deploy/.env` moved to `deploy/.env.removed-<ts>` |
 | `uninstall --level 3` | level 2, then `/var/lib/styrman` |
 
@@ -273,146 +273,71 @@ commit to git."
 
 ## Auto-update (tag-gated, ADR-050/051)
 
-### Harness channel (ADR-073)
+### Agent harness in the image (ADR-074)
 
-The agent harness reaches the host without a crew release: the same
-`deploy/update/styrman-update` script gained a `harness` verb
-(`styrman-update harness [--check] [--force]`), run by
-`styrman-harness-update.service` (oneshot, `After=`/`Requires=docker.service`,
-its own `RuntimeDirectory=styrman-harness-update`,
-`DOCKER_CONFIG=%t/styrman-harness-update/docker`, `TimeoutStartSec=45min`,
-`Nice=10`, idle IO — its own runtime dir rather than sharing the crew
-updater's, since systemd removes a `RuntimeDirectory` when any unit
-declaring it stops) on `styrman-harness-update.timer` (`OnBootSec=7min`,
-`OnUnitActiveSec=5min`, `RandomizedDelaySec=60` — offset two minutes at boot
-from the crew updater's cadence so the two ticks, which share a lock, don't
-start together). The unit pins every path itself, the ADR-052 shape:
-`STYRMAN_UPDATE_STATE_DIR=/etc/styrman/update` (shared with the crew
-updater — `harness-version`, `harness-sha`, `harness-failed-version`,
-`harness-refused` live beside `deployed-version`), `STYRMAN_DEPLOY_DIR=/opt/styrman`,
-`STYRMAN_HARNESS_REPO_DIR=/opt/styrman-harness`,
-`STYRMAN_HARNESS_DIR=/var/lib/styrman/harness`,
-`STYRMAN_HARNESS_GH_TOKEN_FILE=/etc/styrman/gh-token-harness`. Both units are
-installed by `host-setup.sh` (beside the crew updater units) and, on EVERY
-updater tick, by `host_converge` from the verified crew tree when they differ
-from the installed copies (`--check` only reports the drift), the way the
-firewall files are — not only by the post-deploy `self_install`, which also
-carries them but runs under the PREVIOUS updater on the tick that deploys a
-release and so cannot install a file that release introduces (BUG-064,
-BUG-035's shape; a tree without the pair is a pre-channel release and skips
-it); `host_converge` then enables the timer whenever the unit file and the
-harness clone both exist, the clone's path pinned in the crew unit as
-`STYRMAN_HARNESS_REPO_DIR` (ADR-052: never defaulted in the script). `host-setup.sh`
-also creates `/var/lib/styrman/harness` root:root 0755 and refuses if it is a
-symlink.
+The agent harness (styrman-harness) reaches every project as the `sh-agent`
+RELEASE binary with the harness embedded, baked into the runtime image at
+build time — superseding both ADR-062's image mirror and ADR-073's host
+harness channel (deleted: the two harness units, `styrman-update`'s
+`harness` verb, `styrman-ctl`'s `--harness-token-file`, the
+`/opt/styrman-harness` clone, `/etc/styrman/gh-token-harness`,
+`STYRMAN_HARNESS_DIR` and the server's read-only harness binds).
 
-**Selection.** The script fetches tags of the root-owned clone at
-`/opt/styrman-harness` (its own fine-grained GitHub token at
-`/etc/styrman/gh-token-harness`, root 600, `Contents: read-only` on
-`styrman-harness` only — the crew token is never used here), lists `vX.Y.Z`
-tags newest first, and walks DOWN to the newest one that verifies
-(`verify_tag`: annotated, SSH-signed, signer in `/etc/styrman/allowed_signers`
-— `REQUIRE_SIGNED` is forced to 1 on this path, the crew updater's opt-out
-does not apply). Every refused tag is an alarm: a `harness: REFUSED: <tag> —
-<reason>` log line and a line appended to `/etc/styrman/update/harness-refused`
-(newest 50 kept). It refuses to go below the installed version — when the
-newest tag is lower than `harness-version` it alarms "below the installed …"
-and keeps the current one. No `vX.Y.Z` tag at all logs "no vX.Y.Z tag yet —
-waiting for the first signed release". A tag that fails export or smoke is
-latched at `/etc/styrman/update/harness-failed-version` and skipped until a
-newer tag appears (`--force` re-exports the installed tag and clears the
-latch when the installed tag is at or above the failed one). `--check`
-reports `update AVAILABLE: <installed> → <tag>` and changes nothing.
+**Image build.** `image/Dockerfile` downloads the release named by
+`ARG HARNESS_VERSION` (default `v1.6.0`) with `gh release download` from
+`kesokaj/styrman-harness` (assets `sh-agent-linux-amd64`, `SHA256SUMS`,
+`SHA256SUMS.sig`), verifies `SHA256SUMS.sig` with `ssh-keygen -Y verify`
+against the signer line in `ARG HARNESS_SIGNER`, checks the `SHA256SUMS`
+header names that version, checks the binary's checksum, and checks
+`sh-agent version` prints `sh-agent <HARNESS_VERSION>`. Bumping the harness
+a crew release ships is editing that `ARG` line.
 
-**Export.** `git archive` of the tag (minus `.agents`, `.gitignore`, any
-`.git`; a symlink anywhere in the tree fails the export) plus `COMMIT`,
-`TAG`, `SHA256SUMS` in the mirror's shape (`image/harness/VENDORED.md` §
-Refresh), and `bin/sh-agent` built offline in the same pinned Go builder
-image the runtime image uses (`FROM golang:… AS harness-builder` in
-`image/Dockerfile`), as the invoking user, `GOPROXY=off`,
-`GOTOOLCHAIN=local`.
+**Token.** The repository is private, so every image build takes a GitHub
+token as a docker build SECRET (`--secret id=gh_token,…`, never a layer):
+`GH_TOKEN` in the environment when set, else the updater's token file
+`/etc/styrman/gh-token`, else the build stops before it starts. Sites:
+`deploy/update/styrman-update` (deploy), `deploy/host-setup.sh` step 7,
+`deploy/styrman-ctl install` (`--gh-token-file F` when given; a `--dry-run`
+without a token plans the `src=` form and says a real run needs one),
+`deploy/verify-commit.sh` and `.agents/docs/testing/styrman/ensure-test-image.sh`
+(both fall back to `gh auth token`). The crew token at
+`/etc/styrman/gh-token` must therefore also read `kesokaj/styrman-harness`
+— the operator grants that; there is no separate harness token any more.
 
-**Smoke.** The candidate is mounted read-only into the DEPLOYED runtime
-image (`styrman-runtime:<deployed-version>` from
-`/etc/styrman/update/deployed-version` — the channel refuses to run before
-crew is deployed) as uid 1000, and `sh-agent list --repo /styrman/harness`
-plus `sh-agent install --dry-run --repo … --home …` must both exit 0; counts
-are logged, never asserted. The scratch home is a 0700 `mktemp -d` under the
-root-owned content dir (`.smoke-XXXXXX`, chowned to the smoke uid; never a
-world-writable dir on the shared `/tmp`), removed afterwards; the smoke and
-the builder containers run `--network none --cap-drop ALL --security-opt
-no-new-privileges`, the builder also `--read-only --tmpfs /tmp` (security
-review 2026-09-16).
+**Boot.** `image/entrypoint.sh` compares
+`~/.styrman/.harness-version` (`<image VERSION>+<sh-agent release>`)
+against the image's own; when it differs it runs `harness-migrate.sh`
+(unchanged), then `sh-agent install --home <home>` (no `--repo`, since the
+harness is embedded in the binary) as the project user, then the browser MCP
+registration (unchanged), and logs `agent harness deployed (version
+<VERSION>, sh-agent vX.Y.Z; browser MCP registered for claude and agy)`.
+`install` copies the binary to `~/.local/bin/sh-agent` (first on `PATH` via
+skel/bashrc) and writes `~/.config/sh-agent/state.json` with
+`"repo": "embedded:vX.Y.Z"`. Never-downgrade: when that manifest already
+names a release NEWER than the image's, install is skipped and the log says
+`agent harness: home has sh-agent vA (sh-agent update), image carries vB;
+left alone`.
 
-**Swap.** Content lands at `/var/lib/styrman/harness/<commit>/{repo,bin/sh-agent}`;
-`current` is a symlink replaced by one rename; the previous target is kept
-beside it, older ones removed; state files are `/etc/styrman/update/harness-version`
-(tag) and `harness-sha` (commit). The content dir is a trust boundary: never
-a symlink, root-owned, no group/world write, and `current` must be a symlink
-— a real directory there is refused with an alarm.
+**Per-project update.** The user runs `sh-agent update` in a project
+terminal; it needs `gh` (authenticated through the credential broker's
+`GH_TOKEN`, so the user's own token must read the private harness repo too)
+and `ssh-keygen` (both in the image); it downloads the newest release,
+verifies it against the signer compiled into the binary, and replaces
+`~/.local/bin/sh-agent`. Crew does nothing else for this: no timer, no
+mount, no mirror. Projects may run different harness releases from each
+other and from the image's baked-in one.
 
-**styrman-ctl.** `install` and `update --setup` accept
-`--harness-token-file <file>` (interactive setup asks for the token; an
-empty answer skips the channel with "harness channel not set up (no token);
-`styrman-ctl update --setup --harness-token-file <file>` does it later").
-Setup installs the token (root 600), creates the content dir (root 755,
-refuses a symlink), clones `https://github.com/kesokaj/styrman-harness.git` to
-`/opt/styrman-harness` — both fixed: `STYRMAN_HARNESS_ORIGIN` and
-`STYRMAN_HARNESS_REPO_DIR` are test seams the script refuses as production
-knobs, like its other path overrides, and the clone path is a literal rather
-than derived from the `STYRMAN_DEPLOY_DIR` knob (security review
-2026-09-16); the origin must be a plain https URL — with the same scoped one-shot credential
-helper as the crew clone, runs
-`styrman-update harness --check`, then
-`systemctl enable --now styrman-harness-update.timer`.
-
-`styrman-ctl status` prints a `harness` line: `<tag> (<sha7>)
-/var/lib/styrman/harness/current` when delivered, "waiting for the first
-signed styrman-harness tag" when the clone exists but no tag has landed, or
-"not set up — `styrman-ctl update --setup --harness-token-file <file>`"
-otherwise, plus the timer/service states, `FAILED LATCHED: <tag>` and "last
-refusal: <line>" when present; a refusal newer than the last delivery, or a
-latched failed tag, marks the host DEGRADED (exit 1). The JSON output carries a `harness` object with
-`version`, `sha`, `failed`, `refused`, `service`, `timer`. `UNITS` (the
-uninstall list) is now six entries, the two harness units added.
-
-**Server side.** `STYRMAN_HARNESS_DIR` (compose: `/var/lib/styrman/harness`,
-the same path inside the server container as on the host through the
-`/var/lib/styrman` volume; empty = disabled, a local dev run) names the
-content dir. On every project create the server computes the channel's two
-binds — `<dir>/current/repo:/styrman/harness:ro` and
-`<dir>/current/bin/sh-agent:/styrman/bin/sh-agent:ro`, on the UNRESOLVED
-`current` path, so Docker re-resolves the symlink on every start and a
-stopped VM picks up a swapped harness on its next start, as it picks up an
-image upgrade — and mounts them only when the channel is present AND
-trusted: the content dir itself not a symlink, owned by root or the server,
-no group/world write; `current` a symlink resolving inside the dir to a
-directory under the same rules whose `repo` and `bin` are real directories
-(never symlinks) holding `repo/COMMIT` and `bin/sh-agent` as regular files. Absent (nothing at `current`) means the image's baked mirror
-seeds the project (R5's fallback); refused means the same plus a WARN naming
-the reason. The setup VM never mounts the channel. A STOPPED container is
-recreated on its next start to gain the binds once the channel has
-delivered, and to drop them once the channel is absent or disabled (Docker
-would create a missing bind source as a root-owned real directory at
-`current/`, which the channel could never swap again) or refused (a bind
-source the server would not mount fresh is not re-resolved by Docker on
-start either: the project boots from the image's mirror, the WARN says why)
-— one comparison, the binds a stopped container carries must equal what the
-server would mount now; a running container upgrades on its next stop/start.
-The `:ro` is enforced on the HOST side of Kata's virtiofs share: guest root
-can flip the guest mount to rw and a write still fails with "Read-only file
-system", and nothing lands in the host's export (probed 2026-09-16 on Kata
-3.31.0 / Docker 29.7.2 with `CAP_SYS_ADMIN` and AppArmor off; the rw control
-succeeds; Tier 2 repeats the probe in every run). One line per server
-start says which applies: `harness channel tag=… commit=… path=…`,
-`harness channel absent; the image's baked harness seeds projects`,
-`harness channel refused; …`, or `harness channel disabled
-(STYRMAN_HARNESS_DIR unset); …`. What the guest does with the mount is the
-entrypoint's seed (`runtime-image.md`).
+**Host cleanup.** The updater's `retire_harness_units` step runs on EVERY
+tick, before `host_converge`, independent of its firewall guards:
+`systemctl disable --now` the ADR-073 timer then service, removes both unit
+files, `daemon-reload`, and removes `harness-version`, `harness-sha`,
+`harness-failed-version`, `harness-refused` from `/etc/styrman/update`.
+Under `--check` it only reports. The now-empty content dir
+`/var/lib/styrman/harness` is an operator `sudo rmdir /var/lib/styrman/harness`
+— it is not removed automatically.
 
 Day-to-day "how do I ship a release / update one image" reference:
-`.agents/docs/specs/styrman/versioning.md`. This section is the full
-mechanics + security model.
+`.agents/docs/specs/styrman/versioning.md`.
 
 Installed by `host-setup.sh` step 8c but ships **DISABLED** — enabling it is
 a deliberate, separate action, not a side effect of a normal deploy, since

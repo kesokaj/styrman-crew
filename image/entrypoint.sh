@@ -107,48 +107,54 @@ if [ ! -f "${HOME_DIR}/.tmux.conf" ]; then
         || log "WARN: could not seed ~/.tmux.conf (home not writable?)"
 fi
 
-# ─── Agent harness from the base image (R5/ADR-030, ADR-062) ────────────────
-# The image carries a mirror of styrman-harness (/styrman/harness, at the
-# commit in its COMMIT file) and the sh-agent binary built from it, so every
-# project gets IDENTICAL defaults. Seeded write-once, keyed on the image
-# version, as the user: `sh-agent install` copies the context, skills and
-# agents into ~/.claude and ~/.gemini/config and writes its manifest to
-# ~/.config/sh-agent/ — NOT credentials, and no settings.json for either tool
-# beyond one key: since harness 42ba2f5 it writes `"attribution": {"commit":
-# "", "pr": ""}` into ~/.claude/settings.json when that key is absent (a
-# present key is left alone), so no commit from a project carries a
-# Co-Authored-By trailer (operator directive 2026-09-03, the exception
-# approved 2026-09-16, ADR-072). A home seeded by the previous harness
-# (≤ v1.19.x) is migrated first: configs/harness-migrate.sh moves its
-# artifacts to ~/.styrman/harness-backup-<ts>/, never deletes.
-# install is a file copier — no network, no agy/claude call — and, because
-# /styrman/harness is a plain copy with no .git, it neither rebuilds itself
-# with `go build` nor runs git (the harness's BUG-015 rule: only a checkout
-# rebuilds; a plain copy installs the running binary as is and says so on
-# its stdout, of which only the settings.json lines are logged below — the
-# "agent harness deployed" line is this boot's pass signal). So the PATH
-# trim ADR-047 needed for the old
-# harness's `agy -p` self-check is gone; measured 0.02 s into an empty home
-# on the host and ~0.5 s through `docker run` including container start
-# (testing/2026-09-03-verify-harness-phase2.md).
+# ─── Agent harness from the base image (R5/ADR-030, ADR-074) ────────────────
+# The image carries /styrman/bin/sh-agent, the styrman-harness RELEASE binary
+# with the harness embedded, downloaded and verified at image build. Seeded
+# write-once, keyed on the image version plus the binary's release, as the
+# user: `sh-agent install` copies the context, skills and agents into
+# ~/.claude and ~/.gemini/config, copies itself to ~/.local/bin/sh-agent
+# (first on PATH, skel/bashrc) and writes its manifest to ~/.config/sh-agent/
+# — NOT credentials, and no settings.json for either tool beyond one key:
+# since harness 42ba2f5 it writes `"attribution": {"commit": "", "pr": ""}`
+# into ~/.claude/settings.json when that key is absent (a present key is
+# left alone), so no commit from a project carries a Co-Authored-By trailer
+# (operator directive 2026-09-03, the exception approved 2026-09-16,
+# ADR-072). A home seeded by the previous harness (≤ v1.19.x) is migrated
+# first: configs/harness-migrate.sh moves its artifacts to
+# ~/.styrman/harness-backup-<ts>/, never deletes. Between image bumps the
+# project moves itself: its user runs `sh-agent update` inside it (gh via
+# the broker's token, the signer compiled into the binary), which replaces
+# ~/.local/bin/sh-agent and reinstalls; the never-downgrade guard below keeps
+# an older image from undoing that. install is a file copier — no network,
+# no agy/claude call, no git, no `go build` (a release binary installs what
+# it carries; of its stdout only the settings.json lines are logged below —
+# the "agent harness deployed" line is this boot's pass signal). So the PATH
+# trim ADR-047 needed for the old harness's `agy -p` self-check is gone;
+# measured 0.02 s into an empty home on the host and ~0.5 s through
+# `docker run` including container start (testing/2026-09-03-verify-harness-phase2.md).
 # Non-fatal: a harness hiccup must never block the project from booting.
+# harness_home_newer <home release> <image release> — true only when BOTH
+# are canonical vX.Y.Z and the home's is strictly newer (sort -V). An
+# unreadable image binary ("unknown") never wins the comparison, so it
+# takes the failure path below instead of silently keeping an old home
+# (security review 2026-09-21). Pure: tested by extraction in
+# internal/config/entrypoint_guard_test.go.
+harness_home_newer() {
+    printf '%s\n' "$1" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || return 1
+    printf '%s\n' "$2" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || return 1
+    [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | tail -1)" = "$1" ]
+}
 if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
     HARNESS_VER="$(cat /styrman/VERSION 2>/dev/null || echo dev)"
-    # ADR-073: /styrman/harness and /styrman/bin/sh-agent are the host's
-    # harness channel export when the server bind-mounted one (its TAG file
-    # says which styrman-harness tag), else the image's own mirror. Either
-    # way the stamp keys on the image version AND the harness commit, so a
-    # channel swapped while the VM was stopped re-seeds on the next boot the
-    # way an image bump always did; an old stamp holding only the version
-    # differs once and re-seeds once.
-    HARNESS_COMMIT="$(head -c 40 /styrman/harness/COMMIT 2>/dev/null | tr -cd '0-9a-f')"
-    [ -n "${HARNESS_COMMIT}" ] || HARNESS_COMMIT=unknown
-    HARNESS_ID="${HARNESS_VER}+${HARNESS_COMMIT}"
-    if [ -s /styrman/harness/TAG ]; then
-        HARNESS_SRC="channel tag $(head -c 64 /styrman/harness/TAG | tr -cd '[:print:]')"
-    else
-        HARNESS_SRC="image"
-    fi
+    # ADR-074: /styrman/bin/sh-agent is the styrman-harness RELEASE binary the
+    # image downloaded at build, the harness embedded. The stamp keys on the
+    # image version AND the binary's release, so an image bump re-seeds once,
+    # as always. Between image bumps the project moves itself: its user runs
+    # `sh-agent update` inside it, which replaces ~/.local/bin/sh-agent and
+    # reinstalls; the guard below keeps an older image from undoing that.
+    HARNESS_REL="$(/styrman/bin/sh-agent version 2>/dev/null | awk '{print $2}' | tr -cd '0-9a-z.')"
+    [ -n "${HARNESS_REL}" ] || HARNESS_REL=unknown
+    HARNESS_ID="${HARNESS_VER}+${HARNESS_REL}"
     HARNESS_STAMP="${HOME_DIR}/.styrman/.harness-version"
     if [ "$(cat "${HARNESS_STAMP}" 2>/dev/null || true)" != "${HARNESS_ID}" ]; then
         runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/.styrman" 2>/dev/null || true
@@ -157,15 +163,13 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
         # stall here must never brick a boot. (The 2026-09-03 security review
         # feared a ~/.gitconfig include of a FIFO hanging the installer's
         # `git rev-parse`, and the install line carried GIT_CONFIG_GLOBAL=
-        # /dev/null against it; since the harness's BUG-015 fix install never
-        # runs git on a plain copy — and /styrman/harness is always one,
-        # image/.dockerignore keeps every .git out of the build — so that
+        # /dev/null against it; a release binary never runs git, so that
         # guard is gone and the timeout is the whole defence.) The stamp is
-        # written only when BOTH steps
-        # succeed, so a failure is retried next boot (both are idempotent);
+        # written only when EVERY step succeeds, so a failure is retried next
+        # boot (all are idempotent);
         # install runs even after a partial migration so a single unmovable
         # old file cannot withhold the harness — the WARN says what was left.
-        # 20 s each: both finish in well under a second — install is a plain
+        # 20 s each: both finish in well under a second — install is a file
         # copy, never a `go build`, never a git call — so the cap only bounds
         # a stall. Each step is well under R1's 15 s soft budget on its own;
         # the four capped steps in this block (migrate, install, two MCP
@@ -191,11 +195,33 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
         # DIAGNOSTIC, not an attestation: the project user is root inside
         # its own VM and can write anything to this stdout, so a check that
         # needs the fact reads ~/.claude/settings.json itself (Tier 2 does).
-        HI_OUT="$(timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" \
-            /styrman/bin/sh-agent install --repo /styrman/harness --home "${HOME_DIR}")" || HI_OK=0
-        printf '%s\n' "${HI_OUT}" | grep -E '^settings:|^note: .*(attribution setting could not be checked|does not set "attribution")' \
-            | tr -cd '[:print:]\n' | cut -c1-200 \
-            | while IFS= read -r line; do log "  ${line}"; done
+        # Never downgrade: the home's manifest names the release its harness
+        # came from ("repo": "embedded:vX.Y.Z" — the binary's own shape; a
+        # path there is a pre-ADR-074 install and re-seeds). A home the user
+        # moved past this image's release keeps its own sh-agent and harness.
+        # The manifest is guest-writable: only a regular file is read, under
+        # the same cap as every other step here (a FIFO must not stall the
+        # boot before /run/styrman/ready — security review 2026-09-21).
+        HOME_REL=""; HI_SKIPPED=0
+        HS="${HOME_DIR}/.config/sh-agent/state.json"
+        if [ -f "${HS}" ] && [ ! -L "${HS}" ]; then
+            HOME_REL="$(timeout 5 sed -n 's/^ *"repo": *"embedded:\(v[0-9][0-9.]*\)".*/\1/p' "${HS}" 2>/dev/null | head -1)"
+        fi
+        if [ "${HARNESS_REL}" = unknown ]; then
+            # No release to key on: nothing is installed, nothing stamped —
+            # the WARN below fires and the next boot retries.
+            HI_OK=0
+            log "WARN: /styrman/bin/sh-agent did not report a version — harness not deployed this boot"
+        elif harness_home_newer "${HOME_REL}" "${HARNESS_REL}"; then
+            HI_SKIPPED=1
+            log "agent harness: home has sh-agent ${HOME_REL} (sh-agent update), image carries ${HARNESS_REL}; left alone"
+        else
+            HI_OUT="$(timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" \
+                /styrman/bin/sh-agent install --home "${HOME_DIR}")" || HI_OK=0
+            printf '%s\n' "${HI_OUT}" | grep -E '^settings:|^note: .*(attribution setting could not be checked|does not set "attribution")' \
+                | tr -cd '[:print:]\n' | cut -c1-200 \
+                | while IFS= read -r line; do log "  ${line}"; done
+        fi
         # Third step (ADR-068 D4): register the project's browser as an MCP
         # server with each agent's OWN command — the tools' MCP registries
         # (~/.claude.json, ~/.gemini/config/mcp_config.json), still no
@@ -218,7 +244,11 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
             # into the sh -c string: a quote in a hand-built STYRMAN_VERSION
             # would otherwise run as the project user (audit 2026-09-13).
             runuser -u "${USERNAME}" -- sh -c 'printf "%s" "$1" > "$2"' _ "${HARNESS_ID}" "${HARNESS_STAMP}" 2>/dev/null || true
-            log "agent harness deployed (version ${HARNESS_VER}, styrman-harness $(printf '%s' "${HARNESS_COMMIT}" | cut -c1-7), source ${HARNESS_SRC}; browser MCP registered for claude and agy)"
+            if [ "${HI_SKIPPED}" = 1 ]; then
+                log "agent harness kept (version ${HARNESS_VER}: home sh-agent ${HOME_REL} is newer than the image's ${HARNESS_REL}, install skipped; browser MCP registered for claude and agy)"
+            else
+                log "agent harness deployed (version ${HARNESS_VER}, sh-agent ${HARNESS_REL}; browser MCP registered for claude and agy)"
+            fi
         else
             [ "${HM_OK}" = 1 ] || log "WARN: previous-harness migration reported errors or timed out (see the [harness-migrate] lines above)"
             [ "${HI_OK}" = 1 ] || log "WARN: sh-agent install reported errors or timed out — harness not deployed this boot (continuing)"

@@ -32,7 +32,7 @@ ENV_SHADOW=()
 if [ -f "${ROOT}/deploy/.env" ]; then
     ENV_SHADOW=(-v /dev/null:/src/deploy/.env:ro)
 fi
-for mod in . deploy/caddy/ingress image/harness; do
+for mod in . deploy/caddy/ingress; do
     echo "==> govulncheck ${mod} (in ${IMAGE})"
     # `go install` then run the binary — NOT `go run`, which collapses
     # govulncheck's exit 3 ("called vulnerability") into its own exit 1 and

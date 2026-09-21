@@ -22,13 +22,6 @@ shopt -s inherit_errexit
 # ─── Paths (env-overridable for tests; the defaults are what host-setup.sh and the units pin) ───
 STATE_DIR="${STYRMAN_STATE_DIR:-/var/lib/styrman}"
 DEPLOY_DIR="${STYRMAN_DEPLOY_DIR:-/opt/styrman}"
-# The harness channel (ADR-073): its own root clone and the repository it
-# follows by signed tags — private, so setup asks for a read-only token.
-# A literal, never derived from STYRMAN_DEPLOY_DIR (a documented knob): root
-# clones into and chowns this path, so nothing an environment can set may
-# choose it (security review 2026-09-16); the Go test sets the seam.
-HARNESS_REPO_DIR="${STYRMAN_HARNESS_REPO_DIR:-/opt/styrman-harness}"
-HARNESS_ORIGIN="${STYRMAN_HARNESS_ORIGIN:-https://github.com/kesokaj/styrman-harness.git}"
 ETC_DIR="${STYRMAN_ETC_DIR:-/etc/styrman}"
 UNIT_DIR="${STYRMAN_UNIT_DIR:-/etc/systemd/system}"
 # The root-only temp dir setup_auto_update stages secrets in, global so the
@@ -49,7 +42,7 @@ KATA_DIR="${STYRMAN_KATA_DIR:-/opt/kata}"
 # under sudo -E it would otherwise choose which binaries root runs and which
 # trees root deletes (security review), so outside the harness it is refused.
 if [ "${STYRMAN_CTL_TEST:-}" != 1 ]; then
-    for _ov in STYRMAN_ETC_DIR STYRMAN_UNIT_DIR STYRMAN_BIN_DIR STYRMAN_SBIN_DIR STYRMAN_TMPFILES_DIR STYRMAN_KATA_DIR STYRMAN_ENV_FILE STYRMAN_HARNESS_REPO_DIR STYRMAN_HARNESS_ORIGIN; do
+    for _ov in STYRMAN_ETC_DIR STYRMAN_UNIT_DIR STYRMAN_BIN_DIR STYRMAN_SBIN_DIR STYRMAN_TMPFILES_DIR STYRMAN_KATA_DIR STYRMAN_ENV_FILE; do
         [ -z "${!_ov:-}" ] || { echo "styrman-ctl: ERROR ${_ov} is a test seam, not a production knob (unset it)" >&2; exit 1; }
     done
 fi
@@ -61,7 +54,7 @@ OPERATOR="${SUDO_USER:-}"
 MUST_FILL="BASE_DOMAIN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET CLOUDFLARE_API_TOKEN ADMIN_EMAIL STYRMAN_ALLOWED_EMAILS"
 CLONE_ENV="${DEPLOY_DIR}/deploy/.env"
 # shellcheck disable=SC2034  # used by uninstall (plan phase 4)
-UNITS=(styrman-firewall.service styrman-firewall.timer styrman-update.service styrman-update.timer styrman-harness-update.service styrman-harness-update.timer)
+UNITS=(styrman-firewall.service styrman-firewall.timer styrman-update.service styrman-update.timer)
 DRY=0
 YES=0
 
@@ -319,22 +312,6 @@ cmd_status() {
     local u_fw_s u_fw_t u_up_s u_up_t fwd in4
     u_fw_s="$(unit_state styrman-firewall.service)"; u_fw_t="$(unit_state styrman-firewall.timer)"
     u_up_s="$(unit_state styrman-update.service)";   u_up_t="$(unit_state styrman-update.timer)"
-    # The harness channel (ADR-073): its units, its state files, and the
-    # newest refusal — a refusal newer than the installed version, a latched
-    # tag, or a failed service degrades the verdict.
-    local u_hs_s u_hs_t hver hsha hfail href hdegraded=0 hline
-    u_hs_s="$(unit_state styrman-harness-update.service)"; u_hs_t="$(unit_state styrman-harness-update.timer)"
-    hver="$(printable "$(cat "${ETC_DIR}/update/harness-version" 2>/dev/null || true)")"
-    hsha="$(printable "$(cat "${ETC_DIR}/update/harness-sha" 2>/dev/null || true)")"
-    hfail="$(printable "$(cat "${ETC_DIR}/update/harness-failed-version" 2>/dev/null || true)")"
-    href="$(printable "$(tail -n 1 "${ETC_DIR}/update/harness-refused" 2>/dev/null || true)" | cut -c1-160)"
-    if [ -n "${href}" ] && [ "${ETC_DIR}/update/harness-refused" -nt "${ETC_DIR}/update/harness-version" ]; then hdegraded=1; fi
-    # A latched failed tag is a stuck channel whatever installed under it
-    # (a lower tag can, ADR-073): DEGRADED until a newer tag clears it.
-    [ -z "${hfail}" ] || hdegraded=1
-    if [ -n "${hver}" ]; then hline="${hver}${hsha:+ (${hsha:0:7})}    ${STATE_DIR}/harness/current"
-    elif [ -d "${HARNESS_REPO_DIR}/.git" ]; then hline="waiting for the first signed styrman-harness tag"
-    else hline="not set up — styrman-ctl update --setup --harness-token-file <file>"; fi
     fwd="$(chain_rules STYRMAN-FWD)"; in4="$(chain_rules STYRMAN-IN)"
     # projects + host
     local vms dirs disk dockerv katav operator
@@ -352,8 +329,6 @@ cmd_status() {
     if [ "${rc}" = 0 ]; then
         [ "${health}" = healthy ] || rc=1
         [ -z "${fver}" ] || rc=1
-        [[ "${u_hs_s}" != */failed ]] || rc=1
-        [ "${hdegraded}" = 0 ] || rc=1
         # The firewall service is a oneshot: enabled/inactive is a good run,
         # enabled/failed is a degraded host (a missing xt_physdev blocks the
         # broker for every sandbox project) — never "OK" (review 2026-09-13).
@@ -362,13 +337,12 @@ cmd_status() {
         [ "${fwd}" != absent ] || rc=1
     fi
     if [ "${as_json}" = 1 ]; then
-        printf '{"host":%s,"installed":%s,"server":{"health":%s,"image":%s,"caddy":%s,"running":%s,"url":%s},"deployed":{"version":%s,"sha":%s,"failed":%s},"updater":{"service":%s,"timer":%s,"clone_sha":%s,"clone_tag":%s,"env_copies_differ":%s},"firewall":{"service":%s,"timer":%s,"fwd_rules":%s,"in_rules":%s},"harness":{"version":%s,"sha":%s,"failed":%s,"refused":%s,"service":%s,"timer":%s},"projects":{"running":%s,"dirs":%s,"disk":%s},"host_tools":{"docker":%s,"kata":%s,"operator":%s},"exit":%s}\n' \
+        printf '{"host":%s,"installed":%s,"server":{"health":%s,"image":%s,"caddy":%s,"running":%s,"url":%s},"deployed":{"version":%s,"sha":%s,"failed":%s},"updater":{"service":%s,"timer":%s,"clone_sha":%s,"clone_tag":%s,"env_copies_differ":%s},"firewall":{"service":%s,"timer":%s,"fwd_rules":%s,"in_rules":%s},"projects":{"running":%s,"dirs":%s,"disk":%s},"host_tools":{"docker":%s,"kata":%s,"operator":%s},"exit":%s}\n' \
             "$(json_str "${host}")" "$([ "${installed}" = 1 ] && echo true || echo false)" \
             "$(json_str "${health}")" "$(json_str "${server_img}")" "$(json_str "${caddy_img}")" "$([ "${running}" = true ] && echo true || echo false)" "$(json_str "${url}")" \
             "$(json_str "${dver}")" "$(json_str "${dsha}")" "$(json_str "${fver}")" \
             "$(json_str "${u_up_s}")" "$(json_str "${u_up_t}")" "$(json_str "${clone_sha}")" "$(json_str "${clone_tag}")" "$([ "${envs_differ}" = 1 ] && echo true || echo false)" \
             "$(json_str "${u_fw_s}")" "$(json_str "${u_fw_t}")" "$(json_str "${fwd}")" "$(json_str "${in4}")" \
-            "$(json_str "${hver}")" "$(json_str "${hsha}")" "$(json_str "${hfail}")" "$(json_str "${href}")" "$(json_str "${u_hs_s}")" "$(json_str "${u_hs_t}")" \
             "${vms:-0}" "${dirs:-0}" "$(json_str "${disk}")" \
             "$(json_str "${dockerv}")" "$(json_str "${katav}")" "$(json_str "${operator}")" "${rc}"
         return "${rc}"
@@ -382,7 +356,6 @@ cmd_status() {
     else
         echo "  updater    ${u_up_t} (timer)   no clone at ${DEPLOY_DIR} — auto-update not set up"
     fi
-    echo "  harness    ${hline}   ${u_hs_t} (timer), ${u_hs_s} (service)${hfail:+ ; FAILED LATCHED: ${hfail}}${href:+ ; last refusal: ${href}}"
     echo "  firewall   ${u_fw_s} (service), ${u_fw_t} (timer)   chains STYRMAN-FWD (${fwd} rules) STYRMAN-IN (${in4})"
     echo "  projects   ${vms:-0} running microVMs, ${dirs:-0} project dirs, ${STATE_DIR} ${disk}"
     echo "  host       Docker ${dockerv:-?}, Kata ${katav:-?} (mvm), operator ${operator:-?}"
@@ -453,7 +426,7 @@ https_origin() {
 }
 
 cmd_install() {
-    local version="" env_file="" gh_token_file="" signers_file="" harness_token_file="" skip_au=0
+    local version="" env_file="" gh_token_file="" signers_file="" skip_au=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --user) OPERATOR="$2"; shift 2 ;;
@@ -461,7 +434,6 @@ cmd_install() {
             --env-file) env_file="$2"; shift 2 ;;
             --gh-token-file) gh_token_file="$2"; shift 2 ;;
             --allowed-signers-file) signers_file="$2"; shift 2 ;;
-            --harness-token-file) harness_token_file="$2"; shift 2 ;;
             --skip-auto-update) skip_au=1; shift ;;
             *) die "install: unknown flag $1" ;;
         esac
@@ -493,7 +465,17 @@ cmd_install() {
     fi
 
     log "install: runtime image and stack at version ${version} (from this checkout — the documented first bring-up)"
-    run docker build -t "styrman-runtime:${version}" --build-arg "STYRMAN_VERSION=${version}" "${REPO}/image"
+    # The image downloads the sh-agent release from the private styrman-harness
+    # repository (ADR-074): a token as a build SECRET, by the one rule every
+    # build site follows — --gh-token-file, else GH_TOKEN, else the installed
+    # token file, else stop. The same token serves auto-update below.
+    local secret_args=()
+    if [ -n "${gh_token_file}" ]; then secret_args=(--secret "id=gh_token,src=${gh_token_file}")
+    elif [ -n "${GH_TOKEN:-}" ]; then export GH_TOKEN; secret_args=(--secret id=gh_token,env=GH_TOKEN)
+    elif [ -f "${ETC_DIR}/gh-token" ]; then private_file "${ETC_DIR}/gh-token"; secret_args=(--secret "id=gh_token,src=${ETC_DIR}/gh-token")
+    elif [ "${DRY}" = 1 ]; then secret_args=(--secret "id=gh_token,src=${ETC_DIR}/gh-token"); log "install: (dry run) a real run needs --gh-token-file F or GH_TOKEN — the token that reads kesokaj/styrman-harness"
+    else die "no GitHub token for the styrman-harness download — pass --gh-token-file F (a token that reads kesokaj/styrman-harness) or run with GH_TOKEN set"; fi
+    run docker build -t "styrman-runtime:${version}" "${secret_args[@]}" --build-arg "STYRMAN_VERSION=${version}" "${REPO}/image"
     run env "STYRMAN_VERSION=${version}" docker compose -f "${REPO}/deploy/docker-compose.yml" --env-file "${ENV_FILE}" up -d --build
     wait_healthy 120 || die "the stack came up but styrman-server is not healthy; \`styrman-ctl status\` and \`docker logs styrman-server\`"
     local base hn; base="$(env_get "${ENV_FILE}" BASE_DOMAIN)"; hn="$(env_get "${ENV_FILE}" STYRMAN_HOSTNAME)"
@@ -506,7 +488,7 @@ cmd_install() {
     else
         local want=y
         [ "${YES}" = 1 ] || ask want "Set up auto-update now (the updater deploys signed release tags itself)? [y/N]" "n"
-        case "${want}" in y|Y|yes) setup_auto_update "${gh_token_file}" "${signers_file}" "${harness_token_file}" ;; *) log "install: auto-update not set up; \`styrman-ctl update --setup\` does it later" ;; esac
+        case "${want}" in y|Y|yes) setup_auto_update "${gh_token_file}" "${signers_file}" ;; *) log "install: auto-update not set up; \`styrman-ctl update --setup\` does it later" ;; esac
     fi
 
     log "install: done. Log out and back in once so YOUR shell picks up the docker group (host-setup.sh added ${OPERATOR} to it; this run needed no group, it ran as root)."
@@ -517,7 +499,7 @@ cmd_install() {
 # (no default by design, ADR-052), the clone, and the token/signers files —
 # the last two default to /etc/styrman inside the updater, which is only
 # right when ETC_DIR is /etc/styrman (review finding, Phase 2).
-UPDATER_ENV=("STYRMAN_UPDATE_STATE_DIR=${ETC_DIR}/update" "STYRMAN_DEPLOY_DIR=${DEPLOY_DIR}" "STYRMAN_GH_TOKEN_FILE=${ETC_DIR}/gh-token" "STYRMAN_ALLOWED_SIGNERS=${ETC_DIR}/allowed_signers" "STYRMAN_HARNESS_REPO_DIR=${HARNESS_REPO_DIR}" "STYRMAN_HARNESS_DIR=${STATE_DIR}/harness" "STYRMAN_HARNESS_GH_TOKEN_FILE=${ETC_DIR}/gh-token-harness")
+UPDATER_ENV=("STYRMAN_UPDATE_STATE_DIR=${ETC_DIR}/update" "STYRMAN_DEPLOY_DIR=${DEPLOY_DIR}" "STYRMAN_GH_TOKEN_FILE=${ETC_DIR}/gh-token" "STYRMAN_ALLOWED_SIGNERS=${ETC_DIR}/allowed_signers")
 is_signers_line() { [[ "$1" =~ ^[^[:space:]]+\ (ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)\ [A-Za-z0-9+/=]+(\ [^[:space:]]+)?$ ]]; }
 # private_file PATH: a secret handed in by path must be nobody else's to
 # read or replace — owned by root or the invoking operator, mode 600-ish,
@@ -536,7 +518,7 @@ private_file() {
 
 # setup_auto_update [TOKEN_FILE] [SIGNERS_FILE]
 setup_auto_update() {
-    local token_file="${1:-}" signers_file="${2:-}" harness_token_file="${3:-}" token="" signers="" origin harness_token=""
+    local token_file="${1:-}" signers_file="${2:-}" token="" signers="" origin
     [ -x "${BIN_DIR}/styrman-update" ] || [ "${DRY}" = 1 ] || die "${BIN_DIR}/styrman-update is not installed — run install first"
     if [ -n "${token_file}" ]; then
         private_file "${token_file}"
@@ -628,78 +610,23 @@ setup_auto_update() {
     run env "${UPDATER_ENV[@]}" "${BIN_DIR}/styrman-update" --check
     run systemctl enable --now styrman-update.timer
     run systemctl start styrman-update.service
-    # ADR-073: the harness channel — its own read-only token for the private
-    # styrman-harness repository, its own root clone, the content dir every
-    # project mounts, and its timer. Skipped, naming the command that does it
-    # later, when no token file is given unattended or the prompt is left empty.
-    if [ -n "${harness_token_file}" ]; then
-        private_file "${harness_token_file}"
-        harness_token="$(tr -d '\n' < "${harness_token_file}")"
-    elif [ "${YES}" != 1 ]; then
-        ask harness_token "GitHub fine-grained token for styrman-harness (Contents: read-only; never echoed) — empty skips the harness channel" "" secret
-    fi
-    if [ -z "${harness_token}" ]; then
-        log "auto-update: harness channel not set up (no token); \`styrman-ctl update --setup --harness-token-file <file>\` does it later"
-    else
-        setup_harness_channel "${harness_token}" "${tmpd}"
-    fi
     [ "${DRY}" = 1 ] || { rm -rf "${CTL_TMPD}"; CTL_TMPD=""; trap - EXIT INT TERM HUP; }
 }
 
 # ─── update: one auto-updater tick (or a forced redeploy of the current tag) ─
-# setup_harness_channel TOKEN TMPD: the channel's half of setup_auto_update
-# (ADR-073). The token is staged in the same root-only temp dir; the clone is
-# https with a one-shot helper reading the INSTALLED token file, like the crew
-# clone; the content dir is root 0755 below the operator-owned state root.
-setup_harness_channel() {
-    local harness_token="$1" tmpd="$2" origin_host helper have_origin
-    # The origin is cloned by root: only a plain https URL, the shape
-    # https_origin() accepts for the crew clone — never a transport git would
-    # execute (security review 2026-09-16).
-    # Whole-string match ([[ =~ ]], as https_origin does): a grep anchors per
-    # LINE and a two-line value with a valid second line would pass it
-    # (security review 2026-09-16).
-    # The host is pinned too: the helper hands a GitHub token to whatever host
-    # the origin names (security review 2026-09-16, round 3).
-    [[ "${HARNESS_ORIGIN}" =~ ^https://github\.com/[A-Za-z0-9._/-]+$ ]] \
-        || die "STYRMAN_HARNESS_ORIGIN must be a plain https://github.com/ URL (got ${HARNESS_ORIGIN//[^[:print:]]/?})"
-    [ "${DRY}" = 1 ] || (umask 077; printf '%s' "${harness_token}" > "${tmpd}/gh-token-harness")
-    origin_host="${HARNESS_ORIGIN#https://}"; origin_host="https://${origin_host%%/*}"
-    helper="credential.${origin_host}.helper=!f() { echo username=x-access-token; printf 'password=%s\\n' \"\$(cat \"\${STYRMAN_HARNESS_GH_TOKEN_FILE}\")\"; }; f"
-    log "auto-update: harness token → ${ETC_DIR}/gh-token-harness (root, 600)"
-    run install -m 600 -o root -g root "${tmpd}/gh-token-harness" "${ETC_DIR}/gh-token-harness"
-    [ -L "${STATE_DIR}/harness" ] && die "${STATE_DIR}/harness is a symlink — refusing"
-    log "auto-update: harness content dir → ${STATE_DIR}/harness (root, 755)"
-    run install -d -m 755 -o root -g root "${STATE_DIR}/harness"
-    if [ -d "${HARNESS_REPO_DIR}/.git" ]; then
-        [ "$(stat -c %u "${HARNESS_REPO_DIR}" 2>/dev/null)" = "$(id -u)" ] || die "${HARNESS_REPO_DIR} is not owned by the user running this (root in production) — refusing"
-        have_origin="$(to_https "$(git -C "${HARNESS_REPO_DIR}" remote get-url origin 2>/dev/null || true)")"
-        [ "${have_origin}" = "${HARNESS_ORIGIN}" ] || die "the clone at ${HARNESS_REPO_DIR} points at ${have_origin:-no origin}, not ${HARNESS_ORIGIN} — remove it or fix its remote first"
-        log "auto-update: harness clone exists at ${HARNESS_REPO_DIR} — fetching tags"
-        run env GIT_TERMINAL_PROMPT=0 STYRMAN_HARNESS_GH_TOKEN_FILE="${ETC_DIR}/gh-token-harness" git -C "${HARNESS_REPO_DIR}" -c credential.helper= -c "${helper}" fetch --tags
-    else
-        log "auto-update: cloning ${HARNESS_ORIGIN} → ${HARNESS_REPO_DIR} (https, token via a one-shot helper)"
-        run env GIT_TERMINAL_PROMPT=0 STYRMAN_HARNESS_GH_TOKEN_FILE="${ETC_DIR}/gh-token-harness" git -c credential.helper= -c "${helper}" clone -- "${HARNESS_ORIGIN}" "${HARNESS_REPO_DIR}"
-    fi
-    run chown -R root:root "${HARNESS_REPO_DIR}"
-    log "auto-update: harness channel dry check, then its timer"
-    run env "${UPDATER_ENV[@]}" "${BIN_DIR}/styrman-update" harness --check
-    run systemctl enable --now styrman-harness-update.timer
-}
 cmd_update() {
-    local setup=0 redeploy=0 gh_token_file="" signers_file="" harness_token_file=""
+    local setup=0 redeploy=0 gh_token_file="" signers_file=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --setup) setup=1; shift ;;
             --redeploy) redeploy=1; shift ;;
             --gh-token-file) gh_token_file="$2"; shift 2 ;;
             --allowed-signers-file) signers_file="$2"; shift 2 ;;
-            --harness-token-file) harness_token_file="$2"; shift 2 ;;
             *) die "update: unknown flag $1" ;;
         esac
     done
     need_root
-    if [ "${setup}" = 1 ]; then setup_auto_update "${gh_token_file}" "${signers_file}" "${harness_token_file}"; return; fi
+    if [ "${setup}" = 1 ]; then setup_auto_update "${gh_token_file}" "${signers_file}"; return; fi
     # The updater is THE update path (versioning.md): signature-verified,
     # from its own clone. The wrapper never runs compose against the clone
     # by hand — the break-glass command stays a documented command.
@@ -997,8 +924,8 @@ styrman-ctl — install, update, edit, uninstall and inspect a styrman host
 
   sudo deploy/styrman-ctl                menu
   sudo deploy/styrman-ctl status [--json]
-  sudo deploy/styrman-ctl install [--user U] [--version X.Y.Z] [--env-file F] [--gh-token-file F] [--allowed-signers-file F] [--harness-token-file F] [--skip-auto-update]
-  sudo deploy/styrman-ctl update [--redeploy] | --setup [--gh-token-file F] [--allowed-signers-file F] [--harness-token-file F]
+  sudo deploy/styrman-ctl install [--user U] [--version X.Y.Z] [--env-file F] [--gh-token-file F] [--allowed-signers-file F] [--skip-auto-update]
+  sudo deploy/styrman-ctl update [--redeploy] | --setup [--gh-token-file F] [--allowed-signers-file F]
   sudo deploy/styrman-ctl edit [KEY=VALUE ...] [--no-apply]
   sudo deploy/styrman-ctl uninstall [--level 1|2|3] [--confirm WORD]
   deploy/styrman-ctl help

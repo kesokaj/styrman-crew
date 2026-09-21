@@ -16,10 +16,10 @@ module/dependency (2026-08-30 cleanup, see `deploy.md`). A 2026-09-01 review
 (`.agents/docs/reviews/2026-09-01-audit-reviewer.md`) flagged the previous
 "vendored verbatim" claim here as false; this file is the fix.
 
-Because this is a fork, do not blindly re-sync it from upstream the way
-`image/harness/VENDORED.md`'s `rsync --delete` refreshes that vendored
-snapshot — that would silently drop every styrman-specific change listed
-above. Pull an upstream fix by hand instead: diff the specific file(s)
-against `~/workspace/devbox/caddy`, port only the fix, and keep the local
-changes intact. Styrman-specific changes belong in this copy and are not
-meant to go back upstream.
+Because this is a fork, do not blindly re-sync it from upstream the way a
+verbatim mirror would with a bulk `rsync --delete` refresh — that would
+silently drop every styrman-specific change listed above. Pull an upstream
+fix by hand instead: diff the specific file(s) against
+`~/workspace/devbox/caddy`, port only the fix, and keep the local changes
+intact. Styrman-specific changes belong in this copy and are not meant to
+go back upstream.

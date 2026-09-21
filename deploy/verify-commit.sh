@@ -52,6 +52,31 @@ build_image() {  # build_image <log> <docker build args…>
     fi
 }
 
+# The runtime image build downloads the sh-agent release from the private
+# styrman-harness repository: a GitHub token as a build secret, by the one
+# rule every build site follows (GH_TOKEN, else the updater's token file,
+# else stop before the build).
+# The token reaches ONE process — the runtime image's docker build — through
+# a temporary environment on that call, never an export the whole run (and
+# every go test, npm step and image build in it) would inherit. A
+# fine-grained token that reads only kesokaj/styrman-harness is the better
+# GH_TOKEN; `gh auth token` is the broad login token (security review
+# 2026-09-21).
+BUILD_TOKEN=""
+if [ -n "${GH_TOKEN:-}" ]; then
+    BUILD_TOKEN="${GH_TOKEN}"; SECRET_ARGS=(--secret id=gh_token,env=GH_TOKEN)
+elif [ -r /etc/styrman/gh-token ]; then
+    # The updater's own bar for this file (root-owned, no group/world access).
+    [ "$(stat -c %u /etc/styrman/gh-token)" = 0 ] && [ -z "$(find /etc/styrman/gh-token -perm /077 2>/dev/null)" ] \
+        || { echo "FATAL: /etc/styrman/gh-token is not root-owned or is readable beyond root (chmod 600 it)" >&2; exit 1; }
+    SECRET_ARGS=(--secret id=gh_token,src=/etc/styrman/gh-token)
+elif BUILD_TOKEN="$(gh auth token 2>/dev/null)" && [ -n "${BUILD_TOKEN}" ]; then
+    SECRET_ARGS=(--secret id=gh_token,env=GH_TOKEN)
+else
+    echo "FATAL: no GitHub token for the styrman-harness download — GH_TOKEN=<a fine-grained token that reads kesokaj/styrman-harness> (or gh auth login), or install /etc/styrman/gh-token" >&2; exit 1
+fi
+unset GH_TOKEN
+
 echo "==> verifying commit ${SHA:0:12} (${REF}) in a detached worktree"
 git -C "${ROOT}" worktree add -q --detach "${WT}" "${SHA}"
 
@@ -66,13 +91,6 @@ echo "==> go test -race"; ( cd "${WT}" && go test -race -count=1 ./... )
 echo "==> vendored ingress module (separate go.mod)"
 ( cd "${WT}/deploy/caddy/ingress" && go vet ./... && go test ./... )
 
-# The harness mirror is a THIRD module and compiles into a binary every
-# project runs (ADR-062). Root ./... never reaches it, and a partially staged
-# refresh (150-odd files, refreshed by hand) is exactly the class this gate
-# exists for — so check the mirror's own integrity manifest against the
-# commit's tree, build the module, and pin the two Dockerfiles' Go toolchain
-# to the same value (vulncheck.sh derives its scan image from
-# Dockerfile.server alone).
 # The two modules share dependencies but pin them independently, and the
 # ingress is the internet-facing one: it runs network_mode: host with the
 # docker socket mounted, so it is the LAST place that should sit on an older
@@ -108,31 +126,7 @@ print(f"    {len(bad)} non-blocking divergence(s); docker/docker agrees")
 PY
 ) || exit 1
 
-echo "==> vendored harness mirror (image/harness: integrity, build, toolchain pin)"
-# sha256sum -c proves every listed file is present and unchanged; the list
-# diff proves nothing UNLISTED was added, and the symlink find that nothing
-# in the mirror is a link (security review round 2).
-( cd "${WT}/image/harness" && sha256sum -c --quiet SHA256SUMS && go vet ./... )
-extra="$(cd "${WT}/image/harness" && diff <(find . -type f ! -name SHA256SUMS | sed 's#^\./##' | LC_ALL=C sort) <(cut -c67- SHA256SUMS) || true)"
-links="$(cd "${WT}/image/harness" && find . -type l)"
-if [ -n "${extra}" ] || [ -n "${links}" ]; then
-    echo "FAIL: image/harness differs from its SHA256SUMS file list (unlisted or missing entries, or symlinks):" >&2
-    printf '%s\n%s\n' "${extra}" "${links}" >&2
-    exit 1
-fi
-srv_go="$(sed -n 's/^FROM \(golang:[^ ]*\) AS builder$/\1/p' "${WT}/deploy/Dockerfile.server")"
-img_go="$(sed -n 's/^FROM \(golang:[^ ]*\) AS harness-builder$/\1/p' "${WT}/image/Dockerfile")"
-if [ -z "${srv_go}" ] || [ "${srv_go}" != "${img_go}" ]; then
-    echo "FAIL: Go toolchain pin differs: deploy/Dockerfile.server='${srv_go}' image/Dockerfile='${img_go}'" >&2
-    exit 1
-fi
-echo "    mirror matches SHA256SUMS; builder pin ${img_go}"
 
-# The Go binary EMBEDS web/dist (web/embed.go), and web/dist is committed. So a
-# frontend change whose build output was never committed ships a server whose
-# UI silently predates its API. Rebuild from the commit's own web/src and
-# compare: vite's content hashes are derived from content, so a matching build
-# produces identical filenames (TODO 2026-09-01; hit for real 2026-09-02).
 if [ -z "${SKIP_WEB_FRESHNESS:-}" ] && command -v npm >/dev/null 2>&1; then
     echo "==> web/dist freshness (rebuild and compare)"
     # ONLY dist/client: that is what web/embed.go embeds and what is
@@ -208,31 +202,21 @@ echo "==> server image (the build the updater runs)"
 ( cd "${WT}" && build_image "${LOGDIR}/server-build.log" -q -f deploy/Dockerfile.server \
     --build-arg STYRMAN_VERSION=verify -t "${IMG}" . )
 
-# The runtime image is the updater's other build, and the one that ships the
-# harness: build it from the commit too, then check that the harness the
-# image lists is the harness the commit's tree holds (ADR-062).
-echo "==> runtime image (image/) and the harness it seeds"
-( cd "${WT}" && build_image "${LOGDIR}/runtime-build.log" -q --build-arg STYRMAN_VERSION=verify -t "${RIMG}" image/ )
-want_skills="$(find "${WT}/image/harness/skills" -mindepth 2 -maxdepth 2 -name SKILL.md | wc -l | tr -d ' ')"
-want_agents="$(find "${WT}/image/harness/agents" -maxdepth 1 -name '*.md' | wc -l | tr -d ' ')"
-listed="$(docker run --rm --entrypoint /styrman/bin/sh-agent "${RIMG}" list --repo /styrman/harness 2>&1)"
-if ! grep -q "Skills (${want_skills})" <<<"${listed}" || ! grep -q "Subagents (${want_agents})" <<<"${listed}"; then
-    echo "FAIL: the runtime image lists a different harness than the commit's image/harness tree" >&2
-    echo "      expected Skills (${want_skills}) and Subagents (${want_agents}); got:" >&2
-    grep -E '^### ' <<<"${listed}" >&2 || true
+# The runtime image is the updater's other build, and the one that carries
+# the agent harness: the sh-agent release binary named by the Dockerfile's
+# HARNESS_VERSION, downloaded from GitHub at build (ADR-074). The build needs
+# a token that reads the private styrman-harness repository (one rule for
+# every build site: GH_TOKEN, else /etc/styrman/gh-token, else stop).
+echo "==> runtime image (image/) and the sh-agent release it carries"
+( cd "${WT}" && GH_TOKEN="${BUILD_TOKEN}" build_image "${LOGDIR}/runtime-build.log" -q "${SECRET_ARGS[@]}" --build-arg STYRMAN_VERSION=verify -t "${RIMG}" image/ )
+want_rel="$(sed -n 's/^ARG HARNESS_VERSION=\(v[0-9][0-9.]*\)$/\1/p' "${WT}/image/Dockerfile")"
+[ -n "${want_rel}" ] || { echo "FAIL: image/Dockerfile has no 'ARG HARNESS_VERSION=vX.Y.Z' line" >&2; exit 1; }
+got_rel="$(docker run --rm --entrypoint /styrman/bin/sh-agent "${RIMG}" version 2>&1)"
+if [ "${got_rel}" != "sh-agent ${want_rel}" ]; then
+    echo "FAIL: the runtime image's sh-agent reports '${got_rel}', the Dockerfile pins ${want_rel}" >&2
     exit 1
 fi
-echo "    runtime image seeds ${want_skills} skills, ${want_agents} subagents (styrman-harness $(cut -c1-7 "${WT}/image/harness/COMMIT"))"
-# The mirror in the image must be a plain copy — no `.git` — or sh-agent's
-# install would take its rebuild path at every project boot (harness BUG-015;
-# the entrypoint's git guards are gone on that promise). The guarantee is
-# image/.dockerignore's `**/.git`; this is the one place the release path
-# proves it on the built image (security review 2026-09-14, round 3).
-if ! docker run --rm --entrypoint sh "${RIMG}" -c 'test ! -e /styrman/harness/.git'; then
-    echo "FAIL: the runtime image carries /styrman/harness/.git — the mirror is not a plain copy" >&2
-    exit 1
-fi
-echo "    runtime image's mirror is a plain copy (no /styrman/harness/.git)"
+echo "    runtime image carries sh-agent ${want_rel}: $(docker run --rm --entrypoint /styrman/bin/sh-agent "${RIMG}" list 2>&1 | grep -E '^### ' | tr '\n' ' ')"
 
 echo
 echo "OK: commit ${SHA:0:12} builds and tests clean in isolation — safe to tag."

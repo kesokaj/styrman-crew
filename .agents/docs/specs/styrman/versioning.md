@@ -12,7 +12,7 @@ read that for the trust story; this doc is the day-to-day reference.
 |---|---|---|---|
 | `styrman-server` | `deploy/Dockerfile.server` | `docker compose build` (or `styrman-update`) | The Go binary + embedded SPA — the containerized server itself. |
 | `styrman-caddy` | `deploy/caddy/Dockerfile` | `docker compose build` (or `styrman-update`) | The vendored ingress: Caddy 2 + caddy-security (Google OAuth) + Cloudflare DNS + the styrman label-discovery module. |
-| `styrman-runtime` | `image/Dockerfile` | `docker build ... image/` — NOT a compose service, a separate step | The per-project microVM image every project boots: Kata guest, dotfiles, the agent harness (`claude`/`agy`), toolchains. The harness itself is delivered by the host's harness channel (ADR-073) once that channel has run; the image's own mirror at `image/harness/COMMIT` (ADR-062) is the fallback until then (R5). |
+| `styrman-runtime` | `image/Dockerfile` | `docker build --secret id=gh_token,… image/` — NOT a compose service, a separate step | The per-project microVM image every project boots: Kata guest, dotfiles, the agent harness (`claude`/`agy`) as the `sh-agent` release binary the Dockerfile's `ARG HARNESS_VERSION` names, downloaded from GitHub at build (ADR-074, R5), toolchains. |
 
 `styrman-runtime` is the odd one out: `docker compose build`/`up --build`
 never touches it. Forgetting to (re)build it at the release version is the
@@ -86,14 +86,13 @@ that section for why.
 
 1. Land the change (commit; the review/security/verifier gates and
    `/preflight` are a separate concern from this doc — see `AGENTS.md`'s
-   Definition of Done). The agent harness itself is no longer shipped by a
-   crew release: since ADR-073 the host's harness channel
-   (`styrman-update harness`, `deploy.md` "Harness channel") delivers the
-   newest signed `styrman-harness` tag directly, independent of
-   `STYRMAN_VERSION`. `image/harness/` remains the fallback the image mirrors
-   (ADR-062) until the channel has delivered on a given host; a release that
-   refreshes it still names the `styrman-harness` commit it ships
-   (`image/harness/COMMIT`) in its changelog entry, recorded as before.
+   Definition of Done). The agent harness a release ships is the
+   `styrman-harness` release the Dockerfile's `ARG HARNESS_VERSION` names
+   (ADR-074); a release that bumps it names the new harness version in its
+   changelog entry, and the bump is read against that harness release's
+   notes before it lands here — the harness content is reviewed in its own
+   repository's gate, not in this one (security review 2026-09-21). Between crew releases a project moves itself forward when
+   its user runs `sh-agent update` inside it.
 2. **REQUIRED: verify the COMMIT, not the working tree, before tagging it —
    run `deploy/verify-commit.sh [commit-ish]` (default `HEAD`).**
    `go build`/`go test`/`docker build` run against whatever is currently
@@ -185,8 +184,9 @@ real on 2026-09-02 — the stack had to be brought back up from
 ```bash
 cd /opt/styrman                # the production clone — NOT a dev checkout
 STYRMAN_VERSION=X.Y.Z
-docker build -t styrman-runtime:${STYRMAN_VERSION} \
-  --build-arg STYRMAN_VERSION=${STYRMAN_VERSION} image/
+sudo docker build -t styrman-runtime:${STYRMAN_VERSION} \
+  --secret id=gh_token,src=/etc/styrman/gh-token \
+  --build-arg STYRMAN_VERSION=${STYRMAN_VERSION} image/   # the token must read kesokaj/styrman-harness (ADR-074)
 cd deploy                      # deploy/.env lives here; compose reads it from cwd
 STYRMAN_VERSION=${STYRMAN_VERSION} \
   docker compose -f docker-compose.yml up -d --build
