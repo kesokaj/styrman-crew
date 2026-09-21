@@ -283,9 +283,12 @@ commit to git."
   irreversible** — it removes the workspace, the project home, and the
   docker disk with no safety net. The UI's "type delete to confirm" dialog
   is the only gate; there is nothing to restore from afterward.
-- **Rebuilding a host** is: clone the repo, `sudo GH_TOKEN=$(gh auth token) bash deploy/host-setup.sh
-  --user $USER`, fill in a fresh `deploy/.env` (see "Bring-up" above), bring
-  the stack up. There is no state to restore — only project workspaces that
+- **Rebuilding a host** is: clone the repo, `sudo deploy/styrman-ctl install
+  --gh-token-file <600 file>` (the token travels as a file; the bare
+  `sudo GH_TOKEN=$(gh auth token) bash deploy/host-setup.sh --user $USER` form
+  still works but puts the token on a sudo-logged command line — see
+  "Bring-up" above), fill in a fresh `deploy/.env`, bring the stack up. A
+  GCP host: `deploy/gcp/vm.sh create` + `deploy/gcp/install.sh` (`gcp.md`). There is no state to restore — only project workspaces that
   were actually committed and pushed come back; anything left uncommitted
   in a project's workspace or home is gone with the old host.
 

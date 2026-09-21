@@ -59,6 +59,12 @@ STYRMAN_VERSION=<x.y.z> docker compose -f deploy/docker-compose.yml up -d --buil
 # "Release procedure"
 deploy/verify-commit.sh [commit-ish]   # default HEAD; SKIP_WEB_FRESHNESS=1 skips the npm-dependent steps
 
+# GCP target (ADR-075): a disposable Compute Engine VM on the same host path;
+# defaults in deploy/gcp/vm.conf, secrets in ~/.config/styrman/gcp/ — guide:
+# .agents/docs/deploy/gcp.md
+deploy/gcp/vm.sh create            # reserve the static IP + create the VM (nested virt, IAP-only ssh); status | ssh | stop | start | delete --confirm styrman
+deploy/gcp/install.sh              # clone at the newest release tag on the VM, verify its signature, styrman-ctl install --yes there
+
 # Test suites
 bash .agents/docs/testing/styrman/integration.sh   # vs real Kata; check counts live in .agents/docs/testing/styrman/README.md (the source of truth)
 bash web/e2e/run.sh                                # browser e2e (Playwright, self-hosted; check counts: .agents/docs/testing/styrman/README.md)
