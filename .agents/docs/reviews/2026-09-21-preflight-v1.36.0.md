@@ -38,7 +38,7 @@ Fixing 1, 2, 3 and 6 after the gate's verification row invalidated it; the row w
 
 The release commit is tagged `v1.36.0` (SSH-signed, per-command config, checked before the push as `specs/styrman/versioning.md` § Release procedure says); the auto-updater on this host deploys it within one 5-minute tick. Live verification is recorded below once the tick has run.
 
-DEPLOY_RESULT
+Deployed by the updater's 20:32:41 tick (`journalctl -u styrman-update`): `deploying v1.36.0 as 1.36.0`, runtime image built, deployed-version `v1.36.0` at 20:33:11, no rollback. Live at 20:33–20:35: `styrman-server:1.36.0` and `styrman-caddy:1.36.0` running, the server container `healthy`, its start line `"image":"styrman-runtime:1.36.0"`, `https://crew.styrman.xyz/api/health` answering 302 (the OAuth portal, as production does unauthenticated); `docker run --rm --entrypoint /styrman/bin/sh-agent styrman-runtime:1.36.0 version` → `sh-agent v1.6.0`; the server logs no `harness channel` line. The second tick (20:38:01, the NEW updater) logged `harness-retire: removed /etc/systemd/system/styrman-harness-update.timer` and `…service`; `systemctl is-enabled styrman-harness-update.timer` → `not-found`; no `harness-*` state files under `/etc/styrman/update`. `/var/lib/styrman/harness` does not exist on this host (the v1.35.0 units were installed but its content dir never was), so no `rmdir` is due. Not verified live: a project boot on the new runtime image and `sh-agent update` inside a project — the operator's check, in a project terminal, on the next stop/start of a project (the two running projects keep their old containers until then).
 
 ## What was not checked
 
