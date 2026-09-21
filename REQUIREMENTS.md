@@ -50,14 +50,17 @@
    allows — `attribution` in `~/.claude/settings.json`, commit and PR trailers off,
    written only when absent — ADR-062, operator approval 2026-09-04, the exception
    approved 2026-09-16 (ADR-072); was "vendored from `devshell_prompt/harness`") is
-   carried by the **host's verified harness channel**: the newest SSH-signed
-   `styrman-harness` tag that verifies against `/etc/styrman/allowed_signers`, exported
-   under `/var/lib/styrman/harness/current` and mounted read-only into every project VM
-   (ADR-073, operator approval 2026-09-16), the base image's pinned mirror at
-   `image/harness/COMMIT` remaining the fallback until the channel has delivered; the
-   default shell config is carried by the **base image**; both are seeded identically
-   into every project home (ADR-030, revised 2026-08-28; was "deployed into the shared
-   home").
+   is carried by the **base image** as the `sh-agent` release binary with the harness
+   embedded — downloaded at image build from the styrman-harness GitHub release named
+   by the Dockerfile's `HARNESS_VERSION`, its signed checksums verified against the
+   harness's signer (ADR-074, operator approval 2026-09-21; was "the host's verified
+   harness channel … the image's pinned mirror … the fallback", ADR-073). The
+   entrypoint installs it into a project home whose harness differs and never
+   downgrades one the user moved forward; from there each project moves itself
+   forward when its user runs `sh-agent update` in it (the harness's R8/R9), so
+   projects may run different harness releases. The default shell config is carried
+   by the base image and seeded write-once into every project home (ADR-030, revised
+   2026-08-28; was "deployed into the shared home").
 6. **R6 — Terminals are durable records over tmux sessions** (ADR-016):
    survive browser disconnects; single active WebSocket per terminal
    (close-code 4001 replaces); pause keeps record + transcript.

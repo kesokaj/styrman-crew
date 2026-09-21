@@ -11,7 +11,8 @@ matching empty-slate Inbox and **ADR-045**
 closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
-- `.agents/docs/plans/2026-09-21-sh-agent-release-binary.md` — the harness reaches a project as the sh-agent release binary (in progress)
+<!-- Nothing in progress. The sh-agent release-binary delivery (ADR-074) landed 2026-09-21;
+its plan is closed (.agents/docs/plans/2026-09-21-sh-agent-release-binary.md). -->
 
 ## Next
 

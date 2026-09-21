@@ -256,13 +256,13 @@ if ! docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
     # repository (ADR-074): a token as a build SECRET, by the one rule every
     # build site follows — GH_TOKEN, else /etc/styrman/gh-token, else stop.
     SECRET_ARGS=()
-    if [ -n "${GH_TOKEN:-}" ]; then export GH_TOKEN; SECRET_ARGS=(--secret id=gh_token,env=GH_TOKEN)
+    if [ -n "${GH_TOKEN:-}" ]; then export GH_TOKEN; SECRET_ARGS=(--secret "id=gh_token,env=GH_TOKEN")
     elif [ -f /etc/styrman/gh-token ]; then
         # The updater's own bar for this file (root-owned, no group/world access): a
         # root build must not authenticate with a token another user controls.
         [ "$(stat -c %u /etc/styrman/gh-token)" = 0 ] && [ -z "$(find /etc/styrman/gh-token -perm /077 2>/dev/null)" ] \
             || { echo "FATAL: /etc/styrman/gh-token is not root-owned or is readable beyond root (chmod 600 it)"; exit 1; }
-        SECRET_ARGS=(--secret id=gh_token,src=/etc/styrman/gh-token)
+        SECRET_ARGS=(--secret "id=gh_token,src=/etc/styrman/gh-token")
     else echo "FATAL: no GitHub token for the styrman-harness download — run with GH_TOKEN=\$(gh auth token) in the environment, or install /etc/styrman/gh-token (root, 600) first"; exit 1; fi
     docker build -t "${RUNTIME_IMAGE}" "${SECRET_ARGS[@]}" \
         --build-arg STYRMAN_VERSION="${SETUP_VERSION}" \

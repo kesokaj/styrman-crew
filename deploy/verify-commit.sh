@@ -64,14 +64,14 @@ build_image() {  # build_image <log> <docker build args…>
 # 2026-09-21).
 BUILD_TOKEN=""
 if [ -n "${GH_TOKEN:-}" ]; then
-    BUILD_TOKEN="${GH_TOKEN}"; SECRET_ARGS=(--secret id=gh_token,env=GH_TOKEN)
+    BUILD_TOKEN="${GH_TOKEN}"; SECRET_ARGS=(--secret "id=gh_token,env=GH_TOKEN")
 elif [ -r /etc/styrman/gh-token ]; then
     # The updater's own bar for this file (root-owned, no group/world access).
     [ "$(stat -c %u /etc/styrman/gh-token)" = 0 ] && [ -z "$(find /etc/styrman/gh-token -perm /077 2>/dev/null)" ] \
         || { echo "FATAL: /etc/styrman/gh-token is not root-owned or is readable beyond root (chmod 600 it)" >&2; exit 1; }
-    SECRET_ARGS=(--secret id=gh_token,src=/etc/styrman/gh-token)
+    SECRET_ARGS=(--secret "id=gh_token,src=/etc/styrman/gh-token")
 elif BUILD_TOKEN="$(gh auth token 2>/dev/null)" && [ -n "${BUILD_TOKEN}" ]; then
-    SECRET_ARGS=(--secret id=gh_token,env=GH_TOKEN)
+    SECRET_ARGS=(--secret "id=gh_token,env=GH_TOKEN")
 else
     echo "FATAL: no GitHub token for the styrman-harness download — GH_TOKEN=<a fine-grained token that reads kesokaj/styrman-harness> (or gh auth login), or install /etc/styrman/gh-token" >&2; exit 1
 fi

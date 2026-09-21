@@ -41,3 +41,5 @@ styrman-harness rebuilt its delivery around one mechanism — `sh-agent` is a Go
 - The channel's empty content dir `/var/lib/styrman/harness` on the live host is the operator's `sudo rmdir`; the updater names no production path of its own (D9).
 - The crew token at `/etc/styrman/gh-token` must be granted read on `kesokaj/styrman-harness` before the next release deploy, or the deploy tick's image build fails at the download.
 - Next release: v1.36.0 (MINOR), cut by `/preflight` on the operator's word.
+
+Addendum (2026-09-21, the follow-up commit): R5 rewritten on the operator's approval ("Go") and ADR-074 appended to `DECISIONS.md`; ADR-062 and ADR-073 marked superseded; the plan closed; ROADMAP "Now" cleared.

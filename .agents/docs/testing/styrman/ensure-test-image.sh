@@ -56,7 +56,7 @@ if [ -z "${BUILD_TOKEN}" ]; then
     [ -n "${BUILD_TOKEN}" ] || { echo "FATAL: ensure-test-image: no GitHub token for the styrman-harness download — GH_TOKEN=<a token that reads kesokaj/styrman-harness>, or gh auth login" >&2; exit 1; }
 fi
 unset GH_TOKEN
-if ! GH_TOKEN="${BUILD_TOKEN}" docker build -t "${TAG}" --secret id=gh_token,env=GH_TOKEN --build-arg "STYRMAN_VERSION=test-$(date +%s)" "${ROOT}/image" >"${ROOT}/.agents/scratch/ensure-test-image.log" 2>&1; then
+if ! GH_TOKEN="${BUILD_TOKEN}" docker build -t "${TAG}" --secret "id=gh_token,env=GH_TOKEN" --build-arg "STYRMAN_VERSION=test-$(date +%s)" "${ROOT}/image" >"${ROOT}/.agents/scratch/ensure-test-image.log" 2>&1; then
     echo "FATAL: ensure-test-image: docker build of ${TAG} failed — see .agents/scratch/ensure-test-image.log" >&2
     exit 1
 fi
