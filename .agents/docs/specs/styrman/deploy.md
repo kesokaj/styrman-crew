@@ -48,7 +48,7 @@ executes nothing.
 
 | Verb | Wraps |
 |---|---|
-| `install` | `host-setup.sh --user <operator>`; prompts for the six must-fill `.env` keys (validated) with `--env-file` supplying defaults unattended; `resolve_version` (`--version`, else the checkout's newest reachable release tag, never a bare commit sha, ADR-053); `docker build -t styrman-runtime:${V} --secret id=gh_token,… --build-arg STYRMAN_VERSION=${V} image/` (the secret is required since ADR-074; `styrman-ctl` takes it from `--gh-token-file`, else `GH_TOKEN`, else `/etc/styrman/gh-token`, and refuses to build without one); `STYRMAN_VERSION=${V} docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build`; waits up to 120s for `styrman-server` to report healthy; then offers auto-update setup |
+| `install` | `host-setup.sh --user <operator>`; prompts for the five must-fill `.env` keys (validated) with `--env-file` supplying defaults unattended; `resolve_version` (`--version`, else the checkout's newest reachable release tag, never a bare commit sha, ADR-053); `docker build -t styrman-runtime:${V} --secret id=gh_token,… --build-arg STYRMAN_VERSION=${V} image/` (the secret is required since ADR-074; `styrman-ctl` takes it from `--gh-token-file`, else `GH_TOKEN`, else `/etc/styrman/gh-token`, and refuses to build without one); `STYRMAN_VERSION=${V} docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build`; waits up to 120s for `styrman-server` to report healthy; then offers auto-update setup |
 | `update --setup` | the "Setup" steps below, as prompts: GitHub token → `/etc/styrman/gh-token` (600); clone-or-fetch `/opt/styrman` under a one-shot `GIT_ASKPASS`; `chown -R root:root` the clone; copy `deploy/.env` into it; write `/etc/styrman/allowed_signers`; `styrman-update --check` with `STYRMAN_UPDATE_STATE_DIR`/`STYRMAN_DEPLOY_DIR`/`STYRMAN_GH_TOKEN_FILE`/`STYRMAN_ALLOWED_SIGNERS` all named explicitly; `systemctl enable --now styrman-update.timer`; `systemctl start styrman-update.service` for the first tick |
 | `update` | `systemctl start styrman-update.service` (one tick now) + `journalctl -u styrman-update.service -n 20` |
 | `update --redeploy` | `styrman-update --force` (clears a latched failed-version, rebuilds the current tag) |
@@ -85,7 +85,7 @@ stop+recreated once on next open to gain the workspace bind.
 Composition (`deploy/docker-compose.yml`):
 - **styrman-caddy** — the ingress vendored from devbox (`deploy/caddy/`,
   see VENDORED.md): Caddy 2 + caddy-security (Google OAuth portal at
-  `auth.<BASE_DOMAIN>`), Cloudflare DNS records + ACME certs, and Docker-label
+  `auth.<BASE_DOMAIN>`), Cloudflare DNS records + DNS-01 ACME certs (or HTTP-01 ACME when CLOUDFLARE_API_TOKEN is unset), and Docker-label
   app discovery. Host networking; watches the docker socket read-only.
   Container-name-derived subdomains and Caddy policy names are sanitized
   (`sanitizeHostname`/`sanitizePolicyName`, `deploy/caddy/ingress/labels.go`
@@ -195,7 +195,8 @@ public links. The kinds are locked to their routes: a private token 404s on
 Prerequisites: a Google OAuth client (console.cloud.google.com → APIs &
 Services → Credentials): Web application, redirect URI
 `https://auth.<BASE_DOMAIN>/oauth2/google/authorization-code-callback`;
-and a Cloudflare API token scoped Zone:DNS:Edit on the zone.
+and an optional Cloudflare API token scoped Zone:DNS:Edit on the zone (when
+omitted, Caddy uses HTTP-01 ACME challenges and DNS records are created manually).
 
 ```bash
 # host-setup.sh's step 7 builds the runtime image, which downloads the sh-agent
@@ -208,9 +209,9 @@ and a Cloudflare API token scoped Zone:DNS:Edit on the zone.
 # with GH_TOKEN exported beforehand, for a bare host-setup.sh run.
 sudo GH_TOKEN=$(gh auth token) bash deploy/host-setup.sh --user $USER   # also seeds deploy/.env identity values
 vi deploy/.env                                # fill: BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET,
-                                              #       CLOUDFLARE_API_TOKEN, ADMIN_EMAIL,
-                                              #       STYRMAN_ALLOWED_EMAILS
-                                              #       (+ optional STYRMAN_PUBLIC_DOMAIN /
+                                              #       ADMIN_EMAIL, STYRMAN_ALLOWED_EMAILS
+                                              #       (+ optional CLOUDFLARE_API_TOKEN,
+                                              #       STYRMAN_HOSTNAME, STYRMAN_PUBLIC_DOMAIN /
                                               #       STYRMAN_PRIVATE_DOMAIN)
 # Build + deploy at the release version — the exact commands (and why
 # `git describe --tags --always` must NOT be used here: its SHA-suffixed

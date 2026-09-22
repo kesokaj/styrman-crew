@@ -1,6 +1,6 @@
 ---
 owner: documentation
-date: 2026-09-03
+date: 2026-09-22
 target: local
 ---
 # Deploy — local
@@ -28,7 +28,7 @@ GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN \
 |---|---|---|
 | `STYRMAN_IMAGE` | — | Runtime image the server boots per project (`styrman-runtime:dev` locally) |
 | `STYRMAN_VERSION` | required by compose | Release version; compose refuses to run without it (no mutable tags, ADR-053) |
-| `deploy/.env` | `.env.example` | Secrets for production only: OAuth client, Cloudflare token, ingress token, JWT key — never committed |
+| `deploy/.env` | `.env.example` | Secrets for production only: OAuth client, Cloudflare token (optional), ingress token, JWT key — never committed |
 
 ## Run
 

@@ -1,6 +1,6 @@
 ---
 owner: documentation
-date: 2026-09-21
+date: 2026-09-22
 target: gcp
 ---
 # Deploy — GCP (a Compute Engine VM on the unchanged host path)
@@ -26,7 +26,7 @@ these scripts, as on the NUC.
 | Machine | `n4-standard-8` (8 vCPU / 32 GB), 300 GB Hyperdisk Balanced, Debian 13 (`debian-13` family), Shielded VM | `GCP_MACHINE_TYPE`, `GCP_BOOT_DISK_*`, `GCP_IMAGE_*` |
 | Service account | **none** (`--no-service-account --no-scopes`): the host needs no GCP API, and a LAN-mode project can reach the metadata server | `vm.sh create` |
 | Public | yes for 80/443 via the project's `http`/`https` firewall tags; **no public port 22** — ssh goes through IAP (Identity-Aware Proxy TCP forwarding, the project's `allow-iap` rule) | `GCP_TAGS`, `GCP_SSH_VIA_IAP` |
-| Static IP | reserved as `styrman-static` in the region; the ingress writes the Cloudflare records to it | `GCP_ADDRESS` |
+| Static IP | reserved as `styrman-static` in the region; DNS points to it (via Cloudflare ingress sync or manual Cloud DNS records) | `GCP_ADDRESS` |
 | Hostname | `BASE_DOMAIN=spgo.demo.altostrat.com`, `STYRMAN_HOSTNAME=crew` → app `https://crew.spgo.demo.altostrat.com`, sign-in `https://auth.spgo.demo.altostrat.com` | the `env` secrets file |
 | Instance name | `styrman` | `GCP_INSTANCE` |
 
@@ -113,7 +113,9 @@ URL, so a mismatch is reported rather than probed blindly.
 `--secrets-dir D` points at another directory. Both scripts take
 `--dry-run`, which prints every command that would change something as
 `+ cmd` and runs none of them (reads such as `describe` still run, so the
-plan is the real one).
+plan is the real one). `deploy/gcp/lib.sh` stat calls are portable across
+macOS and Linux (`stat -c` on Linux, `stat -f` on BSD/macOS), so `install.sh`
+runs on either operator OS without issues.
 
 `install.sh` refuses, before staging anything: a missing or non-running VM
 (`vm.sh create` / `vm.sh start`), an unreachable VM (it prints gcloud's
@@ -130,8 +132,8 @@ The token never appears on a command line: it travels as a file and
 `styrman-ctl` exports it for `host-setup.sh` in its own process.
 
 What runs on the VM is exactly the NUC's first bring-up (`remote.md`,
-`specs/styrman/deploy.md` "Bring-up"): `host-setup.sh --user U`, the six
-`.env` keys, the runtime image built with the token as a build secret, the
+`specs/styrman/deploy.md` "Bring-up"): `host-setup.sh --user U`, the five
+must-fill `.env` keys, the runtime image built with the token as a build secret, the
 stack at the release version, then the auto-updater set up with the same
 token and signer, so the VM follows every signed release tag on its own.
 
@@ -169,8 +171,8 @@ deploy/gcp/vm.sh start
 deploy/gcp/vm.sh delete --confirm styrman      # instance, boot disk and static IP — irreversible; without --confirm it refuses (exit 2)
 ```
 
-Deleting leaves the Cloudflare records behind (the ingress creates, never
-deletes them) and the OAuth redirect URI on the client. **Remove both by
+Deleting leaves DNS records behind (the ingress creates, never
+deletes Cloudflare records; manual Cloud DNS records also remain) and the OAuth redirect URI on the client. **Remove both by
 hand as part of the teardown, not "if you feel like it".** The address is
 released back to Google's pool, so the records now point at an address
 someone else can be given: whoever gets it can serve content on your names,
@@ -181,9 +183,12 @@ shared with another host (it should not be: see the prerequisites), that
 reaches the other host too.
 
 ```bash
-# the two records the ingress created, in the Cloudflare dashboard or API:
+# DNS records to remove (Cloudflare dashboard/API, or Cloud DNS if created manually):
 #   <STYRMAN_HOSTNAME>.<BASE_DOMAIN>   A   <the released address>
 #   auth.<BASE_DOMAIN>                 A   <the released address>
+# For Cloud DNS:
+#   gcloud dns record-sets delete crew.spgo.demo.altostrat.com. --project=daring-lioness-uwgw --zone=spgo-demo-altostrat-com --type=A
+#   gcloud dns record-sets delete auth.spgo.demo.altostrat.com. --project=daring-lioness-uwgw --zone=spgo-demo-altostrat-com --type=A
 dig +short <STYRMAN_HOSTNAME>.<BASE_DOMAIN> auth.<BASE_DOMAIN>   # both must return nothing when done
 ```
 

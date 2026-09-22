@@ -200,12 +200,12 @@ selections before a keypress can land — the runtime image's tmux
 ## 2. Architecture
 
 ```
-Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS, Cloudflare DNS,
+Browser ──HTTPS──► styrman-caddy (host net): Google OAuth, TLS (Cloudflare DNS or HTTP-01 ACME),
                    label discovery (vendored ingress, deploy/caddy)
                       │ X-Caddy-Email + X-Styrman-Ingress
                       ▼
    styrman-server (container; header-auth; no auth-bypass listener in prod)
-     ├── embedded TanStack Start SPA (ADR-013)
+     ├── embedded TanStack Start SPA (ADR-013; PWA install support)
      ├── identity → per-user space: homes/<user> (server-only parent of
      │   base/ and p/<uuid>, ADR-064), users/<user>/{projects,
      │   conversations,profile}.json  (ADR-019; no database, ADR-007)
@@ -467,9 +467,10 @@ GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN \
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
 
 # Production (Google OAuth + HTTPS + reboot-safe; needs neither Go nor Node):
-vi deploy/.env    # BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET, CLOUDFLARE_API_TOKEN,
-                  # ADMIN_EMAIL, STYRMAN_ALLOWED_EMAILS, STYRMAN_HOSTNAME (default
-                  # styrman; the live deploy uses crew) (redirect URI:
+vi deploy/.env    # BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET, ADMIN_EMAIL,
+                  # STYRMAN_ALLOWED_EMAILS (plus optional CLOUDFLARE_API_TOKEN;
+                  # HTTP-01 ACME challenge used when omitted), STYRMAN_HOSTNAME
+                  # (default styrman; the live deploy uses crew) (redirect URI:
                   # https://auth.<domain>/oauth2/google/authorization-code-callback)
 # The version derivation + build/deploy commands are NOT restated here — see
 # versioning.md's "Release procedure" for the exact steps (commit, verify the
@@ -479,7 +480,7 @@ vi deploy/.env    # BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET, CLOUDFLARE_API_TOKEN,
 # the version with `git describe --tags --always` — versioning.md explains
 # why that command's SHA-suffixed fallback breaks the no-mutable-tags rule
 # (ADR-053).
-# DNS records + certs are automatic → https://<STYRMAN_HOSTNAME>.<domain>
+# Certs + DNS records are automatic with Cloudflare, or manual DNS + HTTP-01 ACME → https://<STYRMAN_HOSTNAME>.<domain>
 ```
 
 `host-setup.sh` installs a pinned Docker CE version and Kata release with a

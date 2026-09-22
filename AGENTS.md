@@ -63,7 +63,7 @@ deploy/verify-commit.sh [commit-ish]   # default HEAD; SKIP_WEB_FRESHNESS=1 skip
 # defaults in deploy/gcp/vm.conf, secrets in ~/.config/styrman/gcp/ — guide:
 # .agents/docs/deploy/gcp.md
 deploy/gcp/vm.sh create            # reserve the static IP + create the VM (nested virt, IAP-only ssh); status | ssh | stop | start | delete --confirm styrman
-deploy/gcp/install.sh              # clone at the newest release tag on the VM, verify its signature, styrman-ctl install --yes there
+deploy/gcp/install.sh              # clone at the newest release tag on the VM, verify its signature, styrman-ctl install --yes there (runs on macOS or Linux)
 
 # Test suites
 bash .agents/docs/testing/styrman/integration.sh   # vs real Kata; check counts live in .agents/docs/testing/styrman/README.md (the source of truth)
@@ -165,7 +165,7 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
 
 ## Deploy
 
-Three targets exist: local (loopback dev run), the production host (the operator's NUC), and a disposable GCP Compute Engine VM running the same host path (`deploy/gcp/vm.sh`, `deploy/gcp/install.sh`, ADR-075). Procedures live in `.agents/docs/deploy/` — `local.md`, `remote.md` (points at `deploy/README.md`, `specs/styrman/deploy.md`, and `versioning.md`), `gcp.md` (the GCP target's defaults, prerequisites and procedure). `/preflight` deploys only by these guides.
+Three targets exist: local (loopback dev run), the production host (the operator's NUC, `crew.styrman.xyz`), and a disposable GCP Compute Engine VM (`daring-lioness-uwgw`, `crew.spgo.demo.altostrat.com`, 300GB Hyperdisk Balanced) running the same host path (`deploy/gcp/vm.sh`, `deploy/gcp/install.sh`, ADR-075). `CLOUDFLARE_API_TOKEN` is optional on both remote targets (HTTP-01 ACME challenge fallback). Procedures live in `.agents/docs/deploy/` — `local.md`, `remote.md` (points at `deploy/README.md`, `specs/styrman/deploy.md`, and `versioning.md`), `gcp.md` (the GCP target's defaults, prerequisites and procedure). `/preflight` deploys only by these guides.
 
 ## Key Files
 

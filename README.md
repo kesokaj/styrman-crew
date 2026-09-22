@@ -28,7 +28,8 @@ with `sh-agent update`, no crew release required.
   it; Settings → Appearance sets terminal and editor font size and family.
   A **Browser** view shows each project's own headless Chromium, driven by
   the operator and by the agents alike through the `styrman-browser` MCP
-  server (ADR-068).
+  server (ADR-068). **PWA support** enables installing the web app directly
+  to desktop or home screen (manifest, custom icons, theme color).
 - **Every project is a git repo, always.** Initialized (or cloned) at
   creation, no exceptions. The **Git tab is a real client**: status, stage/
   unstage, commit (author auto-injected), a Fast commit button for a
@@ -81,10 +82,10 @@ with `sh-agent update`, no crew release required.
 ## Architecture
 
 ```
-Browser ──HTTPS──► Caddy (Google OAuth, TLS, Cloudflare DNS — vendored ingress)
+Browser ──HTTPS──► Caddy (Google OAuth, TLS via Cloudflare DNS or HTTP-01 ACME — vendored ingress)
                       │ identity header
                       ▼
-              styrman server (Go; embedded TanStack Start SPA)
+              styrman server (Go; embedded TanStack Start SPA, PWA installable)
                 ├── per-user spaces: homes/<user> (server-only parent of
                 │     base/ and p/<uuid>, ADR-064), metadata JSON stores
                 ├── REST + WS /ws/term/{projectId}/{terminal}
@@ -110,11 +111,20 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.38.0**, deployed: https://crew.styrman.xyz (Google sign-in).
+**v1.39.0**, deployed: https://crew.spgo.demo.altostrat.com (GCP) and https://crew.styrman.xyz (NUC) (Google sign-in).
 
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
 
+- **v1.39.0** (2026-09-22): GCP target migrated to `daring-lioness-uwgw` (300 GB
+  Hyperdisk Balanced, domain `spgo.demo.altostrat.com`, deployed to
+  `https://crew.spgo.demo.altostrat.com` via signed tag + auto-updater);
+  `CLOUDFLARE_API_TOKEN` is now optional across Caddy ingress, `styrman-ctl`,
+  and `install.sh` (Caddy falls back to HTTP-01 ACME challenges for non-wildcard
+  hostnames); `deploy/gcp/lib.sh` stat calls are portable across macOS and
+  Linux (`stat -c` / `stat -f`); PWA support added (`manifest.webmanifest`,
+  192/512/maskable PNG icons, apple-touch-icon, theme-color meta tag) enabling
+  browser install prompts and home-screen app launch.
 - **v1.38.0** (2026-09-22): a whole-project review, acted on in five phases.
   The file explorer's listing is bounded (5000 entries) and says when it was
   cut — it previously read an entire guest-owned directory and sorted it
@@ -285,7 +295,8 @@ sudo bash deploy/host-setup.sh --user $USER
 #    group added in step 1 is not active in your current shell yet.
 
 # Production (Google OAuth, HTTPS, reboot-safe) — no mutable tags. Fill the
-# OAuth/Cloudflare/domain values first:
+# OAuth/domain values first (CLOUDFLARE_API_TOKEN is optional; HTTP-01 ACME
+# challenge fallback):
 vi deploy/.env
 # The version derivation + build/deploy commands live in ONE place, not
 # restated here — versioning.md's "Release procedure" (commit, verify the

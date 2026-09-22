@@ -1,6 +1,6 @@
 ---
 owner: documentation
-date: 2026-09-21
+date: 2026-09-22
 target: remote
 ---
 # Deploy — remote machine (production host)
@@ -12,7 +12,7 @@ Production is one self-hosted Debian 13 host (baremetal on the operator's networ
 | Item | Value |
 |---|---|
 | Host | operator's Debian 13 box (`deploy/host-setup.sh` converges it, R11) |
-| Services | vendored Caddy ingress (Google OAuth, TLS, Cloudflare DNS) + containerized server (`deploy/Dockerfile.server`) via `deploy/docker-compose.yml` |
+| Services | vendored Caddy ingress (Google OAuth, TLS via Cloudflare DNS or HTTP-01 ACME) + containerized server (`deploy/Dockerfile.server`) via `deploy/docker-compose.yml` |
 | Secrets | `deploy/.env` on the host only |
 
 The host is provisioned and operated with `sudo deploy/styrman-ctl`
