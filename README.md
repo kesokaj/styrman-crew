@@ -48,17 +48,18 @@ with `sh-agent update`, no crew release required.
   an optional autostart command (start your dev server or a container the
   moment the session opens).
 - **Hard isolation.** 1 project = 1 microVM (own kernel, own dockerd, own
-  network, own home — projects can never reach each other; the LAN only
-  when an admin allows it for that one project, ADR-065/066). Enforced by a
-  host firewall (dedicated iptables chains, insert-if-missing so there's no
-  unprotected window) that a self-healing systemd timer re-applies every 60s
-  (ADR-036; the host-reachability rule itself is ADR-029), with the
-  per-project LAN allowance applied by the same root script within about a
-  second of the switch. An allowance is full same-network parity outbound:
-  the host itself and host-published ports are inside it only where the
-  operator's root-owned conf opts in (both default closed), and a
-  LAN-enabled project stops being served the operator's SSH key. Users never
-  see each other's worlds.
+  network, own home — projects can never reach each other, Docker's own
+  unconditional per-bridge DROP rule). A project's MODE is its Docker
+  bridge interface name, chosen by the server at `docker network create` —
+  nothing else changes and the server never touches iptables. Sandbox
+  (default) is `sdb-<hash>`, matched by the root-owned host firewall's
+  (ADR-036/067) drops of all private ranges plus the host itself, internet
+  only, re-applied by a systemd timer. LAN is `lan-<hash>`, matched by no
+  styrman rule at all, so the project reaches whatever the host reaches,
+  still NAT-only outbound. An admin toggles a project's mode at any time,
+  rebuilding that project's Docker network and container; there is no
+  allowlist, no marker, no spool, and the credential broker withholds
+  nothing from a LAN project. Users never see each other's worlds.
 - **Share previews, not access.** A project owner can grant specific Google
   emails access to ONE exposed port's preview — never the terminal, files,
   dashboard, or other ports. Sharing mints a stable **private link** on its
@@ -109,23 +110,37 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.34.1**, deployed: https://crew.styrman.xyz (Google sign-in).
+**v1.37.0**, deployed: https://crew.styrman.xyz (Google sign-in).
 
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
 
-- **v1.35.0** (2026-09-16): the agent harness now reaches every project
-  through the host's HARNESS CHANNEL (ADR-073): a root timer walks the
-  `styrman-harness` tags down to the newest SSH-signed one that verifies
-  against the host's pinned signers, exports it as a plain copy with an
-  offline-built `sh-agent`, smokes it in the deployed runtime image, and
-  swaps it in under `/var/lib/styrman/harness/current`; the server mounts it
-  read-only into every project VM and a stopped VM picks a new export up on
-  its next start, so a styrman-harness release no longer needs a crew
-  release. The image's mirror stays the fallback until the channel has
-  delivered. Setup: `sudo styrman-ctl update --setup --harness-token-file
-  <file>` (a fine-grained read-only token for the styrman-harness repo);
-  `styrman-ctl status` gained a `harness` line. Full entry:
+- **v1.37.0** (2026-09-22): a GCP Compute Engine target running the
+  unchanged host path (ADR-075) — `deploy/gcp/vm.sh` for the instance
+  lifecycle over IAP and `deploy/gcp/install.sh` for bring-up on the VM —
+  plus two fixes to the shared path it uncovered: `host-setup.sh` can
+  install Kata on a fresh host again (BUG-070), and `styrman-ctl install
+  --gh-token-file` exports the token in its own process rather than on a
+  command line.
+- **v1.36.0** (2026-09-21): the agent harness is delivered as the
+  `sh-agent` release binary, downloaded and verified at image build time
+  from the private `kesokaj/styrman-harness` repository (ADR-074). Every
+  project seeds from it on first boot with `sh-agent install --home`; a
+  user pulls a newer release into their own project with `sh-agent
+  update`. This superseded ADR-062's `image/harness/` mirror and ADR-073's
+  host harness channel (below).
+- **v1.35.0** (2026-09-16): the agent harness reached every project
+  through the host's HARNESS CHANNEL (ADR-073): a root timer walked the
+  `styrman-harness` tags down to the newest SSH-signed one that verified
+  against the host's pinned signers, exported it as a plain copy with an
+  offline-built `sh-agent`, smoked it in the deployed runtime image, and
+  swapped it in under `/var/lib/styrman/harness/current`; the server
+  mounted it read-only into every project VM and a stopped VM picked a new
+  export up on its next start, so a styrman-harness release no longer
+  needed a crew release. The image's mirror stayed the fallback until the
+  channel had delivered. **Superseded by ADR-074 (v1.36.0, above); the
+  `styrman-ctl update --setup --harness-token-file` setup step it required
+  is retired and must not be run.** Full entry:
   `.agents/docs/changes/2026-09-16-v1.35.0-release.md`.
 - **v1.34.1** (2026-09-16): stopping a project (the Stop button or the idle
   reaper) now switches its container's restart policy to `no` before the
@@ -268,7 +283,8 @@ vi deploy/.env
 
 # Dev (loopback, no auth; needs Go 1.25+) — builds its OWN image tag so
 # experiments never touch the production one (~10 min first build):
-docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/
+GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN \
+  -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
 ```
 

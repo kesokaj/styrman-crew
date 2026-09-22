@@ -4,7 +4,8 @@
 binary** (ADR-002). Debian trixie, AMD64 only. Built locally:
 
 ```bash
-docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> image/
+GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN \
+  -t styrman-runtime:dev --build-arg STYRMAN_VERSION=<ver> image/
 ```
 
 ## Contents

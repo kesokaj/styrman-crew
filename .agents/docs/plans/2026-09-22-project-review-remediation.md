@@ -159,33 +159,44 @@ Runs after Phase 0b, which outranks it. Cheapest fix in the plan. Dispatched to 
 `documentation` agent for the files it owns; the `.env.example` line is the main
 agent's.
 
-- [ ] The ADR-074 build secret, five copies: `README.md:271`,
+- [x] The ADR-074 build secret, five copies: `README.md:271`,
       `.agents/docs/deploy/local.md:21`,
       `.agents/docs/specs/styrman/guide.md:463`,
       `.agents/docs/specs/styrman/runtime-image.md:7`,
       `.agents/docs/testing/styrman/README.md:128` — each gains
       `GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN`,
       matching `AGENTS.md`'s Setup block, which is already correct.
-- [ ] `.agents/docs/deploy/local.md:31,36` — drop `STYRMAN_FIREWALL_DIR`
+- [x] `.agents/docs/deploy/local.md:31,36` — drop `STYRMAN_FIREWALL_DIR`
       (deleted with the ADR-067 spool).
-- [ ] `deploy/.env.example:63` — same variable, claims compose sets it; compose
+- [x] `deploy/.env.example:63` — same variable, claims compose sets it; compose
       has no firewall reference and no code reads it. Main agent, not
       `documentation`.
-- [ ] `README.md:50-61` — replace the ADR-065/066 root-mediated LAN description
+- [x] `README.md:50-61` — replace the ADR-065/066 root-mediated LAN description
       (incl. SSH-key withholding, whose removal
       `internal/credbroker/broker_test.go:249` asserts) with the ADR-067 model
       `AGENTS.md` already states correctly.
-- [ ] `README.md:112` — "v1.34.1, deployed" → v1.37.0; extend the release list
+- [x] `README.md:112` — "v1.34.1, deployed" → v1.37.0; extend the release list
       past v1.35.0; remove the retired ADR-073 harness channel and
       `styrman-ctl update --setup --harness-token-file`, which read as live
       instructions.
-- [ ] `.agents/docs/testing/styrman/README.md:8` — two named test files no
+- [x] `.agents/docs/testing/styrman/README.md:8` — two named test files no
       longer exist; `:130-135` — drop the v1.16.x caveat.
-- [ ] Re-run the docs lens's own 8 `git grep` commands (end of
+- [x] Re-run the docs lens's own 8 `git grep` commands (end of
       `.agents/docs/reviews/2026-09-22-review-project-docs.md`) and paste the
       output in the change entry. A docs fix that does not re-grep is how the
-      next copy survives.
-- [ ] **Checkpoint:** `changes/` entry, commit, push.
+      next copy survives. **It found two the lens had missed**, one real:
+      `.agents/docs/specs/styrman/deploy.md:51` described `styrman-ctl
+      install`'s `docker build` without the ADR-074 secret, while
+      `deploy/styrman-ctl:490-496` builds `secret_args` and refuses to build
+      without a token. Fixed. The other two hits are correct text: `versioning.md:199`
+      carries `--secret` on its next line, and the testing README's
+      `internal/netpolicy/script_test.go` mention says the file "is gone" and
+      names its replacement.
+- [x] `.agents/docs/specs/styrman/api.md` — the listing cap, `truncated`, and
+      the symlink-traversal refusal from Phase 0b. Not in the review: this is
+      Phase 0b's own describing-text obligation, found while assembling the
+      brief.
+- [x] **Checkpoint:** `changes/` entry, commit, push.
 
 ## Phase 2 — the gates that measure the wrong thing (findings 1, 8)
 

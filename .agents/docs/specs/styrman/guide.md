@@ -460,7 +460,8 @@ sudo bash deploy/host-setup.sh --user $USER   # Docker, Kata "mvm", daemon cfg, 
                                               # styrman-runtime:latest to confirm Kata can
                                               # boot it — production never runs this tag
                                               # (no mutable tags; versioning.md)
-docker build -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/  # separate tag for the loopback dev run; the version keys harness re-seeding
+GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN \
+  -t styrman-runtime:dev --build-arg STYRMAN_VERSION=dev-$(date +%s) image/  # separate tag for the loopback dev run; the version keys harness re-seeding
 
 # Dev (no auth, loopback; needs a Go 1.25+ toolchain — host-setup.sh does NOT install one):
 STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1:8080
