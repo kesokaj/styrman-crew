@@ -80,6 +80,7 @@ export function FileExplorer({
   const setPath = (p: string) => setHistory((h) => pushPath(h, p));
   const goUp = () => setPath(parentOf(path));
   const [entries, setEntries] = useState<FileEntry[]>([]);
+  const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<string>();
   const [dragging, setDragging] = useState(false);
   // Recent-strip geometry: GLOBAL preference, read once on mount. Lazy
@@ -163,6 +164,7 @@ export function FileExplorer({
       .then((r) => {
         if (gen !== loadGen.current) return; // stale response
         setEntries(r.entries);
+        setTruncated(r.truncated === true);
         setError(undefined);
       })
       .catch((e: Error) => {
@@ -421,6 +423,12 @@ export function FileExplorer({
         {error && <p className="px-2 py-2 text-xs text-danger">{error}</p>}
         {!error && entries.length === 0 && (
           <p className="px-2 py-2 text-xs text-text-dim">Empty directory</p>
+        )}
+        {!error && truncated && (
+          <p className="px-2 py-2 text-xs text-warn">
+            This directory has more entries than the explorer lists. Some are
+            not shown — use a terminal to see all of them.
+          </p>
         )}
         {path !== "" && (
           <button

@@ -117,10 +117,11 @@ func TestListWorksBelowATrustedBase(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws, "README.md"), []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := List(ws, "")
+	lst, err := List(ws, "")
 	if err != nil {
 		t.Fatal(err)
 	}
+	entries := lst.Entries
 	if len(entries) != 2 {
 		t.Fatalf("List below a trusted base returned %d entries, want 2: %+v", len(entries), entries)
 	}

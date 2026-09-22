@@ -106,41 +106,52 @@ both the BUG-035 shape — a mechanism that exists in the package and did not
 reach every caller — which is why they survived four earlier audits of this same
 file.
 
-- [ ] `internal/files/files.go:191` — `List` does an uncapped `ReadDir(-1)` on a
+- [x] `internal/files/files.go:191` — `List` does an uncapped `ReadDir(-1)` on a
       guest-owned directory. `ListNames:489-492` caps at `maxListNames` with the
       reasoning already written in the file ("the directory is guest-writable
       and this is polled — an unbounded ReadDir is a per-tenant lever on the
       shared server", security review 2026-09-03). `List` never got it. Bounded
       batched read, with the truncation surfaced to the caller rather than
       silently dropped.
-- [ ] `internal/files/files.go:232-246` — `sortEntries` is a hand-rolled
+- [x] `internal/files/files.go:232-246` — `sortEntries` is a hand-rolled
       insertion sort, O(n²), measured by the reviewer on a copy: 5k entries
       102ms, 20k 1.57s, 50k 9.83s single-core, in the one process serving every
       tenant. Replace with `slices.SortFunc` over the existing `less`, which is
       already a correct comparator.
-- [ ] Reproduce the cost before the fix and after it, on the real function
+- [x] Reproduce the cost before the fix and after it, on the real function
       rather than a copy: a benchmark with 50k entries, recorded as a
       must-improve proof. A fix to a performance finding that was never measured
       on the real path is not verified.
-- [ ] `internal/files/files.go:446` — `ReadRawNoFollow` opens the parent with
+- [x] `internal/files/files.go:446` — `ReadRawNoFollow` opens the parent with
       `rt.Open`, i.e. `OpenFile(name, O_RDONLY, 0)`: the **only** open in the
       package without `O_NONBLOCK`. Lines 154, 186, 296, 353, 454, 484 and 518
       all carry it, several with explicit guest-planted-FIFO comments, and 454
       is the very next open in the same function. A guest replacing `~/.ssh`
       with a FIFO wedges `httpapi/setup.go:247`'s goroutine and its OS thread
       forever. Add `syscall.O_NONBLOCK`; test with a planted FIFO.
-- [ ] `internal/httpapi/explorer.go:99-111` — `managedHomeTarget` matches the
+- [x] `internal/httpapi/explorer.go:99-111` — `managedHomeTarget` matches the
       first *string* component while `os.Root` follows in-root symlinks; the
       reviewer probed it (`x -> .dockerd`, then `Root.RemoveAll("x/disk.img")`
       succeeded). Same principal throughout, so this is not an escape — but the
       comment reads like a boundary, which is the defect. Either make it one or
       correct the comment to say what it actually does.
-- [ ] Close the test blind spot the reviewer named: only 4 of 15 root functions
+- [x] Close the test blind spot the reviewer named: only 4 of 15 root functions
       have a case below a `files.Trust` base, and the cross-tenant wipe test in
       `rmcheck_test.go` runs on the untrusted path — BUG-004's exact blind spot,
       in the test written to prevent it. Add the missing trusted-base cases.
-- [ ] **Checkpoint:** `changes/` entry, commit, push. `reviewer` over the diff,
-      and `security` (this is the confinement boundary).
+- [x] **Both reviews found a bypass in the first version of the fix**, and it
+      is fixed: `managedHomeTarget` inspected only the path's FIRST component,
+      so `work/sub/link -> ../../.dockerd` walked straight past it while
+      `os.Root` followed the link. `traversesALink` now lstats every component
+      but the last. The test was written first and failed against the pre-fix
+      code.
+- [x] **Security also found one this phase created**: the new cap made a
+      truncated listing render as complete, because nothing consumed
+      `Truncated`. Fixed in `web/src/lib/api.ts` and
+      `web/src/components/FileExplorer.tsx`. Not unit-tested — see Phase 5.
+- [x] **Checkpoint:** `changes/` entry, commit, push. `reviewer` over the diff,
+      and `security` (this is the confinement boundary). Both returned findings;
+      outcomes are appended to each report.
 
 ## Phase 1 — docs truth (findings 2, 3, M1, 12, 13)
 
@@ -263,6 +274,13 @@ them, and Tier 4 needs the live host.
       the NUC — the suite no lens ran this wave.
 - [ ] `bash web/e2e/run.sh` (Tier 4) — then map which of the 33 files it
       actually reaches.
+- [ ] Assert the explorer's truncation notice in Tier 4: a directory past
+      `files.maxListEntries` must render "Some are not shown". Added in Phase
+      0b with no unit test, because `FileExplorer.tsx` has none and the project
+      has no component-testing infrastructure — standing that up is a
+      dependency decision, not a side effect of a security fix. Until this
+      box is ticked, that notice is type-checked and linted, not proven to
+      render.
 - [ ] Record the real uncovered list in `.agents/docs/testing/styrman/README.md`
       and decide per file: unit test, accept as e2e-covered, or accept as
       untested with a reason. No blanket answer.

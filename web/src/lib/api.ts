@@ -586,8 +586,13 @@ export const api = {
       method: "DELETE",
     }),
 
+  // truncated: the server caps a listing (files.maxListEntries). The cap is
+  // applied to raw directory order BEFORE sorting, so what is missing is
+  // arbitrary — a listing that hides entries silently would be a way to keep
+  // a file out of a human's sight (security review 2026-09-22), which is why
+  // the explorer has to say so.
   listFiles: (scope: Scope, path: string) =>
-    request<{ entries: FileEntry[] }>(
+    request<{ entries: FileEntry[]; truncated?: boolean }>(
       `${scopeBase(scope)}/files?path=${encodeURIComponent(path)}`,
     ),
   readFile: (scope: Scope, path: string) =>

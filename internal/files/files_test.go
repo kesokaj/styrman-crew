@@ -76,10 +76,11 @@ func TestListDoesNotFollowEscape(t *testing.T) {
 		t.Fatal("listing through escaping symlink must fail")
 	}
 	// But the entry itself shows in the parent listing, flagged as a symlink.
-	entries, err := List(root, "projects/p")
+	lst, err := List(root, "projects/p")
 	if err != nil {
 		t.Fatal(err)
 	}
+	entries := lst.Entries
 	var found bool
 	for _, e := range entries {
 		if e.Name == "esc" {
@@ -240,10 +241,11 @@ func TestListReportsScopeRelativePaths(t *testing.T) {
 	// on to strip exactly `prefix+"/"`.
 	root, _ := setup(t)
 	_ = Save(root, "projects/p/sub/deep.txt", []byte("x"), 0o644)
-	entries, err := List(root, "projects/p/sub")
+	lst, err := List(root, "projects/p/sub")
 	if err != nil {
 		t.Fatal(err)
 	}
+	entries := lst.Entries
 	var got string
 	for _, e := range entries {
 		if e.Name == "deep.txt" {

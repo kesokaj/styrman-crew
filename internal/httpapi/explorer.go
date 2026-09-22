@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"path"
 	"path/filepath"
@@ -59,15 +60,17 @@ func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	// Paths in and out are scope-relative: since ADR-027 the scope root IS
 	// the workspace (or home), so nothing needs prefix stripping anymore.
-	entries, err := files.List(root, r.URL.Query().Get("path"))
+	lst, err := files.List(root, r.URL.Query().Get("path"))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, errors.New("cannot list path"))
 		return
 	}
 	// The formatter's transient temp file (format.go) lives beside the file
 	// being formatted for a fraction of a second; never show it.
-	entries = slices.DeleteFunc(entries, func(e files.Entry) bool { return strings.HasPrefix(e.Name, ".styrman-fmt-") })
-	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+	lst.Entries = slices.DeleteFunc(lst.Entries, func(e files.Entry) bool { return strings.HasPrefix(e.Name, ".styrman-fmt-") })
+	// Listing carries Truncated beside entries: the listing is capped since
+	// 2026-09-22, and a cut directory must not read as a complete one.
+	writeJSON(w, http.StatusOK, lst)
 }
 
 func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +106,16 @@ func scopeRel(rel string) (string, error) {
 // identity (R3). Project scope is confined to its own workspace dir
 // (ADR-027), where these names are ordinary user dirs — so the guard keys
 // on the SCOPE, not the path shape.
-func managedHomeTarget(isHome bool, rel string) bool {
+//
+// The name match alone is not a boundary, because os.Root follows symlinks
+// that stay inside the root: with `ln -s .dockerd x`, deleting `x/disk.img`
+// reached a managed subtree through an unmanaged name (probed 2026-09-22).
+// Nothing legitimate reaches THROUGH a link in the home scope, so any path
+// that traverses one is refused rather than resolved. Acting on the link
+// ITSELF is not refused: removing or renaming a bad symlink is ordinary
+// housekeeping, it touches only the link, and TestFileDeleteSymlinkEscape
+// requires it.
+func managedHomeTarget(root string, isHome bool, rel string) bool {
 	if !isHome {
 		return false
 	}
@@ -111,6 +123,55 @@ func managedHomeTarget(isHome bool, rel string) bool {
 	switch first {
 	case "projects", ".dockerd", ".styrman", ".ssh":
 		return true
+	}
+	return traversesALink(root, rel)
+}
+
+// traversesALink reports whether any component of rel EXCEPT the last is a
+// symlink. The depth matters: a guard that looked only at the first component
+// was blind to `work/sub/link -> ../../.dockerd`, where the first component
+// is a real directory and os.Root follows the link anyway (code review,
+// 2026-09-22). The last component is deliberately not inspected — that is the
+// link itself, and acting on it touches only the link.
+//
+// It answers "yes, treat as managed" whenever it cannot tell: this stands in
+// front of a delete, and a guard whose own check errors must keep the data.
+// A component that does not exist is the one exception — it is no subtree at
+// all, and the operation behind this guard fails on its own.
+//
+// What this is NOT: a tenancy boundary. That is os.Root's, it is atomic, and
+// it holds regardless of anything here. This lstat runs on a different handle
+// from the one the operation later opens, so a guest can swap a real
+// directory for a link in between and win the race — against its OWN home,
+// as the same principal, which is the whole of what it gains (security
+// review 2026-09-22). Closing the race would mean carrying one root handle
+// from check to operation through every files.* verb; it is not worth that
+// while the only thing on the other side of it is the tenant itself.
+func traversesALink(root, rel string) bool {
+	parts := strings.Split(rel, "/")
+	if len(parts) < 2 {
+		return false
+	}
+	rt, err := files.OpenRoot(root)
+	if err != nil {
+		return true
+	}
+	defer rt.Close()
+	for i := 1; i < len(parts); i++ {
+		prefix := strings.Join(parts[:i], "/")
+		if prefix == "" || prefix == "." {
+			continue
+		}
+		st, err := rt.Lstat(prefix)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return false
+			}
+			return true
+		}
+		if st.Mode()&fs.ModeSymlink != 0 {
+			return true
+		}
 	}
 	return false
 }
@@ -126,7 +187,7 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if managedHomeTarget(strings.Contains(r.Pattern, "/home/"), rel) {
+	if managedHomeTarget(root, strings.Contains(r.Pattern, "/home/"), rel) {
 		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
 		return
 	}
@@ -162,7 +223,7 @@ func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	isHome := strings.Contains(r.Pattern, "/home/")
-	if managedHomeTarget(isHome, from) || managedHomeTarget(isHome, to) {
+	if managedHomeTarget(root, isHome, from) || managedHomeTarget(root, isHome, to) {
 		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
 		return
 	}
@@ -192,7 +253,7 @@ func (s *Server) makeDir(w http.ResponseWriter, r *http.Request) {
 	// Same managed-subtree guard as delete/rename (audit finding: the write
 	// paths were unguarded, letting a home-scope write clobber e.g. the
 	// loop-mounted docker disk of a RUNNING microVM).
-	if managedHomeTarget(strings.Contains(r.Pattern, "/home/"), rel) {
+	if managedHomeTarget(root, strings.Contains(r.Pattern, "/home/"), rel) {
 		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
 		return
 	}
@@ -225,7 +286,7 @@ func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 	// Managed-subtree guard on the write path too (audit finding): without
 	// it, PUT home/file?path=.dockerd/<uuid>.img O_TRUNCs the loop-mounted
 	// docker disk of a possibly-running microVM.
-	if managedHomeTarget(strings.Contains(r.Pattern, "/home/"), rel) {
+	if managedHomeTarget(root, strings.Contains(r.Pattern, "/home/"), rel) {
 		writeErr(w, http.StatusBadRequest, errors.New("path is managed by styrman"))
 		return
 	}
@@ -300,7 +361,7 @@ func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 		target := strings.TrimPrefix(path.Clean("/"+path.Join(dir, name)), "/")
 		// Managed-subtree guard per part (audit finding): an upload into
 		// ~/.dockerd or ~/.ssh must be refused like delete/rename/write.
-		if managedHomeTarget(strings.Contains(r.Pattern, "/home/"), target) {
+		if managedHomeTarget(root, strings.Contains(r.Pattern, "/home/"), target) {
 			uploadErr(http.StatusBadRequest, errors.New("path is managed by styrman"))
 			return
 		}

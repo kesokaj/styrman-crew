@@ -33,6 +33,23 @@ import (
 // MaxReadBytes caps file reads served to the browser.
 const MaxReadBytes = 2 << 20 // 2 MiB
 
+// maxListEntries bounds a directory listing served to the browser. The
+// directory is guest-writable and the explorer polls it, so an unbounded
+// ReadDir is a per-tenant lever on the shared server -- the same reasoning
+// ListNames has carried since the 2026-09-03 security review, which List
+// itself never got until the 2026-09-22 whole-project review found the
+// asymmetry. 5000 is far past what a browser pane can usefully show and far
+// short of what costs the shared process anything.
+const maxListEntries = 5000
+
+// Listing is one directory's entries, capped at maxListEntries. Truncated
+// says the cap was hit, so a caller can tell a big directory from a complete
+// one instead of silently showing a prefix.
+type Listing struct {
+	Entries   []Entry `json:"entries"`
+	Truncated bool    `json:"truncated"`
+}
+
 // Entry is one directory entry.
 type Entry struct {
 	Name     string `json:"name"`
@@ -173,7 +190,7 @@ func openReg(rt *os.Root, rel string) (*os.File, os.FileInfo, error) {
 
 // List returns the entries in the directory at rel, directories first.
 // Dotfiles are included — this is a developer's home, they matter.
-func List(root, rel string) ([]Entry, error) {
+func List(root, rel string) (*Listing, error) {
 	rt, err := openRoot(root)
 	if err != nil {
 		return nil, err
@@ -188,9 +205,17 @@ func List(root, rel string) ([]Entry, error) {
 		return nil, err
 	}
 	defer d.Close()
-	des, err := d.ReadDir(-1)
-	if err != nil {
+	// Bounded, for the reason maxListEntries gives. One more than the cap is
+	// read so a directory that is exactly full can be told from one that was
+	// cut; io.EOF here means the directory is empty, which is not a failure.
+	des, err := d.ReadDir(maxListEntries + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
+	}
+	truncated := false
+	if len(des) > maxListEntries {
+		des = des[:maxListEntries]
+		truncated = true
 	}
 	base := ""
 	if rel != "." {
@@ -226,23 +251,26 @@ func List(root, rel string) ([]Entry, error) {
 		})
 	}
 	sortEntries(out)
-	return out, nil
+	return &Listing{Entries: out, Truncated: truncated}, nil
 }
 
+// sortEntries puts directories first, then orders case-insensitively by name.
+// Stable, so two names differing only in case keep the order the filesystem
+// gave them -- what the hand-rolled insertion sort here did until 2026-09-22,
+// when it was replaced for being quadratic on a guest-controlled input
+// (50k entries measured at 9.83s single-core in the one shared process).
 func sortEntries(out []Entry) {
-	// directories first, then case-insensitive by name
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && less(out[j], out[j-1]); j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
+	slices.SortStableFunc(out, compareEntries)
 }
 
-func less(a, b Entry) bool {
+func compareEntries(a, b Entry) int {
 	if a.Dir != b.Dir {
-		return a.Dir
+		if a.Dir {
+			return -1
+		}
+		return 1
 	}
-	return strings.ToLower(a.Name) < strings.ToLower(b.Name)
+	return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 }
 
 // FileContent is a file read for the viewer.
@@ -443,7 +471,12 @@ func ReadRawNoFollow(root, rel string, max int64) ([]byte, error) {
 	if base == "" || base == "." || base == ".." {
 		return nil, fmt.Errorf("not a file name: %q", rel)
 	}
-	d, err := rt.Open(dirRel)
+	// O_NONBLOCK, like every other open in this package: rt.Open is
+	// OpenFile(name, O_RDONLY, 0), and a guest that replaces this parent
+	// (~/.ssh) with a FIFO would otherwise wedge the goroutine -- and its OS
+	// thread -- in open(2) forever. It was the last open here without it
+	// (found 2026-09-22); the openat below has carried it all along.
+	d, err := rt.OpenFile(dirRel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}

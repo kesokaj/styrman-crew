@@ -34,3 +34,35 @@ func TestRemoveAllRefusesSymlinkedProjects(t *testing.T) {
 		t.Fatalf("victim data was destroyed through the symlink: %v", err)
 	}
 }
+
+// The test above runs on a root that no files.Trust base covers — the
+// untrusted branch of openRoot, not the one production takes. That is
+// BUG-004's exact blind spot, sitting inside the test written to prevent a
+// cross-tenant wipe (found by the 2026-09-22 security review of this
+// package). Same attack, asserted on the path the server actually uses.
+func TestRemoveAllRefusesSymlinkedProjectsBelowATrustedBase(t *testing.T) {
+	base := t.TempDir()
+	Trust(base)
+	attacker := filepath.Join(base, "attacker")
+	victimHome := filepath.Join(base, "victim")
+	victimProjects := filepath.Join(victimHome, "projects")
+	if err := os.MkdirAll(victimProjects, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(attacker, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keep := filepath.Join(victimProjects, "important.txt")
+	if err := os.WriteFile(keep, []byte("VICTIM"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victimHome, filepath.Join(attacker, "projects")); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = RemoveAll(attacker, "projects/anything")
+
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("victim data was destroyed through the symlink, below a trusted base: %v", err)
+	}
+}
