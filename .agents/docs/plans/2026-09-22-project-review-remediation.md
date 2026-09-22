@@ -246,7 +246,7 @@ state it is supposed to catch, before its verdict is trusted.
 - [x] `internal/httpapi/server.go` — give `credharvest.go`'s `credPushing` /
       `credPushRerun` their own `credMu` instead of sharing `deletingMu` with
       the project-lifecycle maps. Three lines; no file split.
-- [ ] **Checkpoint:** `changes/` entry, commit, push. `reviewer` over the diff
+- [x] **Checkpoint:** `changes/` entry, commit, push. `reviewer` over the diff
       (Phase 3 crosses 5 files) and `security` (it touches the ingress and a
       secret-file gate).
 
@@ -291,18 +291,18 @@ The verifier's FAIL on 33 of 47 `web/src` files is a *not examined*, not a
 *confirmed uncovered*: `testing/styrman/README.md` says Tier 4 covers most of
 them, and Tier 4 needs the live host.
 
-- [ ] `bash .agents/docs/testing/styrman/integration.sh` (Tier 2, 115 checks) on
+- [x] `bash .agents/docs/testing/styrman/integration.sh` (Tier 2, 115 checks) on
       the NUC — the suite no lens ran this wave.
-- [ ] `bash web/e2e/run.sh` (Tier 4) — then map which of the 33 files it
+- [x] `bash web/e2e/run.sh` (Tier 4) — then map which of the 33 files it
       actually reaches.
-- [ ] Assert the explorer's truncation notice in Tier 4: a directory past
+- [x] Assert the explorer's truncation notice in Tier 4: a directory past
       `files.maxListEntries` must render "Some are not shown". Added in Phase
       0b with no unit test, because `FileExplorer.tsx` has none and the project
       has no component-testing infrastructure — standing that up is a
       dependency decision, not a side effect of a security fix. Until this
       box is ticked, that notice is type-checked and linted, not proven to
       render.
-- [ ] Record the real uncovered list in `.agents/docs/testing/styrman/README.md`
+- [x] Record the real uncovered list in `.agents/docs/testing/styrman/README.md`
       and decide per file: unit test, accept as e2e-covered, or accept as
       untested with a reason. No blanket answer.
 - [ ] **Checkpoint:** `changes/` entry, commit, push.

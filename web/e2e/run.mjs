@@ -276,6 +276,48 @@ try {
     await fileList().getByText("subdir", { exact: true }).click();
     await page.waitForSelector("aside >> text=nested.txt");
   });
+  // The listing is capped at files.maxListEntries (5000) since 2026-09-22,
+  // because the directory is guest-writable and the explorer polls it. The
+  // cap is applied to raw directory order BEFORE sorting, so which entries
+  // are missing is arbitrary — a cut listing that rendered as a complete one
+  // would be a way to keep a file out of a human's sight. The notice is the
+  // only thing that makes truncation visible, and it has no unit test:
+  // FileExplorer.tsx has none and the project has no component-testing
+  // framework, so this check is its only coverage (security review of the
+  // cap, 2026-09-22).
+  //
+  // Placed here, after the breadcrumb check, because the explorer's position
+  // is load-bearing for the editor checks below: this one navigates away and
+  // puts it back inside subdir before it returns.
+  await check("a directory past the listing cap says so", async () => {
+    await page.locator(".xterm textarea").first().focus();
+    await page.keyboard.type("mkdir -p big && (cd big && seq 1 5200 | xargs -n1 -P8 touch) && echo BIGDONE");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => document.body.innerText.includes("BIGDONE"), null, { timeout: 120000 });
+
+    // finally, not a straight line: when this check failed during its own
+    // must-fail probe it left the explorer at the wrong path and cascaded
+    // into eight later checks, which reads as eight defects instead of one.
+    try {
+      await panel().getByRole("button", { name: "Project root" }).click();
+      await page.waitForSelector("aside >> text=big");
+      await fileList().getByText("big", { exact: true }).click();
+      await page.waitForSelector("aside >> text=Some are not shown", { timeout: 30000 });
+
+      // Not simply always on: the workspace root has far fewer entries.
+      await panel().getByRole("button", { name: "Project root" }).click();
+      await page.waitForSelector("aside >> text=subdir");
+      if (await panel().getByText("Some are not shown").count()) {
+        throw new Error("the truncation notice renders on a small directory too");
+      }
+    } finally {
+      // Restore what the editor checks below expect: inside subdir.
+      await panel().getByRole("button", { name: "Project root" }).click().catch(() => {});
+      await fileList().getByText("subdir", { exact: true }).click().catch(() => {});
+      await page.waitForSelector("aside >> text=nested.txt", { timeout: 15000 }).catch(() => {});
+    }
+  });
+
   await shot("04-files");
 
   // ── Editor pane (2026-09-01): the editor shares the main pane with the
