@@ -74,3 +74,21 @@ the reproduction here needed the operator's own browser.
 ## Related
 BUG-069 and BUG-072 — same bring-up, each a check or a claim that pointed
 at the wrong thing before the real cause was found.
+
+## Operator decision, 2026-09-22
+
+"it worked in incognito. That is enough for me. I will not use the local and gcp with the same gmail account."
+
+The operator accepts the constraint and will not run both hosts from one
+signed-in browser session. This record stays OPEN but is NOT to be fixed
+unasked: the code change it proposes rewrites how the ingress loads config
+(it pushes a Caddyfile to the admin API; the portal's cookie name is not
+expressible there, so a fix must adapt to JSON and patch it) and touches
+authentication on the live production host. Reopen it only if the operator
+asks for several hosts under one parent domain in one browser profile.
+
+One precision for whoever reads this next: the collision is a property of the
+BROWSER PROFILE, not of the Google account. Two different Google accounts in
+the SAME profile still send the same `AUTHP_ACCESS_TOKEN` cookie to both
+hosts. What avoids it is a separate profile (or a private window) per host,
+which is how a second Google account is normally used anyway.
