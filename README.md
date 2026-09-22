@@ -110,11 +110,24 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.37.0**, deployed: https://crew.styrman.xyz (Google sign-in).
+**v1.38.0**, deployed: https://crew.styrman.xyz (Google sign-in).
 
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
 
+- **v1.38.0** (2026-09-22): a whole-project review, acted on in five phases.
+  The file explorer's listing is bounded (5000 entries) and says when it was
+  cut — it previously read an entire guest-owned directory and sorted it
+  quadratically in the one process serving every tenant, 5.88 s at 20 000
+  entries against 13.4 ms now; the managed-subtree guard refuses paths
+  reaching `~/.dockerd` and friends through a symlink at any depth; a guest
+  FIFO at `~/.ssh` can no longer wedge a server goroutine; the R12 boot
+  assertion refuses an unreadable `ip_forward` instead of warning; the release
+  gate compares the committed frontend by content rather than by file name;
+  and the GCP scripts take their hardened secret-file helpers from one shared
+  copy. Plus ADR-076 and a documentation pass that fixed five build commands
+  which failed as written. Full entry:
+  `.agents/docs/changes/2026-09-22-v1.38.0-release.md`.
 - **v1.37.0** (2026-09-22): a GCP Compute Engine target running the
   unchanged host path (ADR-075) — `deploy/gcp/vm.sh` for the instance
   lifecycle over IAP and `deploy/gcp/install.sh` for bring-up on the VM —
