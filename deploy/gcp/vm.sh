@@ -128,7 +128,12 @@ cmd_status() {
         *)
             [[ "${ctl}" =~ ^/root/styrman-crew/deploy/styrman-ctl$ ]] ||
             [[ "${ctl}" =~ ^/home/[a-z_][a-z0-9_-]{0,31}/styrman-crew/deploy/styrman-ctl$ ]] ||
-                die "${GCP_INSTANCE} answered with an unexpected styrman-ctl path: ${ctl}"
+                die "${GCP_INSTANCE} answered with an unexpected styrman-ctl path: ${ctl}
+       Accepted: /opt/styrman/deploy/styrman-ctl, /usr/local/bin/styrman-ctl,
+       /root/styrman-crew/deploy/styrman-ctl, or /home/<user>/styrman-crew/deploy/styrman-ctl
+       where <user> is lowercase, starts with a letter or _, and is at most 32
+       characters. A legitimate account outside that shape (a dot, uppercase, or
+       longer) lands here too — that is this check's limit, not a broken install."
             ;;
     esac
     if vm_ssh "sudo ${ctl} status"; then return 0; fi

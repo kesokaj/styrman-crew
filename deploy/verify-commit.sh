@@ -145,7 +145,13 @@ if [ -z "${SKIP_WEB_FRESHNESS:-}" ] && command -v npm >/dev/null 2>&1; then
     # saw an exit and no reason (release review 2026-09-22).
     if ! ( cd "${WT}/web" && npm ci --no-audit --no-fund && npm run build ) >"${LOGDIR}/web-build.log" 2>&1; then
         echo "FAIL: rebuilding web/ for the freshness check failed — last 20 lines:" >&2
-        tail -20 "${LOGDIR}/web-build.log" >&2
+        # Redacted: this tail is pasted into gate reports, which are committed.
+        # The harness token cannot reach it (GH_TOKEN is unset at the top of
+        # this script and the build secret is per-command), but an operator's
+        # own ~/.npmrc credential can appear in npm output (security review
+        # 2026-09-22).
+        tail -20 "${LOGDIR}/web-build.log" \
+            | sed -E 's/(_authToken|_password|_auth|npm_[A-Za-z0-9]{8})[=:][^[:space:]]*/\1=<redacted>/g' >&2
         exit 1
     fi
     rebuilt="$(cd "${WT}/web/dist" && find client -type f -exec sha256sum {} + | sort -k2)"
