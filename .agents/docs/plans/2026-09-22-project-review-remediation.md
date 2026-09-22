@@ -284,7 +284,7 @@ not. Full versions in `.agents/scratch/2026-09-22-review-triage.md` (items 7,
       `agy` installer is TLS-only, and the manifest sha512 check happens inside
       a script that was not itself verified. No code change — the exception
       stands; the note currently implies more coverage than it has.
-- [ ] **Checkpoint:** `changes/` entry, commit, push.
+- [x] **Checkpoint:** `changes/` entry, commit, push. Done in 9e50118.
 
 ## Phase 5 — turn the coverage unknown into evidence (finding 17)
 
@@ -306,7 +306,7 @@ them, and Tier 4 needs the live host.
 - [x] Record the real uncovered list in `.agents/docs/testing/styrman/README.md`
       and decide per file: unit test, accept as e2e-covered, or accept as
       untested with a reason. No blanket answer.
-- [ ] **Checkpoint:** `changes/` entry, commit, push.
+- [x] **Checkpoint:** `changes/` entry, commit, push. Done in 766f970.
 
 ## Done when
 

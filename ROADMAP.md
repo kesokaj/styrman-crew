@@ -2,7 +2,7 @@
 
 <!-- Division of labor: ROADMAP.md = where the project is going; TODO.md = small deferred items; .agents/docs/plans/ = how. -->
 
-Last reviewed: 2026-09-14
+Last reviewed: 2026-09-22
 
 Empty by design past "Now" (operator directive 2026-08-30: "I want nothing
 in todo and roadmap — start fresh with new things"). See `TODO.md` for the
