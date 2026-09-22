@@ -49,6 +49,8 @@ subject — place it after every check that depends on live state, or give
 it its own throwaway project. When replacing checks in a shared suite, ask
 what the OLD ones did to the world before inheriting their position.
 
+This rule graduated into `.agents/rules/e2e-checks-leave-the-suite-as-they-found-it.md` on 2026-09-22.
+
 ## Related
 BUG-022, BUG-023, BUG-025, BUG-026 — all found in the same ADR-067 Phase 5
 suite run, `.agents/docs/plans/2026-09-09-lan-mode-by-bridge-prefix.md`.

@@ -24,7 +24,6 @@
 | BUG-018 | 2026-09-08 | internal/httpapi/network.go, internal/project (LAN access) | fixed | PUT rollback after a failed marker write re-stamped LanChangedAt to the failed request's time instead of restoring it | a rollback of a value+timestamp pair must restore both fields exactly, not reuse the forward-change path with the current clock |
 | BUG-019 | 2026-09-08 | internal/netpolicy, web/src (LAN access) | fixed | LAN switch rendered enabled though the host firewall half was entirely absent (e2e-caught) | expose a capability the server already knows as its own field; don't infer it from a state value reachable through more than one cause |
 | BUG-020 | 2026-09-08 | web/src/components/LocalNetwork.tsx (LAN access) | fixed | LAN switch stayed on the last local PUT reply forever after an out-of-band change (e2e-caught) | optimistic-UI override must yield when the poll's state is no older, not only when identical — equality on a monotonic timestamp latches forever |
-| BUG-021 | 2026-09-09 | web/e2e/run.mjs (ADR-067 network mode) | fixed | new network-toggle checks placed early rebuilt the container, cascading 17 unrelated e2e failures | a check that restarts/rebuilds/deletes the thing under test must run after everything depending on live state, never inherit a read-only check's position |
 | BUG-022 | 2026-09-09 | web/src/lib/api.ts (ADR-067 network mode) | fixed | setProjectLan kept request()'s 20s abort though the PUT rebuilds the project, so the UI reported failure for a change that succeeded | derive a client timeout from the SERVER's bound for that request and exceed it; copying a neighbouring endpoint's number encodes ITS budget, which is how the first fix here was still 30s short |
 | BUG-023 | 2026-09-09 | internal/orchestrator/ports.go | fixed | /ports 500'd "port scan exited 128" when a network-mode rebuild raced the poll | a vanished guest container fails BOTH as a transport error and as a non-zero exit code — guard both branches, not one |
 | BUG-024 | 2026-09-09 | web/e2e/run.sh (cleanup trap) | fixed | suite reported passed=86 failed=0 but exited 1; state dirs leaked | set -e applies inside EXIT traps — guard every command (especially `$(...)` assignments) and never let exit status fall out of the trap |
@@ -75,11 +74,17 @@
 | BUG-072 | 2026-09-22 | deploy/gcp/install.sh | fixed | healthy GCP bring-up failed its own verify step: probed `crew.gcp.styrman.xyz`, host served `styrman.gcp.styrman.xyz` | deliver every optional key an env-file passes or read the far side's effective value back; a name-probing check must use the name the thing under test actually claims |
 | BUG-073 | 2026-09-22 | deploy/gcp/vm.sh | fixed | `vm.sh status` reported "not installed" against a fully installed, serving GCP host | probe a path the installer actually creates or ask the host where its copy is — never hard-code a guess that can never succeed |
 | BUG-074 | 2026-09-22 | deploy/caddy/ingress (config.go, generator.go) | open | operator's browser looped ERR_TOO_MANY_REDIRECTS on the GCP host; incognito worked | a deployment-identifying cookie/header/key needs a unique NAME, not just a scoped domain; test a second deployment from a browser that already holds the first one's session |
+| BUG-075 | 2026-09-22 | internal/httpapi/explorer.go | fixed | managed-home guard's fix checked only the path's first component, letting a nested symlink escape it | a path guard inspects every traversed component, not the first; test plants the hostile component at depth |
+| BUG-076 | 2026-09-22 | internal/httpapi/explorer.go | fixed | same guard's first draft was too broad, refusing to delete the symlink itself and breaking an existing test | test a destructive-op guard against legitimate uses too; give the distinction its own assertion |
+| BUG-077 | 2026-09-22 | web/e2e/run.mjs | fixed | truncation-notice e2e check waited on the echoed command text, not its output — measured nothing | a terminal e2e wait asserts a sentinel the typed line cannot contain; compute it in the shell |
+| BUG-079 | 2026-09-22 | deploy/gcp/vm.sh | fixed | styrman-ctl path allowlist (`case … *`) admitted shell metacharacters; first fix's round-trip broke a test | validate an interpolated path with an anchored regex not a glob; a fix must not add a round-trip test fakes don't answer, and an asserted message is extended not reworded |
 
 ## Graduated
 
 | ID | Area | Graduated into |
 |---|---|---|
 | BUG-061 | .agents/docs/testing/styrman/integration.sh (Tier 2), image/entrypoint.sh comment | `.agents/rules/tests-describe-behaviour.md` |
+| BUG-021 | web/e2e/run.mjs (ADR-067 network mode) | `.agents/rules/e2e-checks-leave-the-suite-as-they-found-it.md` |
+| BUG-078 | web/e2e/run.mjs | `.agents/rules/e2e-checks-leave-the-suite-as-they-found-it.md` |
 | BUG-069 | deploy/gcp (vm.sh, install.sh) | `.agents/rules/remote-check-names-transport-first.md` |
 | BUG-070 | deploy/host-setup.sh (Kata install step) | `.agents/rules/shared-path-learnings.md` |
