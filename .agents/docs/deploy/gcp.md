@@ -154,6 +154,22 @@ Then in a browser: sign in with an allowed Google account, create a
 project, open a terminal, `sh-agent version`. Firewall and harness checks
 are the same as `remote.md` "Verify", run over `vm.sh ssh`.
 
+## Claude via Vertex AI (optional)
+
+On a GCP host, Claude Code can use Vertex AI instead of the direct
+Anthropic API. In Settings → Credentials, add three custom variables:
+
+| Variable | Value |
+|----------|-------|
+| `CLAUDE_CODE_USE_VERTEX` | `1` |
+| `ANTHROPIC_VERTEX_PROJECT_ID` | `daring-lioness-uwgw` (or your project) |
+| `CLOUD_ML_REGION` | `global` (or a specific region) |
+
+Then sign in to claude via the Credentials page (click **sign in** next
+to the grey **claude** row → boot setup VM → run `claude` → pick
+"3rd-party platform" → "Google Vertex AI"). The broker harvests the
+credentials and delivers them to every project.
+
 ## Update / rollback
 
 The VM runs the auto-updater (`deploy/update/`, ADR-050/051): it deploys
