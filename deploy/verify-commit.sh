@@ -132,11 +132,20 @@ if [ -z "${SKIP_WEB_FRESHNESS:-}" ] && command -v npm >/dev/null 2>&1; then
     # ONLY dist/client: that is what web/embed.go embeds and what is
     # committed. dist/server is the unused Node handler Start also emits and is
     # gitignored, so including it compares a build artifact against nothing.
-    committed="$(cd "${WT}/web/dist" && find client -type f | sort)"
+    # sha256 per file, not just the NAME set: the bundles carry a content
+    # hash in their filenames, but _shell.html and favicon.svg do not, so a
+    # committed-but-not-rebuilt edit to web/index.html or the favicon used to
+    # compare EQUAL and ship stale inside //go:embed all:dist/client while
+    # this gate printed "match" (whole-project review, 2026-09-22).
+    # web/scripts/normalize-shell.mjs already makes _shell.html
+    # byte-reproducible, so hashing is stable across rebuilds.
+    committed="$(cd "${WT}/web/dist" && find client -type f -exec sha256sum {} + | sort -k2)"
     ( cd "${WT}/web" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1 )
-    rebuilt="$(cd "${WT}/web/dist" && find client -type f | sort)"
+    rebuilt="$(cd "${WT}/web/dist" && find client -type f -exec sha256sum {} + | sort -k2)"
     if [ "${committed}" != "${rebuilt}" ]; then
         echo "FAIL: committed web/dist does not match a build of this commit's web/src." >&2
+        echo "      A differing sha256 on the SAME path is a stale committed asset;" >&2
+        echo "      a path on one side only is a missing or extra file." >&2
         echo "      Run 'cd web && npm run build' and commit web/dist." >&2
         diff <(printf '%s\n' "${committed}") <(printf '%s\n' "${rebuilt}") | head -20 >&2
         exit 1
@@ -165,10 +174,16 @@ fi
 # unit that systemd rejects must fail here, not on the host. Its behavioural
 # test is deploy/firewall/test.sh, which needs root and runs out of band.
 echo "==> host scripts: bash -n, shellcheck, systemd-analyze verify"
-( cd "${WT}" && bash -n deploy/host-setup.sh deploy/firewall/styrman-firewall.sh deploy/firewall/install.sh deploy/firewall/test.sh deploy/update/styrman-update deploy/gcp/*.sh )
+( cd "${WT}" && bash -n deploy/host-setup.sh deploy/styrman-ctl deploy/firewall/styrman-firewall.sh deploy/firewall/install.sh deploy/firewall/test.sh deploy/update/styrman-update deploy/gcp/*.sh image/entrypoint.sh )
 if command -v shellcheck >/dev/null 2>&1; then
-    ( cd "${WT}" && shellcheck -S warning deploy/firewall/*.sh deploy/update/styrman-update deploy/gcp/*.sh )
-    echo "    shellcheck clean: deploy/firewall/*.sh deploy/update/styrman-update deploy/gcp/*.sh"
+    # host-setup.sh, styrman-ctl and image/entrypoint.sh were syntax-checked
+    # but never shellchecked (BUG-068 names the first two). host-setup.sh is
+    # THE shared fresh-host path — the one file a second target proved could
+    # be broken upstream for months with every green run on an already-installed
+    # host (BUG-070, .agents/rules/shared-path-learnings.md). All three were
+    # clean when added, so this buys the next change to them, not this one.
+    ( cd "${WT}" && shellcheck -S warning deploy/host-setup.sh deploy/styrman-ctl deploy/firewall/*.sh deploy/update/styrman-update deploy/gcp/*.sh image/entrypoint.sh )
+    echo "    shellcheck clean: deploy/host-setup.sh deploy/styrman-ctl deploy/firewall/*.sh deploy/update/styrman-update deploy/gcp/*.sh image/entrypoint.sh"
 else
     echo "    shellcheck not installed — skipped"
 fi

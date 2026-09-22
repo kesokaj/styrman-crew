@@ -204,19 +204,26 @@ Both changes are green on arrival, which is their weakness. Each one lands with
 a must-fail proof per `review-standards` §2: the check is seen red once, in the
 state it is supposed to catch, before its verdict is trusted.
 
-- [ ] `deploy/verify-commit.sh:135-144` — compare a `sha256sum` set, not a
+- [x] `deploy/verify-commit.sh:135-144` — compare a `sha256sum` set, not a
       `find | sort` name set. `web/scripts/normalize-shell.mjs` already makes
       `_shell.html` byte-reproducible; keep the diff-on-failure output.
-- [ ] Must-fail proof for the above: edit one byte inside the committed
+- [x] Must-fail proof for the above: edit one byte inside the committed
       `_shell.html`, run the gate, record that it exits non-zero and names the
       file, restore. Record the command and its exit status in the log.
-- [ ] `deploy/verify-commit.sh:170` — add `deploy/host-setup.sh`,
+- [x] `deploy/verify-commit.sh:170` — add `deploy/host-setup.sh`,
       `deploy/styrman-ctl` and `image/entrypoint.sh` to the `shellcheck -S
       warning` list (BUG-068 names the first two; `shared-path-learnings.md`
       makes `host-setup.sh` the shared fresh-host path). All three pass at HEAD.
-- [ ] Must-fail proof for the above: introduce a deliberate warning in one of
+- [x] Must-fail proof for the above: introduce a deliberate warning in one of
       the three, see the gate go red, revert.
-- [ ] **Checkpoint:** `changes/` entry, commit, push.
+- [x] **Both proofs ran against the REAL gate on a real commit**, not a copy:
+      a throwaway local branch carried a content-only edit to
+      `web/dist/client/favicon.svg`. The OLD gate ran that commit to
+      completion, rc 0, printing "committed assets match a fresh build"; the
+      new one fails it at the freshness section. For shellcheck, an SC2034
+      planted in `host-setup.sh` is invisible to the old line (rc 0) and
+      named by the new one (rc 1).
+- [x] **Checkpoint:** `changes/` entry, commit, push.
 
 ## Phase 3 — hardening that did not travel (findings 4, 5, 6, 9-lock)
 
