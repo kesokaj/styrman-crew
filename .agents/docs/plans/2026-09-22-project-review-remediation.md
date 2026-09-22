@@ -77,22 +77,74 @@ Follow-ups noted, not built:
 Nothing is edited in this phase. It exists because a finding in
 `internal/files/` would reshape everything after it.
 
-- [ ] `/review internal/files --security` — `openRoot`'s own confinement and the
-      BUG-004 `DirEntry.Info()` prohibition, which no lens verified. The call
-      sites were traced (`orchestrator.go:344/411/708/758`, `files.Trust` at
-      `httpapi/server.go:206`) and cover create and start; the package's
-      internals were not read.
-- [ ] Rebuild `deadcode` against the go1.27.1 toolchain (the installed binary is
-      go1.26 and errors out), run it over both modules, and record the result —
-      including "nothing found", which is the likely answer and is evidence.
-- [ ] Fold any Phase 0 finding into this plan as a new phase task before Phase 1
-      begins. If Phase 0 finds nothing, say so in the checkpoint entry: a clean
-      result here is the point of the phase, not a wasted phase.
-- [ ] **Checkpoint:** `changes/` entry, commit, push.
+- [x] `/review internal/files --security` — **done, FINDINGS**
+      (`.agents/docs/reviews/2026-09-22-security-files.md`). Both rule claims
+      HOLD: `openRoot` reaches the root as `os.OpenRoot(<base>/<tenant>)` +
+      `Root.OpenRoot(rest)` (`files.go:126-135`), with no `os.OpenRoot(path)`,
+      `os.ReadDir` or `os.Stat` by name below a mounted home; and no
+      `DirEntry.Info()` survives in the package or any caller. **No path escape
+      found.** Three new findings instead, carried to Phase 0b.
+- [x] Rebuild `deadcode` against the go1.27.1 toolchain — **done**. Root module:
+      `deadcode ./...` rc 0, zero unreachable functions, corroborating the
+      simplify lens's independent hand-check. The silence was validated before
+      being believed: a scratch module with a deliberately dead function reports
+      it, so the tool can emit. Ingress module: `deadcode: no main packages` —
+      it is one library package whose entry points are Caddy registry callbacks
+      (`caddy.RegisterModule` in `init()`), so whole-program reachability from a
+      main is not applicable and a synthetic main would report every handler as
+      a false positive. Recorded as a tool limitation, not a gap.
+- [x] Fold any Phase 0 finding into this plan — **done: Phase 0b below**, which
+      also changes the plan's order. Phase 0 was written expecting to find
+      nothing; it found a per-tenant DoS lever, so its findings now run before
+      the docs phase.
+- [x] **Checkpoint:** `changes/` entry, commit, push.
+
+## Phase 0b — act on Phase 0's findings (`internal/files`)
+
+Promoted ahead of Phase 1: these outrank a stale sentence. Findings 1 and 2 are
+both the BUG-035 shape — a mechanism that exists in the package and did not
+reach every caller — which is why they survived four earlier audits of this same
+file.
+
+- [ ] `internal/files/files.go:191` — `List` does an uncapped `ReadDir(-1)` on a
+      guest-owned directory. `ListNames:489-492` caps at `maxListNames` with the
+      reasoning already written in the file ("the directory is guest-writable
+      and this is polled — an unbounded ReadDir is a per-tenant lever on the
+      shared server", security review 2026-09-03). `List` never got it. Bounded
+      batched read, with the truncation surfaced to the caller rather than
+      silently dropped.
+- [ ] `internal/files/files.go:232-246` — `sortEntries` is a hand-rolled
+      insertion sort, O(n²), measured by the reviewer on a copy: 5k entries
+      102ms, 20k 1.57s, 50k 9.83s single-core, in the one process serving every
+      tenant. Replace with `slices.SortFunc` over the existing `less`, which is
+      already a correct comparator.
+- [ ] Reproduce the cost before the fix and after it, on the real function
+      rather than a copy: a benchmark with 50k entries, recorded as a
+      must-improve proof. A fix to a performance finding that was never measured
+      on the real path is not verified.
+- [ ] `internal/files/files.go:446` — `ReadRawNoFollow` opens the parent with
+      `rt.Open`, i.e. `OpenFile(name, O_RDONLY, 0)`: the **only** open in the
+      package without `O_NONBLOCK`. Lines 154, 186, 296, 353, 454, 484 and 518
+      all carry it, several with explicit guest-planted-FIFO comments, and 454
+      is the very next open in the same function. A guest replacing `~/.ssh`
+      with a FIFO wedges `httpapi/setup.go:247`'s goroutine and its OS thread
+      forever. Add `syscall.O_NONBLOCK`; test with a planted FIFO.
+- [ ] `internal/httpapi/explorer.go:99-111` — `managedHomeTarget` matches the
+      first *string* component while `os.Root` follows in-root symlinks; the
+      reviewer probed it (`x -> .dockerd`, then `Root.RemoveAll("x/disk.img")`
+      succeeded). Same principal throughout, so this is not an escape — but the
+      comment reads like a boundary, which is the defect. Either make it one or
+      correct the comment to say what it actually does.
+- [ ] Close the test blind spot the reviewer named: only 4 of 15 root functions
+      have a case below a `files.Trust` base, and the cross-tenant wipe test in
+      `rmcheck_test.go` runs on the untrusted path — BUG-004's exact blind spot,
+      in the test written to prevent it. Add the missing trusted-base cases.
+- [ ] **Checkpoint:** `changes/` entry, commit, push. `reviewer` over the diff,
+      and `security` (this is the confinement boundary).
 
 ## Phase 1 — docs truth (findings 2, 3, M1, 12, 13)
 
-Highest severity in the review and the cheapest to fix. Dispatched to the
+Runs after Phase 0b, which outranks it. Cheapest fix in the plan. Dispatched to the
 `documentation` agent for the files it owns; the `.env.example` line is the main
 agent's.
 
