@@ -10,6 +10,61 @@ die()  { echo "${PROG}: ERROR $*" >&2; exit 1; }
 run()  { if [ "${DRY}" = 1 ]; then echo "+ $*"; else "$@"; fi; }
 has_tty() { ( : < /dev/tty ) 2>/dev/null; }
 
+# --- secrets and env files -------------------------------------------------
+# These are the hardened versions from deploy/styrman-ctl. install.sh used to
+# carry its own forks; env_get's had lost the is_key guard and matched with
+# `grep -E "^$2="`, interpolating the key into a regex, and private_file's had
+# drifted in two of five checks (2026-09-22 review). styrman-ctl cannot source
+# this file -- it is the general host tool and this lib is GCP-specific -- so
+# the duplication is deliberate, and internal/config/gcp_scripts_test.go
+# asserts the two copies still agree rather than trusting them to.
+
+is_key() { [[ "$1" =~ ^[A-Z][A-Z0-9_]*$ ]]; }
+
+env_get() { # env_get FILE KEY → value ('' if absent); the LAST assignment wins, like compose
+    local file="$1" key="$2"
+    is_key "${key}" || die "not a key: ${key}"
+    [ -f "${file}" ] || return 0
+    # The key travels as an awk VARIABLE and is matched literally — never
+    # interpolated into a program (security review: a key with a slash
+    # changed a sed program; with GNU sed's e flag that is command execution).
+    awk -v k="${key}" 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { if (v != "") print v }' "${file}"
+}
+
+# private_file FILE [OWNER_POLICY] [PARENT_MASK]
+#
+# OWNER_POLICY is `self` (the invoking user only, the default here) or
+# `root-or-self` (also root or ${SUDO_USER}). styrman-ctl needs the latter
+# because it runs under sudo; these scripts run as the operator, so they do
+# not. That difference is deliberate, not drift.
+#
+# PARENT_MASK is the octal mask the parent directory's mode must not
+# intersect. 022 -- not writable by group or other -- is the check that
+# actually protects the file: a readable directory does not expose a 600 file,
+# a writable one lets it be REPLACED. 077 additionally demands 700 and suits a
+# directory that exists only to hold secrets, which is why these scripts pass
+# it for ~/.config/styrman/gcp; styrman-ctl uses 022 because /etc/styrman is
+# legitimately 755.
+private_file() {
+    local f="$1" owner_policy="${2:-self}" parent_mask="${3:-077}" mode owner pmode
+    [ -L "${f}" ] && die "${f}: a symlink is refused"
+    [ -f "${f}" ] || die "${f}: no such file (see: deploy/gcp/install.sh help)"
+    owner="$(stat -c %U "${f}" 2>/dev/null || echo ?)"
+    case "${owner_policy}" in
+        root-or-self)
+            [ "${owner}" = root ] || [ "${owner}" = "${SUDO_USER:-}" ] || [ "${owner}" = "$(id -un)" ] \
+                || die "${f} is owned by ${owner}, not root or ${SUDO_USER:-you}" ;;
+        self)
+            [ "${owner}" = "$(id -un)" ] || die "${f} is owned by ${owner}, not you" ;;
+        *) die "private_file: unknown owner policy ${owner_policy}" ;;
+    esac
+    mode="$(stat -c %a "${f}" 2>/dev/null || echo 777)"
+    [ "$(( 8#${mode} & 8#077 ))" = 0 ] || die "${f} is readable by group or others (mode ${mode}); chmod 600 it first"
+    pmode="$(stat -c %a "$(dirname -- "${f}")" 2>/dev/null || echo 777)"
+    [ "$(( 8#${pmode} & 8#${parent_mask} ))" = 0 ] \
+        || die "$(dirname -- "${f}") is too permissive (mode ${pmode}, must not intersect ${parent_mask}); a secret file must not sit in a shared directory"
+}
+
 DRY=0
 # shellcheck disable=SC2034  # set here, read by vm.sh's create
 YES=0

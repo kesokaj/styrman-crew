@@ -176,9 +176,15 @@ type Server struct {
 	// notifCache memoizes each user's notifications scan for a few seconds
 	// (see listNotifications).
 	notifCache sync.Map
-	// credPushing (deletingMu, key user+"/-") single-flights the per-user
-	// credential push into running projects; credPushRerun coalesces pushes
-	// requested while one is in flight (see credharvest.go).
+	// credMu guards credPushing and credPushRerun (key user+"/-"):
+	// credPushing single-flights the per-user credential push into running
+	// projects, credPushRerun coalesces pushes requested while one is in
+	// flight (see credharvest.go). They had shared deletingMu, which guards
+	// the project-lifecycle maps above — two unrelated features on one lock,
+	// so a credential push and a project delete serialised against each other
+	// for no reason and a reader had to prove they were unrelated (simplify
+	// lens, 2026-09-22).
+	credMu        sync.Mutex
 	credPushing   map[string]bool
 	credPushRerun map[string]bool
 

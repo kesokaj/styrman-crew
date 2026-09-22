@@ -449,6 +449,15 @@ func writeAppBlock(b *strings.Builder, app App, cfg GeneratorConfig) {
 		fmt.Fprintf(b, "        request_header %s \"{http.request.header.%s}\"\n", HeaderSubject, UpstreamHeaderSub)
 
 		if app.Mode == ModeRoleGated {
+			// Strip any CLIENT-supplied role first. Unlike the identity headers
+			// above, the role is set only INSIDE the matchers below, so a
+			// request matching none of them would otherwise carry the client's
+			// own X-Caddy-Role straight to the upstream. Nothing reads that
+			// header today, which is exactly why this is cheap to fix now and
+			// would look like an authorization bug the day something does
+			// (security review 2026-09-22). Authenticated mode sets the header
+			// unconditionally in the else branch, so it needs no strip.
+			fmt.Fprintf(b, "        request_header -%s\n", HeaderRole)
 			// Set role: viewer first, then admin, then superadmin overwrites (highest wins)
 			fmt.Fprintf(b, "        @%s_viewer header_regexp %s \"app/%s/%s\"\n", policyName, UpstreamHeaderRoles, app.Hostname, RoleViewer)
 			fmt.Fprintf(b, "        request_header @%s_viewer %s \"%s\"\n", policyName, HeaderRole, RoleViewer)

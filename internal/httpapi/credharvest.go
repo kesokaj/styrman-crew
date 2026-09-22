@@ -191,15 +191,15 @@ func shellQuote(s string) string {
 // only caller (the backup feature, the other user, was removed 2026-09-01).
 func (s *Server) tryAcquire(m map[string]bool, user, projectID string) (release func(), ok bool) {
 	key := user + "/" + projectID
-	s.deletingMu.Lock()
-	defer s.deletingMu.Unlock()
+	s.credMu.Lock()
+	defer s.credMu.Unlock()
 	if m[key] {
 		return nil, false
 	}
 	m[key] = true
 	return func() {
-		s.deletingMu.Lock()
-		defer s.deletingMu.Unlock()
+		s.credMu.Lock()
+		defer s.credMu.Unlock()
 		delete(m, key)
 	}, true
 }
@@ -223,9 +223,9 @@ func (s *Server) pushCredsToRunningProjects(user, guest string) {
 	// flag the in-flight goroutine honors with one more full pass.
 	release, ok := s.tryAcquire(s.credPushing, user, "-")
 	if !ok {
-		s.deletingMu.Lock()
+		s.credMu.Lock()
 		s.credPushRerun[user] = true
-		s.deletingMu.Unlock()
+		s.credMu.Unlock()
 		return
 	}
 	go func() {
@@ -269,10 +269,10 @@ func (s *Server) pushCredsToRunningProjects(user, guest string) {
 		}
 		// A harvest completed while we were pushing — one more pass so the
 		// guests visited before it still get the newest credentials.
-		s.deletingMu.Lock()
+		s.credMu.Lock()
 		rerun := s.credPushRerun[user]
 		delete(s.credPushRerun, user)
-		s.deletingMu.Unlock()
+		s.credMu.Unlock()
 		if rerun {
 			handedOff = true
 			release() // free the slot BEFORE re-entering (it re-acquires)

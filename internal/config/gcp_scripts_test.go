@@ -532,3 +532,160 @@ func TestGCPVMSSHDryRunRunsNothing(t *testing.T) {
 		t.Fatalf("dry-run ssh actually connected:\n%s", c)
 	}
 }
+
+// env_get and private_file live in deploy/gcp/lib.sh since 2026-09-22.
+// deploy/gcp/install.sh used to carry its own forks: env_get's had lost the
+// is_key guard and matched with `grep -E "^$2="`, interpolating the key into a
+// regex, and private_file's had drifted from styrman-ctl's in two of five
+// checks. These three tests hold the merge in place.
+
+// styrman-ctl cannot source deploy/gcp/lib.sh — it is the general host tool
+// and that lib is GCP-specific — so two copies of env_get exist on purpose.
+// Two copies that already drifted once will drift again unless something
+// fails when they do. Same shape as TestFirewallScriptMatchesBridgePrefixes.
+func TestGCPLibEnvGetMatchesStyrmanCtl(t *testing.T) {
+	root := repoRoot(t)
+	read := func(rel string) string {
+		b, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	ctl, lib := read("deploy/styrman-ctl"), read("deploy/gcp/lib.sh")
+
+	// The literal-match awk program is the security-load-bearing line: the key
+	// travels as a VARIABLE and is never interpolated into the program.
+	const awkLine = `awk -v k="${key}" 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { if (v != "") print v }' "${file}"`
+	for name, src := range map[string]string{"deploy/styrman-ctl": ctl, "deploy/gcp/lib.sh": lib} {
+		if !strings.Contains(src, awkLine) {
+			t.Errorf("%s no longer contains env_get's literal-match awk program; the two copies have drifted", name)
+		}
+		if !strings.Contains(src, `is_key() { [[ "$1" =~ ^[A-Z][A-Z0-9_]*$ ]]; }`) {
+			t.Errorf("%s no longer contains the is_key guard", name)
+		}
+	}
+
+	// And the fork must not come back.
+	install := read("deploy/gcp/install.sh")
+	for _, bad := range []string{"env_get() {", "private_file() {"} {
+		if strings.Contains(install, bad) {
+			t.Errorf("deploy/gcp/install.sh defines its own %s again; it must use lib.sh's", strings.TrimSuffix(bad, "() {"))
+		}
+	}
+	if strings.Contains(install, `grep -E "^$2="`) {
+		t.Error("deploy/gcp/install.sh interpolates a key into a grep regex again (the 2026-09-22 finding)")
+	}
+}
+
+// The case the hardening was written for: a key containing a slash must be
+// refused by name, never interpolated into the matcher. The fork would have
+// passed it straight to `grep -E`.
+func TestGCPLibEnvGetRefusesANonKey(t *testing.T) {
+	e := gcpSetup(t)
+	probe := filepath.Join(e.root, "probe.sh")
+	body := `#!/usr/bin/env bash
+set -euo pipefail
+PROG=probe
+. "` + filepath.Join(repoRoot(t), "deploy", "gcp", "lib.sh") + `"
+env_get "$1" "$2"
+`
+	if err := os.WriteFile(probe, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(e.root, "env")
+	if err := os.WriteFile(envFile, []byte("BASE_DOMAIN=example.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, key := range []string{"a/b", "BASE_DOMAIN/x", "lower", "WITH-DASH", "$(id)", "*"} {
+		out, err := exec.Command(probe, envFile, key).CombinedOutput()
+		if err == nil {
+			t.Errorf("env_get accepted %q as a key (output %q); is_key must refuse it", key, out)
+		}
+		if !strings.Contains(string(out), "not a key") {
+			t.Errorf("env_get(%q) failed without naming the reason: %q", key, out)
+		}
+	}
+
+	// A real key still works, so the guard is not simply refusing everything.
+	out, err := exec.Command(probe, envFile, "BASE_DOMAIN").CombinedOutput()
+	if err != nil {
+		t.Fatalf("env_get on a valid key failed: %v (%q)", err, out)
+	}
+	if strings.TrimSpace(string(out)) != "example.com" {
+		t.Errorf("env_get(BASE_DOMAIN) = %q, want example.com", out)
+	}
+}
+
+// private_file's two parameters exist because styrman-ctl runs under sudo and
+// these scripts do not, and because /etc/styrman is legitimately 755 while
+// ~/.config/styrman/gcp exists only to hold secrets. Both defaults must stay
+// what install.sh relied on before the merge: self, and 077.
+func TestGCPLibPrivateFileDefaultsAndPolicies(t *testing.T) {
+	e := gcpSetup(t)
+	probe := filepath.Join(e.root, "pf.sh")
+	body := `#!/usr/bin/env bash
+set -euo pipefail
+PROG=probe
+. "` + filepath.Join(repoRoot(t), "deploy", "gcp", "lib.sh") + `"
+private_file "$@"
+echo OK
+`
+	if err := os.WriteFile(probe, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mk := func(dirMode, fileMode os.FileMode) string {
+		dir, err := os.MkdirTemp(e.root, "s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := filepath.Join(dir, "secret")
+		if err := os.WriteFile(f, []byte("x"), fileMode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(f, fileMode); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, dirMode); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+
+	// Default: a 600 file in a 700 directory passes.
+	if out, err := exec.Command(probe, mk(0o700, 0o600)).CombinedOutput(); err != nil {
+		t.Errorf("private_file refused a 600 file in a 700 dir: %v (%q)", err, out)
+	}
+	// Default parent mask is 077, so a 755 parent is refused — what install.sh
+	// did before the merge, and must keep doing.
+	if out, err := exec.Command(probe, mk(0o755, 0o600)).CombinedOutput(); err == nil {
+		t.Errorf("default private_file accepted a 755 parent; the default mask must stay 077 (%q)", out)
+	}
+	// With styrman-ctl's mask, the same 755 parent is fine: readable is not
+	// writable, and /etc/styrman is legitimately 755.
+	if out, err := exec.Command(probe, mk(0o755, 0o600), "self", "022").CombinedOutput(); err != nil {
+		t.Errorf("private_file with mask 022 refused a 755 parent: %v (%q)", err, out)
+	}
+	// A group-writable parent is refused under either mask.
+	if out, err := exec.Command(probe, mk(0o775, 0o600), "self", "022").CombinedOutput(); err == nil {
+		t.Errorf("private_file accepted a group-writable parent under mask 022 (%q)", out)
+	}
+	// A group-readable FILE is refused regardless.
+	if out, err := exec.Command(probe, mk(0o700, 0o640)).CombinedOutput(); err == nil {
+		t.Errorf("private_file accepted a group-readable file (%q)", out)
+	}
+	// An unknown owner policy is an error, not a silent pass.
+	if out, err := exec.Command(probe, mk(0o700, 0o600), "nonsense").CombinedOutput(); err == nil {
+		t.Errorf("private_file accepted an unknown owner policy (%q)", out)
+	}
+	// A symlink is refused.
+	real := mk(0o700, 0o600)
+	link := filepath.Join(filepath.Dir(real), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(probe, link).CombinedOutput(); err == nil {
+		t.Errorf("private_file accepted a symlink (%q)", out)
+	}
+}

@@ -55,23 +55,11 @@ fi
 [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "no release version: pass --version X.Y.Z (a commit sha is never a version, ADR-053)"
 
 # private_file / private_dir: the checks styrman-ctl's private_file makes.
-private_file() {
-    local f="$1" mode owner pmode
-    [ -L "${f}" ] && die "${f}: a symlink is refused"
-    [ -f "${f}" ] || die "${f}: no such file (see: deploy/gcp/install.sh help)"
-    owner="$(stat -c %U "${f}" 2>/dev/null || echo ?)"
-    [ "${owner}" = "$(id -un)" ] || die "${f} is owned by ${owner}, not you"
-    mode="$(stat -c %a "${f}" 2>/dev/null || echo 777)"
-    [ "$(( 8#${mode} & 8#077 ))" = 0 ] || die "${f} is readable by group or others (mode ${mode}); chmod 600 it first"
-    pmode="$(stat -c %a "$(dirname -- "${f}")" 2>/dev/null || echo 777)"
-    [ "$(( 8#${pmode} & 8#077 ))" = 0 ] || die "$(dirname -- "${f}") must be mode 700 (it is ${pmode}); a secret file must not sit in a shared directory"
-}
 [ -L "${SECRETS}" ] && die "${SECRETS}: a symlink is refused"
 [ -d "${SECRETS}" ] || die "${SECRETS}: no such directory — create it (mkdir -m 700) with env, gh-token and allowed_signers (deploy/gcp/install.sh help)"
 ENV_FILE="${SECRETS}/env"; TOKEN_FILE="${SECRETS}/gh-token"; SIGNERS_FILE="${SECRETS}/allowed_signers"
 private_file "${ENV_FILE}"; private_file "${TOKEN_FILE}"; private_file "${SIGNERS_FILE}"
 
-env_get() { local v; v="$(grep -E "^$2=" "$1" | tail -n1 || true)"; printf '%s' "${v#*=}"; }
 for key in BASE_DOMAIN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET CLOUDFLARE_API_TOKEN ADMIN_EMAIL STYRMAN_ALLOWED_EMAILS; do
     [ -n "$(env_get "${ENV_FILE}" "${key}")" ] || die "${ENV_FILE}: ${key} is empty or missing"
 done
