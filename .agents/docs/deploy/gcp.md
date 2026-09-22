@@ -151,8 +151,25 @@ deploy/gcp/vm.sh delete --confirm styrman      # instance, boot disk and static 
 ```
 
 Deleting leaves the Cloudflare records behind (the ingress creates, never
-deletes them) and the OAuth redirect URI; remove both by hand if the name
-is not coming back.
+deletes them) and the OAuth redirect URI on the client. **Remove both by
+hand as part of the teardown, not "if you feel like it".** The address is
+released back to Google's pool, so the records now point at an address
+someone else can be given: whoever gets it can serve content on your names,
+obtain a certificate for them through HTTP-01 validation, and — because
+`auth.<BASE_DOMAIN>` stays registered as a redirect URI on the OAuth client
+— be handed authorization codes issued for that client. When the client is
+shared with another host (it should not be: see the prerequisites), that
+reaches the other host too.
+
+```bash
+# the two records the ingress created, in the Cloudflare dashboard or API:
+#   <STYRMAN_HOSTNAME>.<BASE_DOMAIN>   A   <the released address>
+#   auth.<BASE_DOMAIN>                 A   <the released address>
+dig +short <STYRMAN_HOSTNAME>.<BASE_DOMAIN> auth.<BASE_DOMAIN>   # both must return nothing when done
+```
+
+Then remove `https://auth.<BASE_DOMAIN>/oauth2/google/authorization-code-callback`
+from the OAuth client (console → APIs & Services → Credentials).
 
 ## Tests
 
