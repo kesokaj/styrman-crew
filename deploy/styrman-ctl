@@ -51,7 +51,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # overridable so the tests never write into the real checkout.
 ENV_FILE="${STYRMAN_ENV_FILE:-${REPO}/deploy/.env}"
 OPERATOR="${SUDO_USER:-}"
-MUST_FILL="BASE_DOMAIN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET CLOUDFLARE_API_TOKEN ADMIN_EMAIL STYRMAN_ALLOWED_EMAILS"
+MUST_FILL="BASE_DOMAIN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET ADMIN_EMAIL STYRMAN_ALLOWED_EMAILS"
 CLONE_ENV="${DEPLOY_DIR}/deploy/.env"
 # shellcheck disable=SC2034  # used by uninstall (plan phase 4)
 UNITS=(styrman-firewall.service styrman-firewall.timer styrman-update.service styrman-update.timer)

@@ -57,7 +57,9 @@ private_file() {
     [ "${parent_mask}" = "000" ] && die "private_file: a parent mask of 000 checks nothing"
     [ -L "${f}" ] && die "${f}: a symlink is refused"
     [ -f "${f}" ] || die "${f}: no such file (see: deploy/gcp/install.sh help)"
-    owner="$(stat -c %U "${f}" 2>/dev/null || echo ?)"
+    # GNU stat uses -c, BSD/macOS stat uses -f; install.sh runs on the
+    # operator's machine (macOS or Linux), so both must work.
+    owner="$(stat -c %U "${f}" 2>/dev/null || stat -f %Su "${f}" 2>/dev/null || echo ?)"
     case "${owner_policy}" in
         root-or-self)
             [ "${owner}" = root ] || [ "${owner}" = "${SUDO_USER:-}" ] || [ "${owner}" = "$(id -un)" ] \
@@ -66,9 +68,9 @@ private_file() {
             [ "${owner}" = "$(id -un)" ] || die "${f} is owned by ${owner}, not you" ;;
         *) die "private_file: unknown owner policy ${owner_policy}" ;;
     esac
-    mode="$(stat -c %a "${f}" 2>/dev/null || echo 777)"
+    mode="$(stat -c %a "${f}" 2>/dev/null || stat -f %Lp "${f}" 2>/dev/null || echo 777)"
     [ "$(( 8#${mode} & 8#077 ))" = 0 ] || die "${f} is readable by group or others (mode ${mode}); chmod 600 it first"
-    pmode="$(stat -c %a "$(dirname -- "${f}")" 2>/dev/null || echo 777)"
+    pmode="$(stat -c %a "$(dirname -- "${f}")" 2>/dev/null || stat -f %Lp "$(dirname -- "${f}")" 2>/dev/null || echo 777)"
     [ "$(( 8#${pmode} & 8#${parent_mask} ))" = 0 ] \
         || die "$(dirname -- "${f}") is too permissive (mode ${pmode}, must not intersect ${parent_mask}); a secret file must not sit in a shared directory"
 }

@@ -147,7 +147,7 @@ func TestGCPVMCreatePlan(t *testing.T) {
 		"--address=styrman-static",
 		"--image-family=debian-13",
 		"--zone=europe-north2-a",
-		"--project=driven-eft-h4it",
+		"--project=daring-lioness-uwgw",
 		"block-project-ssh-keys=TRUE",
 	} {
 		if !strings.Contains(out, flag) {

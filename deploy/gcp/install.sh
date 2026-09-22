@@ -11,8 +11,8 @@
 # --secrets-dir (default ~/.config/styrman/gcp, mode 700) holds three files,
 # each mode 600 and owned by you:
 #   env              the six must-fill keys of deploy/.env.example (BASE_DOMAIN,
-#                    GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, CLOUDFLARE_API_TOKEN,
-#                    ADMIN_EMAIL, STYRMAN_ALLOWED_EMAILS) + optional STYRMAN_HOSTNAME
+#                    GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ADMIN_EMAIL,
+#                    STYRMAN_ALLOWED_EMAILS) + optional CLOUDFLARE_API_TOKEN + optional STYRMAN_HOSTNAME
 #   gh-token         a fine-grained GitHub token that reads this repository AND
 #                    kesokaj/styrman-harness (the image build, ADR-074)
 #   allowed_signers  one line: <git email> <key type> <public key> of the release signer
@@ -60,7 +60,7 @@ fi
 ENV_FILE="${SECRETS}/env"; TOKEN_FILE="${SECRETS}/gh-token"; SIGNERS_FILE="${SECRETS}/allowed_signers"
 private_file "${ENV_FILE}"; private_file "${TOKEN_FILE}"; private_file "${SIGNERS_FILE}"
 
-for key in BASE_DOMAIN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET CLOUDFLARE_API_TOKEN ADMIN_EMAIL STYRMAN_ALLOWED_EMAILS; do
+for key in BASE_DOMAIN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET ADMIN_EMAIL STYRMAN_ALLOWED_EMAILS; do
     [ -n "$(env_get "${ENV_FILE}" "${key}")" ] || die "${ENV_FILE}: ${key} is empty or missing"
 done
 BASE_DOMAIN="$(env_get "${ENV_FILE}" BASE_DOMAIN)"

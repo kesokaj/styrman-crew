@@ -21,13 +21,13 @@ these scripts, as on the NUC.
 
 | Item | Value | Where |
 |---|---|---|
-| Project | `driven-eft-h4it` | `deploy/gcp/vm.conf` `GCP_PROJECT` |
+| Project | `daring-lioness-uwgw` | `deploy/gcp/vm.conf` `GCP_PROJECT` |
 | Zone / region | `europe-north2-a` / `europe-north2` (subnet `europe-north2`) | `GCP_ZONE`, `GCP_SUBNET` |
-| Machine | `n4-standard-8` (8 vCPU / 32 GB), 200 GB Hyperdisk Balanced, Debian 13 (`debian-13` family), Shielded VM | `GCP_MACHINE_TYPE`, `GCP_BOOT_DISK_*`, `GCP_IMAGE_*` |
+| Machine | `n4-standard-8` (8 vCPU / 32 GB), 300 GB Hyperdisk Balanced, Debian 13 (`debian-13` family), Shielded VM | `GCP_MACHINE_TYPE`, `GCP_BOOT_DISK_*`, `GCP_IMAGE_*` |
 | Service account | **none** (`--no-service-account --no-scopes`): the host needs no GCP API, and a LAN-mode project can reach the metadata server | `vm.sh create` |
-| Public | yes for 80/443 via the project's `http`/`https` firewall tags; **no public port 22** — ssh and scp tunnel through IAP (Identity-Aware Proxy TCP forwarding, the project's `allow-iap` rule) | `GCP_TAGS`, `GCP_SSH_VIA_IAP` |
+| Public | yes for 80/443 via the project's `http`/`https` firewall tags; **no public port 22** — ssh goes through IAP (Identity-Aware Proxy TCP forwarding, the project's `allow-iap` rule) | `GCP_TAGS`, `GCP_SSH_VIA_IAP` |
 | Static IP | reserved as `styrman-static` in the region; the ingress writes the Cloudflare records to it | `GCP_ADDRESS` |
-| Hostname | `BASE_DOMAIN=gcp.styrman.xyz`, `STYRMAN_HOSTNAME=crew` → app `https://crew.gcp.styrman.xyz`, sign-in `https://auth.gcp.styrman.xyz` | the `env` secrets file |
+| Hostname | `BASE_DOMAIN=spgo.demo.altostrat.com`, `STYRMAN_HOSTNAME=crew` → app `https://crew.spgo.demo.altostrat.com`, sign-in `https://auth.spgo.demo.altostrat.com` | the `env` secrets file |
 | Instance name | `styrman` | `GCP_INSTANCE` |
 
 Every `GCP_*` key can be overridden from the environment for one run
@@ -49,10 +49,14 @@ disk (about USD 20/month). Stop it when idle.
    were already trying root logins on it.
 2. The secrets directory `~/.config/styrman/gcp/` (mode 700), three files,
    each mode 600 and owned by you — never inside the repository:
-   - `env`: the six must-fill keys of `deploy/.env.example` for THIS host —
+   - `env`: the five must-fill keys of `deploy/.env.example` for THIS host —
      `BASE_DOMAIN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
-     `CLOUDFLARE_API_TOKEN`, `ADMIN_EMAIL`, `STYRMAN_ALLOWED_EMAILS` — plus
-     the optional `STYRMAN_HOSTNAME`. **Use a separate OAuth client and a
+     `ADMIN_EMAIL`, `STYRMAN_ALLOWED_EMAILS` — plus the optional
+     `STYRMAN_HOSTNAME` and the optional `CLOUDFLARE_API_TOKEN`.
+     When `CLOUDFLARE_API_TOKEN` is unset, the ingress uses HTTP-01 ACME
+     challenges (works for non-wildcard hostnames) and DNS records must be
+     created manually (e.g. in Cloud DNS — see "Create DNS records" below).
+     **Use a separate OAuth client and a
      separate Cloudflare token for this host**, the token scoped to the zone
      it actually needs. Copying the production host's credentials works —
      one zone token covers every sub-name, one OAuth client takes several
@@ -82,10 +86,25 @@ deploy/gcp/install.sh            # clones this repo at its newest release tag on
                                  # runs `sudo styrman-ctl install --yes …` there (10–20 min), verifies, removes the staged files
 ```
 
+### Create DNS records (Cloud DNS, no Cloudflare)
+
+When `CLOUDFLARE_API_TOKEN` is unset in the secrets `env` file, the ingress
+does not manage DNS. Create the A records manually after `vm.sh create`
+reserves the static IP:
+
+```bash
+IP=$(gcloud compute addresses describe styrman-static --project=daring-lioness-uwgw --region=europe-north2 --format='value(address)')
+gcloud dns record-sets create crew.spgo.demo.altostrat.com. --project=daring-lioness-uwgw --zone=spgo-demo-altostrat-com --type=A --ttl=300 --rrdatas="$IP"
+gcloud dns record-sets create auth.spgo.demo.altostrat.com. --project=daring-lioness-uwgw --zone=spgo-demo-altostrat-com --type=A --ttl=300 --rrdatas="$IP"
+```
+
+Skip this when `CLOUDFLARE_API_TOKEN` is set — the ingress creates the
+records itself.
+
 `install.sh` also delivers the OPTIONAL keys in `env` — `STYRMAN_HOSTNAME`,
 `STYRMAN_PUBLIC_DOMAIN`, `STYRMAN_PRIVATE_DOMAIN` — with `styrman-ctl edit`
 after the install, because `styrman-ctl install --env-file` itself carries
-only the six must-fill keys and the host would otherwise keep its defaults
+only the five must-fill keys and the host would otherwise keep its defaults
 (BUG-072). It then reads the hostname back from the host and verifies that
 URL, so a mismatch is reported rather than probed blindly.
 
@@ -120,7 +139,7 @@ token and signer, so the VM follows every signed release tag on its own.
 
 ```bash
 deploy/gcp/vm.sh status                       # RUNNING + IP, then `styrman-ctl status` on the VM; exit 0 healthy
-curl -sSI https://crew.gcp.styrman.xyz/ | head -3   # 302 to https://auth.gcp.styrman.xyz/…
+curl -sSI https://crew.spgo.demo.altostrat.com/ | head -3   # 302 to https://auth.spgo.demo.altostrat.com/…
 deploy/gcp/vm.sh ssh -- 'sudo styrman-ctl status'   # server + caddy at the version, updater timer active
 gcloud compute instances network-interfaces get-effective-firewalls styrman --zone europe-north2-a   # 0.0.0.0/0 allows: 80, 443 and ICMP only
 ```

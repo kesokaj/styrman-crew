@@ -22,6 +22,13 @@ type GeneratorConfig struct {
 	PrivateDomain     string   // Email-gated preview wildcard base (e.g., "private.crew.styrman.xyz"); empty = off
 	IngressToken      string   // shared secret injected as X-Styrman-Ingress (proves ingress origin)
 	JWTKey            string   // stable HMAC key so caddy-security JWTs survive restarts (else sessions break on redeploy)
+	// CloudflareDNS enables the `acme_dns cloudflare` global option, which
+	// uses CLOUDFLARE_API_TOKEN for DNS-01 ACME challenges. When false
+	// (no token), Caddy falls back to HTTP-01 challenges — sufficient for
+	// non-wildcard hostnames, which is all the base app and auth portal need.
+	// Wildcard certs (preview/private domains) require DNS-01 and will not
+	// issue without a token.
+	CloudflareDNS bool
 	// AdminListen is the admin API's bind address. It is emitted into the
 	// generated global options so the endpoint accepts requests only from
 	// itself — see writeGlobalOptions.
@@ -205,7 +212,9 @@ func writePrivateWildcard(b *strings.Builder, app App, cfg GeneratorConfig) {
 func writeGlobalOptions(b *strings.Builder, apps []App, cfg GeneratorConfig, needsOAuth bool) {
 	b.WriteString("{\n")
 	fmt.Fprintf(b, "    email %s\n", cfg.AdminEmail)
-	b.WriteString("    acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}\n")
+	if cfg.CloudflareDNS {
+		b.WriteString("    acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}\n")
+	}
 	b.WriteString("    auto_https disable_redirects\n\n")
 
 	// The admin API reconfigures the ENTIRE ingress in a network_mode:host

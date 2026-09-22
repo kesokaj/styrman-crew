@@ -12,12 +12,13 @@ import (
 // for consistent testing. Apps go to <hostname>.apps.example.com.
 func testConfig() GeneratorConfig {
 	return GeneratorConfig{
-		BaseDomain:  "example.com",
-		AdminEmail:  "admin@example.com",
-		DefaultRPS:  100,
-		AuthDomain:  "auth.example.com",
-		ShellDomain: "shell.example.com",
-		AppsDomain:  "apps.example.com",
+		BaseDomain:    "example.com",
+		AdminEmail:    "admin@example.com",
+		DefaultRPS:    100,
+		AuthDomain:    "auth.example.com",
+		ShellDomain:   "shell.example.com",
+		AppsDomain:    "apps.example.com",
+		CloudflareDNS: true,
 	}
 }
 
@@ -38,6 +39,18 @@ func TestGenerateCaddyfile_NoApps(t *testing.T) {
 	// Should NOT have security block or auth portal (no apps need OAuth)
 	assertNotContains(t, result, "security {")
 	assertNotContains(t, result, "authenticate with myportal")
+}
+
+func TestGenerateCaddyfile_NoCloudflare(t *testing.T) {
+	cfg := testConfig()
+	cfg.CloudflareDNS = false
+	result := GenerateCaddyfile(nil, cfg)
+
+	// Without a Cloudflare token Caddy falls back to HTTP-01 challenges.
+	assertNotContains(t, result, "acme_dns")
+	// Everything else is still present.
+	assertContains(t, result, "email admin@example.com")
+	assertContains(t, result, "auto_https disable_redirects")
 }
 
 func TestGenerateCaddyfile_PublicApp(t *testing.T) {

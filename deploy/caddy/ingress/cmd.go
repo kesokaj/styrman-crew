@@ -138,6 +138,7 @@ func loadConfig(log *slog.Logger) (GeneratorConfig, error) {
 		PrivateDomain:     os.Getenv(EnvPrivateDomain),
 		IngressToken:      os.Getenv(EnvIngressToken),
 		JWTKey:            os.Getenv(EnvJWTKey),
+		CloudflareDNS:     os.Getenv(EnvCloudflareToken) != "",
 		AdminListen:       getEnvOrDefault(EnvCaddyAdmin, DefaultCaddyAdmin),
 	}
 
