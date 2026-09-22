@@ -74,6 +74,7 @@
 | BUG-071 | 2026-09-21 | deploy/gcp/install.sh | fixed | mutation-check restore via inverse `sed` (no line address) silently corrupted a second, unintended line — `GH_TOKEN="$(cat …)"` — reviewer caught it | restore a mutation from a byte-identical copy (`cp`/`cmp`), never an inverse edit; a command-string test names every value the command needs from its own exec |
 | BUG-072 | 2026-09-22 | deploy/gcp/install.sh | fixed | healthy GCP bring-up failed its own verify step: probed `crew.gcp.styrman.xyz`, host served `styrman.gcp.styrman.xyz` | deliver every optional key an env-file passes or read the far side's effective value back; a name-probing check must use the name the thing under test actually claims |
 | BUG-073 | 2026-09-22 | deploy/gcp/vm.sh | fixed | `vm.sh status` reported "not installed" against a fully installed, serving GCP host | probe a path the installer actually creates or ask the host where its copy is — never hard-code a guess that can never succeed |
+| BUG-074 | 2026-09-22 | deploy/caddy/ingress (config.go, generator.go) | open | operator's browser looped ERR_TOO_MANY_REDIRECTS on the GCP host; incognito worked | a deployment-identifying cookie/header/key needs a unique NAME, not just a scoped domain; test a second deployment from a browser that already holds the first one's session |
 
 ## Graduated
 
