@@ -75,6 +75,8 @@ management port is not exposed publicly when the platform offers a tunnel
 (IAP here) — this VM's port 22 was reached by scanners within four minutes
 of boot.
 
+Graduated to `.agents/rules/remote-check-names-transport-first.md` on 2026-09-22.
+
 ## Related
 Same family as BUG-034 (silence from your own instrumentation) and BUG-040
 (a green run against the wrong server): a signal read as evidence of the

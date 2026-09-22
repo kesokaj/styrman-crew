@@ -67,6 +67,8 @@ checksum must come from something the publisher still publishes (here
 GitHub's asset digest), not from a sidecar file whose existence was
 assumed.
 
+Graduated to `.agents/rules/shared-path-learnings.md` on 2026-09-22.
+
 ## Related
 BUG-056 (Docker Hub pulls: an external publisher's behaviour changing
 under a green gate); BUG-035 (a mechanism must reach every caller — here
