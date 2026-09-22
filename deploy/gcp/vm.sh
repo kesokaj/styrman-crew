@@ -61,6 +61,7 @@ cmd_create() {
         read -r -p "Create ${GCP_INSTANCE} (${GCP_MACHINE_TYPE}, ${GCP_BOOT_DISK_SIZE} ${GCP_BOOT_DISK_TYPE}) in ${GCP_ZONE}: billed while running (about USD 250-300/month for n4-standard-8) — continue? [y/N] " a < /dev/tty
         [[ "${a}" =~ ^[yY] ]] || die "aborted, nothing created"
     fi
+    assert_no_public_ssh
     if gcloud compute addresses describe "${GCP_ADDRESS}" "${GCP_ARGS[@]}" --region="${GCP_REGION}" --format='value(address)' >/dev/null 2>&1; then
         log "address ${GCP_ADDRESS} already reserved in ${GCP_REGION}"
     else
@@ -80,7 +81,7 @@ cmd_create() {
         echo "+ (dry run) would wait for ssh and print the external IP"
         return 0
     fi
-    log "waiting for ssh (up to 5 minutes; gcloud adds this machine's key to the project on first use)"
+    log "waiting for ssh (up to 5 minutes; gcloud adds this machine's key to the INSTANCE's metadata on first use — project-wide keys are blocked)"
     local i
     for i in $(seq 1 30); do
         if ssh_reachable; then
@@ -142,7 +143,13 @@ cmd_delete() {
 case "${VERB}" in
     create) cmd_create ;;
     status) cmd_status ;;
-    ssh)    vm_ssh "${ARGS[@]}" ;;
+    ssh)    if [ "${DRY}" = 1 ]; then
+                if [ ${#ARGS[@]} -gt 0 ]; then
+                    printf '+ gcloud compute ssh %s %s %s %s --quiet --command=%q\n' "${GCP_INSTANCE}" "${GCP_ARGS[*]}" "${ZONE_ARGS[*]}" "${SSH_ARGS[*]}" "${ARGS[*]}"
+                else
+                    printf '+ gcloud compute ssh %s %s %s %s --quiet\n' "${GCP_INSTANCE}" "${GCP_ARGS[*]}" "${ZONE_ARGS[*]}" "${SSH_ARGS[*]}"
+                fi
+            else vm_ssh "${ARGS[@]}"; fi ;;
     stop)   run gcloud compute instances stop "${GCP_INSTANCE}" "${GCP_ARGS[@]}" "${ZONE_ARGS[@]}" ;;
     start)  run gcloud compute instances start "${GCP_INSTANCE}" "${GCP_ARGS[@]}" "${ZONE_ARGS[@]}" ;;
     delete) cmd_delete ;;

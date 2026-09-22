@@ -117,7 +117,8 @@ cleanup() {
     local rc=$?
     if [ "${STAGED}" = 1 ]; then
         log "install: removing the staged secrets from the VM"
-        run "${VM}" ssh -- 'rm -rf "$HOME/.styrman-install"' || warn "could not remove ~/.styrman-install on the VM — remove it by hand"
+        run "${VM}" ssh -- 'rm -rf "$HOME/.styrman-install"' \
+            || warn "the staged secrets are STILL ON THE VM: remove them with  deploy/gcp/vm.sh ssh -- 'rm -rf \"\$HOME/.styrman-install\"'"
     fi
     exit "${rc}"
 }
@@ -139,8 +140,11 @@ HELPER="credential.${ORIGIN_HOST}.helper=!f() { echo username=x-access-token; pr
 GIT_ENV='env GIT_TERMINAL_PROMPT=0 STYRMAN_GH_TOKEN_FILE="$HOME/.styrman-install/gh-token"'
 GIT_C="git -c credential.helper= -c $(sq "${HELPER}")"
 if vm_ssh 'test -d "$HOME/styrman-crew/.git"' >/dev/null 2>&1; then
-    log "install: ~/styrman-crew exists on the VM — fetching tags, checking out v${VERSION}"
-    run "${VM}" ssh -- "${GIT_ENV} ${GIT_C} -C \"\$HOME/styrman-crew\" fetch --tags && git -C \"\$HOME/styrman-crew\" checkout -q v${VERSION}"
+    # reset --hard + clean: `checkout` alone keeps local edits and untracked
+    # files, so the verify-tag below would vouch for the tag object while the
+    # tree that runs as root is something else (review 2026-09-22).
+    log "install: ~/styrman-crew exists on the VM — fetching tags, resetting it to v${VERSION}"
+    run "${VM}" ssh -- "${GIT_ENV} ${GIT_C} -C \"\$HOME/styrman-crew\" fetch --tags && git -C \"\$HOME/styrman-crew\" reset -q --hard \"v${VERSION}\" && git -C \"\$HOME/styrman-crew\" clean -qfdx"
 else
     log "install: cloning ${ORIGIN} at v${VERSION} → ~/styrman-crew on the VM"
     run "${VM}" ssh -- "${GIT_ENV} ${GIT_C} clone --branch v${VERSION} -- ${ORIGIN} \"\$HOME/styrman-crew\""
@@ -150,7 +154,10 @@ fi
 # Only a release the staged allowed_signers vouches for runs on the VM — the
 # updater's rule (ADR-050/051), applied to the first install too.
 log "install: verifying the v${VERSION} tag signature against the staged allowed_signers"
-run "${VM}" ssh -- "git -C \"\$HOME/styrman-crew\" -c gpg.ssh.allowedSignersFile=\"\$HOME/.styrman-install/allowed_signers\" verify-tag \"v${VERSION}\""
+# gpg.format and gpg.ssh.program are pinned on the command line: the checkout
+# is writable by the VM user, and a repo-local config could otherwise point
+# the verifier at another program (security review 2026-09-22).
+run "${VM}" ssh -- "git -C \"\$HOME/styrman-crew\" -c gpg.format=ssh -c gpg.ssh.program=ssh-keygen -c gpg.ssh.allowedSignersFile=\"\$HOME/.styrman-install/allowed_signers\" verify-tag \"v${VERSION}\""
 # The token reaches host-setup.sh's image build through --gh-token-file:
 # styrman-ctl exports it in its own process, so no value is ever on a
 # command line sudo logs (security review 2026-09-21).

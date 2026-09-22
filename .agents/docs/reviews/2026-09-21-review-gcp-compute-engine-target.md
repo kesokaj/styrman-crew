@@ -132,3 +132,10 @@ test drives `--dry-run` and the remote command is never actually executed.
 ## Outcome
 
 - High, `install.sh:153` (`GH_TOKEN` read through `${STYRMAN_GH_TOKEN_FILE}`, unset in that ssh exec): **fixed** the same day. The line reads `GH_TOKEN="$(cat "$HOME/.styrman-install/gh-token")"` again; `TestGCPInstallPlan` now finds the plan's `styrman-ctl install --yes` line and requires that literal path with no `STYRMAN_GH_TOKEN_FILE` in it — the assertion failed on the reviewed line (`the install line must read the staged token by its literal path`) before the fix and passes after. Root cause: a must-fail mutation restored by an inverse global `sed` that also rewrote this line — BUG-071. Verified by the `verifier` round-3 log named in the change entry.
+
+**Addendum, 2026-09-22.** The Outcome above quotes the install line as
+`GH_TOKEN="$(cat "$HOME/.styrman-install/gh-token")"`. That form shipped for
+part of a day and was superseded the same session by the v1.37.0 security
+review: the token value must not sit in an argv that `sudo` logs. The line now
+passes `--gh-token-file` only, and `styrman-ctl` exports the token in its own
+process (`run_host_setup`). See `2026-09-22-security-v1.36.0-HEAD.md`.

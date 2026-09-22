@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -100,6 +101,10 @@ func ctl(t *testing.T, e ctlEnv, args ...string) (string, int) {
 	t.Helper()
 	cmd := exec.Command(filepath.Join(repoRoot(t), "deploy", "styrman-ctl"), args...)
 	cmd.Env = e.env
+	// No controlling terminal: `go test` from a terminal would otherwise lend
+	// it one, making has_tty true and the `read … < /dev/tty` prompts
+	// reachable (review 2026-09-22, the same defect as gcp_scripts_test.go).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -889,35 +894,62 @@ func TestStyrmanCtlDisplayValuesArePrintable(t *testing.T) {
 }
 
 // host-setup.sh's step 7 needs the GitHub token before styrman-ctl installs
-// the token file; from --gh-token-file it reaches host-setup.sh through the
-// environment, never on a command line (sudo logs argv — security review
-// 2026-09-21). The plan names the export and never the token's content.
+// the token file. It must reach host-setup.sh through the ENVIRONMENT and
+// never on a command line (sudo logs argv; /proc/<pid>/cmdline is world
+// readable — security review 2026-09-21). The dry-run plan alone cannot show
+// this: it prints the planned command, not its environment, so deleting the
+// export would leave a plan-only assertion green (review 2026-09-22). The
+// __run-host-setup hook runs the real function against a fake host-setup.sh
+// under the test's temp root and reads what it received.
 func TestStyrmanCtlInstallExportsTokenForHostSetup(t *testing.T) {
 	e := ctlSetup(t, true)
 	tok := filepath.Join(e.root, "secrets", "tok")
 	if err := os.WriteFile(tok, []byte("ghp_SECRETTOKEN\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	seen := filepath.Join(e.root, "host-setup-saw.txt")
+	hs := filepath.Join(e.root, "fake-host-setup.sh")
+	body := "#!/usr/bin/env bash\nprintf 'GH_TOKEN=[%s] argv=[%s]\\n' \"${GH_TOKEN:-<unset>}\" \"$*\" > \"" + seen + "\"\n"
+	if err := os.WriteFile(hs, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, code := ctl(t, e, "__run-host-setup", tok, "u", hs)
+	if code != 0 {
+		t.Fatalf("__run-host-setup: %d\n%s", code, out)
+	}
+	got, err := os.ReadFile(seen)
+	if err != nil {
+		t.Fatalf("the fake host-setup.sh did not run: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(got), "GH_TOKEN=[ghp_SECRETTOKEN]") {
+		t.Fatalf("host-setup.sh did not receive the token in its environment: %s", got)
+	}
+	if !strings.Contains(string(got), "argv=[--user u]") {
+		t.Fatalf("host-setup.sh got the wrong argv: %s", got)
+	}
+	if strings.Contains(string(got), "argv=[") && strings.Contains(strings.SplitN(string(got), "argv=[", 2)[1], "ghp_") {
+		t.Fatalf("the token reached a command line: %s", got)
+	}
+	if strings.Contains(out, "ghp_SECRETTOKEN") {
+		t.Fatalf("the token's content was printed:\n%s", out)
+	}
+	// And the install plan says so without reading or printing the secret.
 	signers := filepath.Join(e.root, "secrets", "signers")
 	if err := os.WriteFile(signers, []byte("me@example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// --skip-auto-update: the export under test happens before host-setup.sh;
-	// the auto-update setup afterwards is TestStyrmanCtlUpdateSetup's subject.
-	out, code := ctl(t, e, "install", "--dry-run", "--yes", "--user", "u", "--version", "1.0.0", "--gh-token-file", tok, "--allowed-signers-file", signers, "--skip-auto-update")
+	out, code = ctl(t, e, "install", "--dry-run", "--yes", "--user", "u", "--version", "1.0.0", "--gh-token-file", tok, "--allowed-signers-file", signers, "--skip-auto-update")
 	if code != 0 {
 		t.Fatalf("install dry run: %d\n%s", code, out)
 	}
 	if !strings.Contains(out, "exported from --gh-token-file") {
 		t.Fatalf("the plan does not say the token is exported for host-setup.sh:\n%s", out)
 	}
-	if strings.Contains(out, "ghp_SECRETTOKEN") {
-		t.Fatalf("the token's content reached the output:\n%s", out)
+	for _, bad := range []string{"ghp_SECRETTOKEN", "env GH_TOKEN", "GH_TOKEN=ghp"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("the plan leaks the token (%q):\n%s", bad, out)
+		}
 	}
-	if strings.Contains(out, "GH_TOKEN=ghp") || strings.Contains(out, "env GH_TOKEN") {
-		t.Fatalf("the token travels on a command line:\n%s", out)
-	}
-	// Without --gh-token-file nothing is exported and the plan says so.
 	out, _ = ctl(t, e, "install", "--dry-run", "--yes", "--user", "u", "--version", "1.0.0", "--skip-auto-update")
 	if strings.Contains(out, "exported from --gh-token-file") {
 		t.Fatalf("export claimed without a token file:\n%s", out)

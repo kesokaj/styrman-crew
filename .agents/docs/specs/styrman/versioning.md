@@ -74,7 +74,11 @@ to run, not a ban on mutable tags everywhere.
 ## Release procedure
 
 **The auto-updater is the real path — there is no manual `docker compose`
-step in normal operation.** This is how v1.18.1 actually shipped: commit,
+step in normal operation.** This holds for every host: the NUC and any GCP
+Compute Engine host (ADR-075, `.agents/docs/deploy/gcp.md`) run the same
+`deploy/update/` units, so both take a signed tag by themselves. A GCP host
+is brought up at a release with `deploy/gcp/install.sh`, which installs that
+tag and sets the updater up the same way. This is how v1.18.1 actually shipped: commit,
 verify the commit, sign and push a tag, and `deploy/update/styrman-update`
 (run every 5 min by `styrman-update.timer` against the dedicated clone at
 `/opt/styrman`) picks it up, verifies its SSH signature, builds all three
@@ -83,6 +87,14 @@ mechanics. Running `docker compose up` by hand against a live host is a
 break-glass fallback (below), not the documented path, and running it from
 the wrong directory is exactly what took production down on 2026-09-02: see
 that section for why.
+
+0. **A release that changes a provisioning step states how the FRESH-host
+   path was exercised** (`.agents/rules/shared-path-learnings.md`): the steps
+   in `host-setup.sh` are guarded by "already installed", so no re-run on an
+   existing host reaches them. The exercise is a GCP bring-up
+   (`deploy/gcp/vm.sh create` + `deploy/gcp/install.sh` against a new VM,
+   `.agents/docs/deploy/gcp.md`) or the words "fresh-host path unexercised"
+   in the gate report — never a green re-run on the NUC.
 
 1. Land the change (commit; the review/security/verifier gates and
    `/preflight` are a separate concern from this doc — see `AGENTS.md`'s

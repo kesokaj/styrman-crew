@@ -52,9 +52,16 @@ disk (about USD 20/month). Stop it when idle.
    - `env`: the six must-fill keys of `deploy/.env.example` for THIS host —
      `BASE_DOMAIN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
      `CLOUDFLARE_API_TOKEN`, `ADMIN_EMAIL`, `STYRMAN_ALLOWED_EMAILS` — plus
-     the optional `STYRMAN_HOSTNAME`. The NUC's OAuth client and Cloudflare
-     token can be reused: the token's zone scope covers any sub-name of
-     `styrman.xyz`, and the OAuth client takes several redirect URIs.
+     the optional `STYRMAN_HOSTNAME`. **Use a separate OAuth client and a
+     separate Cloudflare token for this host**, the token scoped to the zone
+     it actually needs. Copying the production host's credentials works —
+     one zone token covers every sub-name, one OAuth client takes several
+     redirect URIs — but it hands a disposable machine the keys to the
+     production name: whoever takes this VM, or the secrets directory on
+     your own machine, can repoint the production host's DNS and obtain a
+     certificate for it (security review 2026-09-22). The same applies to
+     `gh-token`: give this host its own, scoped to the repositories it
+     reads.
    - `gh-token`: a fine-grained GitHub token that reads BOTH this repository
      (the VM's clone and its auto-updater) and `kesokaj/styrman-harness`
      (the runtime image's `sh-agent` download, ADR-074). The NUC's

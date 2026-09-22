@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -44,6 +45,7 @@ func gcpSetup(t *testing.T) gcpEnv {
 	// external IP, tab-separated. FAKE_INSTANCE_RC=1 means "no such instance".
 	fake("gcloud", `case "$*" in
   *"instances describe"*) [ "${FAKE_INSTANCE_RC:-1}" = 0 ] && printf '%s\t%s\n' "${FAKE_INSTANCE_STATUS:-RUNNING}" 203.0.113.5; exit "${FAKE_INSTANCE_RC:-1}" ;;
+  *"firewall-rules list"*) [ "${FAKE_FW_RC:-0}" = 0 ] || exit "${FAKE_FW_RC}"; printf '%s\n' "${FAKE_FW:-[]}"; exit 0 ;;
   *"addresses describe"*) [ "${FAKE_ADDRESS_RC:-1}" = 0 ] && echo 203.0.113.5; exit "${FAKE_ADDRESS_RC:-1}" ;;
   *"compute ssh"*)
     [ "${FAKE_SSH_RC:-0}" = 0 ] || exit "${FAKE_SSH_RC}"
@@ -80,6 +82,12 @@ func gcpRun(t *testing.T, e gcpEnv, script string, extraEnv []string, args ...st
 	t.Helper()
 	cmd := exec.Command(filepath.Join(repoRoot(t), "deploy", "gcp", script), args...)
 	cmd.Env = append(append([]string{}, e.env...), extraEnv...)
+	// A new session, so the child has NO controlling terminal: `go test` run
+	// from a terminal would otherwise lend the script its tty, `has_tty`
+	// would be true, and the scripts' `read … < /dev/tty` prompts would be
+	// reached — two tests here passed for that reason without a tty and hung
+	// the package with one (review 2026-09-22).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	out, err := cmd.CombinedOutput()
 	code := 0
 	if ee, ok := err.(*exec.ExitError); ok {
@@ -389,5 +397,111 @@ func TestGCPVMStatusExitCodes(t *testing.T) {
 	}
 	if out, code := gcpRun(t, e, "vm.sh", []string{"FAKE_INSTANCE_RC=0", "FAKE_CTL_RC=0"}, "status"); code != 0 {
 		t.Fatalf("running and healthy: code %d, want 0\n%s", code, out)
+	}
+}
+
+// "No public port 22" is a property of the PROJECT: omitting the `ssh` tag
+// hides the VM from a tag-targeted rule, but an untagged rule (a default
+// VPC's `default-allow-ssh`) reaches it anyway. create refuses rather than
+// claim a posture the project does not have (security review 2026-09-22).
+func TestGCPVMCreateRefusesPublicSSH(t *testing.T) {
+	open22 := `[{"name":"default-allow-ssh","direction":"INGRESS","sourceRanges":["0.0.0.0/0"],"allowed":[{"IPProtocol":"tcp","ports":["22"]}]}]`
+	// Must-fail states: each of these reaches this instance on port 22.
+	for _, fw := range []string{
+		open22,
+		`[{"name":"wide-range","direction":"INGRESS","sourceRanges":["0.0.0.0/0"],"allowed":[{"IPProtocol":"tcp","ports":["20-30"]}]}]`,
+		`[{"name":"all-ports","direction":"INGRESS","sourceRanges":["0.0.0.0/0"],"allowed":[{"IPProtocol":"tcp"}]}]`,
+		`[{"name":"our-tag","direction":"INGRESS","sourceRanges":["0.0.0.0/0"],"targetTags":["http"],"allowed":[{"IPProtocol":"all"}]}]`,
+	} {
+		e := gcpSetup(t)
+		out, code := gcpRun(t, e, "vm.sh", []string{"FAKE_FW=" + fw}, "--dry-run", "--yes", "create")
+		if code != 1 || !strings.Contains(out, "opens ssh to the internet") {
+			t.Fatalf("exposed project accepted: code %d\n%s\nfw=%s", code, out, fw)
+		}
+		if strings.Contains(out, "instances create") || strings.Contains(out, "addresses create") {
+			t.Fatalf("a refused create still planned resources:\n%s", out)
+		}
+	}
+	// Must-pass states: none of these reaches this instance on port 22.
+	for _, fw := range []string{
+		`[]`,
+		`[{"name":"other-tag-ssh","direction":"INGRESS","sourceRanges":["0.0.0.0/0"],"targetTags":["bastion"],"allowed":[{"IPProtocol":"tcp","ports":["22"]}]}]`,
+		`[{"name":"web","direction":"INGRESS","sourceRanges":["0.0.0.0/0"],"allowed":[{"IPProtocol":"tcp","ports":["80","443"]}]}]`,
+		`[{"name":"internal","direction":"INGRESS","sourceRanges":["10.0.0.0/8"],"allowed":[{"IPProtocol":"all"}]}]`,
+		`[{"name":"disabled","direction":"INGRESS","disabled":true,"sourceRanges":["0.0.0.0/0"],"allowed":[{"IPProtocol":"tcp","ports":["22"]}]}]`,
+		`[{"name":"egress","direction":"EGRESS","sourceRanges":["0.0.0.0/0"],"allowed":[{"IPProtocol":"tcp","ports":["22"]}]}]`,
+	} {
+		e := gcpSetup(t)
+		out, code := gcpRun(t, e, "vm.sh", []string{"FAKE_FW=" + fw}, "--dry-run", "--yes", "create")
+		if code != 0 || !strings.Contains(out, "instances create") {
+			t.Fatalf("a project that does not expose ssh was refused: code %d\n%s\nfw=%s", code, out, fw)
+		}
+	}
+	// Shapes round 2 of the review named: a numeric protocol and an IPv6
+	// any-source both reach 22; a rule scoped to service accounts cannot
+	// reach an instance created with --no-service-account.
+	for _, tc := range []struct {
+		fw     string
+		refuse bool
+	}{
+		{`[{"name":"num-proto","direction":"INGRESS","sourceRanges":["0.0.0.0/0"],"allowed":[{"IPProtocol":"6","ports":["22"]}]}]`, true},
+		{`[{"name":"v6-any","direction":"INGRESS","sourceRanges":["::/0"],"allowed":[{"IPProtocol":"tcp","ports":["22"]}]}]`, true},
+		{`[{"name":"sa-scoped","direction":"INGRESS","sourceRanges":["0.0.0.0/0"],"targetServiceAccounts":["svc@example.iam.gserviceaccount.com"],"allowed":[{"IPProtocol":"tcp","ports":["22"]}]}]`, false},
+	} {
+		e := gcpSetup(t)
+		out, code := gcpRun(t, e, "vm.sh", []string{"FAKE_FW=" + tc.fw}, "--dry-run", "--yes", "create")
+		if tc.refuse && (code != 1 || !strings.Contains(out, "opens ssh to the internet")) {
+			t.Fatalf("shape not caught: code %d\n%s\nfw=%s", code, out, tc.fw)
+		}
+		if !tc.refuse && (code != 0 || !strings.Contains(out, "instances create")) {
+			t.Fatalf("shape wrongly refused: code %d\n%s\nfw=%s", code, out, tc.fw)
+		}
+	}
+	// The check never passes quietly when it could not run (BUG-034's family).
+	for _, tc := range []struct {
+		env  []string
+		want string
+	}{
+		{[]string{"FAKE_FW={not json"}, "could not run"},
+		{[]string{"FAKE_FW_RC=1"}, "cannot list this project's firewall rules"},
+	} {
+		e := gcpSetup(t)
+		out, code := gcpRun(t, e, "vm.sh", tc.env, "--dry-run", "--yes", "create")
+		if code != 1 || !strings.Contains(out, tc.want) {
+			t.Fatalf("an unrunnable check did not refuse (%v): code %d\n%s", tc.env, code, out)
+		}
+		if strings.Contains(out, "instances create") {
+			t.Fatalf("an unrunnable check still planned a create:\n%s", out)
+		}
+	}
+	// The operator can accept the exposure, and is told the check was skipped.
+	e := gcpSetup(t)
+	out, code := gcpRun(t, e, "vm.sh", []string{"FAKE_FW=" + open22, "GCP_ALLOW_PUBLIC_SSH=1"}, "--dry-run", "--yes", "create")
+	if code != 0 || !strings.Contains(out, "instances create") || !strings.Contains(out, "GCP_ALLOW_PUBLIC_SSH=1") {
+		t.Fatalf("the override did not proceed with a warning: code %d\n%s", code, out)
+	}
+}
+
+// --dry-run promises to run nothing; `ssh` opened a real session anyway.
+func TestGCPVMSSHDryRunRunsNothing(t *testing.T) {
+	e := gcpSetup(t)
+	out, code := gcpRun(t, e, "vm.sh", nil, "--dry-run", "ssh", "--", "sudo styrman-ctl status")
+	if code != 0 || !strings.Contains(out, "+ gcloud compute ssh") {
+		t.Fatalf("dry-run ssh: code %d, want 0 and a planned command:\n%s", code, out)
+	}
+	if !strings.Contains(out, "--tunnel-through-iap") {
+		t.Fatalf("the planned command does not tunnel through IAP:\n%s", out)
+	}
+	// The command is printed shell-quoted, so the line can be re-run as
+	// printed; unquoting it must give back exactly what was asked for.
+	_, cmdPart, found := strings.Cut(out, "--command=")
+	if !found {
+		t.Fatalf("no --command= in the planned line:\n%s", out)
+	}
+	if got := strings.ReplaceAll(strings.TrimSpace(cmdPart), `\ `, " "); got != "sudo styrman-ctl status" {
+		t.Fatalf("the planned command is not the real one: %q\n%s", got, out)
+	}
+	if c := gcpCalls(t, e); strings.Contains(c, "compute ssh") {
+		t.Fatalf("dry-run ssh actually connected:\n%s", c)
 	}
 }

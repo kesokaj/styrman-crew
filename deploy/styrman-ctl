@@ -425,6 +425,24 @@ https_origin() {
     printf '%s' "${o}"
 }
 
+# run_host_setup TOKEN_FILE OPERATOR [SCRIPT]
+# host-setup.sh's step 7 builds the runtime image (the sh-agent download,
+# ADR-074) BEFORE this script installs the token file, so a first install needs
+# the token now: from --gh-token-file it travels in the ENVIRONMENT — never on
+# a command line, which sudo would log and /proc would show (security review
+# 2026-09-21, BUG-069's family). A dry run plans the step without reading the
+# secret (security review 2026-09-22). The SCRIPT argument exists for the
+# __run-host-setup test hook, which is the only caller that passes it.
+run_host_setup() {
+    local token_file="$1" operator="$2" script="${3:-${REPO}/deploy/host-setup.sh}"
+    if [ -n "${token_file}" ]; then
+        private_file "${token_file}"
+        [ "${DRY}" = 1 ] || { GH_TOKEN="$(tr -d '\n' < "${token_file}")"; export GH_TOKEN; }
+        log "install: GH_TOKEN for host-setup.sh exported from --gh-token-file (environment only)"
+    fi
+    run bash "${script}" --user "${operator}"
+}
+
 cmd_install() {
     local version="" env_file="" gh_token_file="" signers_file="" skip_au=0
     while [ $# -gt 0 ]; do
@@ -449,17 +467,7 @@ cmd_install() {
     version="$(resolve_version "${version}")"
 
     log "install: host-setup.sh as root for operator ${OPERATOR}"
-    # host-setup.sh's step 7 builds the runtime image (the sh-agent download,
-    # ADR-074) BEFORE this script installs the token file, so a first install
-    # needs the token now: from --gh-token-file it travels in the environment
-    # — never on a command line, which sudo would log and /proc would show
-    # (security review 2026-09-21, BUG-069's family).
-    if [ -n "${gh_token_file}" ]; then
-        private_file "${gh_token_file}"
-        GH_TOKEN="$(tr -d '\n' < "${gh_token_file}")"; export GH_TOKEN
-        log "install: GH_TOKEN for host-setup.sh exported from --gh-token-file (environment only)"
-    fi
-    run bash "${REPO}/deploy/host-setup.sh" --user "${OPERATOR}"
+    run_host_setup "${gh_token_file}" "${OPERATOR}"
 
     log "install: deploy/.env — the must-fill keys"
     if [ ! -f "${ENV_FILE}" ]; then
@@ -924,6 +932,7 @@ cmd_internal() {
         __env-get)   env_get "$2" "$3" ;;
         __guard-path) guard_path "$2" ;;
         __rm-tree)   rm_tree "$2" ;;
+        __run-host-setup) case "$4" in /*) ;; *) die "__run-host-setup needs an absolute script path under ${TMPDIR:-/tmp}" ;; esac; run_host_setup "$2" "$3" "$4" ;;
         *) die "unknown internal verb ${1:-}" ;;
     esac
 }

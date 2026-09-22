@@ -60,9 +60,12 @@ instance_state() {
         --format='value(status,networkInterfaces[0].accessConfigs[0].natIP)' 2>/dev/null
 }
 
-# vm_ssh [CMD]: no CMD → an interactive shell; CMD → run that one command
-# string on the VM (gcloud adds this machine's key to project metadata on
-# first use). A read, never wrapped in run(): callers that mutate wrap it.
+# vm_ssh [CMD]: no CMD → an interactive shell; CMD → run that ONE command
+# STRING on the VM — every argument is flattened into it, so a caller builds
+# the string itself rather than passing a word list. gcloud puts this
+# machine's key in the INSTANCE's metadata (create sets
+# block-project-ssh-keys=TRUE, so project-wide keys are not used). A read,
+# never wrapped in run(): callers that mutate wrap it.
 vm_ssh() {
     if [ $# -eq 0 ]; then
         gcloud compute ssh "${GCP_INSTANCE}" "${GCP_ARGS[@]}" "${ZONE_ARGS[@]}" "${SSH_ARGS[@]}" --quiet
@@ -70,6 +73,69 @@ vm_ssh() {
         gcloud compute ssh "${GCP_INSTANCE}" "${GCP_ARGS[@]}" "${ZONE_ARGS[@]}" "${SSH_ARGS[@]}" --quiet \
             --ssh-flag='-o ConnectTimeout=15' --command="$*"
     fi
+}
+
+# assert_no_public_ssh: "no public port 22" is a property of the PROJECT, not
+# of this script — omitting the `ssh` tag hides the VM from a tag-targeted
+# rule, but a rule with NO target tags (a default VPC's `default-allow-ssh`)
+# reaches every instance anyway. Refuse to create into such a project rather
+# than claim a posture the project does not have (security review
+# 2026-09-22). The check never fails SILENTLY: when it cannot run — no
+# firewall list, no python3, a filter that errors — it refuses and names the
+# override, because a quiet pass here is the failure this check exists to
+# prevent (BUG-034's family; review round 2, 2026-09-22).
+assert_no_public_ssh() {
+    if [ "${GCP_ALLOW_PUBLIC_SSH:-0}" = 1 ]; then
+        warn "GCP_ALLOW_PUBLIC_SSH=1 — NOT checking whether this project exposes ssh to the internet"
+        return 0
+    fi
+    local json out rc exposed
+    json="$(gcloud compute firewall-rules list "${GCP_ARGS[@]}" --format=json 2>/dev/null)" || json=""
+    [ -n "${json}" ] || die "cannot list this project's firewall rules, so 'no public port 22' is unverified for ${GCP_INSTANCE} — grant compute.firewalls.list, or re-run with GCP_ALLOW_PUBLIC_SSH=1 to create without the check"
+    # The filter prints one line: OK, then the names of the rules that reach
+    # THIS instance on port 22 from the internet. Its exit status and that
+    # sentinel are both read — a traceback or a missing python3 must not read
+    # as "nothing exposed".
+    if out="$(printf '%s' "${json}" | python3 -c '
+import json, sys
+tags = set(t for t in sys.argv[1].split(",") if t)
+PUBLIC = {"0.0.0.0/0", "::/0"}
+TCP = {"tcp", "all", "6"}          # the API accepts the protocol number too
+def reaches_22(rule):
+    for a in rule.get("allowed") or []:
+        if str(a.get("IPProtocol", "")).lower() not in TCP:
+            continue
+        ports = a.get("ports")
+        if not ports:                      # no ports key = every port
+            return True
+        for p in ports:
+            lo, _, hi = str(p).partition("-")
+            try:
+                if int(lo) <= 22 <= int(hi or lo):
+                    return True
+            except ValueError:
+                continue
+    return False
+names = []
+for r in json.load(sys.stdin):
+    if (r.get("direction") or "INGRESS").upper() != "INGRESS" or r.get("disabled"):
+        continue
+    if not (PUBLIC & set(r.get("sourceRanges") or [])):
+        continue
+    if r.get("targetServiceAccounts"):     # this instance runs with none
+        continue
+    targets = r.get("targetTags")
+    if targets and not (set(targets) & tags):
+        continue                           # aimed at other instances
+    if reaches_22(r):
+        names.append(str(r.get("name") or "?"))
+print("OK " + " ".join(names))' "${GCP_TAGS}" 2>/dev/null)"; then rc=0; else rc=$?; fi
+    case "${rc}:${out}" in
+        0:OK*) ;;
+        *) die "the ssh-exposure check could not run (python3 exit ${rc}); refusing rather than assuming this project is closed — re-run with GCP_ALLOW_PUBLIC_SSH=1 to create without the check" ;;
+    esac
+    exposed="${out#OK}"; exposed="${exposed# }"
+    [ -z "${exposed}" ] || die "this project has a firewall rule that opens ssh to the internet for instances like ${GCP_INSTANCE} (rule: ${exposed}). It carries no 'ssh' tag and ssh goes through IAP, so port 22 is meant to be closed — delete or retarget that rule, or, if it does not reach this instance's network, re-run with GCP_ALLOW_PUBLIC_SSH=1."
 }
 
 # ssh_reachable: one `true` over ssh — the check every diagnosis starts with,
