@@ -115,6 +115,15 @@ if command -v ip6tables >/dev/null 2>&1; then
         || "$ip6" -I FORWARD -i sdb-+ -j STYRMAN-FWD6 2>/dev/null || true
 fi
 
+#
+# RETIREMENT: this converge has no reachable consumer left. The NUC has been
+# past it since v1.27.0, a host created by deploy/gcp/install.sh never had the
+# artifacts, and the only caller that could still need it is a host frozen
+# between v1.23 and v1.35 that upgrades later. It is kept for that host and
+# for no other reason (whole-project review, 2026-09-22 — the operator chose
+# the safety margin over the deletion). DELETE IT, and this note, in the first
+# release cut after the GCP target is used in anger, recording the removal in
+# ADR-067's and ADR-074's Consequences.
 # ─── One-shot cleanup: ADR-065/066 leftovers ─────────────────────────────────
 # A host upgrading from v1.23/v1.24 may still carry tagged allowance rules
 # this script no longer writes. Remove them by FULL CONTENT MATCH, never by

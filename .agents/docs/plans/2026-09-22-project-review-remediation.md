@@ -227,23 +227,23 @@ state it is supposed to catch, before its verdict is trusted.
 
 ## Phase 3 — hardening that did not travel (findings 4, 5, 6, 9-lock)
 
-- [ ] Move `env_get` into `deploy/gcp/lib.sh` with `styrman-ctl`'s `is_key`
+- [x] Move `env_get` into `deploy/gcp/lib.sh` with `styrman-ctl`'s `is_key`
       guard and awk-variable literal match; delete the fork in
       `deploy/gcp/install.sh`.
-- [ ] Move `private_file` into `deploy/gcp/lib.sh` as one version taking an
+- [x] Move `private_file` into `deploy/gcp/lib.sh` as one version taking an
       owner-policy argument; it has already diverged from `styrman-ctl`'s in 2
       of 5 checks (owner policy, and parent mode `&022` vs `&077`). Decide which
       of the two is correct for each check and say so in the change entry —
       this is a secret-file gate, and "merge them" is not the same as "pick the
       stricter one".
-- [ ] Extend `internal/config/gcp_scripts_test.go` to cover both helpers through
+- [x] Extend `internal/config/gcp_scripts_test.go` to cover both helpers through
       the dry-run path, including a key containing `/` (the case the original
       hardening was written for).
-- [ ] `deploy/caddy/ingress/generator.go` — emit `request_header -X-Caddy-Role`
+- [x] `deploy/caddy/ingress/generator.go` — emit `request_header -X-Caddy-Role`
       before the three `header_regexp` matchers in `writeAppBlock`, matching
       what every other identity header on that path already does; add a
       generator test asserting the directive is present.
-- [ ] `internal/httpapi/server.go` — give `credharvest.go`'s `credPushing` /
+- [x] `internal/httpapi/server.go` — give `credharvest.go`'s `credPushing` /
       `credPushRerun` their own `credMu` instead of sharing `deletingMu` with
       the project-lifecycle maps. Three lines; no file split.
 - [ ] **Checkpoint:** `changes/` entry, commit, push. `reviewer` over the diff
@@ -256,12 +256,12 @@ Each needs an answer before it is built; the recommendation is mine, the call is
 not. Full versions in `.agents/scratch/2026-09-22-review-triage.md` (items 7,
 10, 11, 15).
 
-- [ ] **Finding 7** — the R12 `ip_forward` assertion fails open on
+- [x] **Finding 7** — the R12 `ip_forward` assertion fails open on
       `fs.ErrNotExist` (`cmd/styrman/main.go:50-51`) while every other error
       exits 1. Recommendation: fail closed when containerized, keep the warning
       for a bare `go run`; test both branches. Blocked on the operator: it can
       stop a production boot.
-- [ ] **Finding 10** — ~125 lines of converge code for superseded ADR-065/066/073
+- [x] **Finding 10** — ~125 lines of converge code for superseded ADR-065/066/073
       (`deploy/update/styrman-update:178`, `deploy/firewall/install.sh:65`,
       `deploy/firewall/styrman-firewall.sh:118`, `deploy/firewall/test.sh:97`)
       with no reachable consumer. Recommendation: keep for now, add a one-line
@@ -269,13 +269,16 @@ not. Full versions in `.agents/scratch/2026-09-22-review-triage.md` (items 7,
       delete once the GCP target is used in anger. Blocked on the operator:
       deleting converge code is irreversible for a host frozen between v1.23
       and v1.35.
-- [ ] **Finding 11** — `go mod tidy` promotes `opencontainers/image-spec` from
+- [~] **Finding 11 (half)** — `go mod tidy` promotes `opencontainers/image-spec` from
       indirect to direct (mine, unblocked). Separately, it and
       `golang.org/x/sys` are direct dependencies absent from
       `REQUIREMENTS.md`'s approved list; that file is immutable without
       explicit approval, so the route is: propose the exact edit → approval →
-      ADR → `REQUIREMENTS.md` and `ROADMAP.md` in one commit.
-- [ ] **Finding 15** — extend the ADR-069 audit note at `image/Dockerfile:47-56`
+      ADR → `REQUIREMENTS.md` and `ROADMAP.md` in one commit. **`go mod tidy`
+      done; the `REQUIREMENTS.md` edit is proposed and PENDING the operator.**
+      Assembling it found the list stale in both directions: it still names
+      `creack/pty`, which this module no longer depends on at all.
+- [x] **Finding 15** — extend the ADR-069 audit note at `image/Dockerfile:47-56`
       by two sentences naming the residual it does not cover: the fetch of the
       `agy` installer is TLS-only, and the manifest sha512 check happens inside
       a script that was not itself verified. No code change — the exception

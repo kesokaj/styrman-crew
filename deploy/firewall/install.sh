@@ -62,6 +62,15 @@ for f in styrman-firewall.service styrman-firewall.timer; do
     run install -m 0644 -o root -g root "${SRC}/${f}" "${UNIT_DIR}/${f}"
 done
 
+#
+# RETIREMENT: this converge has no reachable consumer left. The NUC has been
+# past it since v1.27.0, a host created by deploy/gcp/install.sh never had the
+# artifacts, and the only caller that could still need it is a host frozen
+# between v1.23 and v1.35 that upgrades later. It is kept for that host and
+# for no other reason (whole-project review, 2026-09-22 — the operator chose
+# the safety margin over the deletion). DELETE IT, and this note, in the first
+# release cut after the GCP target is used in anger, recording the removal in
+# ADR-067's and ADR-074's Consequences.
 # ─── 2. Converge away the ADR-065/066 host artifacts ────────────────────────
 # Order matters: stop and disable before deleting the unit files, or systemd
 # keeps a running unit whose fragment is gone.

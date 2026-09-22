@@ -40,23 +40,25 @@ func main() {
 	// this container, and since v1.33.0 the server refuses to run without
 	// that guarantee instead of trusting the deploy file. Host-mode dev is
 	// exempt — it shares the host's netns (Docker needs forwarding there)
-	// and never attaches to a bridge. A MISSING sysctl file is a warning
-	// (an exotic kernel must not take the service down over it); any other
-	// read error is refused like forwarding-on — the guard cannot vouch for
-	// what it could not read (security review, 2026-09-14).
+	// and never attaches to a bridge. EVERY read error refuses, a missing
+	// sysctl file included since 2026-09-22: a guard that cannot measure
+	// must not report "fine" (see config.IPForwardMustRefuse for why the
+	// missing-file warning was dropped). STYRMAN_ALLOW_IP_FORWARD=1 is the
+	// operator's documented way through.
 	if cfg.SelfContainer != "" {
 		off, ferr := config.IPForwardOff(config.IPForwardProc)
-		switch {
-		case ferr != nil && errors.Is(ferr, fs.ErrNotExist):
-			logger.Warn("ip_forward state unknown — cannot assert the no-routing guarantee (R12)", "error", ferr)
-		case ferr != nil && os.Getenv("STYRMAN_ALLOW_IP_FORWARD") != "1":
-			logger.Error("ip_forward could not be read — refusing to run without the no-routing guarantee (R12); set STYRMAN_ALLOW_IP_FORWARD=1 to run anyway", "error", ferr)
+		override := os.Getenv("STYRMAN_ALLOW_IP_FORWARD") == "1"
+		if config.IPForwardMustRefuse(off, ferr, override) {
+			if ferr != nil {
+				logger.Error("ip_forward could not be read — refusing to run without the no-routing guarantee (R12); set STYRMAN_ALLOW_IP_FORWARD=1 to run anyway", "error", ferr)
+			} else {
+				logger.Error("ip_forward is on inside the server container — it could route between project bridges (R12); fix the compose sysctl net.ipv4.ip_forward=0, or set STYRMAN_ALLOW_IP_FORWARD=1 to run without that guarantee")
+			}
 			os.Exit(1)
+		}
+		switch {
 		case ferr != nil:
 			logger.Warn("ip_forward could not be read and STYRMAN_ALLOW_IP_FORWARD=1 is set — per-project isolation (R12) is not guaranteed by this server", "error", ferr)
-		case !off && os.Getenv("STYRMAN_ALLOW_IP_FORWARD") != "1":
-			logger.Error("ip_forward is on inside the server container — it could route between project bridges (R12); fix the compose sysctl net.ipv4.ip_forward=0, or set STYRMAN_ALLOW_IP_FORWARD=1 to run without that guarantee")
-			os.Exit(1)
 		case !off:
 			logger.Warn("ip_forward is on inside the server container and STYRMAN_ALLOW_IP_FORWARD=1 is set — per-project isolation (R12) is not guaranteed by this server")
 		}

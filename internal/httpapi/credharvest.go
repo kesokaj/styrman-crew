@@ -185,22 +185,28 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// tryAcquire is a compare-and-set on one of the in-flight maps (audit
-// 2026-08-30: a plain store let two concurrent operations both pass every
-// check and interleave). Lives here since the credential push became its
-// only caller (the backup feature, the other user, was removed 2026-09-01).
-func (s *Server) tryAcquire(m map[string]bool, user, projectID string) (release func(), ok bool) {
+// tryAcquire is a compare-and-set on credPushing (audit 2026-08-30: a plain
+// store let two concurrent operations both pass every check and interleave).
+// Lives here since the credential push became its only caller (the backup
+// feature, the other user, was removed 2026-09-01).
+//
+// It took the map as a parameter while every in-flight map shared one mutex.
+// Since credPushing moved to credMu that signature is a trap: a caller
+// passing s.deleting would lock the wrong mutex and corrupt the map it meant
+// to guard, silently (security review 2026-09-22). The map is now fixed to
+// the lock that protects it.
+func (s *Server) tryAcquire(user, projectID string) (release func(), ok bool) {
 	key := user + "/" + projectID
 	s.credMu.Lock()
 	defer s.credMu.Unlock()
-	if m[key] {
+	if s.credPushing[key] {
 		return nil, false
 	}
-	m[key] = true
+	s.credPushing[key] = true
 	return func() {
 		s.credMu.Lock()
 		defer s.credMu.Unlock()
-		delete(m, key)
+		delete(s.credPushing, key)
 	}, true
 }
 
@@ -221,7 +227,7 @@ func (s *Server) pushCredsToRunningProjects(user, guest string) {
 	// push is in flight is NOT simply dropped (audit: guests the in-flight
 	// loop already visited would miss the newer harvest): it sets a rerun
 	// flag the in-flight goroutine honors with one more full pass.
-	release, ok := s.tryAcquire(s.credPushing, user, "-")
+	release, ok := s.tryAcquire(user, "-")
 	if !ok {
 		s.credMu.Lock()
 		s.credPushRerun[user] = true

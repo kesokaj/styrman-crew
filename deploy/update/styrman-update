@@ -175,6 +175,15 @@ verify_tag() {
 # unset means one log line and nothing done. The channel's content dir
 # (/var/lib/styrman/harness, pinned only by the retired unit) is the
 # operator's `rmdir` — this script names no production path of its own.
+#
+# RETIREMENT: this converge has no reachable consumer left. The NUC has been
+# past it since v1.27.0, a host created by deploy/gcp/install.sh never had the
+# artifacts, and the only caller that could still need it is a host frozen
+# between v1.30 and v1.35 that upgrades later. It is kept for that host and
+# for no other reason (whole-project review, 2026-09-22 — the operator chose
+# the safety margin over the deletion). DELETE IT, and this note, in the first
+# release cut after the GCP target is used in anger, recording the removal in
+# ADR-067's and ADR-074's Consequences.
 retire_harness_units() {
     local unitdir u f out removed=0
     if [ -z "${UPDATER_UNIT_DIR}" ]; then log "harness-retire skipped: STYRMAN_UPDATER_UNIT_DIR unset (the unit sets it)"; return 0; fi

@@ -1,6 +1,9 @@
 package config
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,5 +44,39 @@ func TestIPForwardOffReadsTheSysctl(t *testing.T) {
 func TestIPForwardOffReportsAMissingFile(t *testing.T) {
 	if _, err := IPForwardOff(filepath.Join(t.TempDir(), "absent")); err == nil {
 		t.Fatal("want an error for a missing sysctl file")
+	}
+}
+
+// The rule behind the R12 boot assertion, both branches. A missing sysctl
+// file used to warn and continue; since 2026-09-22 it refuses like every
+// other unreadable state, because a guard that measured nothing must not
+// report "fine" (BUG-014/028/029/031's shape).
+func TestIPForwardMustRefuse(t *testing.T) {
+	missing := fmt.Errorf("read /proc/…: %w", fs.ErrNotExist)
+	other := errors.New("permission denied")
+
+	cases := []struct {
+		name     string
+		off      bool
+		err      error
+		override bool
+		want     bool
+	}{
+		{"forwarding off, no error: run", true, nil, false, false},
+		{"forwarding ON: refuse", false, nil, false, true},
+		{"forwarding ON with override: run", false, nil, true, false},
+		{"missing sysctl file: refuse", false, missing, false, true},
+		{"missing sysctl file with override: run", false, missing, true, false},
+		{"unreadable for any other reason: refuse", false, other, false, true},
+		{"unreadable with override: run", false, other, true, false},
+		// An error wins over a reading that looks fine: the bool is
+		// meaningless when the read failed.
+		{"error alongside off=true: refuse", true, other, false, true},
+	}
+	for _, c := range cases {
+		if got := IPForwardMustRefuse(c.off, c.err, c.override); got != c.want {
+			t.Errorf("%s: IPForwardMustRefuse(%v, %v, %v) = %v, want %v",
+				c.name, c.off, c.err, c.override, got, c.want)
+		}
 	}
 }

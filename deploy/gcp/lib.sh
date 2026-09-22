@@ -16,8 +16,11 @@ has_tty() { ( : < /dev/tty ) 2>/dev/null; }
 # `grep -E "^$2="`, interpolating the key into a regex, and private_file's had
 # drifted in two of five checks (2026-09-22 review). styrman-ctl cannot source
 # this file -- it is the general host tool and this lib is GCP-specific -- so
-# the duplication is deliberate, and internal/config/gcp_scripts_test.go
-# asserts the two copies still agree rather than trusting them to.
+# the duplication is deliberate. internal/config/gcp_scripts_test.go holds the
+# two copies together: env_get and is_key are compared by exact text, and
+# private_file -- whose bodies differ on purpose, one parameterised and one
+# not -- by the checks it makes, plus the one mask value that differs between
+# them (022 here, 077 there) so the reasoning below cannot rot silently.
 
 is_key() { [[ "$1" =~ ^[A-Z][A-Z0-9_]*$ ]]; }
 
@@ -47,6 +50,11 @@ env_get() { # env_get FILE KEY → value ('' if absent); the LAST assignment win
 # legitimately 755.
 private_file() {
     local f="$1" owner_policy="${2:-self}" parent_mask="${3:-077}" mode owner pmode
+    # A mask of 0/00/000 would make the parent check a tautology -- weaker
+    # than either original, and silently (security review 2026-09-22). No
+    # caller passes a mask today; this is here so none can get it wrong.
+    [[ "${parent_mask}" =~ ^[0-7]{3}$ ]] || die "private_file: parent mask must be three octal digits, got ${parent_mask}"
+    [ "${parent_mask}" = "000" ] && die "private_file: a parent mask of 000 checks nothing"
     [ -L "${f}" ] && die "${f}: a symlink is refused"
     [ -f "${f}" ] || die "${f}: no such file (see: deploy/gcp/install.sh help)"
     owner="$(stat -c %U "${f}" 2>/dev/null || echo ?)"

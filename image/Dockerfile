@@ -54,6 +54,15 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 # manifest whose sha512 the installer verifies, offers no versioned artifact,
 # and the CLI self-updates at run time anyway — a build-time pin would be
 # theatre, so the floating install is an accepted, recorded exception.
+# What that exception does NOT cover, stated so the next reader does not have
+# to infer it (security review 2026-09-22, which filed the float as a finding
+# because this note reads as more coverage than it gives): the fetch of
+# install.sh itself is TLS-only, and the sha512 check it performs happens
+# INSIDE a script nothing verified. So this line trusts Google's TLS and
+# Google's server, as root, in an image every tenant microVM boots beside
+# their brokered credentials. Nothing upstream currently offers a way to close
+# that — revisit if Google ever publishes a versioned artifact or a detached
+# signature for the installer.
 # Before 2026-09-02, OpenTofu and Helm were `curl | bash` too; Helm was
 # removed, OpenTofu pinned. Bump the ARG pairs deliberately and together
 # (specs/styrman/runtime-image.md names the procedure).

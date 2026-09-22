@@ -566,6 +566,38 @@ func TestGCPLibEnvGetMatchesStyrmanCtl(t *testing.T) {
 		}
 	}
 
+	// private_file is the function whose drift motivated the merge, and the
+	// two bodies are NOT textually identical -- lib.sh's is parameterised,
+	// styrman-ctl's is not -- so they are compared by the checks they make.
+	// Asserting only env_get here is what the comment in lib.sh and the
+	// change entry both claimed to cover and did not (security review
+	// 2026-09-22).
+	for name, src := range map[string]string{"deploy/styrman-ctl": ctl, "deploy/gcp/lib.sh": lib} {
+		for _, check := range []struct{ what, needle string }{
+			{"symlink refusal", `[ -L "${f}" ] && die`},
+			{"owner read", `owner="$(stat -c %U "${f}" 2>/dev/null || echo ?)"`},
+			{"file mode read", `mode="$(stat -c %a "${f}" 2>/dev/null || echo 777)"`},
+			{"file not group/other readable", `[ "$(( 8#${mode} & 8#077 ))" = 0 ]`},
+			{"parent mode read", `pmode="$(stat -c %a "$(dirname -- "${f}")" 2>/dev/null || echo 777)"`},
+		} {
+			if !strings.Contains(src, check.needle) {
+				t.Errorf("%s: private_file lost its %s; the two copies have drifted", name, check.what)
+			}
+		}
+	}
+	// The one check whose VALUE differs on purpose: styrman-ctl refuses a
+	// parent intersecting 022 (not writable), because /etc/styrman is
+	// legitimately 755; lib.sh defaults to 077 because ~/.config/styrman/gcp
+	// exists only to hold secrets. If either changes, the reasoning in
+	// lib.sh's comment and in changes/2026-09-22-review-remediation-phase-3.md
+	// stops being true.
+	if !strings.Contains(ctl, `[ "$(( 8#${pmode} & 8#022 ))" = 0 ]`) {
+		t.Error("deploy/styrman-ctl's private_file no longer uses parent mask 022")
+	}
+	if !strings.Contains(lib, `parent_mask="${3:-077}"`) {
+		t.Error("deploy/gcp/lib.sh's private_file no longer defaults to parent mask 077")
+	}
+
 	// And the fork must not come back.
 	install := read("deploy/gcp/install.sh")
 	for _, bad := range []string{"env_get() {", "private_file() {"} {

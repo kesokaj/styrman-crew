@@ -43,10 +43,17 @@ file checks a working deploy depends on.
 **The duplication against `styrman-ctl` remains, deliberately.** `styrman-ctl`
 is the general host tool and `deploy/gcp/lib.sh` is GCP-specific; making the
 former source the latter inverts the dependency. Two copies that have already
-drifted once will drift again, so `TestGCPLibEnvGetMatchesStyrmanCtl` asserts
-both still carry the literal-match awk program and the `is_key` guard, and
-that `install.sh` has not grown the fork back — the same shape as
-`TestFirewallScriptMatchesBridgePrefixes`.
+drifted once will drift again, so `TestGCPLibEnvGetMatchesStyrmanCtl` holds
+them together — the same shape as `TestFirewallScriptMatchesBridgePrefixes`.
+It compares `env_get` and `is_key` by exact text; `private_file`, whose bodies
+differ on purpose, by the five checks it makes plus the one mask value that
+differs between the copies.
+
+*(Corrected after the security review of this phase: as first written, both
+this entry and the comment in `lib.sh` claimed the guard covered `private_file`
+when it covered only `env_get` — an overclaim about the very function whose
+drift motivated the merge. The guard now covers it, proved by mutating
+`styrman-ctl`'s parent mask from 022 to 077 and watching the test name it.)*
 
 ## `X-Caddy-Role` is stripped from the client request
 

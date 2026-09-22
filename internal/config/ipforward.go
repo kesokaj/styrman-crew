@@ -30,3 +30,25 @@ func IPForwardOff(procPath string) (bool, error) {
 	}
 	return strings.TrimSpace(string(b)) == "0", nil
 }
+
+// IPForwardMustRefuse reports whether a CONTAINERIZED server must refuse to
+// start, given what the sysctl read returned and whether the operator set the
+// override. It exists as its own function because the rule is a security
+// decision and main() is not reachable from a test.
+//
+// Any error refuses, including fs.ErrNotExist. Until 2026-09-22 a missing
+// file warned and continued, on the reasoning that an exotic kernel should
+// not take the service down; that made the one guard standing behind R12
+// report "fine" in the single case where it had measured nothing — the shape
+// of BUG-014/028/029/031. Inside a Linux container that file is effectively
+// always present, so its absence is a reason to look, not to proceed. The
+// operator keeps a documented way through: STYRMAN_ALLOW_IP_FORWARD=1.
+func IPForwardMustRefuse(off bool, err error, override bool) bool {
+	if override {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	return !off
+}
