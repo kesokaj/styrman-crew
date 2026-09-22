@@ -107,11 +107,23 @@ cmd_status() {
         echo "ssh to ${GCP_INSTANCE} unreachable — $(ssh_hint)"
         return 1
     fi
-    if ! vm_ssh 'test -x /usr/local/bin/styrman-ctl' >/dev/null 2>&1; then
+    # styrman-ctl is never installed into PATH: it lives in the deploy clone
+    # the updater maintains, and in the operator's checkout. Probing
+    # /usr/local/bin/styrman-ctl reported "not installed" on a host that was
+    # serving (BUG-073) — ask the host which copy it has.
+    local ctl
+    ctl="$(vm_ssh 'for p in /opt/styrman/deploy/styrman-ctl "$HOME/styrman-crew/deploy/styrman-ctl" /usr/local/bin/styrman-ctl; do [ -x "$p" ] && { echo "$p"; break; }; done' 2>/dev/null | tr -d '\r' | head -n1)"
+    if [ -z "${ctl}" ]; then
         echo "styrman not installed on ${GCP_INSTANCE} — deploy/gcp/install.sh"
         return 1
     fi
-    if vm_ssh 'sudo styrman-ctl status'; then return 0; fi
+    # The remote's answer reaches a sudo command line: only the three paths
+    # asked for are accepted.
+    case "${ctl}" in
+        /opt/styrman/deploy/styrman-ctl|/home/*/styrman-crew/deploy/styrman-ctl|/root/styrman-crew/deploy/styrman-ctl|/usr/local/bin/styrman-ctl) ;;
+        *) die "${GCP_INSTANCE} answered with an unexpected styrman-ctl path: ${ctl}" ;;
+    esac
+    if vm_ssh "sudo ${ctl} status"; then return 0; fi
     return 1
 }
 

@@ -82,6 +82,13 @@ deploy/gcp/install.sh            # clones this repo at its newest release tag on
                                  # runs `sudo styrman-ctl install --yes …` there (10–20 min), verifies, removes the staged files
 ```
 
+`install.sh` also delivers the OPTIONAL keys in `env` — `STYRMAN_HOSTNAME`,
+`STYRMAN_PUBLIC_DOMAIN`, `STYRMAN_PRIVATE_DOMAIN` — with `styrman-ctl edit`
+after the install, because `styrman-ctl install --env-file` itself carries
+only the six must-fill keys and the host would otherwise keep its defaults
+(BUG-072). It then reads the hostname back from the host and verifies that
+URL, so a mismatch is reported rather than probed blindly.
+
 `install.sh --version X.Y.Z` pins a release; `--user U` sets the VM login
 (default: your local user name, which `gcloud compute ssh` uses);
 `--secrets-dir D` points at another directory. Both scripts take

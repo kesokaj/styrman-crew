@@ -11,7 +11,8 @@ matching empty-slate Inbox and **ADR-045**
 closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
-Active plan: `.agents/docs/plans/2026-09-21-gcp-compute-engine-target.md` — a GCP Compute Engine target (deploy/gcp scripts + guide, one disposable bring-up).
+<!-- Nothing in progress. The GCP Compute Engine target (ADR-075) shipped as v1.37.0 on 2026-09-22;
+its plan is closed (.agents/docs/plans/2026-09-21-gcp-compute-engine-target.md). -->
 <!-- The sh-agent release-binary delivery (ADR-074) landed 2026-09-21;
 its plan is closed (.agents/docs/plans/2026-09-21-sh-agent-release-binary.md). -->
 

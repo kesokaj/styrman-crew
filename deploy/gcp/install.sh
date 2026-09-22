@@ -164,7 +164,31 @@ run "${VM}" ssh -- "git -C \"\$HOME/styrman-crew\" -c gpg.format=ssh -c gpg.ssh.
 log "install: sudo styrman-ctl install --yes on the VM (host-setup.sh, image build, stack, auto-updater — 10-20 minutes)"
 run "${VM}" ssh -- "cd \"\$HOME/styrman-crew\" && sudo ./deploy/styrman-ctl install --yes --user ${USER_NAME} --version ${VERSION} --env-file \"\$HOME/.styrman-install/env\" --gh-token-file \"\$HOME/.styrman-install/gh-token\" --allowed-signers-file \"\$HOME/.styrman-install/allowed_signers\""
 
-# ─── 6. Verify from here ────────────────────────────────────────────────────
+# ─── 5b. The optional keys styrman-ctl install does not carry ───────────────
+# `styrman-ctl install --env-file` prompts for the SIX must-fill keys only, so
+# anything else in the secrets env never reaches the host and it silently uses
+# the default (BUG-072: the first bring-up served styrman.<domain> while this
+# script verified crew.<domain>). `styrman-ctl edit` is the supported way to
+# set them; it rewrites .env and recreates the stack at the deployed version.
+for _key in STYRMAN_HOSTNAME STYRMAN_PUBLIC_DOMAIN STYRMAN_PRIVATE_DOMAIN; do
+    _val="$(env_get "${ENV_FILE}" "${_key}")"
+    [ -n "${_val}" ] || continue
+    [[ "${_val}" =~ ^[a-z0-9.-]+$ ]] || die "${ENV_FILE}: ${_key}='${_val}' is not a hostname"
+    log "install: ${_key}=${_val} → the host (styrman-ctl edit, which recreates the stack)"
+    run "${VM}" ssh -- "cd \"\$HOME/styrman-crew\" && sudo ./deploy/styrman-ctl edit ${_key}=${_val}"
+done
+
+# ─── 6. Verify from here, against the hostname the HOST actually has ────────
+# Read it back rather than assume the edit above landed: verifying a URL the
+# host does not serve is how BUG-072 read as a failed install of a working
+# host.
+if [ "${DRY}" != 1 ]; then
+    _eff="$(vm_ssh 'sudo sed -n "s/^STYRMAN_HOSTNAME=//p" /opt/styrman/deploy/.env 2>/dev/null | tail -n1' 2>/dev/null | tr -cd 'a-z0-9.-')"
+    if [ -n "${_eff}" ] && [ "${_eff}" != "${HOSTNAME_KEY}" ]; then
+        warn "the host serves ${_eff}.${BASE_DOMAIN}, not ${HOSTNAME_KEY}.${BASE_DOMAIN} — verifying the host's own name"
+        HOSTNAME_KEY="${_eff}"
+    fi
+fi
 URL="https://${HOSTNAME_KEY}.${BASE_DOMAIN}/"
 log "install: verifying ${URL} answers with the sign-in redirect (the ingress may take a few minutes to obtain its certificate)"
 if [ "${DRY}" = 1 ]; then

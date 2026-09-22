@@ -52,7 +52,8 @@ func gcpSetup(t *testing.T) gcpEnv {
     case "$*" in
       *"/dev/kvm"*) exit "${FAKE_KVM_RC:-0}" ;;
       *"styrman-crew/.git"*) exit "${FAKE_CLONE_EXISTS_RC:-1}" ;;
-      *"styrman-ctl"*) exit "${FAKE_CTL_RC:-1}" ;;
+      *"for p in /opt/styrman"*) [ -n "${FAKE_CTL_PATH:-}" ] && echo "${FAKE_CTL_PATH}"; exit 0 ;;
+      *"styrman-ctl status"*) exit "${FAKE_CTL_RC:-1}" ;;
     esac
     exit 0 ;;
 esac
@@ -254,6 +255,11 @@ func TestGCPInstallPlan(t *testing.T) {
 	if !strings.Contains(install, `--gh-token-file "$HOME/.styrman-install/gh-token"`) || strings.Contains(install, "GH_TOKEN=") || strings.Contains(install, "STYRMAN_GH_TOKEN_FILE") {
 		t.Fatalf("the install line must pass the token by path only: %s", install)
 	}
+	// The optional keys styrman-ctl install does not carry are delivered
+	// explicitly, or the host silently keeps its default (BUG-072).
+	if !strings.Contains(out, "styrman-ctl edit STYRMAN_HOSTNAME=crew") {
+		t.Errorf("the plan does not deliver STYRMAN_HOSTNAME to the host:\n%s", out)
+	}
 	// The checked-out release tag is signature-verified against the staged
 	// allowed_signers before anything runs from it.
 	var verify string
@@ -392,11 +398,32 @@ func TestGCPVMStatusExitCodes(t *testing.T) {
 	if out, code := gcpRun(t, e, "vm.sh", []string{"FAKE_INSTANCE_RC=0", "FAKE_INSTANCE_STATUS=TERMINATED"}, "status"); code != 3 {
 		t.Fatalf("stopped instance: code %d, want 3\n%s", code, out)
 	}
-	if out, code := gcpRun(t, e, "vm.sh", []string{"FAKE_INSTANCE_RC=0", "FAKE_CTL_RC=1"}, "status"); code != 1 || !strings.Contains(out, "not installed") {
+	// No styrman-ctl anywhere on the host: not installed.
+	if out, code := gcpRun(t, e, "vm.sh", []string{"FAKE_INSTANCE_RC=0"}, "status"); code != 1 || !strings.Contains(out, "not installed") {
 		t.Fatalf("running, styrman not installed: code %d, want 1 naming not installed\n%s", code, out)
 	}
-	if out, code := gcpRun(t, e, "vm.sh", []string{"FAKE_INSTANCE_RC=0", "FAKE_CTL_RC=0"}, "status"); code != 0 {
-		t.Fatalf("running and healthy: code %d, want 0\n%s", code, out)
+	// Installed in the deploy clone (where it really lives — BUG-073: the
+	// probe used to test /usr/local/bin, which nothing creates, so a serving
+	// host reported "not installed"), and its status decides the exit code.
+	for _, tc := range []struct {
+		path, rc string
+		want     int
+	}{
+		{"/opt/styrman/deploy/styrman-ctl", "0", 0},
+		{"/opt/styrman/deploy/styrman-ctl", "1", 1},
+		{"/home/kesokaj/styrman-crew/deploy/styrman-ctl", "0", 0},
+	} {
+		out, code := gcpRun(t, e, "vm.sh", []string{"FAKE_INSTANCE_RC=0", "FAKE_CTL_PATH=" + tc.path, "FAKE_CTL_RC=" + tc.rc}, "status")
+		if code != tc.want {
+			t.Fatalf("status with %s (ctl exit %s): code %d, want %d\n%s", tc.path, tc.rc, code, tc.want, out)
+		}
+		if strings.Contains(out, "not installed") {
+			t.Fatalf("an installed host reported not installed:\n%s", out)
+		}
+	}
+	// A path the host was not asked about never reaches a sudo command line.
+	if out, code := gcpRun(t, e, "vm.sh", []string{"FAKE_INSTANCE_RC=0", "FAKE_CTL_PATH=/tmp/evil; rm -rf /"}, "status"); code == 0 || !strings.Contains(out, "unexpected styrman-ctl path") {
+		t.Fatalf("an unexpected path was accepted: code %d\n%s", code, out)
 	}
 }
 

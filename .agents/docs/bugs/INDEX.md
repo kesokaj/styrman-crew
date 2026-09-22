@@ -72,6 +72,8 @@
 | BUG-067 | 2026-09-21 | image/entrypoint.sh (ADR-074 never-downgrade guard) | fixed | skipped harness install logged "deployed"; `sort -V` ranked sentinel `unknown` above a real version, permanently suppressing install | assert the shape of BOTH sides before a version comparison (a sentinel must lose, never win); a pass line must name deployed vs kept |
 | BUG-068 | 2026-09-21 | deploy/verify-commit.sh (shellcheck step) / styrman-update, host-setup.sh, styrman-ctl | fixed | release gate's `shellcheck -S warning` failed SC2054 on an unquoted `--secret id=...,src=...` array element the change's own `-S error` verification had missed | verifier dispatch runs shellcheck at the gate's severity (`-S warning`); quote a comma-bearing array element the day it's written |
 | BUG-071 | 2026-09-21 | deploy/gcp/install.sh | fixed | mutation-check restore via inverse `sed` (no line address) silently corrupted a second, unintended line — `GH_TOKEN="$(cat …)"` — reviewer caught it | restore a mutation from a byte-identical copy (`cp`/`cmp`), never an inverse edit; a command-string test names every value the command needs from its own exec |
+| BUG-072 | 2026-09-22 | deploy/gcp/install.sh | fixed | healthy GCP bring-up failed its own verify step: probed `crew.gcp.styrman.xyz`, host served `styrman.gcp.styrman.xyz` | deliver every optional key an env-file passes or read the far side's effective value back; a name-probing check must use the name the thing under test actually claims |
+| BUG-073 | 2026-09-22 | deploy/gcp/vm.sh | fixed | `vm.sh status` reported "not installed" against a fully installed, serving GCP host | probe a path the installer actually creates or ask the host where its copy is — never hard-code a guess that can never succeed |
 
 ## Graduated
 
