@@ -140,7 +140,14 @@ if [ -z "${SKIP_WEB_FRESHNESS:-}" ] && command -v npm >/dev/null 2>&1; then
     # web/scripts/normalize-shell.mjs already makes _shell.html
     # byte-reproducible, so hashing is stable across rebuilds.
     committed="$(cd "${WT}/web/dist" && find client -type f -exec sha256sum {} + | sort -k2)"
-    ( cd "${WT}/web" && npm ci --no-audit --no-fund >/dev/null 2>&1 && npm run build >/dev/null 2>&1 )
+    # Capture rather than discard: under `set -e` a failed npm ci or build
+    # aborted the whole gate with its output in /dev/null, so the operator
+    # saw an exit and no reason (release review 2026-09-22).
+    if ! ( cd "${WT}/web" && npm ci --no-audit --no-fund && npm run build ) >"${LOGDIR}/web-build.log" 2>&1; then
+        echo "FAIL: rebuilding web/ for the freshness check failed — last 20 lines:" >&2
+        tail -20 "${LOGDIR}/web-build.log" >&2
+        exit 1
+    fi
     rebuilt="$(cd "${WT}/web/dist" && find client -type f -exec sha256sum {} + | sort -k2)"
     if [ "${committed}" != "${rebuilt}" ]; then
         echo "FAIL: committed web/dist does not match a build of this commit's web/src." >&2

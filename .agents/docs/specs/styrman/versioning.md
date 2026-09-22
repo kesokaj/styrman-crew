@@ -120,7 +120,10 @@ that section for why.
    `go build`/`go vet`/`go test -race` for the root module, the vendored
    ingress module (`deploy/caddy/ingress`, a separate `go.mod` the root
    `./...` never reaches), `gofmt -l`, a `web/dist` freshness check (rebuilds
-   the frontend from the commit's own `web/src` and compares file lists —
+   the frontend from the commit's own `web/src` and compares a per-file
+   sha256 set — it compared file NAMES until 2026-09-22, which let an edit to
+   `web/index.html` or the favicon, both fixed names, ship stale under a green
+   gate; the hashed bundle names had hidden it —
    `web/embed.go` embeds the committed `dist/client`, so an uncommitted
    frontend build would ship a UI that silently predates its API), the
    frontend `check`/`lint`/unit-test trio (`npm run check && npm run lint &&

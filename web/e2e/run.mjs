@@ -291,9 +291,27 @@ try {
   // puts it back inside subdir before it returns.
   await check("a directory past the listing cap says so", async () => {
     await page.locator(".xterm textarea").first().focus();
-    await page.keyboard.type("mkdir -p big && (cd big && seq 1 5200 | xargs -n1 -P8 touch) && echo BIGDONE");
+    // Assert an OUTPUT sentinel, never the echoed command — the convention
+    // this file sets at :190 and :202-206. A wait on a literal the typed
+    // line already contains is satisfied by the terminal's own echo, before
+    // the command has run at all: the first version of this check waited for
+    // "BIGDONE" while typing `echo BIGDONE`, and passed only because the
+    // 30 s selector wait below absorbed the 5200 touches (release review,
+    // 2026-09-22). The count is computed by the shell, so the sentinel
+    // cannot appear until the files exist — and it proves how many do.
+    await page.keyboard.type(
+      "mkdir -p big && (cd big && seq 1 5200 | xargs -n1 -P8 touch) && echo BIG-$(ls big | wc -l)-DONE",
+      { delay: 10 },
+    );
     await page.keyboard.press("Enter");
-    await page.waitForFunction(() => document.body.innerText.includes("BIGDONE"), null, { timeout: 120000 });
+    await page.waitForFunction(
+      () =>
+        [...document.querySelectorAll(".xterm-rows")].some((r) =>
+          (r.textContent ?? "").includes("BIG-5200-DONE"),
+        ),
+      null,
+      { timeout: 120000 },
+    );
 
     // finally, not a straight line: when this check failed during its own
     // must-fail probe it left the explorer at the wrong path and cascaded

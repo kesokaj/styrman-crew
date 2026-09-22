@@ -721,3 +721,34 @@ echo OK
 		t.Errorf("private_file accepted a symlink (%q)", out)
 	}
 }
+
+// vm.sh's status probe asks the HOST which styrman-ctl it has, and the answer
+// reaches a sudo command line that the remote shell re-parses. The allowlist
+// used `case` with a /home/*/... arm, and `*` matches `/`, a space, a quote
+// and `$(` alike (security review 2026-09-22). The username is now bounded.
+func TestGCPVMStatusRefusesAMetacharacterCtlPath(t *testing.T) {
+	e := gcpSetup(t)
+	for _, bad := range []string{
+		"/home/a/b/styrman-crew/deploy/styrman-ctl",   // * used to match the slash
+		"/home/x;id/styrman-crew/deploy/styrman-ctl",  // command separator
+		"/home/$(id)/styrman-crew/deploy/styrman-ctl", // substitution
+		"/home/x y/styrman-crew/deploy/styrman-ctl",   // word split
+		"/home/'x'/styrman-crew/deploy/styrman-ctl",   // quote
+		"/tmp/evil/styrman-ctl",                       // not a known location at all
+	} {
+		out, code := gcpRun(t, e, "vm.sh",
+			[]string{"FAKE_INSTANCE_RC=0", "FAKE_CTL_PATH=" + bad, "FAKE_CTL_RC=0"}, "status")
+		if code == 0 {
+			t.Errorf("status accepted the ctl path %q\n%s", bad, out)
+		}
+		if !strings.Contains(out, "unexpected styrman-ctl path") {
+			t.Errorf("status refused %q without naming why:\n%s", bad, out)
+		}
+	}
+	// The legitimate home path still works, so the guard is not refusing all.
+	if out, code := gcpRun(t, e, "vm.sh",
+		[]string{"FAKE_INSTANCE_RC=0", "FAKE_CTL_PATH=/home/kesokaj/styrman-crew/deploy/styrman-ctl", "FAKE_CTL_RC=0"},
+		"status"); code != 0 {
+		t.Errorf("status refused a legitimate home path: code %d\n%s", code, out)
+	}
+}

@@ -117,11 +117,19 @@ cmd_status() {
         echo "styrman not installed on ${GCP_INSTANCE} — deploy/gcp/install.sh"
         return 1
     fi
-    # The remote's answer reaches a sudo command line: only the three paths
-    # asked for are accepted.
+    # The remote's answer reaches a sudo command line and is re-parsed by the
+    # remote shell, so what is accepted must contain no shell metacharacter.
+    # The two fixed paths are compared literally; the home one is the only
+    # variable part and its username is bounded to a POSIX-ish class --
+    # `case`'s old /home/*/... arm accepted a `*`, which matches `/`, a
+    # space, a quote and `$(` alike (security review 2026-09-22).
     case "${ctl}" in
-        /opt/styrman/deploy/styrman-ctl|/home/*/styrman-crew/deploy/styrman-ctl|/root/styrman-crew/deploy/styrman-ctl|/usr/local/bin/styrman-ctl) ;;
-        *) die "${GCP_INSTANCE} answered with an unexpected styrman-ctl path: ${ctl}" ;;
+        /opt/styrman/deploy/styrman-ctl|/usr/local/bin/styrman-ctl) ;;
+        *)
+            [[ "${ctl}" =~ ^/root/styrman-crew/deploy/styrman-ctl$ ]] ||
+            [[ "${ctl}" =~ ^/home/[a-z_][a-z0-9_-]{0,31}/styrman-crew/deploy/styrman-ctl$ ]] ||
+                die "${GCP_INSTANCE} answered with an unexpected styrman-ctl path: ${ctl}"
+            ;;
     esac
     if vm_ssh "sudo ${ctl} status"; then return 0; fi
     return 1
