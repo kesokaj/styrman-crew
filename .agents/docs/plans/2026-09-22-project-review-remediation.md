@@ -269,13 +269,14 @@ not. Full versions in `.agents/scratch/2026-09-22-review-triage.md` (items 7,
       delete once the GCP target is used in anger. Blocked on the operator:
       deleting converge code is irreversible for a host frozen between v1.23
       and v1.35.
-- [~] **Finding 11 (half)** — `go mod tidy` promotes `opencontainers/image-spec` from
+- [x] **Finding 11** — `go mod tidy` promotes `opencontainers/image-spec` from
       indirect to direct (mine, unblocked). Separately, it and
       `golang.org/x/sys` are direct dependencies absent from
       `REQUIREMENTS.md`'s approved list; that file is immutable without
       explicit approval, so the route is: propose the exact edit → approval →
-      ADR → `REQUIREMENTS.md` and `ROADMAP.md` in one commit. **`go mod tidy`
-      done; the `REQUIREMENTS.md` edit is proposed and PENDING the operator.**
+      ADR → `REQUIREMENTS.md` and `ROADMAP.md` in one commit. **Both halves done:** `go mod tidy`,
+      then ADR-076 and the `REQUIREMENTS.md` edit in one commit on the
+      operator's "finish all the work".
       Assembling it found the list stale in both directions: it still names
       `creack/pty`, which this module no longer depends on at all.
 - [x] **Finding 15** — extend the ADR-069 audit note at `image/Dockerfile:47-56`

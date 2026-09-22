@@ -143,8 +143,13 @@
 
 ## Constraints
 
-- Go stdlib-first server; approved deps: `coder/websocket`, `creack/pty`, `docker/docker`
-  SDK. Every addition must be justified.
+- Go stdlib-first server; approved deps: `coder/websocket` (terminal bridge),
+  `docker/docker` SDK (orchestrator), `opencontainers/image-spec` (the SDK's own
+  types, read directly by the orchestrator), `golang.org/x/sys` (`openat2` with
+  `O_NOFOLLOW`, which `os` does not expose — `internal/files`' no-follow read
+  depends on it). Every addition must be justified, naming the stdlib
+  alternative it rejects. See ADR-076; `creack/pty` was listed until 2026-09-22
+  and is not a dependency of this module.
 - Frontend: TanStack Start + TypeScript + Tailwind, fully contained in `web/`.
 - Runtime image: Debian, AMD64 only.
 - Host: Docker with Kata `mvm` runtime (already configured); no Kubernetes.
