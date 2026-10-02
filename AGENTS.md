@@ -106,7 +106,9 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
   Credentials (status-colored: green synced / grey not-set / red set-not-synced).
 - Terminals: durable records over tmux sessions; transcripts piped to
   `~/.styrman/logs/<projectId>/`. WS protocol: binary = PTY bytes, JSON
-  text = resize, close 4000 = exited, 4001 = replaced.
+  text = control (resize; ping answered with pong, ADR-079), close 4000 =
+  exited, 4001 = replaced (the page may take the terminal back when it is
+  shown again or its user presses "Use here").
 - Per-project dockerd: overlay2 on loop-mounted `~/.dockerd/<uuid>.img`.
 - Project networks are isolated from each other (R12); the server joins
   them in the background for the port-preview proxy (ip_forward=0, asserted

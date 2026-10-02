@@ -46,7 +46,11 @@ await fetch(`${BASE}/api/projects/${PROJECT}?wipe=true`, {
 }).catch(() => {});
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1440, height: 860 } });
+// An explicit context, not browser.newPage(): the terminal-recovery checks
+// open a second and a third page in the SAME session, and Playwright refuses
+// context.newPage() on the context browser.newPage() creates implicitly.
+const context = await browser.newContext({ viewport: { width: 1440, height: 860 } });
+const page = await context.newPage();
 // Surface uncaught client errors as suite failures (they were invisible).
 // React hydration warnings (#418/#423/#425) are recoverable — React re-renders
 // on the client — and pre-date this suite; closed as known-benign in ADR-045
@@ -1115,6 +1119,193 @@ try {
   await check("deep link reattaches terminal 1", () =>
     page.waitForSelector('header button:has-text("Renamed by e2e")'),
   );
+
+  // ── Terminal recovery without a reload (ADR-079, BUG-085) ───────────────
+  // The first page sits on terminal 1 and none of these three navigates it.
+  // Each closes its extra page and removes its overrides in a `finally`, and
+  // the first two end with the first page holding terminal 1 again
+  // (.agents/rules/e2e-checks-leave-the-suite-as-they-found-it.md). What the
+  // suite cannot produce for real — a hidden tab, a socket that died without
+  // closing — is EMULATED at the page's own APIs, and the header of each
+  // check says how.
+  const waitTermText = (p, needle, timeout = 20000) =>
+    p.waitForFunction(
+      (n) =>
+        [...document.querySelectorAll(".xterm-rows")].some((r) =>
+          (r.textContent ?? "").includes(n),
+        ),
+      needle,
+      { timeout },
+    );
+  const typeIn = async (p, text) => {
+    await p.locator(".xterm textarea").first().focus();
+    await p.keyboard.type(text, { delay: 5 });
+    await p.keyboard.press("Enter");
+  };
+  // Headless Chromium never hides a background page, so hidden → visible is
+  // emulated where the app reads it: the document's own properties, plus the
+  // event the browser would dispatch.
+  const setVisibility = (p, state) =>
+    p.evaluate((v) => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => v });
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => v !== "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }, state);
+  const clearVisibility = (p) =>
+    p
+      .evaluate(() => {
+        delete document.visibilityState;
+        delete document.hidden;
+      })
+      .catch(() => {});
+  const notReplaced = (p, timeout = 20000) =>
+    p.waitForFunction(
+      () => !(document.querySelector("main")?.innerText ?? "").includes("Opened in another tab"),
+      null,
+      { timeout },
+    );
+  // Leave the first page holding terminal 1 whatever happened: on a page
+  // where the button does not exist (or the pane is already connected) this
+  // does nothing.
+  const firstPageTakesTerminalBack = async () => {
+    const b = page.getByRole("button", { name: "Use here", exact: true });
+    if (await b.count().catch(() => 0)) await b.click({ timeout: 5000 }).catch(() => {});
+  };
+
+  await check("a terminal taken by another tab is taken back with one click", async () => {
+    const second = await context.newPage();
+    try {
+      await second.goto(`${BASE}/p/${PID}/1`);
+      await page.getByText("Opened in another tab").waitFor({ timeout: 20000 });
+      await page.getByRole("button", { name: "Use here", exact: true }).click();
+      await notReplaced(page);
+      await typeIn(page, "echo reclaim-click-$((20+3))");
+      await mainContains("reclaim-click-23");
+    } finally {
+      await second.close().catch(() => {});
+      await firstPageTakesTerminalBack();
+    }
+  });
+
+  await check("a replaced terminal comes back by itself when its tab is shown again", async () => {
+    const second = await context.newPage();
+    try {
+      await second.goto(`${BASE}/p/${PID}/1`);
+      await page.getByText("Opened in another tab").waitFor({ timeout: 20000 });
+      await setVisibility(page, "hidden");
+      await setVisibility(page, "visible");
+      await notReplaced(page);
+      await typeIn(page, "echo reclaim-shown-$((30+4))");
+      await mainContains("reclaim-shown-34");
+    } finally {
+      await clearVisibility(page);
+      await second.close().catch(() => {});
+      await firstPageTakesTerminalBack();
+    }
+  });
+
+  await check("a terminal whose socket went silent works again once its tab is shown", async () => {
+    // A THROWAWAY page on terminal 2 carries the fixture; the first page is
+    // not touched. The init script wraps window.WebSocket so one socket
+    // instance can be FROZEN: its sends are dropped and its message and close
+    // events withheld, while readyState stays OPEN — what a page sees of a
+    // connection that died without a close. The app sets its handlers through
+    // the on* properties, so those setters are what the wrapper intercepts.
+    const third = await context.newPage();
+    try {
+      await third.addInitScript(() => {
+        const Real = window.WebSocket;
+        const all = [];
+        class FreezableSocket extends Real {
+          constructor(...args) {
+            super(...args);
+            this.__frozen = false;
+            this.__texts = [];
+            all.push(this);
+          }
+          send(data) {
+            if (this.__frozen) return;
+            super.send(data);
+          }
+          get onmessage() {
+            return super.onmessage;
+          }
+          set onmessage(fn) {
+            super.onmessage =
+              fn &&
+              ((ev) => {
+                if (this.__frozen) return;
+                if (typeof ev.data === "string") this.__texts.push(ev.data);
+                fn.call(this, ev);
+              });
+          }
+          get onclose() {
+            return super.onclose;
+          }
+          set onclose(fn) {
+            super.onclose =
+              fn &&
+              ((ev) => {
+                if (!this.__frozen) fn.call(this, ev);
+              });
+          }
+        }
+        window.WebSocket = FreezableSocket;
+        window.__termSockets = () => all.filter((s) => s.url.includes("/ws/term/"));
+      });
+      await third.goto(`${BASE}/p/${PID}/2`);
+      await third.waitForFunction(
+        () => /[$❯]/.test(document.querySelector(".xterm-rows")?.textContent ?? ""),
+        null,
+        { timeout: 45000 },
+      );
+      await typeIn(third, "echo frz-before-$((40+1))");
+      await waitTermText(third, "frz-before-41");
+      // The page only trusts its liveness check on a connection that has
+      // answered a ping, so wait (bounded) for the first pong — then freeze
+      // WHATEVER happened: against a build without the fix no pong arrives,
+      // and the check must fail at its last step, not here.
+      await third
+        .waitForFunction(
+          () =>
+            window.__termSockets().some(
+              (s) => s.readyState === 1 && s.__texts.some((t) => t.includes('"pong"')),
+            ),
+          null,
+          { timeout: 5000 },
+        )
+        .catch(() => {});
+      const frozen = await third.evaluate(() => {
+        const open = window.__termSockets().filter((s) => s.readyState === 1);
+        for (const s of open) s.__frozen = true;
+        return open.length;
+      });
+      if (frozen !== 1) throw new Error(`expected one open terminal socket to freeze, froze ${frozen}`);
+      // The fixture must produce the condition it claims: nothing typed now
+      // reaches the shell.
+      await typeIn(third, "echo frz-lost-$((50+2))");
+      await third.waitForTimeout(2000);
+      const lost = await third.evaluate(() =>
+        [...document.querySelectorAll(".xterm-rows")].some((r) =>
+          (r.textContent ?? "").includes("frz-lost-52"),
+        ),
+      );
+      if (lost) throw new Error("the frozen socket still carried input: the fixture froze nothing");
+      await setVisibility(third, "hidden");
+      await setVisibility(third, "visible");
+      // The page notices (a probe, 5 s unanswered) and reconnects in place: a
+      // NEW, unfrozen socket, and the same page — no reload.
+      await third.waitForFunction(
+        () => window.__termSockets().some((s) => !s.__frozen && s.readyState === 1),
+        null,
+        { timeout: 20000 },
+      );
+      await typeIn(third, "echo frz-after-$((60+3))");
+      await waitTermText(third, "frz-after-63");
+    } finally {
+      await third.close().catch(() => {});
+    }
+  });
 
   // ── Settings ────────────────────────────────────────────────────────────
   await page.click("aside >> text=Settings");

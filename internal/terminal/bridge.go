@@ -307,8 +307,10 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 	conn.SetReadLimit(16 << 20)
 
 	// Atomically replace any previous connection for this session (close 4001;
-	// the frontend must not auto-reconnect on it, or two clients would fight
-	// over the tmux session in a reconnect death-spiral). The old Close runs
+	// the frontend must not reconnect BY ITSELF on it, or two clients would
+	// fight over the tmux session in a reconnect death-spiral — it may take
+	// the session back when its page is shown again or its user asks,
+	// ADR-079). The old Close runs
 	// in a goroutine: a dead peer's close handshake can block ~5-10 s, which
 	// must not stall this new attach (it blew the "reopen < 5 s" SLA).
 	b.swapMu.Lock()

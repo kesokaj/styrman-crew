@@ -131,7 +131,7 @@ behavior — their panes idle at a shell, so reattaching is always safe.
 | Code | Name | Client behavior |
 |---|---|---|
 | 4000 | shell exited | The tmux session genuinely ended (user typed `exit`, agent quit). Do NOT silently reconnect — the UI presents this state as **Paused** with a **Resume** action (the record and transcript persist; reconnecting starts a fresh shell). |
-| 4001 | replaced | A newer WebSocket attached to this conversation (another tab). NEVER auto-reconnect — doing so death-spirals: each reconnect replaces the other tab, which reconnects, forever. |
+| 4001 | replaced | A newer WebSocket attached to this conversation (another tab). The pane never reconnects BY ITSELF — an automatic reconnect death-spirals: each reconnect replaces the other tab, which reconnects, forever. The pane shows "Opened in another tab" with a **Use here** button; the button, or the tab becoming visible again (hidden → visible), takes the terminal back in place, without boot intent. Being replaced triggers neither, so two pages cannot trade the terminal in a loop (see "Page liveness and wake" below). |
 | 4002 | project stopped | The project VM was deliberately stopped (Stop button / idle reaper) and this connect carried no boot intent. NEVER auto-reconnect — a reconnect with `?boot=1` would boot the VM back up. The UI shows **Project stopped** with a **Start** action; that click (epoch bump → first connect → `?boot=1`) is the explicit intent that boots it (v1.11.0). |
 | 1000/1001/1006 | normal/going away/abnormal | Transient. Silently reconnect; tmux reattaches with scrollback and running processes intact. |
 | 4004 | browser unavailable | **Browser relay only** (`/ws/browser/{project}`, below): the project's Chromium could not be started or its DevTools endpoint could not be reached; the close reason carries the END of the launcher's log tail (cut to the 120-byte frame budget on a rune boundary, prefixed `"…"` — the "browser did not start: " head is dropped since the pane's own heading already says so). Do NOT auto-reconnect — a blind retry re-runs a launch that just failed; the pane shows the reason and a **Retry** button, which calls `POST /api/projects/{id}/browser/start` FIRST (its 502 body is the launcher's full 2 KiB log tail, shown in full) before reconnecting the relay — three guest execs total, intended: Retry only runs after an explicit click on a failed launch. |
@@ -145,6 +145,34 @@ deliberately-stopped project the server answers them with close 4002 (before
 any VM boot) instead of resurrecting the VM. This is what makes the sidebar
 Stop stick while terminal tabs are open. Setup panes ignore `boot` (the
 setup VM has no stop marker).
+
+## Page liveness and wake (project terminals, ADR-079)
+
+The page side of the `ping`/`pong` control frames above
+(`web/src/components/TerminalPane.tsx`, `web/src/lib/termLiveness.ts`).
+Project terminals only: a setup pane (`/ws/setup`) takes none of it and never
+reconnects once it has been open.
+
+- **Probe.** On socket open the page sends one ping; the pong marks this
+  connection as one that answers pings. A probe is a ping with a 5 s
+  deadline for ANY frame to arrive. It is sent when the tab becomes visible,
+  when the browser reports the network back (`online`), and every 25 s while
+  the tab is visible.
+- **Unanswered probe.** The socket is dropped and reconnected at once, in
+  place (same xterm, scrollback kept), with the retry counter reset and
+  WITHOUT boot intent — a stopped project answers 4002 and stays stopped. A
+  connection that never answered a ping is never declared dead, so a server
+  without the pong reply behaves as before.
+- **Wake events.** The same two events (tab shown, network back) also
+  reconnect a pane that is "Disconnected" (its 8 retries used up, or a
+  non-transient close) or waiting out a reconnect backoff. The 25 s interval
+  never does.
+- **4001.** Only the **Use here** button and a hidden → visible transition
+  take the terminal back; `online` and the interval do not. With two pages
+  both visible, the second holds the terminal and the first shows the button.
+- 4000, 4002 and 4003 are unchanged.
+- **Not covered:** the browser pane (`/ws/browser/...`): a dead relay socket
+  there still shows a frozen frame (open follow-up question for the operator).
 
 ## Browser relay (`/ws/browser/{project}`, ADR-068)
 

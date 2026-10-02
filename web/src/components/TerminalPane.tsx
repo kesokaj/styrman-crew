@@ -12,6 +12,12 @@ import {
   terminalTheme,
   type StyrmanTerminal,
 } from "../lib/terminal";
+import {
+  createLiveness,
+  isPong,
+  PING_FRAME,
+  type Liveness,
+} from "../lib/termLiveness";
 
 export type TermTarget =
   | { kind: "term"; project: string; id: string }
@@ -31,12 +37,22 @@ type ConnState =
 // else (failed upgrade, server error) must not loop forever.
 const TRANSIENT_CODES = new Set([1000, 1001, 1006]);
 const MAX_RETRIES = 8;
+// How often a visible pane asks its socket whether it is still alive (ADR-079).
+const PROBE_INTERVAL_MS = 25_000;
 
 /**
  * One styrman terminal (lib/terminal.ts) bound to a WebSocket. Implements
  * the wire protocol: binary frames are PTY bytes, JSON text frames carry
- * resize, close 4000 = paused (no auto-reconnect), close 4001 = replaced by
- * another tab (NEVER reconnect), anything else = transient → reconnect.
+ * control messages (resize out; the ping/pong liveness check, ADR-079),
+ * close 4000 = paused (no auto-reconnect), close 4001 = replaced by another
+ * tab (never reconnect BY ITSELF: the pane takes the terminal back when its
+ * page is shown again or the user presses "Use here"), anything else =
+ * transient → reconnect.
+ *
+ * A project terminal also notices a socket that died without a close event
+ * (sleep, a network change): it probes when the tab is shown, when the
+ * network comes back and every 25 s while visible, and reconnects in place
+ * when the probe goes unanswered. A setup pane takes none of this.
  *
  * (The former URL "link bar" was removed in v1.3 — copy-on-select made it
  * redundant, and it mostly harvested junk URLs from apt output. The
@@ -71,6 +87,9 @@ export function TerminalPane({
   // N7: keep onExited fresh without re-running the connection effect.
   const onExitedRef = useRef(onExited);
   const onResizeRef = useRef<(() => void) | null>(null);
+  // Set by the connection effect: takes a replaced terminal back in place
+  // (the "Use here" button). Null for a setup pane.
+  const reclaimRef = useRef<(() => void) | null>(null);
   const lastFocusToken = useRef(focusToken);
   useEffect(() => {
     if (focusToken === undefined || focusToken === lastFocusToken.current) return;
@@ -173,8 +192,21 @@ export function TerminalPane({
       return true;
     });
 
+    // Everything below about liveness, wake events and reclaiming applies to
+    // project terminals only: a setup pane must never reconnect once it has
+    // been open (see everOpened).
+    const isTerm = target.kind === "term";
     let ws: WebSocket | null = null;
+    let live: Liveness | null = null;
     let closedForGood = false;
+    // What may bring a closed-for-good pane back without its own button
+    // (ADR-079). "wake": it ran out of retries or met a non-transient close,
+    // and a wake event (tab shown again, network back) tries once more.
+    // "reclaim": another tab took the terminal (4001); only this page being
+    // shown again, or its "Use here" button, takes it back — being replaced
+    // causes neither, so two pages cannot trade the terminal in a loop.
+    // "no": exited, stopped, revoked, or a setup pane.
+    let resumable: "no" | "wake" | "reclaim" = "no";
     let retries = 0;
     let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     // Setup panes must never auto-reconnect once they've been open: the bridge
@@ -194,35 +226,63 @@ export function TerminalPane({
     let bootIntent = true;
     const connect = () => {
       if (closedForGood) return;
+      reconnectTimer = undefined;
       setState((prev) =>
         prev === "connecting" ? "connecting" : "reconnecting",
       );
-      ws = new WebSocket(
+      const sock = new WebSocket(
         termSocketUrl(target, term.cols, term.rows, bootIntent),
       );
+      ws = sock;
       bootIntent = false;
-      ws.binaryType = "arraybuffer";
-      ws.onopen = () => {
+      sock.binaryType = "arraybuffer";
+      // One liveness check per socket. A probe that gets no frame back means
+      // the socket died without telling us: replace it now.
+      const lv = isTerm
+        ? createLiveness({
+            sendPing: () => {
+              if (sock.readyState === WebSocket.OPEN) sock.send(PING_FRAME);
+            },
+            onDead: () => {
+              if (ws === sock && !closedForGood) reconnectNow();
+            },
+          })
+        : null;
+      live = lv;
+      sock.onopen = () => {
         retries = 0;
         everOpened = true;
         setState("connected");
         // The URL size only seeds session *creation*; a reattach needs an
         // explicit resize in case the pane changed size while disconnected.
         fit.fit();
-        ws?.send(
+        sock.send(
           JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }),
         );
         flushOutbox(); // send anything typed while reconnecting
+        lv?.opened();
         term.focus();
       };
-      ws.onmessage = (ev) => {
+      sock.onmessage = (ev) => {
+        lv?.received();
+        if (typeof ev.data === "string") {
+          // Text frames are control messages; the bridge sends one kind, the
+          // pong. Never terminal output: PTY bytes are binary frames.
+          if (isPong(ev.data)) lv?.pong();
+          return;
+        }
         term.write(new Uint8Array(ev.data as ArrayBuffer));
       };
-      ws.onclose = (ev) => {
+      sock.onclose = (ev) => {
+        lv?.stop();
         if (closedForGood) return;
         if (ev.code === CLOSE_REPLACED) {
           setState("replaced");
-          closedForGood = true; // protocol: never reconnect on 4001
+          // Protocol: never reconnect BY ITSELF on 4001. `resumable` is what
+          // lets this page take the terminal back when it is shown again or
+          // its user asks.
+          closedForGood = true;
+          resumable = isTerm ? "reclaim" : "no";
           return;
         }
         if (ev.code === CLOSE_STOPPED) {
@@ -258,10 +318,81 @@ export function TerminalPane({
         } else {
           setState("disconnected");
           closedForGood = true;
+          resumable = isTerm ? "wake" : "no";
         }
       };
     };
+    // Let go of the current socket without waiting for its close event — a
+    // dead socket may never deliver one.
+    const dropSocket = () => {
+      live?.stop();
+      live = null;
+      if (!ws) return;
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      try {
+        ws.close();
+      } catch {
+        // already gone
+      }
+      ws = null;
+    };
+    // Reconnect IN PLACE: the same xterm (scrollback kept), the retry counter
+    // reset, and never boot intent — a wake or a reclaim is not the user
+    // asking to start a stopped project; the server answers that with 4002
+    // and the pane shows Start.
+    const reconnectNow = () => {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+      dropSocket();
+      closedForGood = false;
+      resumable = "no";
+      retries = 0;
+      connect();
+    };
     connect();
+
+    // Wake events (ADR-079). `shown` is true only for this page going from
+    // hidden to visible — the one event, beside the button, that may take a
+    // replaced terminal back.
+    const onWake = (shown: boolean) => {
+      if (!isTerm) return;
+      if (closedForGood) {
+        if (resumable === "wake" || (resumable === "reclaim" && shown)) {
+          reconnectNow();
+        }
+        return;
+      }
+      if (ws?.readyState === WebSocket.OPEN) live?.probe();
+      // Waiting out a backoff: the user is back, try now. (A socket still
+      // CONNECTING is left alone — its open handler pings.)
+      else if (reconnectTimer !== undefined) reconnectNow();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") onWake(true);
+    };
+    const onOnline = () => onWake(false);
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", onOnline);
+    // The interval only PROBES an open socket. It never reconnects a
+    // disconnected pane (that would be the endless retry MAX_RETRIES exists
+    // to prevent) and never reclaims.
+    const probeTimer = isTerm
+      ? setInterval(() => {
+          if (
+            document.visibilityState === "visible" &&
+            ws?.readyState === WebSocket.OPEN
+          ) {
+            live?.probe();
+          }
+        }, PROBE_INTERVAL_MS)
+      : undefined;
+    reclaimRef.current = isTerm
+      ? () => {
+          if (closedForGood && resumable === "reclaim") reconnectNow();
+        }
+      : null;
 
     // N6: keystrokes typed during a brief reconnect window used to vanish
     // silently ("I typed and nothing happened"). Queue them (bounded) and
@@ -278,8 +409,10 @@ export function TerminalPane({
         // Binary frame = raw input bytes (text frames are control messages).
         ws.send(new TextEncoder().encode(d).buffer as ArrayBuffer);
       } else if (!closedForGood && outbox.length < 256) {
-        // Queue only while a reconnect is expected; bytes typed after a
-        // terminal-for-good close (exited/replaced) could never flush.
+        // Queue only while a reconnect is under way. Bytes typed at a pane
+        // that is closed for good are dropped: after exited/stopped they
+        // could never flush, and a replaced pane that is later taken back
+        // must not replay what was typed while it said it was elsewhere.
         outbox.push(d);
       }
     });
@@ -347,15 +480,17 @@ export function TerminalPane({
 
     return () => {
       closedForGood = true;
+      resumable = "no";
+      reclaimRef.current = null;
       clearTimeout(reconnectTimer);
       clearTimeout(resizeTimer);
+      clearInterval(probeTimer);
       clearTimeout(toastTimer.current); // no toast after unmount (N2)
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", onOnline);
       dataSub.dispose();
       resizeObserver.disconnect();
-      if (ws) {
-        ws.onclose = null;
-        ws.close();
-      }
+      dropSocket();
       styrRef.current = null;
       styr.dispose();
     };
@@ -424,6 +559,16 @@ export function TerminalPane({
               {state === "revoked" && "Access revoked — sign in again if this is a mistake"}
               {state === "disconnected" && "Disconnected"}
             </span>
+            {state === "replaced" && target.kind === "term" && (
+              // In place, not an epoch bump: the xterm and its scrollback
+              // stay, and there is no boot intent (see reconnectNow).
+              <button
+                onClick={() => reclaimRef.current?.()}
+                className="rounded-full border border-accent bg-accent-soft px-3 py-1 text-xs text-on-accent-soft hover:brightness-110"
+              >
+                Use here
+              </button>
+            )}
             {(state === "exited" ||
               state === "stopped" ||
               state === "disconnected") && (
