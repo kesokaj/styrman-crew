@@ -234,6 +234,15 @@ Steps, in order:
    reserved name (root, daemon, …) that already exists at a different uid is
    rejected — the boot fails loudly instead of every `docker exec` silently
    running as the wrong uid on a home it doesn't own (I11).
+   4b. `chown "${UID_}:${GID_}" /opt/agy` — the DIRECTORY only, not the binary
+   (which stays root-owned), right after step 4 and BEFORE the minimal-mode
+   branch, so the setup VM runs it too. `agy` updates itself by replacing its
+   binary in that directory, so the directory belongs to the project user and
+   to nobody else (ADR-077, ADR-080); the integration check "agy's directory is
+   owner-only: the project user's, mode 755, not writable by another uid" also
+   asserts that nothing under `/opt/agy` is group- or other-writable. On failure
+   the boot logs `WARN: could not hand /opt/agy to <user> — `agy update` will
+   not work in this VM` and continues.
 5. `~/projects/<dir>`, `~/.dockerd`, `~/.config`, `~/.cache`, `~/.local/bin`,
    `~/.npm-global/bin` and `~/.npm-global/lib` (as the user, on every
    non-minimal boot; the npm prefix `skel/bash_exports` names via

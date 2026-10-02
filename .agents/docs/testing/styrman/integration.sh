@@ -257,9 +257,12 @@ check "project user can write agy's directory; /usr/local/bin/agy resolves into 
 # ALONE. The first cut shipped it 0777, and any other uid in the VM could
 # then swap the binary the user runs next. `runuser -u nobody -- true` is the
 # positive control: a runuser that cannot run at all must not read as "nobody
-# cannot write".
+# cannot write". The last clause covers what is IN the directory too: nothing
+# under /opt/agy may be group- or other-writable, the binary included
+# (security review round 2: the directory's mode says nothing about a
+# binary that could be overwritten in place).
 check "agy's directory is owner-only: the project user's, mode 755, not writable by another uid" \
-    "[ \"\$(docker exec ${CN} stat -c '%U %a' /opt/agy)\" = '${ME} 755' ] && docker exec ${CN} runuser -u nobody -- true && ! docker exec ${CN} runuser -u nobody -- test -w /opt/agy"
+    "[ \"\$(docker exec ${CN} stat -c '%U %a' /opt/agy)\" = '${ME} 755' ] && docker exec ${CN} runuser -u nobody -- true && ! docker exec ${CN} runuser -u nobody -- test -w /opt/agy && docker exec ${CN} test -x /opt/agy/agy && [ -z \"\$(docker exec ${CN} find /opt/agy -perm /022)\" ]"
 
 # R1 boot budget, from the container's own clock: the gap between its start
 # and the entrypoint's ready line. The quick half of the harness seed (the
