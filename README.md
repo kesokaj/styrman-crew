@@ -114,11 +114,20 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.40.0**, tagged 2026-10-02. Both hosts take a signed tag by themselves: the GCP VM (https://crew.spgo.demo.altostrat.com, Google sign-in) on its next updater tick; the NUC (https://crew.styrman.xyz), which still ran `styrman-server:1.38.0` on 2026-10-02, only after its updater's token is replaced — `/etc/styrman/gh-token` is rejected by GitHub (BUG-084, open: the operator installs a fresh token that reads both `kesokaj/styrman-crew` and `kesokaj/styrman-harness`). v1.39.0 reached the GCP VM only.
+**v1.41.0**, tagged 2026-10-02. Both hosts take a signed tag by themselves: the GCP VM (https://crew.spgo.demo.altostrat.com, Google sign-in) on its next updater tick; the NUC (https://crew.styrman.xyz), which still ran `styrman-server:1.38.0` on 2026-10-02, only after its updater's token is replaced — `/etc/styrman/gh-token` is rejected by GitHub (BUG-084, open: the operator installs a fresh token that reads both `kesokaj/styrman-crew` and `kesokaj/styrman-harness`). From this release on, Settings tells admins when a host's auto-updater is failing; a host shows it one updater tick after it takes the release. v1.39.0 reached the GCP VM only.
 
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
 
+- **v1.41.0** (2026-10-02): Settings tells admins when the host's
+  auto-updater is failing, has stopped running or cannot be read, and why
+  (ADR-081: the updater records each tick in `/etc/styrman/status/updater.json`,
+  mounted read-only into the server); a browser view whose connection went
+  silent reconnects by itself; keys typed while a terminal reconnected are
+  dropped once they are 30 s old instead of being replayed after a sleep; the
+  Ports panel and the browser view no longer answer with an error while a
+  project's network mode is switched or the project stops (BUG-088); ADR-082
+  records the two release signers.
 - **v1.40.0** (2026-10-02): `claude` and `agy` update themselves inside a
   project (agy in its own directory owned by the project user; the npm prefix
   Claude's updater needs is created at boot); a terminal recovers without a
