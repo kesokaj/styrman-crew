@@ -389,8 +389,8 @@ a browser.
 ### Phase 3 — records and release
 - [x] ADR-082 (two release signers; a host deploys only tags signed by a key in its own `allowed_signers`) appended; item 4 recorded as D5 — verify: read, AI — expect: present — docs: specs/styrman/versioning.md, deploy/gcp.md — ADR-082 appended and both docs point at it; D5 is in `## Decisions`, 2026-10-02
 - [x] Definition of Done: reviewer, security (a root script, a root-written file the server parses, a new mount), documentation, `/review --docs`, bug records, change entries (Phase 2's entry carries a "Learnings for the local host" section, `.agents/rules/shared-path-learnings.md`, and lists the callers of the status variable by name) — verify: reports' `## Status`, AI — expect: no open high or medium — four rounds of code (opus), security and docs reviews, every report COMPLETE with an `## Outcome` section, no open high or medium; BUG-088 recorded; change entries for each phase and fix commit; the cap reached at `624808d`, the operator: "Fix all five, then ship"; gate `reviews/2026-10-02-preflight-v1.41.0.md`, 2026-10-02
-- [ ] `/preflight` cuts the next MINOR — verify: its gate report, AI — expect: tag signed with the original key and pushed
-- [ ] Checkpoint — expect: handoff on disk; this host's update still waits on BUG-084's token — evidence: handoff path, date
+- [x] `/preflight` cuts the next MINOR — verify: its gate report, AI — expect: tag signed with the original key and pushed — v1.41.0 tagged at `c2b1f61`, signed with `SHA256:5HpYQJjpG+…` (verified `Good "git" signature`), pushed; gate `reviews/2026-10-02-preflight-v1.41.0.md` SHIP, 2026-10-02
+- [x] Checkpoint — expect: handoff on disk; this host's update still waits on BUG-084's token — evidence: handoff path, date — `handoffs/2026-10-02-2214-v1.41.0-updater-status-stale-keys-browser.md`; this host still on 1.38.0, its updater exit 1 (BUG-084), 2026-10-02
 
 ## Risks
 Assumptions:

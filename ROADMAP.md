@@ -12,8 +12,9 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-- Stale keystrokes, browser-view recovery, updater status in Settings —
-  `.agents/docs/plans/2026-10-02-stale-keys-browser-liveness-updater-status.md`
+<!-- Nothing open. Stale keystrokes, browser-view recovery and the updater
+status in Settings shipped as v1.41.0 on 2026-10-02; the plan is closed
+(.agents/docs/plans/2026-10-02-stale-keys-browser-liveness-updater-status.md). -->
 
 <!-- In-project tool updates, the terminal freeze and
 harness v2.3.2 shipped as v1.40.0 on 2026-10-02; the plan is closed
