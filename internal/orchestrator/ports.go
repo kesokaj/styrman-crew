@@ -100,11 +100,11 @@ func (o *Orchestrator) ListeningPorts(ctx context.Context, user, project string)
 	// while the UI is polling this endpoint. A vanished container shows up
 	// EITHER way — as a transport error, or as a non-zero exit code from the
 	// exec itself (128, 9 observed) — so both are re-asked the same question
-	// (GuestGoingAway). If the guest is going away there are no ports to
-	// report, and that is an answer rather than an internal error: the same
-	// shape the git endpoints use for a guest that is not there. A failure
-	// against the container we are STILL looking at, with no lifecycle change
-	// in flight, is a real one.
+	// (GuestGoingAway, which also waits out a stop still in flight). If the
+	// guest went away there are no ports to report, and that is an answer
+	// rather than an internal error: the same shape the git endpoints use for
+	// a guest that is not there. A failure against the container we are STILL
+	// looking at, once nothing is changing it, is a real one.
 	if err != nil || code != 0 {
 		if o.GuestGoingAway(ctx, user, project, st) {
 			return []Port{}, nil
@@ -124,12 +124,13 @@ func (o *Orchestrator) ListeningPorts(ctx context.Context, user, project string)
 // whether the project is no longer that running container (BUG-023). A
 // container being stopped is still reported running, with the same id, until
 // its PID 1 exits, and the exec the shutdown killed exits non-zero (9,
-// observed on Kata; BUG-088) — so when the answer is "still the same" while a
-// lifecycle change holds the project's lock, it waits for the lock to come
-// free and asks again. A stop or a mode toggle then reads stopped or
-// replaced; a change that leaves the guest as it was (an attach's no-op
-// EnsureRunning, the idle reaper's busy probe) reads the same, and the
-// failure stays the command's. Bounded by ctx: a request that gives up first
+// observed on Kata; BUG-088) — so while the answer is "still the same" and a
+// lifecycle change holds the project's lock, it keeps asking until the
+// guest is gone or the lock comes free. A stop or a mode toggle reads
+// stopped or replaced as soon as its container is down; a change that
+// leaves the guest as it was (an attach's no-op EnsureRunning, the idle
+// reaper's busy probe) reads the same when it lets go, and the failure stays
+// the command's. A held lock alone never answers the question. Bounded by ctx: a request that gives up first
 // gets false, and its caller reports the failure. Never call it while
 // holding the project's lock.
 func (o *Orchestrator) GuestGoingAway(ctx context.Context, user, project string, ran Status) bool {
@@ -137,19 +138,25 @@ func (o *Orchestrator) GuestGoingAway(ctx context.Context, user, project string,
 		now, err := o.Status(ctx, user, project)
 		return err == nil && (now.State != "running" || now.ContainerID != ran.ContainerID)
 	}
-	if gone() {
-		return true
-	}
 	l := o.lockProject(key(user, project))
-	for !l.TryLock() {
+	for {
+		if gone() {
+			return true
+		}
+		// Asked on every tick, not only once the lock is free: a mode
+		// toggle holds the lock through waitReady (up to 90 s), far longer
+		// than the page waits for a poll, while its container is already
+		// down after the first second or two (gate review, finding 1).
+		if l.TryLock() {
+			l.Unlock()
+			return gone()
+		}
 		select {
 		case <-ctx.Done():
 			return false
 		case <-time.After(lifecycleRecheck):
 		}
 	}
-	l.Unlock()
-	return gone()
 }
 
 // lifecycleRecheck is how often GuestGoingAway looks again for the end of a

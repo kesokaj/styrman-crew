@@ -44,6 +44,10 @@ func updaterScript(t *testing.T) string {
 func runUpdaterHook(t *testing.T, gated bool, args ...string) (int, string) {
 	t.Helper()
 	cmd := exec.Command("bash", append([]string{updaterScript(t)}, args...)...)
+	// A scratch working directory: a relative path a case hands the writer
+	// must never resolve into the checkout, refused or not (review-standards
+	// § 8; gate review of 5571b57..57179a4, finding 3).
+	cmd.Dir = t.TempDir()
 	cmd.Env = append(os.Environ(), "STYRMAN_UPDATE_STATUS_FILE=")
 	if gated {
 		cmd.Env = append(cmd.Env, "STYRMAN_UPDATE_TEST=1")
@@ -81,11 +85,23 @@ func readStatus(t *testing.T, path string) statusFile {
 	return st
 }
 
+// trustedTempDir is t.TempDir() made 0755: Go creates it 0777 less the
+// umask, which is group-writable under umask 002 (this host), and the writer
+// refuses any ancestor others can write without the sticky bit.
+func trustedTempDir(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	if err := os.Chmod(d, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
 // statusDir returns a directory that passes the updater's bar (the caller's,
 // 0755) and the status path inside it.
 func statusDir(t *testing.T) (dir, file string) {
 	t.Helper()
-	dir = filepath.Join(t.TempDir(), "status")
+	dir = filepath.Join(trustedTempDir(t), "status")
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +201,7 @@ func TestStyrmanUpdateStatusWriteCarriesSinceAcrossAFailingStreak(t *testing.T) 
 // tick's own exit status untouched (exit 0).
 func TestStyrmanUpdateStatusWriteDirectoryTrust(t *testing.T) {
 	// Missing, under a trusted parent: created 0755.
-	parent := t.TempDir()
+	parent := trustedTempDir(t)
 	if err := os.Chmod(parent, 0o755); err != nil { // t.TempDir is 0777 less the umask: 0775 under 002
 		t.Fatal(err)
 	}
@@ -213,7 +229,7 @@ func TestStyrmanUpdateStatusWriteDirectoryTrust(t *testing.T) {
 	}
 
 	// Missing, under a group-writable parent: not created.
-	loose := filepath.Join(t.TempDir(), "loose")
+	loose := filepath.Join(trustedTempDir(t), "loose")
 	if err := os.Mkdir(loose, 0o775); err != nil {
 		t.Fatal(err)
 	}
@@ -226,11 +242,11 @@ func TestStyrmanUpdateStatusWriteDirectoryTrust(t *testing.T) {
 	}
 
 	// A symlink where the directory should be.
-	real := filepath.Join(t.TempDir(), "elsewhere")
+	real := filepath.Join(trustedTempDir(t), "elsewhere")
 	if err := os.Mkdir(real, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	linkParent := t.TempDir()
+	linkParent := trustedTempDir(t)
 	if err := os.Symlink(real, filepath.Join(linkParent, "status")); err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +256,7 @@ func TestStyrmanUpdateStatusWriteDirectoryTrust(t *testing.T) {
 	}
 
 	// A group-writable directory.
-	gw := filepath.Join(t.TempDir(), "status")
+	gw := filepath.Join(trustedTempDir(t), "status")
 	if err := os.Mkdir(gw, 0o775); err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +378,7 @@ func TestStyrmanUpdateStatusPathIsPinnedInTheUnitOnly(t *testing.T) {
 		t.Error("the script must take the status path from the environment with no default")
 	}
 	// Unset, a tick-shaped exit writes nothing anywhere.
-	dir := t.TempDir()
+	dir := trustedTempDir(t)
 	cmd := exec.Command("bash", "-c", `STATUS_ARMED=1; source <(sed -n '/^log()/,/^# ALWAYS clear inherited/p' "$1"); TRUST_UID=$(id -u); on_exit`, "_", updaterScript(t))
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "STYRMAN_UPDATE_STATUS_FILE=")
@@ -430,14 +446,14 @@ func TestStyrmanUpdateStatusEarlyRefusalWritesNothing(t *testing.T) {
 // a relative path, a `..`, or a symlink ANYWHERE above the directory is
 // refused, with nothing written through it and the tick's status untouched.
 func TestStyrmanUpdateStatusWriteRefusesANonCanonicalPath(t *testing.T) {
-	realParent := t.TempDir()
+	realParent := trustedTempDir(t)
 	if err := os.Chmod(realParent, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(realParent, "status"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	linkRoot := t.TempDir()
+	linkRoot := trustedTempDir(t)
 	if err := os.Symlink(realParent, filepath.Join(linkRoot, "etc")); err != nil {
 		t.Fatal(err)
 	}
@@ -454,4 +470,44 @@ func TestStyrmanUpdateStatusWriteRefusesANonCanonicalPath(t *testing.T) {
 	if entries, _ := os.ReadDir(filepath.Join(realParent, "status")); len(entries) != 0 {
 		t.Errorf("a status was written through a non-canonical path: %v", entries)
 	}
+}
+
+// Every directory ABOVE the status directory, from / down (gate security
+// review of 5571b57..57179a4, finding 1): a canonical path is still a
+// check-time snapshot if someone else can rename a directory on it. An
+// ancestor anyone may write — without the sticky bit that keeps them from
+// renaming entries they do not own — is refused; a sticky one (/tmp, which
+// every case here lives under) is not.
+func TestStyrmanUpdateStatusWriteRefusesAWritableAncestor(t *testing.T) {
+	loose := filepath.Join(trustedTempDir(t), "loose")
+	if err := os.Mkdir(loose, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(loose, 0o777); err != nil { // past the umask
+		t.Fatal(err)
+	}
+	mid := filepath.Join(loose, "mid")
+	if err := os.Mkdir(mid, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(mid, "status"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(mid, "status", "updater.json")
+	code, out := runUpdaterHook(t, true, "__write-status", file, "ok", "ok", "", "")
+	if code != 0 || !strings.Contains(out, "WARN: status not written") {
+		t.Fatalf("want a WARN and exit 0 below a world-writable ancestor, got %d %q", code, out)
+	}
+	if _, err := os.Lstat(file); err == nil {
+		t.Fatal("a status was written below a world-writable, non-sticky ancestor")
+	}
+
+	// The same tree with the sticky bit on that ancestor is accepted.
+	if err := os.Chmod(loose, 0o777|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := runUpdaterHook(t, true, "__write-status", file, "ok", "ok", "", ""); code != 0 || strings.Contains(out, "WARN") {
+		t.Fatalf("a sticky ancestor must be accepted, got %d %q", code, out)
+	}
+	readStatus(t, file)
 }

@@ -43,7 +43,7 @@ func scanWhileLocked(t *testing.T, change func(fd *fakeDocker)) portsResult {
 		p, err := o.ListeningPorts(ctx, tUser, tProj)
 		done <- portsResult{p, err}
 	}()
-	time.Sleep(3 * lifecycleRecheck) // the scan has failed and is waiting on the lock
+	waitInTheLoop(t, fd)
 	select {
 	case r := <-done:
 		l.Unlock()
@@ -59,6 +59,21 @@ func scanWhileLocked(t *testing.T, change func(fd *fakeDocker)) portsResult {
 		t.Fatal("ListeningPorts did not answer after the lock was released")
 	}
 	return portsResult{}
+}
+
+// waitInTheLoop returns once the scan's exec has failed and GuestGoingAway
+// has asked Docker at least twice: the first look, and one from the wait —
+// proof the scan is waiting, not merely scheduled (a fixed sleep could pass
+// without the wait ever running, under load).
+func waitInTheLoop(t *testing.T, fd *fakeDocker) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for fd.callsTo("ContainerExecInspect") < 1 || fd.callsTo("ContainerInspect") < 3 {
+		if time.Now().After(deadline) {
+			t.Fatal("the scan never reached GuestGoingAway's wait")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func setContainer(fd *fakeDocker, fn func(c *fakeContainer)) {
@@ -130,5 +145,37 @@ func TestListeningPortsWaitIsBoundedByTheRequest(t *testing.T) {
 	}
 	if d := time.Since(start); d > 2*time.Second {
 		t.Fatalf("the wait outlived its request by far: %v", d)
+	}
+}
+
+// A mode toggle holds the lock through stop, recreate and waitReady (up to
+// 90 s), longer than the page waits for a poll. The wait looks at the guest
+// on every tick, so a scan killed by the stop answers as soon as the
+// container is down — not when the lock comes free (gate review of
+// 5571b57..57179a4, finding 1).
+func TestListeningPortsAnswersAsSoonAsTheGuestIsGone(t *testing.T) {
+	o, fd, cfg := seamOrch(t)
+	plant(fd, cfg, true, false)
+	fd.execExit = 9
+
+	l := o.lockProject(key(tUser, tProj))
+	l.Lock()
+	defer l.Unlock() // held for the whole test: the toggle is still running
+	done := make(chan portsResult, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() {
+		p, err := o.ListeningPorts(ctx, tUser, tProj)
+		done <- portsResult{p, err}
+	}()
+	waitInTheLoop(t, fd)
+	setContainer(fd, func(c *fakeContainer) { c.running = false })
+	select {
+	case r := <-done:
+		if r.err != nil || r.ports == nil || len(r.ports) != 0 {
+			t.Fatalf("want no ports once the container is down, got %#v %v", r.ports, r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the scan kept waiting on the lock after the container was already down")
 	}
 }

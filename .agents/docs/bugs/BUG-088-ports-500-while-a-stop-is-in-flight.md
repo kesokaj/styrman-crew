@@ -74,6 +74,21 @@ means gone" logic put back, four of the five fail; all pass with `-race`.
 `internal/httpapi/browser_goingaway_test.go`
 `TestBrowserStatusDuringALifecycleChangeIsNotRunning` covers the browser site.
 
+Third step (release gate): the code review
+(`reviews/2026-10-02-review-5571b57-57179a4-code.md`, finding 1, low) found
+that the revised wait checked only the lock. A mode toggle holds the lock
+through stop, recreate and `waitReady` (up to 90 s), longer than the page waits
+for a poll, so the poll could still end in the 500. Now `GuestGoingAway` asks
+Docker on every 100 ms tick while it waits. It answers "going away" as soon as
+the container is down or replaced, and only asks once more after the lock comes
+free if it is still the same running container.
+New test `TestListeningPortsAnswersAsSoonAsTheGuestIsGone`: the lock is held
+for the whole test, the container stops, and the scan must answer. It failed
+against the previous loop with "the scan never reached GuestGoingAway's wait"
+(the old loop never asked again). The tests now wait on the fake Docker
+client's recorded calls, not a fixed sleep. `ports_lifecycle_test.go` has six
+tests.
+
 ## Prevention
 A held lock says that something is in flight, not WHAT it is. Wait for it and
 ask again (is it still the same running container?), and list every holder of

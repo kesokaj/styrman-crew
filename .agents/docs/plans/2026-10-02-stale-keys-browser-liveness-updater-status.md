@@ -36,7 +36,7 @@ Out:
 - Replacing this host's updater token (BUG-084): the operator's step, unchanged.
 - The setup pane's reconnect behaviour.
 
-Follow-ups noted, not built: none.
+Follow-ups noted, not built: `Config.IngressNetwork` (`internal/config/config.go:155-160,195`) is read from `STYRMAN_INGRESS_NETWORK` and used by nothing since ADR-067, and its comment still describes the deleted cross-check: remove both — found in: the release gate's docs lens (`reviews/2026-10-02-review-5571b57-57179a4-docs.md`).
 
 ## Surfaces touched
 Recon: `plans/2026-10-02-recon-updater-status.md`.

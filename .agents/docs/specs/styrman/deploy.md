@@ -493,12 +493,15 @@ disabled for exactly this reason.
   `STYRMAN_UPDATE_STATUS_FILE` to it (the script has no default: unset, it
   writes nothing) and the updater writes one JSON line at the end of every
   real tick (keys and codes: `versioning.md`'s auto-updater section).
-  `/etc/styrman/status` must be a real directory owned by root, not
-  group/world-writable; the updater creates it (0755) when missing and its
-  parent passes the same check. The status file's path must also be
-  absolute and canonical, with no symlink, `..` or `//` anywhere on it,
-  like the state dir's; otherwise it logs `WARN: status not
-  written: …` and the tick's own result is unchanged. `--check` and a tick
+  The status file's path must be absolute and canonical: no symlink, `..`
+  or `//` anywhere on it. Every directory above the status directory, from
+  `/` down, must be a real directory owned by root (or by the updater's own
+  uid) that no one else can write; a directory others can write is accepted
+  only with the sticky bit, which stops them renaming entries they do not
+  own. `/etc/styrman/status` itself must be a real directory owned by root,
+  not group/world-writable; the updater creates it (0755) when missing and
+  its parent passes the same check. Otherwise it logs `WARN: status not
+  written: …`, writes nothing, and the tick's own result is unchanged. `--check` and a tick
   that found the lock busy or refused before taking it write nothing.
   `styrman-ctl`'s hand runs (`update --setup`'s `--check`,
   `update --redeploy`'s `--force`) pass

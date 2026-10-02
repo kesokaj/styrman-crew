@@ -60,9 +60,10 @@ type fakeGuest struct {
 	calls     [][]string
 	// reply decides each exec's result. nil means "exit 0, empty output".
 	reply func(cmd []string) (int, string, error)
-	// goingAway is what GuestGoingAway reports for a RUNNING project: a
-	// lifecycle change in flight (BUG-088). A non-running state is "going
-	// away" whatever it says, as in the real orchestrator.
+	// goingAway is what GuestGoingAway reports for a RUNNING project: the
+	// real one's answer after it waited out a stop or rebuild in flight
+	// (BUG-088). A non-running state is "going away" whatever it says, as in
+	// the real orchestrator.
 	goingAway bool
 	// statusFor records the (user, project) each Status call was asked about,
 	// so a handler that looks up the WRONG tenant can be caught. The real

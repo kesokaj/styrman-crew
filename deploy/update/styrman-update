@@ -98,6 +98,27 @@ status_dir_ok() {
         && [ -z "$(find "$1" -maxdepth 0 -perm /022 2>/dev/null)" ]
 }
 
+# status_ancestors_ok <dir> — every directory from / down to <dir> is a real
+# directory owned by root or TRUST_UID that no one else can write, or — if
+# others can — has the sticky bit, so they cannot rename entries they do not
+# own (/tmp). A canonical path alone is a check-time snapshot: anyone who can
+# rename a directory on it can swap the path under the write (gate security
+# review of 5571b57..57179a4, finding 1).
+status_ancestors_ok() {
+    local p="" c owner parts
+    IFS='/' read -ra parts <<< "${1#/}"
+    for c in "" "${parts[@]}"; do
+        p="${p%/}/${c}"
+        [ -d "${p}" ] && [ ! -L "${p}" ] || return 1
+        owner="$(stat -c %u "${p}")"
+        [ "${owner}" = 0 ] || [ "${owner}" = "${TRUST_UID}" ] || return 1
+        if [ -n "$(find "${p}" -maxdepth 0 -perm /022 2>/dev/null)" ] \
+            && [ -z "$(find "${p}" -maxdepth 0 -perm -1000 2>/dev/null)" ]; then
+            return 1
+        fi
+    done
+}
+
 # write_status <result> <code> — never fails the tick: every refusal is one
 # WARN and a return 0.
 write_status() {
@@ -111,10 +132,11 @@ write_status() {
     if [ "$(basename -- "${STATUS_FILE}")" != "updater.json" ]; then
         log "WARN: status not written: ${STATUS_FILE} is not named updater.json"; return 0
     fi
-    # Absolute and canonical, like the state dir below: a relative path, a
-    # `..`, a `//` or a symlink anywhere on the way is refused, so the checks
-    # that follow are about the directory the write really lands in
-    # (security review of v1.40.0..5571b57, finding 2).
+    # Absolute and canonical: a relative path, a `..`, a `//` or a symlink
+    # anywhere on the way is refused, so the checks that follow are about the
+    # directory the write really lands in (security review of
+    # v1.40.0..5571b57, finding 2). Then every directory above it
+    # (status_ancestors_ok), then the directory itself (status_dir_ok).
     case "${STATUS_FILE}" in
         /*) ;;
         *) log "WARN: status not written: ${STATUS_FILE} is not an absolute path"; return 0 ;;
@@ -123,6 +145,9 @@ write_status() {
         log "WARN: status not written: ${STATUS_FILE} is not canonical (a symlink, .. or // on its path)"; return 0
     fi
     dir="$(dirname -- "${STATUS_FILE}")"
+    if ! status_ancestors_ok "$(dirname -- "${dir}")"; then
+        log "WARN: status not written: a directory above ${dir} is a symlink, not root's or the updater's, or writable by others without the sticky bit"; return 0
+    fi
     if [ ! -e "${dir}" ] && [ ! -L "${dir}" ]; then
         # Created only under a parent that meets the same bar; mkdir, so the
         # owner is the caller (TRUST_UID on a real tick and in the hooks).

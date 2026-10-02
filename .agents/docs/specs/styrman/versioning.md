@@ -352,12 +352,16 @@ version:
 
   `--check` never writes a status; nor does a tick that found the lock busy
   or refused before taking it (not root, a bad state dir) — the previous
-  file stays. `/etc/styrman/status` must be a real directory owned by root,
-  not group/world-writable; the updater creates it (0755) when missing and
-  its parent passes the same check. The status file's path must also be
-  absolute and canonical, with no symlink, `..` or `//` anywhere on it,
-  like the state dir's. Otherwise it logs
-  `WARN: status not written: …` and the tick's own result is unchanged.
+  file stays. The status file's path must be absolute and canonical: no
+  symlink, `..` or `//` anywhere on it. Every directory above the status
+  directory, from `/` down, must be a real directory owned by root (or by
+  the updater's own uid) that no one else can write; a directory others can
+  write is accepted only with the sticky bit, which stops them renaming
+  entries they do not own. `/etc/styrman/status` itself must be a real
+  directory owned by root, not group/world-writable; the updater creates it
+  (0755) when missing and its parent passes the same check. Otherwise it
+  logs `WARN: status not written: …`, writes nothing, and the tick's own
+  result is unchanged.
   The server reads the file (read-only mount) and shows admins in
   Settings; see `deploy.md`. The first status appears one tick (about 5
   minutes) after a host takes this release: the tick that deploys it runs
