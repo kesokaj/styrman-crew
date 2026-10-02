@@ -58,8 +58,9 @@ disk (about USD 20/month). Stop it when idle.
      install, never prompted for; from v1.39.0 until the release after it a
      token here was dropped silently).
      When `CLOUDFLARE_API_TOKEN` is unset, the ingress uses HTTP-01 ACME
-     challenges (works for non-wildcard hostnames) and DNS records must be
-     created manually (e.g. in Cloud DNS — see "Create DNS records" below).
+     challenges (covers the base app and the auth portal only; the wildcard
+     preview/private-link hostnames need DNS-01 and get no certificate) and
+     DNS records must be created manually (e.g. in Cloud DNS — see "Create DNS records" below).
      **Use a separate OAuth client and a
      separate Cloudflare token for this host**, the token scoped to the zone
      it actually needs. Copying the production host's credentials works —
@@ -75,7 +76,11 @@ disk (about USD 20/month). Stop it when idle.
      (the runtime image's `sh-agent` download, ADR-074). The NUC's
      `/etc/styrman/gh-token` is such a token.
    - `allowed_signers`: one line, `<git email> <key type> <public key>` of
-     the release signer (the NUC's `/etc/styrman/allowed_signers`).
+     the release signer (the NUC's `/etc/styrman/allowed_signers`). The VM's
+     list holds two keys: the original release signer (`SHA256:5HpYQJjpG+…`)
+     and the second SSH key that signed the v1.39.0 tag (`SHA256:XeeDl8Y8…`,
+     "the Mac key"); see `.agents/docs/handoffs/2026-09-22-vertex-ai-and-final.md`.
+     An updater refuses a tag signed by a key its host does not list.
 3. On the Google OAuth client (console → APIs & Services → Credentials),
    add the redirect URI
    `https://auth.<BASE_DOMAIN>/oauth2/google/authorization-code-callback`.

@@ -346,6 +346,13 @@ export function TerminalPane({
       clearTimeout(reconnectTimer);
       reconnectTimer = undefined;
       dropSocket();
+      // Coming back from a pane that had given up: whatever was queued while
+      // it was still reconnecting is stale now — the wake may come hours
+      // later — and must not be typed into the shell behind the user's back
+      // (security review 2026-10-02). A reconnect from a state that had NOT
+      // given up (a dead socket just noticed, a backoff cut short) keeps the
+      // queue: those keys are seconds old and the user is waiting on them.
+      if (closedForGood) outbox.length = 0;
       closedForGood = false;
       resumable = "no";
       retries = 0;

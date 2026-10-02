@@ -413,9 +413,12 @@ cat <<NEXT
     0. LOG OUT AND BACK IN first (or run \`newgrp docker\`) — the docker
        group this script just added you to is NOT active in this shell,
        and every docker command below fails without it.
-    1. Edit ${SCRIPT_DIR}/.env — fill GOOGLE_CLIENT_ID/SECRET, CLOUDFLARE_API_TOKEN,
+    1. Edit ${SCRIPT_DIR}/.env — fill GOOGLE_CLIENT_ID/SECRET,
        STYRMAN_ALLOWED_EMAILS, BASE_DOMAIN, ADMIN_EMAIL. (Identity + secrets
        like STYRMAN_INGRESS_TOKEN / STYRMAN_JWT_KEY are already generated.)
+       CLOUDFLARE_API_TOKEN is optional: without it certificates come over
+       HTTP-01, DNS records are yours to manage, and the WILDCARD hostnames
+       (public preview and private share links) get no certificate.
     2. Deploy at the release version (NO v prefix, NO mutable tags — the same
        string names all three images; see .agents/docs/specs/styrman/versioning.md):
          cd ${SCRIPT_DIR} \\

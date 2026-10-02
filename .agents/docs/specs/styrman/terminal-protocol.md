@@ -167,6 +167,14 @@ reconnects once it has been open.
   reconnect a pane that is "Disconnected" (its 8 retries used up, or a
   non-transient close) or waiting out a reconnect backoff. The 25 s interval
   never does.
+- **Typed-while-down queue.** Keystrokes typed while a pane is reconnecting
+  are queued (at most 256 entries) and sent when the reconnect lands. A pane
+  that had GIVEN UP ("Disconnected") and is brought back by a wake event
+  (tab shown, network back) drops that queue instead of sending it: the wake
+  may come hours later, and replaying stale keys into a live shell is unsafe
+  (security review 2026-10-02). A reconnect from a state that had not given
+  up (a dead socket just noticed by the liveness probe, a backoff cut short
+  by a wake) keeps the queue.
 - **4001.** Only the **Use here** button and a hidden → visible transition
   take the terminal back; `online` and the interval do not. With two pages
   both visible, the second holds the terminal and the first shows the button.

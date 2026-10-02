@@ -12,7 +12,7 @@ Production is one self-hosted Debian 13 host (baremetal on the operator's networ
 | Item | Value |
 |---|---|
 | Host | operator's Debian 13 box (`deploy/host-setup.sh` converges it, R11) |
-| Services | vendored Caddy ingress (Google OAuth, TLS via Cloudflare DNS or HTTP-01 ACME) + containerized server (`deploy/Dockerfile.server`) via `deploy/docker-compose.yml` |
+| Services | vendored Caddy ingress (Google OAuth, TLS via Cloudflare DNS, or HTTP-01 ACME without `CLOUDFLARE_API_TOKEN` — HTTP-01 covers the base app and auth portal only; the wildcard preview/private-link hostnames need DNS-01 and get no certificate) + containerized server (`deploy/Dockerfile.server`) via `deploy/docker-compose.yml` |
 | Secrets | `deploy/.env` on the host only |
 
 The host is provisioned and operated with `sudo deploy/styrman-ctl`

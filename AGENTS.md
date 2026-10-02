@@ -167,7 +167,7 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
 
 ## Deploy
 
-Three targets exist: local (loopback dev run), the production host (the operator's NUC, `crew.styrman.xyz`), and a disposable GCP Compute Engine VM (`daring-lioness-uwgw`, `crew.spgo.demo.altostrat.com`, 300GB Hyperdisk Balanced) running the same host path (`deploy/gcp/vm.sh`, `deploy/gcp/install.sh`, ADR-075). `CLOUDFLARE_API_TOKEN` is optional on both remote targets (HTTP-01 ACME challenge fallback). Procedures live in `.agents/docs/deploy/` — `local.md`, `remote.md` (points at `deploy/README.md`, `specs/styrman/deploy.md`, and `versioning.md`), `gcp.md` (the GCP target's defaults, prerequisites and procedure). `/preflight` deploys only by these guides.
+Three targets exist: local (loopback dev run), the production host (the operator's NUC, `crew.styrman.xyz`), and a disposable GCP Compute Engine VM (`daring-lioness-uwgw`, `crew.spgo.demo.altostrat.com`, 300GB Hyperdisk Balanced) running the same host path (`deploy/gcp/vm.sh`, `deploy/gcp/install.sh`, ADR-075). `CLOUDFLARE_API_TOKEN` is optional on both remote targets (HTTP-01 ACME challenge fallback, which covers the base app and auth portal only; the wildcard preview/private-link hostnames need DNS-01 and get no certificate). Procedures live in `.agents/docs/deploy/` — `local.md`, `remote.md` (points at `deploy/README.md`, `specs/styrman/deploy.md`, and `versioning.md`), `gcp.md` (the GCP target's defaults, prerequisites and procedure). `/preflight` deploys only by these guides.
 
 ## Key Files
 

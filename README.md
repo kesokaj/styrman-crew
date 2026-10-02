@@ -114,7 +114,7 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.39.0**, deployed: https://crew.spgo.demo.altostrat.com (GCP) and https://crew.styrman.xyz (NUC) (Google sign-in).
+**v1.39.0**, deployed on the GCP VM: https://crew.spgo.demo.altostrat.com (Google sign-in). The NUC (https://crew.styrman.xyz) did not take v1.39.0: on 2026-10-02 it still ran `styrman-server:1.38.0` and `styrman-caddy:1.38.0`, because its `styrman-update.service` failed on every tick — `/etc/styrman/gh-token` is rejected by GitHub (BUG-084, open: the operator installs a fresh token that reads both `kesokaj/styrman-crew` and `kesokaj/styrman-harness`).
 
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
@@ -298,8 +298,9 @@ sudo bash deploy/host-setup.sh --user $USER
 #    group added in step 1 is not active in your current shell yet.
 
 # Production (Google OAuth, HTTPS, reboot-safe) — no mutable tags. Fill the
-# OAuth/domain values first (CLOUDFLARE_API_TOKEN is optional; HTTP-01 ACME
-# challenge fallback):
+# OAuth/domain values first (CLOUDFLARE_API_TOKEN is optional: without it Caddy
+# uses HTTP-01, which covers the base app and auth portal only — the wildcard
+# preview/private-link hostnames need DNS-01 and get no certificate):
 vi deploy/.env
 # The version derivation + build/deploy commands live in ONE place, not
 # restated here — versioning.md's "Release procedure" (commit, verify the

@@ -3,8 +3,10 @@ package ingress
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -352,6 +354,24 @@ func (w *Watcher) reloadCaddy(ctx context.Context, caddyfile string) error {
 		return fmt.Errorf("caddy reload failed with status %d", resp.StatusCode)
 	}
 
+	// A 200 is not proof of a load (BUG-087, the 2026-10-02 outage). When the
+	// Caddyfile adapts with WARNINGS, caddy writes them to the response
+	// before it loads anything (caddyconfig/load.go, handleLoad) — that sends
+	// the 200 — and a load that then fails can only say so in the body, as
+	// its {"error": …} object. At boot, with no network for the OIDC
+	// metadata fetch, exactly that happened: this function logged success,
+	// the Caddyfile was latched as applied, every later scan said
+	// "unchanged", and caddy sat on its admin-only config for six hours.
+	// Returned as a plain error, not errAdminUnreachable: the admin answered,
+	// and the in-process retry (noteReloadFailure) is what heals it.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("caddy reload: reading the admin API's response: %v", err)
+	}
+	if msg := loadError(body); msg != "" {
+		return fmt.Errorf("caddy reported a failed load behind status 200: %s", msg)
+	}
+
 	w.log.Info("caddy reloaded successfully")
 	return nil
 }
@@ -412,4 +432,26 @@ func containerName(c types.Container) string {
 		return strings.TrimLeft(c.Names[0], "/")
 	}
 	return c.ID[:12]
+}
+
+// loadError returns caddy's own error message when the body of a /load
+// response carries one, "" otherwise. The body is a sequence of JSON values:
+// the adapter's warnings array when there were any, then — only on failure —
+// caddy's APIError object, {"error": "…"}. Only that object means failure:
+// an empty body, warnings alone, any other value and an undecodable tail are
+// all a load caddy did not report as failed (treating them as failures would
+// re-load caddy on every retry tick forever).
+func loadError(body []byte) string {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	for {
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			return ""
+		}
+		if obj, ok := v.(map[string]any); ok {
+			if msg, ok := obj["error"].(string); ok && msg != "" {
+				return msg
+			}
+		}
+	}
 }

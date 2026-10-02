@@ -278,7 +278,12 @@ version:
   recently pushed).
 - Every tag must be **SSH-signed** and verified against a root-owned
   `/etc/styrman/allowed_signers` allowlist — a PGP-signed tag is refused
-  outright, not merely unpinned (ADR-051).
+  outright, not merely unpinned (ADR-051). The keys a host trusts are exactly
+  the ones in its `allowed_signers`; an updater refuses a tag signed by a key
+  its host does not list. The v1.39.0 tag was signed with a second SSH key
+  (`SHA256:XeeDl8Y8…`), not the original release signer (`SHA256:5HpYQJjpG+…`);
+  the GCP VM lists both, and whether the NUC lists the second is not
+  established.
 - It runs against a dedicated clone at `/opt/styrman`, never the operator's
   own working tree, so an automatic `git checkout <tag>` can never stomp
   in-progress work.

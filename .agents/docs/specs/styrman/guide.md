@@ -469,7 +469,9 @@ STYRMAN_IMAGE=styrman-runtime:dev go run ./cmd/styrman/   # → http://127.0.0.1
 # Production (Google OAuth + HTTPS + reboot-safe; needs neither Go nor Node):
 vi deploy/.env    # BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET, ADMIN_EMAIL,
                   # STYRMAN_ALLOWED_EMAILS (plus optional CLOUDFLARE_API_TOKEN;
-                  # HTTP-01 ACME challenge used when omitted), STYRMAN_HOSTNAME
+                  # HTTP-01 ACME used when omitted — base app + auth portal
+                  # only; wildcard preview/private-link hosts need DNS-01 and
+                  # get no certificate), STYRMAN_HOSTNAME
                   # (default styrman; the live deploy uses crew) (redirect URI:
                   # https://auth.<domain>/oauth2/google/authorization-code-callback)
 # The version derivation + build/deploy commands are NOT restated here — see
@@ -480,7 +482,7 @@ vi deploy/.env    # BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET, ADMIN_EMAIL,
 # the version with `git describe --tags --always` — versioning.md explains
 # why that command's SHA-suffixed fallback breaks the no-mutable-tags rule
 # (ADR-053).
-# Certs + DNS records are automatic with Cloudflare, or manual DNS + HTTP-01 ACME → https://<STYRMAN_HOSTNAME>.<domain>
+# Certs + DNS records are automatic with Cloudflare, or manual DNS + HTTP-01 ACME (base app + auth portal only; no wildcard certs) → https://<STYRMAN_HOSTNAME>.<domain>
 ```
 
 `host-setup.sh` installs a pinned Docker CE version and Kata release with a
@@ -688,6 +690,7 @@ re-import it.
 | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `invalid namespace type` starting any microVM         | Docker ≥29.5 time-namespaces vs Kata ≤3.31 — host-setup sets the daemon.json feature flag (ADR-009).                                                                                                                                                                                         |
 | Site unreachable but server fine                      | Check DNS first — a "newly registered domain" blocklist (NextDNS et al.) sinkholed styrman.xyz once (`dig` for 0.0.0.0 answers).                                                                                                                                                             |
+| Site unreachable after a host reboot (nothing on 443) | `ss -ltn` shows no `:443` and `curl -s http://127.0.0.1:2019/config/` prints only the `admin` block: Caddy's load failed at boot (no network yet for the OIDC metadata fetch). The ingress watcher now reads `/load`'s response body, treats caddy's `{"error": …}` object as a failed load whatever the status, and retries every 15 s. On a host not yet running that release, `docker restart styrman-caddy` once the network is up. |
 | dockerd inside a project uses `vfs`                   | Loop mount of `~/.dockerd/<uuid>.img` failed; see container logs (ADR-008 fallback).                                                                                                                                                                                                         |
 | agy/claude ask to sign in despite a synced credential | A tool's TOKEN can sync while its per-project CLIENT STATE doesn't (e.g. claude's `hasCompletedOnboarding` — fixed for new logins since v1.5.6). If it's an OLDER project VM, recreate it to pick up a runtime-image fix; a running container keeps the rootfs it booted with until stopped. |
 | `git commit` in a terminal fails "who are you"        | The user's git identity hasn't reached the broker yet — rerun `styrman-setup` (or `Settings → Credentials → Import`) so `STYRMAN_GIT_NAME`/`STYRMAN_GIT_EMAIL` get harvested, then open a fresh login shell (v1.7.1).                                                                        |

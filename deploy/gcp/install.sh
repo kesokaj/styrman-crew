@@ -2,7 +2,7 @@
 # deploy/gcp/install.sh — install styrman on the VM deploy/gcp/vm.sh created,
 # by the SAME path the NUC uses: clone this repo at a release tag on the VM,
 # stage the three secret files there, run `styrman-ctl install --yes …`
-# (host-setup.sh, the six .env keys, runtime image, stack, auto-updater),
+# (host-setup.sh, the five must-fill .env keys, runtime image, stack, auto-updater),
 # verify, and remove the staged secrets. Plan
 # .agents/docs/plans/2026-09-21-gcp-compute-engine-target.md, ADR-075.
 #

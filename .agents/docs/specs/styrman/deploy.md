@@ -143,6 +143,23 @@ listed in the compose file's default environment block.
 Both containers are `restart: unless-stopped`: a host reboot brings the whole
 stack back via docker.service — no systemd units needed.
 
+**Ingress reload and a failed load at boot.** Caddy's `/load` adapts the
+Caddyfile first and, when the adapter has warnings, writes them to the response
+before loading — which sends a 200; a load that then fails (at boot: no network
+yet for the OIDC metadata fetch) can only say so in the response BODY, as an
+`{"error": …}` object. On 2026-10-02 `crew.styrman.xyz` was down about six
+hours after a host boot: the watcher checked the status alone, logged "caddy
+reloaded successfully", recorded the Caddyfile as applied, and every later
+scan said "caddyfile unchanged, skipping reload", so Caddy sat on its
+admin-only config with nothing listening on 80/443. `reloadCaddy`
+(`deploy/caddy/ingress/watcher.go`) now reads the response body and treats
+caddy's error object as a failed load whatever the status; a failed load is
+retried every 15 s (the retry the 2026-09-01 fix introduced for a 400).
+Diagnosis from the host: `ss -ltn` shows no `:443`, and
+`curl -s http://127.0.0.1:2019/config/` prints only the `admin` block. Until a
+host runs the release with this fix (the release after v1.39.0),
+`docker restart styrman-caddy` brings the ingress back once the network is up.
+
 ### Public preview links (optional, ADR-025)
 
 Set `STYRMAN_PUBLIC_DOMAIN` (e.g. `public.crew.${BASE_DOMAIN}`) in
@@ -152,7 +169,10 @@ sides of the stack:
   service, `deploy/docker-compose.yml`): adds a `*.PREVIEW_DOMAIN`
   `ModePublic` wildcard site block (no OAuth — the link token is the
   credential), a wildcard DNS A record (`EnsureDNS`), and an auto-issued
-  wildcard TLS cert. The `styrman-server` container is the wildcard's target
+  wildcard TLS cert — the DNS record and cert only with `CLOUDFLARE_API_TOKEN`
+  set (DNS-01); without it the wildcard host gets no certificate and no DNS
+  record is managed for you
+  (`deploy/caddy/ingress/generator.go:25-30`, `deploy/.env.example:30-36`). The `styrman-server` container is the wildcard's target
   via its `caddy_preview_target: 'true'` label.
 - **Server** (`STYRMAN_PREVIEW_BASE=${STYRMAN_PUBLIC_DOMAIN}`): each minted
   link is served at its own origin, `https://<token>.<PREVIEW_DOMAIN>/`, via
@@ -175,7 +195,8 @@ per-port email shares on their own subdomains too. Same two-sided wiring:
   (`writePrivateWildcard` reuses the server app's authorization policy — the
   JWT cookie is domain-scoped, so an existing session works), injects the
   verified identity headers + the ingress token, preserves Host, plus the
-  wildcard DNS record and cert.
+  wildcard DNS record and cert (both need `CLOUDFLARE_API_TOKEN`/DNS-01;
+  without it the wildcard host gets no certificate and no DNS record).
 - **Server** (`STYRMAN_PRIVATE_BASE=${STYRMAN_PRIVATE_DOMAIN}`): sharing a
   port mints a stable private link served at
   `https://<token>.<PRIVATE_DOMAIN>/` via the same host rewrite →
@@ -196,7 +217,7 @@ Prerequisites: a Google OAuth client (console.cloud.google.com → APIs &
 Services → Credentials): Web application, redirect URI
 `https://auth.<BASE_DOMAIN>/oauth2/google/authorization-code-callback`;
 and an optional Cloudflare API token scoped Zone:DNS:Edit on the zone (when
-omitted, Caddy uses HTTP-01 ACME challenges and DNS records are created manually).
+omitted, Caddy uses HTTP-01 ACME challenges, which cover the base app and the auth portal only; the wildcard preview/private-link hostnames need DNS-01 and get no certificate, and DNS records are created manually).
 
 ```bash
 # host-setup.sh's step 7 builds the runtime image, which downloads the sh-agent

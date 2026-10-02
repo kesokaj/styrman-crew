@@ -1204,61 +1204,115 @@ try {
     }
   });
 
-  await check("a terminal whose socket went silent works again once its tab is shown", async () => {
-    // A THROWAWAY page on terminal 2 carries the fixture; the first page is
-    // not touched. The init script wraps window.WebSocket so one socket
-    // instance can be FROZEN: its sends are dropped and its message and close
-    // events withheld, while readyState stays OPEN — what a page sees of a
-    // connection that died without a close. The app sets its handlers through
-    // the on* properties, so those setters are what the wrapper intercepts.
-    const third = await context.newPage();
-    try {
-      await third.addInitScript(() => {
-        const Real = window.WebSocket;
-        const all = [];
-        class FreezableSocket extends Real {
-          constructor(...args) {
-            super(...args);
-            this.__frozen = false;
-            this.__texts = [];
-            all.push(this);
+  // The socket fixture of the two checks below, installed on a THROWAWAY page
+  // before its first navigation. It wraps window.WebSocket so one socket
+  // instance can be driven from the test:
+  //   __frozen       its sends are dropped and its open/message/close events
+  //                  withheld while readyState stays OPEN — what a page sees of
+  //                  a connection that died without a close;
+  //   __dropNow(c)   the app's close handler is called with code c, as a
+  //                  transient or a final close would;
+  //   window.__failNextTermSocket = c   the NEXT terminal socket the page
+  //                  opens is closed with code c before it ever opens.
+  // The app sets its handlers through the on* properties, so those setters
+  // are what the wrapper intercepts. The suite's first page never carries it.
+  const installSocketFixture = (p) =>
+    p.addInitScript(() => {
+      const Real = window.WebSocket;
+      const all = [];
+      class FreezableSocket extends Real {
+        constructor(...args) {
+          super(...args);
+          this.__frozen = false;
+          this.__texts = [];
+          this.__failCode = 0;
+          if (window.__failNextTermSocket && String(args[0]).includes("/ws/term/")) {
+            this.__failCode = window.__failNextTermSocket;
+            window.__failNextTermSocket = 0;
+            this.__frozen = true;
           }
-          send(data) {
-            if (this.__frozen) return;
-            super.send(data);
+          all.push(this);
+        }
+        send(data) {
+          if (this.__frozen) return;
+          super.send(data);
+        }
+        __dropNow(code) {
+          this.__frozen = true;
+          try {
+            super.close();
+          } catch {
+            // already closing
           }
-          get onmessage() {
-            return super.onmessage;
-          }
-          set onmessage(fn) {
-            super.onmessage =
-              fn &&
-              ((ev) => {
-                if (this.__frozen) return;
-                if (typeof ev.data === "string") this.__texts.push(ev.data);
-                fn.call(this, ev);
-              });
-          }
-          get onclose() {
-            return super.onclose;
-          }
-          set onclose(fn) {
-            super.onclose =
-              fn &&
-              ((ev) => {
-                if (!this.__frozen) fn.call(this, ev);
-              });
+          this.__appClose?.call(this, { code, reason: "" });
+        }
+        get onopen() {
+          return super.onopen;
+        }
+        set onopen(fn) {
+          super.onopen =
+            fn &&
+            ((ev) => {
+              if (!this.__frozen) fn.call(this, ev);
+            });
+        }
+        get onmessage() {
+          return super.onmessage;
+        }
+        set onmessage(fn) {
+          super.onmessage =
+            fn &&
+            ((ev) => {
+              if (this.__frozen) return;
+              if (typeof ev.data === "string") this.__texts.push(ev.data);
+              fn.call(this, ev);
+            });
+        }
+        get onclose() {
+          return super.onclose;
+        }
+        set onclose(fn) {
+          this.__appClose = fn;
+          super.onclose =
+            fn &&
+            ((ev) => {
+              if (!this.__frozen) fn.call(this, ev);
+            });
+          if (fn && this.__failCode) {
+            const code = this.__failCode;
+            setTimeout(() => this.__dropNow(code), 0);
           }
         }
-        window.WebSocket = FreezableSocket;
-        window.__termSockets = () => all.filter((s) => s.url.includes("/ws/term/"));
-      });
+      }
+      window.WebSocket = FreezableSocket;
+      window.__termSockets = () => all.filter((s) => s.url.includes("/ws/term/"));
+    });
+  const termHas = (p, needle) =>
+    p.evaluate(
+      (n) => [...document.querySelectorAll(".xterm-rows")].some((r) => (r.textContent ?? "").includes(n)),
+      needle,
+    );
+  const waitPrompt = (p) =>
+    p.waitForFunction(
+      () => /[$❯]/.test(document.querySelector(".xterm-rows")?.textContent ?? ""),
+      null,
+      { timeout: 45000 },
+    );
+  const waitLiveSocket = (p, timeout = 20000) =>
+    p.waitForFunction(
+      () => window.__termSockets().some((s) => !s.__frozen && s.readyState === 1),
+      null,
+      { timeout },
+    );
+
+  await check("a terminal whose socket went silent works again once its tab is shown", async () => {
+    // A throwaway page on terminal 2 carries the fixture; the first page is
+    // not touched.
+    const third = await context.newPage();
+    try {
+      await installSocketFixture(third);
       await third.goto(`${BASE}/p/${PID}/2`);
-      await third.waitForFunction(
-        () => /[$❯]/.test(document.querySelector(".xterm-rows")?.textContent ?? ""),
-        null,
-        { timeout: 45000 },
-      );
+      await waitPrompt(third);
       await typeIn(third, "echo frz-before-$((40+1))");
       await waitTermText(third, "frz-before-41");
       // The page only trusts its liveness check on a connection that has
@@ -1285,25 +1339,59 @@ try {
       // reaches the shell.
       await typeIn(third, "echo frz-lost-$((50+2))");
       await third.waitForTimeout(2000);
-      const lost = await third.evaluate(() =>
-        [...document.querySelectorAll(".xterm-rows")].some((r) =>
-          (r.textContent ?? "").includes("frz-lost-52"),
-        ),
-      );
-      if (lost) throw new Error("the frozen socket still carried input: the fixture froze nothing");
+      if (await termHas(third, "frz-lost-52")) {
+        throw new Error("the frozen socket still carried input: the fixture froze nothing");
+      }
       await setVisibility(third, "hidden");
       await setVisibility(third, "visible");
       // The page notices (a probe, 5 s unanswered) and reconnects in place: a
       // NEW, unfrozen socket, and the same page — no reload.
-      await third.waitForFunction(
-        () => window.__termSockets().some((s) => !s.__frozen && s.readyState === 1),
-        null,
-        { timeout: 20000 },
-      );
+      await waitLiveSocket(third);
       await typeIn(third, "echo frz-after-$((60+3))");
       await waitTermText(third, "frz-after-63");
     } finally {
       await third.close().catch(() => {});
+    }
+  });
+
+  await check("keys typed before a pane gave up are not replayed when it comes back", async () => {
+    // The arrangement the security review of 2026-10-02 named: keystrokes
+    // typed while the pane is RECONNECTING are queued; if the pane then gives
+    // up ("Disconnected") and is brought back by a wake event — possibly
+    // hours later — the queue must not be flushed into the shell. Staged on a
+    // throwaway page: the live socket is dropped as a transient close (the
+    // pane starts reconnecting), a line is typed (queued), the reconnect
+    // attempt is failed with a non-transient code (the pane gives up), and
+    // the tab is shown again (the pane reconnects for real).
+    const fourth = await context.newPage();
+    try {
+      await installSocketFixture(fourth);
+      await fourth.goto(`${BASE}/p/${PID}/2`);
+      await waitPrompt(fourth);
+      await typeIn(fourth, "echo ob-before-$((70+1))");
+      await waitTermText(fourth, "ob-before-71");
+      const dropped = await fourth.evaluate(() => {
+        window.__failNextTermSocket = 1011;
+        const open = window.__termSockets().filter((s) => s.readyState === 1 && !s.__frozen);
+        for (const s of open) s.__dropNow(1006);
+        return open.length;
+      });
+      if (dropped !== 1) throw new Error(`expected one open terminal socket to drop, dropped ${dropped}`);
+      // Typed at once: the pane's first retry comes 2 s after the drop, and
+      // until it fails the pane is not closed for good, so this line is queued.
+      await typeIn(fourth, "echo ob-stale-$((80+2))");
+      await fourth.getByText("Disconnected", { exact: true }).waitFor({ timeout: 15000 });
+      await setVisibility(fourth, "hidden");
+      await setVisibility(fourth, "visible");
+      await waitLiveSocket(fourth);
+      await typeIn(fourth, "echo ob-after-$((90+3))");
+      await waitTermText(fourth, "ob-after-93");
+      // The fresh line ran, so anything the reconnect flushed has run too.
+      if (await termHas(fourth, "ob-stale-82")) {
+        throw new Error("the line typed before the pane gave up was replayed into the shell");
+      }
+    } finally {
+      await fourth.close().catch(() => {});
     }
   });
 
