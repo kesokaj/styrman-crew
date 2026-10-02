@@ -1,6 +1,7 @@
 // Typed client for the styrman REST API (spec: .agents/docs/specs/styrman/api.md).
 
 import { toast } from "./toast";
+import type { UpdaterStatus } from "./updaterNotice";
 
 export interface Project {
   id: string; // UUID — the identity everything keys on
@@ -218,6 +219,9 @@ export interface Settings {
   /** True once the user explicitly picked a name (setup won't re-ask). */
   terminalUsernameChosen: boolean;
   setupComplete: boolean;
+  /** The host's auto-updater, as it last recorded itself — admins only, and
+   *  absent when the host has nothing to report (ADR-081). */
+  updater?: UpdaterStatus;
 }
 
 /** A stored credential, value-free. `id` is the delete key (host | KEY | file

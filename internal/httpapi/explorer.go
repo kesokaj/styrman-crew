@@ -25,6 +25,7 @@ import (
 	"github.com/kesokaj/styrman-crew/internal/identity"
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 	"github.com/kesokaj/styrman-crew/internal/project"
+	"github.com/kesokaj/styrman-crew/internal/updatestatus"
 )
 
 // scopeFor resolves the file-explorer scope for a project route. Both roots
@@ -517,7 +518,23 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		"terminalUsernameChosen": s.usernameChosen(u.Username),
 		"setupComplete":          s.userSetupStatus(r.Context(), u.Username).Done,
 	}
+	if st, ok := updaterFor(u.Admin, s.cfg.UpdateStatusFile, time.Now()); ok {
+		resp["updater"] = st
+	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// updaterFor is the auto-updater's last recorded result, for an ADMIN only
+// (ADR-081): which release the host runs and why its updater is failing is
+// operator information. ok is false — no key in the payload at all — for
+// everyone else, when the feature is off (no path), and when the host has no
+// status file. Pure but for the read, so the gate is tested without a
+// second identity.
+func updaterFor(admin bool, path string, now time.Time) (updatestatus.Status, bool) {
+	if !admin {
+		return updatestatus.Status{}, false
+	}
+	return updatestatus.Read(path, now)
 }
 
 // updateRuntime changes the operator-tunable settings (admin only): idle

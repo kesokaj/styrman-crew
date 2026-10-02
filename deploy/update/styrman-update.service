@@ -12,6 +12,10 @@ Environment=STYRMAN_UPDATE_STATE_DIR=/etc/styrman/update
 # health-checked deploy (same ADR-052 shape: no in-script default).
 Environment=STYRMAN_UPDATER_BIN=/usr/local/bin/styrman-update
 Environment=STYRMAN_UPDATER_UNIT_DIR=/etc/systemd/system
+# Where each tick records how it ended, for the server to show admins in
+# Settings (ADR-081; same ADR-052 shape: no in-script default). A root-only
+# directory; the compose file mounts it read-only into the server.
+Environment=STYRMAN_UPDATE_STATUS_FILE=/etc/styrman/status/updater.json
 # Where host_converge installs the firewall script from the verified tag
 # (ADR-065; same ADR-052 shape). The units go to STYRMAN_UPDATER_UNIT_DIR.
 Environment=STYRMAN_FW_INSTALL_BIN=/usr/local/sbin/styrman-firewall.sh

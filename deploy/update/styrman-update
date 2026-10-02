@@ -66,6 +66,108 @@ trusted_dir() {
     [ -d "$1" ] && [ "$(stat -c %u "$1")" = "0" ] && [ -z "$(find "$1" -maxdepth 0 -perm /022 2>/dev/null)" ]
 }
 
+# ─── The updater's last result, for the server to show (ADR-081) ────────────
+# This unit failed for ten days on a rejected token and nothing said so
+# (BUG-084). Each real tick now ends by recording its result in ONE small
+# file the server reads and shows to admins in Settings.
+#
+# The file is root's, in a directory only root writes (the unit pins
+# /etc/styrman/status/updater.json; the compose file mounts that directory
+# read-only into the server). Never under /var/lib/styrman: that tree is the
+# server uid's, and root writing into a lower-privileged owner's directory is
+# how a planted symlink turns a status write into a root write somewhere else
+# (BUG-009). No in-script default (ADR-052's shape): unset, nothing is written.
+#
+# Only codes and validated tags are ever written — never git's output, never a
+# message: the server and the page treat every field as a closed set.
+STATUS_FILE="${STYRMAN_UPDATE_STATUS_FILE:-}"
+STATUS_ARMED=0     # 1 once the lock is held on a real tick (never --check, never a hook)
+STATUS_RESULT=""   # a site sets it only where the exit status would lie (the latched exit is 0)
+STATUS_CODE=""     # the failing code of the site that is about to fail
+STATUS_DEPLOYED="" # the tag this host runs, as far as this tick knows
+STATUS_LATEST=""   # the newest stable tag this tick saw
+EXIT_RM_DIR=""     # a hand run's throwaway DOCKER_CONFIG, removed on exit
+
+is_release_tag() { [[ "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
+
+# status_dir_ok <dir> — a real directory (not a symlink), owned by TRUST_UID,
+# not group/world-writable. TRUST_UID and not a literal 0, so the test hooks
+# exercise the same check as a real tick.
+status_dir_ok() {
+    [ -d "$1" ] && [ ! -L "$1" ] && [ "$(stat -c %u "$1")" = "${TRUST_UID}" ] \
+        && [ -z "$(find "$1" -maxdepth 0 -perm /022 2>/dev/null)" ]
+}
+
+# write_status <result> <code> — never fails the tick: every refusal is one
+# WARN and a return 0.
+write_status() {
+    local result="$1" code="$2" dir tmp now since="" prev deployed="" latest=""
+    [ -n "${STATUS_FILE}" ] || return 0
+    case "${result}:${code}" in
+        ok:ok) ;;
+        failing:fetch-auth|failing:fetch|failing:no-tags|failing:signature|failing:rolled-back|failing:deploy-failed|failing:latched|failing:error) ;;
+        *) result=failing; code=error ;;
+    esac
+    if [ "$(basename -- "${STATUS_FILE}")" != "updater.json" ]; then
+        log "WARN: status not written: ${STATUS_FILE} is not named updater.json"; return 0
+    fi
+    dir="$(dirname -- "${STATUS_FILE}")"
+    if [ ! -e "${dir}" ] && [ ! -L "${dir}" ]; then
+        # Created only under a parent that meets the same bar; mkdir, so the
+        # owner is the caller (TRUST_UID on a real tick and in the hooks).
+        if ! status_dir_ok "$(dirname -- "${dir}")" || ! mkdir -m 755 -- "${dir}" 2>/dev/null; then
+            log "WARN: status not written: ${dir} is missing and cannot be created under a trusted parent"; return 0
+        fi
+    fi
+    if ! status_dir_ok "${dir}"; then
+        log "WARN: status not written: ${dir} is a symlink, not owned by uid ${TRUST_UID}, or group/world-writable"; return 0
+    fi
+    now="$(date -u +%FT%TZ)"
+    if [ "${result}" = failing ]; then
+        # The first tick of this failing streak: carried over from the file a
+        # previous failing tick wrote (our own, in a directory only we write).
+        since="${now}"
+        if [ -f "${STATUS_FILE}" ] && [ ! -L "${STATUS_FILE}" ]; then
+            prev="$(head -c 4096 -- "${STATUS_FILE}" 2>/dev/null || true)"
+            case "${prev}" in *'"result":"failing"'*)
+                prev="$(printf '%s' "${prev}" | sed -n 's/.*"since":"\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}T[0-9:]\{8\}Z\)".*/\1/p' | head -n 1)"
+                [ -z "${prev}" ] || since="${prev}" ;;
+            esac
+        fi
+    fi
+    ! is_release_tag "${STATUS_DEPLOYED}" || deployed="${STATUS_DEPLOYED}"
+    ! is_release_tag "${STATUS_LATEST}" || latest="${STATUS_LATEST}"
+    if ! tmp="$(mktemp -- "${dir}/.updater.json.XXXXXX" 2>/dev/null)"; then
+        log "WARN: status not written: cannot create a temp file in ${dir}"; return 0
+    fi
+    if printf '{"result":"%s","code":"%s","checkedAt":"%s","since":"%s","deployed":"%s","latest":"%s"}\n' \
+            "${result}" "${code}" "${now}" "${since}" "${deployed}" "${latest}" > "${tmp}" \
+        && chmod 644 -- "${tmp}" && mv -f -- "${tmp}" "${STATUS_FILE}"; then
+        return 0
+    fi
+    rm -f -- "${tmp}" 2>/dev/null || true
+    log "WARN: status not written: could not install ${STATUS_FILE}"
+    return 0
+}
+
+# on_exit — the script's ONE exit handler, installed for every mode (below
+# the argument loop). It removes a hand run's throwaway docker config and,
+# when the status is armed, records how the tick ended: what a site said
+# (STATUS_RESULT/STATUS_CODE), else the exit status.
+on_exit() {
+    local rc=$?
+    [ -z "${EXIT_RM_DIR}" ] || rm -rf -- "${EXIT_RM_DIR}" 2>/dev/null || true
+    [ "${STATUS_ARMED}" = 1 ] || return 0
+    if [ -n "${STATUS_RESULT}" ]; then
+        write_status "${STATUS_RESULT}" "${STATUS_CODE:-error}"
+    elif [ "${rc}" = 0 ]; then
+        write_status ok ok
+    else
+        write_status failing "${STATUS_CODE:-error}"
+    fi
+    return 0
+}
+
 
 # ALWAYS clear inherited credential helpers — with or without a token file —
 # so an ambient root credential store can never silently answer for a fetch
@@ -232,6 +334,24 @@ if [ "${1:-}" = "__retire-harness-units" ]; then
     [ "${4:-}" != --check ] || CHECK_ONLY=true
     retire_harness_units; exit $?
 fi
+# The status writer and the exit decision under the same test gate
+# (internal/config/styrman_update_status_test.go): the same functions a real
+# tick runs, with the caller's uid as the trust bar.
+if [ "${1:-}" = "__write-status" ]; then
+    [ "${STYRMAN_UPDATE_TEST:-}" = 1 ] || fail "internal test hooks are disabled (set STYRMAN_UPDATE_TEST=1 only under the Go test)"
+    [ $# -eq 6 ] || fail "usage: __write-status <file> <result> <code> <deployed> <latest>"
+    STATUS_FILE="$2"; TRUST_UID="$(id -u)"; STATUS_DEPLOYED="$5"; STATUS_LATEST="$6"
+    write_status "$3" "$4"; exit 0
+fi
+if [ "${1:-}" = "__exit-status" ]; then
+    [ "${STYRMAN_UPDATE_TEST:-}" = 1 ] || fail "internal test hooks are disabled (set STYRMAN_UPDATE_TEST=1 only under the Go test)"
+    [ $# -eq 3 ] || [ $# -eq 5 ] || fail "usage: __exit-status <file> <exit status> [<result> <code>]"
+    [[ "$3" =~ ^[0-9]+$ ]] || fail "usage: __exit-status: the exit status must be a number"
+    STATUS_FILE="$2"; TRUST_UID="$(id -u)"; STATUS_ARMED=1
+    STATUS_RESULT="${4:-}"; STATUS_CODE="${5:-}"
+    trap on_exit EXIT
+    exit "$3"
+fi
 # Production: root's ownership bar, set HERE and never read from the
 # environment — the hook above is the only other writer (security review
 # 2026-09-21, the DOCKER_CONFIG rule's shape).
@@ -246,6 +366,10 @@ for arg in "$@"; do
         *) echo "unknown flag: ${arg}" >&2; exit 2 ;;
     esac
 done
+# The ONE exit handler, for every mode — production included. It used to be
+# set only in the hand-run arm of the DOCKER_CONFIG case below, a branch the
+# unit never takes.
+trap on_exit EXIT
 
 
 [ "$(id -u)" -eq 0 ] || fail "must run as root"
@@ -302,9 +426,9 @@ case "${DOCKER_CONFIG:-}" in
         ;;
     *)
         DOCKER_CONFIG="$(mktemp -d)"
-        # The script's ONLY trap: anyone adding another EXIT trap must chain
-        # this cleanup, not replace it (review note).
-        trap 'rm -rf "${DOCKER_CONFIG}"' EXIT ;;
+        # Removed by on_exit, the script's one EXIT handler (set above the
+        # root check): another trap here would REPLACE it and drop the status.
+        EXIT_RM_DIR="${DOCKER_CONFIG}" ;;
 esac
 export DOCKER_CONFIG
 [ -d "${DEPLOY_DIR}/.git" ] || fail "no deploy clone at ${DEPLOY_DIR} (see host-setup.sh step 8c)"
@@ -334,6 +458,14 @@ STATE_PARENT="$(dirname "${STATE_DIR}")"
     || fail "${STATE_DIR} is group/world-writable — refusing to trust the recorded deploy state"
 exec 9>"${LOCK}"
 flock -n 9 || { log "another run is in progress — skipping this tick"; exit 0; }
+# From here this is a real tick and its end is recorded (on_exit) — never
+# under --check, which promises to change nothing. A refusal ABOVE this line
+# writes nothing: the status directory's own trust rests on the checks above,
+# and the server shows a status that stopped being refreshed as stale.
+if [ "${CHECK_ONLY}" = false ]; then
+    STATUS_ARMED=1
+    STATUS_DEPLOYED="$(cat "${STATE}" 2>/dev/null || true)"
+fi
 
 cd "${DEPLOY_DIR}"
 # git refuses to operate on a tree owned by another user. Pass it per-command
@@ -405,7 +537,15 @@ fi
 # in the local clone and keep reinstalling itself).
 # Fail LOUDLY on a fetch error rather than silently deploying from stale local
 # tags: "no new version" and "cannot see new versions" must not look identical.
-if ! git fetch --tags --force --prune --prune-tags origin 2>&1; then
+FETCH_OUT="$(git fetch --tags --force --prune --prune-tags origin 2>&1)" && FETCH_RC=0 || FETCH_RC=$?
+[ -z "${FETCH_OUT}" ] || printf '%s\n' "${FETCH_OUT}"
+if [ "${FETCH_RC}" != 0 ]; then
+    # Which kind, for the status: git's own words for a rejected or missing
+    # credential, else anything (DNS, network, a moved remote).
+    case "${FETCH_OUT}" in
+        *"Authentication failed"*|*"Invalid username or token"*|*"could not read Username"*) STATUS_CODE=fetch-auth ;;
+        *) STATUS_CODE=fetch ;;
+    esac
     fail "git fetch failed — root cannot reach ${DEPLOY_DIR}'s origin. For a private repo: mint a FINE-GRAINED GitHub token (this repo only, Contents: Read-only) and install it at ${GH_TOKEN_FILE} (root:root, chmod 600); the origin must be an https:// URL. Expired token? Fine-grained tokens have an expiry — mint a fresh one."
 fi
 
@@ -413,7 +553,8 @@ fi
 # anchored regex, so release candidates can be pushed without deploying them.
 # sort -V picks the highest VERSION, not the most recently created tag.
 LATEST="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
-[ -n "${LATEST}" ] || fail "no stable vX.Y.Z tags found"
+[ -n "${LATEST}" ] || { STATUS_CODE=no-tags; fail "no stable vX.Y.Z tags found"; }
+STATUS_LATEST="${LATEST}"
 
 # ─── Tag integrity ──────────────────────────────────────────────────────────
 # What this script does with a tag is check it out and BUILD IT AS ROOT, and
@@ -447,7 +588,7 @@ fi
 if [ "${REQUIRE_SIGNED}" != "1" ]; then
     log "WARNING: signature checking DISABLED — any pushed tag will be built and run as root"
 fi
-verify_tag "${LATEST}" || fail "refusing to deploy ${LATEST} (see above)"
+verify_tag "${LATEST}" || { STATUS_CODE=signature; fail "refusing to deploy ${LATEST} (see above)"; }
 
 CURRENT="$(cat "${STATE}" 2>/dev/null || true)"
 # The state file is root-owned, but a malformed value (notably a leading "-")
@@ -766,6 +907,9 @@ host_converge
 if [ "$(cat "${FAILED}" 2>/dev/null || true)" = "${LATEST}" ] && [ "${FORCE}" = false ]; then
     log "${LATEST} previously FAILED to deploy and was rolled back — skipping."
     log "  investigate, then re-run with --force (or push a newer tag)."
+    # Exit 0 for the timer, failing for the operator: the host is NOT on the
+    # newest release and will not get there by itself.
+    STATUS_RESULT=failing; STATUS_CODE=latched
     exit 0
 fi
 if [ "${FORCE}" = true ]; then
@@ -801,6 +945,7 @@ if deploy "${LATEST}" "${LATEST#v}" && reports_version "${LATEST#v}"; then
     self_install
     retire_harness_units
     host_converge
+    STATUS_DEPLOYED="${LATEST}"
     log "OK — ${LATEST} is live"
     exit 0
 fi
@@ -812,6 +957,7 @@ log "ERROR: ${LATEST} did not come up healthy within ${HEALTH_TIMEOUT}s"
 # rebuild this same broken tag every 5 minutes forever (review finding).
 printf '%s' "${LATEST}" > "${FAILED}"
 if [ "${PREVIOUS}" = "none" ] || [ -z "${PREVIOUS}" ]; then
+    STATUS_CODE=deploy-failed
     fail "no previous version recorded — leaving the box as-is for manual repair. ${LATEST} is latched as failed; re-run with --force after fixing."
 fi
 log "rolling back to ${PREVIOUS}"
@@ -830,6 +976,8 @@ if deploy "${rollback_ref}" "${PREVIOUS#v}" "${rollback_trust}" && reports_versi
     self_install
     retire_harness_units
     host_converge
+    STATUS_CODE=rolled-back; STATUS_DEPLOYED="${PREVIOUS}"
     fail "rolled back to ${PREVIOUS}. ${LATEST} is marked FAILED and will not be retried automatically — fix it and re-run with --force, or push a newer tag."
 fi
+STATUS_CODE=deploy-failed
 fail "rollback to ${PREVIOUS} ALSO failed — manual intervention required"

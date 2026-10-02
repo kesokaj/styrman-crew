@@ -96,6 +96,7 @@ go build -o "${STATE}/wsprobe" ./cmd/wsprobe/
 say "start server (state=${STATE}, port=${PORT})"
 mkdir -p "${STATE}/home/projects"   # legacy layout: exercises the migration
 STYRMAN_STATE_DIR="${STATE}" STYRMAN_IMAGE="${IMAGE}" STYRMAN_ADDR="127.0.0.1:${PORT}" \
+    STYRMAN_UPDATE_STATUS_FILE="${STATE}/status/updater.json" \
     "${STATE}/styrman" > "${STATE}/server.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 20); do
@@ -469,6 +470,24 @@ check "git diff of the untracked file shows its content" \
 
 say "settings"
 check "settings served" "curl -fsS ${API}/api/settings | grep -q '\"authMode\"'"
+
+# Updater status (ADR-081): the server reads ONE file, named by
+# STYRMAN_UPDATE_STATUS_FILE (set on the server above), and shows an admin
+# what is in it — this server runs with auth off, where the caller is one.
+# The plant's times are NOW: a literal would be more than an hour old and
+# read "stale", not "failing".
+US_FILE="${STATE}/status/updater.json"
+check "settings: no updater status file, no updater key" \
+    "curl -fsS ${API}/api/settings | jq -e 'has(\"updater\") | not' >/dev/null"
+mkdir -p "${STATE}/status"
+US_NOW="$(date -u +%FT%TZ)"
+printf '{"result":"failing","code":"fetch-auth","checkedAt":"%s","since":"%s","deployed":"v1.38.0","latest":""}\n' "${US_NOW}" "${US_NOW}" > "${US_FILE}"
+check "settings: a failing updater status reaches an admin, code and all" \
+    "curl -fsS ${API}/api/settings | jq -e '.updater.state == \"failing\" and .updater.code == \"fetch-auth\" and .updater.deployed == \"v1.38.0\"' >/dev/null"
+printf 'not json\n' > "${US_FILE}"
+check "settings: an updater status that cannot be read is \"unknown\", never ok" \
+    "curl -fsS ${API}/api/settings | jq -e '.updater.state == \"unknown\" and (.updater | has(\"code\") | not)' >/dev/null"
+rm -f "${US_FILE}"
 
 say "persistence across container destruction (R3/R5)"
 "${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/1" \

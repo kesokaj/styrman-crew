@@ -60,6 +60,10 @@ type fakeGuest struct {
 	calls     [][]string
 	// reply decides each exec's result. nil means "exit 0, empty output".
 	reply func(cmd []string) (int, string, error)
+	// goingAway is what GuestGoingAway reports for a RUNNING project: a
+	// lifecycle change in flight (BUG-088). A non-running state is "going
+	// away" whatever it says, as in the real orchestrator.
+	goingAway bool
 	// statusFor records the (user, project) each Status call was asked about,
 	// so a handler that looks up the WRONG tenant can be caught. The real
 	// Status binds its ContainerID to that pair; a fake that ignored the
@@ -97,6 +101,15 @@ func (f *fakeGuest) Exec(_ context.Context, _ string, spec orchestrator.ExecSpec
 		return 0, "", nil
 	}
 	return reply(spec.Cmd)
+}
+
+func (f *fakeGuest) GuestGoingAway(ctx context.Context, user, project string, _ orchestrator.Status) bool {
+	if st, err := f.Status(ctx, user, project); err == nil && st.State != "running" {
+		return true
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.goingAway
 }
 
 // matching returns every recorded argv containing `want`, in order.

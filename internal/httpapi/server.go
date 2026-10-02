@@ -77,6 +77,7 @@ type userSpace struct {
 type guestRuntime interface {
 	Status(ctx context.Context, user, project string) (orchestrator.Status, error)
 	Exec(ctx context.Context, containerID string, spec orchestrator.ExecSpec) (int, string, error)
+	GuestGoingAway(ctx context.Context, user, project string, ran orchestrator.Status) bool
 }
 
 // modeRuntime is the network-mode handler's view of the orchestrator: one

@@ -79,8 +79,9 @@ disk (about USD 20/month). Stop it when idle.
      the release signer (the NUC's `/etc/styrman/allowed_signers`). The VM's
      list holds two keys: the original release signer (`SHA256:5HpYQJjpG+…`)
      and the second SSH key that signed the v1.39.0 tag (`SHA256:XeeDl8Y8…`,
-     "the Mac key"); see `.agents/docs/handoffs/2026-09-22-vertex-ai-and-final.md`.
-     An updater refuses a tag signed by a key its host does not list.
+     "the Mac key"). Both are release signers by decision (ADR-082); see
+     also `.agents/docs/handoffs/2026-09-22-vertex-ai-and-final.md`. An
+     updater refuses a tag signed by a key its host does not list.
 3. On the Google OAuth client (console → APIs & Services → Credentials),
    add the redirect URI
    `https://auth.<BASE_DOMAIN>/oauth2/google/authorization-code-callback`.

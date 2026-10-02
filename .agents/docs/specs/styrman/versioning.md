@@ -280,10 +280,13 @@ version:
   `/etc/styrman/allowed_signers` allowlist — a PGP-signed tag is refused
   outright, not merely unpinned (ADR-051). The keys a host trusts are exactly
   the ones in its `allowed_signers`; an updater refuses a tag signed by a key
-  its host does not list. The v1.39.0 tag was signed with a second SSH key
-  (`SHA256:XeeDl8Y8…`), not the original release signer (`SHA256:5HpYQJjpG+…`);
-  the GCP VM lists both, and whether the NUC lists the second is not
-  established.
+  its host does not list. Two keys sign release tags (ADR-082): the original
+  release signer (`SHA256:5HpYQJjpG+…`), which signs every tag cut by
+  `/preflight` on the NUC and which every host lists, and a second SSH key
+  (`SHA256:XeeDl8Y8…`, "the Mac key"), which signed v1.39.0. The GCP VM lists
+  both; whether the NUC lists the second has not been checked. A host that
+  does not list a tag's signer stays on its version, and Settings shows
+  admins the refusal as `signature` (ADR-081).
 - It runs against a dedicated clone at `/opt/styrman`, never the operator's
   own working tree, so an automatic `git checkout <tag>` can never stomp
   in-progress work.
@@ -323,6 +326,38 @@ version:
   introduces this, is deployed by the OLD script and still needs one manual
   reinstall right after that single deploy — every release after it
   self-installs.
+- **Status file (ADR-081).** At the end of every real tick the updater
+  writes one JSON line to the path in `STYRMAN_UPDATE_STATUS_FILE`;
+  `styrman-update.service` sets it to `/etc/styrman/status/updater.json`.
+  The script has no default: unset, it writes nothing. Six keys: `result`
+  (`ok`|`failing`), `code`, `checkedAt` (UTC), `since` (first failing tick
+  of the current streak, empty when ok), `deployed` and `latest` (release
+  tags `vX.Y.Z` or empty). `code` is `ok` or one of:
+  - `fetch-auth`: git fetch failed with an authentication error (the token
+    in `/etc/styrman/gh-token` was rejected).
+  - `fetch`: git fetch failed otherwise.
+  - `no-tags`: no stable release tag.
+  - `signature`: the newest tag is not signed by a key in the host's
+    `allowed_signers`.
+  - `rolled-back`: the new version did not come up and the previous one
+    was restored.
+  - `deploy-failed`: it did not come up and there was nothing to roll back
+    to, or the rollback failed too.
+  - `latched`: the newest tag failed before and is not retried
+    (`styrman-ctl update --redeploy` clears it).
+  - `error`: any other failure, including a tick killed by its 45-minute
+    timeout.
+
+  `--check` never writes a status; nor does a tick that found the lock busy
+  or refused before taking it (not root, a bad state dir) — the previous
+  file stays. `/etc/styrman/status` must be a real directory owned by root,
+  not group/world-writable; the updater creates it (0755) when missing and
+  its parent passes the same check. Otherwise it logs
+  `WARN: status not written: …` and the tick's own result is unchanged.
+  The server reads the file (read-only mount) and shows admins in
+  Settings; see `deploy.md`. The first status appears one tick (about 5
+  minutes) after a host takes this release: the tick that deploys it runs
+  the previous updater, which then installs the new one (`self_install`).
 
 ## Rollback
 

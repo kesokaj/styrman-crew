@@ -158,6 +158,13 @@ type Config struct {
 	// ask the daemon whether it named the right one, so the server — which
 	// can — compares and surfaces a mismatch.
 	IngressNetwork string
+
+	// UpdateStatusFile is where the host's auto-updater records how its last
+	// tick ended (STYRMAN_UPDATE_STATUS_FILE, ADR-081). No default, like the
+	// updater's own side of the same variable: the compose file pins it and
+	// mounts its directory read-only; empty means the feature is off, so a
+	// dev run on a host whose /etc/styrman is root-only shows nothing.
+	UpdateStatusFile string
 }
 
 // Load resolves configuration from the environment with sensible defaults.
@@ -194,6 +201,7 @@ func Load() (*Config, error) {
 	}
 	c.HomeDir = envOr("STYRMAN_HOME_DIR", filepath.Join(c.StateDir, "home"))
 	c.HomesDir = envOr("STYRMAN_HOMES_DIR", filepath.Join(c.StateDir, "homes"))
+	c.UpdateStatusFile = os.Getenv("STYRMAN_UPDATE_STATUS_FILE")
 
 	// Username: env wins; user.Current() is best-effort — it fails in a
 	// static binary without $USER (the containerized server), where

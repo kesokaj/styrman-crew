@@ -89,8 +89,10 @@ func (s *Server) browserExec(ctx context.Context, user, project, guestUser, verb
 		Env:  env,
 	})
 	if err != nil || code != 0 {
-		if now, err2 := s.guest.Status(ctx, user, project); err2 == nil &&
-			(now.State != "running" || now.ContainerID != st.ContainerID) {
+		// The guest went away under the exec (stopped, replaced, or a
+		// lifecycle change in flight — BUG-023, BUG-088): not running is the
+		// honest answer, not the launcher's failure.
+		if s.guest.GuestGoingAway(ctx, user, project, st) {
 			return -1, "", errProjectNotRunning
 		}
 	}

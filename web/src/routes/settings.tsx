@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { api, tryUI, type CredItem } from "../lib/api";
+import { api, tryUI, type CredItem, type Settings } from "../lib/api";
+import { updaterNotice } from "../lib/updaterNotice";
 import {
   FONT_FAMILY_LABELS,
   FONT_SIZE_MAX,
@@ -772,6 +773,7 @@ function SettingsPage() {
     <div className="min-w-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-2xl p-6 text-xs">
         <h1 className="mb-5 text-sm font-semibold">Settings</h1>
+        <UpdaterNotice data={data} />
 
         <Section title="Account">
           <Row label="Signed in as">
@@ -1037,5 +1039,27 @@ function RuntimeEditor({
         </Row>
       )}
     </>
+  );
+}
+
+/** What the host's auto-updater last recorded, for admins (ADR-081). Nothing
+ *  when there is nothing to say. Text only: every word comes from
+ *  lib/updaterNotice.ts, never from the updater or a remote. */
+function UpdaterNotice({ data }: { data: Settings }) {
+  const n = data.isAdmin ? updaterNotice(data.updater) : null;
+  if (!n) return null;
+  return (
+    <p
+      role="status"
+      data-testid="updater-notice"
+      className={
+        "mb-5 rounded border px-3 py-2 " +
+        (n.tone === "danger"
+          ? "border-danger/40 bg-danger/10 text-danger"
+          : "border-warn/40 bg-warn/20 text-warn")
+      }
+    >
+      {n.text}
+    </p>
   );
 }

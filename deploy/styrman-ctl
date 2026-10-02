@@ -536,7 +536,10 @@ cmd_install() {
 # (no default by design, ADR-052), the clone, and the token/signers files —
 # the last two default to /etc/styrman inside the updater, which is only
 # right when ETC_DIR is /etc/styrman (review finding, Phase 2).
-UPDATER_ENV=("STYRMAN_UPDATE_STATE_DIR=${ETC_DIR}/update" "STYRMAN_DEPLOY_DIR=${DEPLOY_DIR}" "STYRMAN_GH_TOKEN_FILE=${ETC_DIR}/gh-token" "STYRMAN_ALLOWED_SIGNERS=${ETC_DIR}/allowed_signers")
+# The status file (ADR-081) has no default in the updater at all: unnamed, a
+# forced redeploy would record nothing and a `latched` notice in Settings
+# would stay up until the next timer tick.
+UPDATER_ENV=("STYRMAN_UPDATE_STATE_DIR=${ETC_DIR}/update" "STYRMAN_DEPLOY_DIR=${DEPLOY_DIR}" "STYRMAN_GH_TOKEN_FILE=${ETC_DIR}/gh-token" "STYRMAN_ALLOWED_SIGNERS=${ETC_DIR}/allowed_signers" "STYRMAN_UPDATE_STATUS_FILE=${ETC_DIR}/status/updater.json")
 is_signers_line() { [[ "$1" =~ ^[^[:space:]]+\ (ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com)\ [A-Za-z0-9+/=]+(\ [^[:space:]]+)?$ ]]; }
 # private_file PATH: a secret handed in by path must be nobody else's to
 # read or replace — owned by root or the invoking operator, mode 600-ish,

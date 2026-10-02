@@ -119,6 +119,9 @@ echo "== building server =="
 ( cd "${REPO}" && go build -o "${STATE}/styrman" ./cmd/styrman/ )
 
 echo "== starting host server (state=${STATE}, port=${PORT}) =="
+# Updater status (ADR-081): exported, so the server below and run.mjs (which
+# plants the file for its Settings check) read the SAME path.
+export STYRMAN_UPDATE_STATUS_FILE="${STATE}/status/updater.json"
 STYRMAN_STATE_DIR="${STATE}" STYRMAN_IMAGE="${IMAGE}" STYRMAN_ADDR="127.0.0.1:${PORT}" \
     "${STATE}/styrman" > "${STATE}/server.log" 2>&1 &
 PID=$!

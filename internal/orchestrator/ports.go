@@ -98,14 +98,14 @@ func (o *Orchestrator) ListeningPorts(ctx context.Context, user, project string)
 	// mode toggle makes it routine, because the toggle REPLACES the container
 	// while the UI is polling this endpoint. A vanished container shows up
 	// EITHER way — as a transport error, or as a non-zero exit code from the
-	// exec itself (128, observed) — so both are re-asked the same question. If
-	// the project is no longer the running container we scanned, there are no
-	// ports to report, and that is an answer rather than an internal error:
-	// the same shape the git endpoints use for a guest that is not there.
-	// A failure against the container we are STILL looking at is a real one.
+	// exec itself (128, 9 observed) — so both are re-asked the same question
+	// (GuestGoingAway). If the guest is going away there are no ports to
+	// report, and that is an answer rather than an internal error: the same
+	// shape the git endpoints use for a guest that is not there. A failure
+	// against the container we are STILL looking at, with no lifecycle change
+	// in flight, is a real one.
 	if err != nil || code != 0 {
-		if now, err2 := o.Status(ctx, user, project); err2 == nil &&
-			(now.State != "running" || now.ContainerID != st.ContainerID) {
+		if o.GuestGoingAway(ctx, user, project, st) {
 			return []Port{}, nil
 		}
 		if err != nil {
@@ -116,6 +116,27 @@ func (o *Orchestrator) ListeningPorts(ctx context.Context, user, project string)
 
 	scan, images := splitPortScan(out)
 	return parseListeningPorts(scan, images), nil
+}
+
+// GuestGoingAway answers, after an exec into ran.ContainerID failed, whether
+// the failure belongs to the guest going away rather than to the command.
+// True when the project is no longer that running container (BUG-023), or
+// when a lifecycle change — a stop, an ADR-067 mode toggle, a boot — holds
+// the project's lock right now (BUG-088): a container being stopped is still
+// reported running, with the same id, until its PID 1 exits, and the exec the
+// shutdown killed exits non-zero (9, observed on Kata). Never call it while
+// holding the project's lock.
+func (o *Orchestrator) GuestGoingAway(ctx context.Context, user, project string, ran Status) bool {
+	if now, err := o.Status(ctx, user, project); err == nil &&
+		(now.State != "running" || now.ContainerID != ran.ContainerID) {
+		return true
+	}
+	l := o.lockProject(key(user, project))
+	if !l.TryLock() {
+		return true
+	}
+	l.Unlock()
+	return false
 }
 
 // splitPortScan separates portScanScript's output into the socket lines and

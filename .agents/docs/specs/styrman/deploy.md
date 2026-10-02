@@ -49,9 +49,9 @@ executes nothing.
 | Verb | Wraps |
 |---|---|
 | `install` | `host-setup.sh --user <operator>`; prompts for the five must-fill `.env` keys (`BASE_DOMAIN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ADMIN_EMAIL`, `STYRMAN_ALLOWED_EMAILS`; validated) with `--env-file` supplying defaults unattended; when the env file carries `CLOUDFLARE_API_TOKEN` it is written too (validated, an invalid value stops the install, never prompted for; v1.39.0 to the release after it dropped it silently and the host used HTTP-01); `resolve_version` (`--version`, else the checkout's newest reachable release tag, never a bare commit sha, ADR-053); `docker build -t styrman-runtime:${V} --secret id=gh_token,… --build-arg STYRMAN_VERSION=${V} image/` (the secret is required since ADR-074; `styrman-ctl` takes it from `--gh-token-file`, else `GH_TOKEN`, else `/etc/styrman/gh-token`, and refuses to build without one); `STYRMAN_VERSION=${V} docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build`; waits up to 120s for `styrman-server` to report healthy; then offers auto-update setup |
-| `update --setup` | the "Setup" steps below, as prompts: GitHub token → `/etc/styrman/gh-token` (600); clone-or-fetch `/opt/styrman` under a one-shot `GIT_ASKPASS`; `chown -R root:root` the clone; copy `deploy/.env` into it; write `/etc/styrman/allowed_signers`; `styrman-update --check` with `STYRMAN_UPDATE_STATE_DIR`/`STYRMAN_DEPLOY_DIR`/`STYRMAN_GH_TOKEN_FILE`/`STYRMAN_ALLOWED_SIGNERS` all named explicitly; `systemctl enable --now styrman-update.timer`; `systemctl start styrman-update.service` for the first tick |
+| `update --setup` | the "Setup" steps below, as prompts: GitHub token → `/etc/styrman/gh-token` (600); clone-or-fetch `/opt/styrman` under a one-shot `GIT_ASKPASS`; `chown -R root:root` the clone; copy `deploy/.env` into it; write `/etc/styrman/allowed_signers`; `styrman-update --check` with `STYRMAN_UPDATE_STATE_DIR`/`STYRMAN_DEPLOY_DIR`/`STYRMAN_GH_TOKEN_FILE`/`STYRMAN_ALLOWED_SIGNERS` all named explicitly, plus `STYRMAN_UPDATE_STATUS_FILE=${ETC_DIR}/status/updater.json`; `systemctl enable --now styrman-update.timer`; `systemctl start styrman-update.service` for the first tick |
 | `update` | `systemctl start styrman-update.service` (one tick now) + `journalctl -u styrman-update.service -n 20` |
-| `update --redeploy` | `styrman-update --force` (clears a latched failed-version, rebuilds the current tag) |
+| `update --redeploy` | `styrman-update --force` with `STYRMAN_UPDATE_STATUS_FILE=${ETC_DIR}/status/updater.json` (clears a latched failed-version, rebuilds the current tag, records its result in the status file) |
 | `edit` | `env_set` on both `.env` copies (checkout's and the clone's, when it exists), then `docker compose -f <dir>/deploy/docker-compose.yml --env-file <dir>/.env up -d` at the currently deployed version — no `--build`, images are immutable per version |
 | `uninstall --level 1` | `docker compose … down --remove-orphans`; `docker rm -f` of every container labeled `styrman.managed=true` (project microVMs AND the hidden per-user setup VMs alike); `docker network rm` of every `sdb-*`/`lan-*` network; `systemctl disable --now` the four units in `UNITS[]` (the firewall and updater pairs; the ADR-073 harness-channel pair is retired by the updater, ADR-074) |
 | `uninstall --level 2` | level 1, then: the IPv4 AND IPv6 firewall chains (`STYRMAN-FWD`/`STYRMAN-IN` and, when `ip6tables` exists, `STYRMAN-FWD6`/`STYRMAN-IN6`); the unit files + `daemon-reload`; `/usr/local/bin/styrman-update`; `/usr/local/sbin/styrman-firewall.sh`; `/etc/tmpfiles.d/styrman-ksm.conf`; `/etc/styrman`; `/opt/styrman`; the `styrman-runtime`/`styrman-server`/`styrman-caddy` images; `deploy/.env` moved to `deploy/.env.removed-<ts>` |
@@ -488,6 +488,33 @@ disabled for exactly this reason.
   root, wiping the failed-tag latch and reinstating the retry storm it
   exists to prevent (review finding, reproduced: both files gone after one
   clean).
+- **Status file (ADR-081): `/etc/styrman/status/updater.json`.** The one
+  part of `/etc/styrman` the server sees. `styrman-update.service` sets
+  `STYRMAN_UPDATE_STATUS_FILE` to it (the script has no default: unset, it
+  writes nothing) and the updater writes one JSON line at the end of every
+  real tick (keys and codes: `versioning.md`'s auto-updater section).
+  `/etc/styrman/status` must be a real directory owned by root, not
+  group/world-writable; the updater creates it (0755) when missing and its
+  parent passes the same check, otherwise it logs `WARN: status not
+  written: …` and the tick's own result is unchanged. `--check` and a tick
+  that found the lock busy or refused before taking it write nothing.
+  `styrman-ctl`'s hand runs (`update --setup`'s `--check`,
+  `update --redeploy`'s `--force`) pass
+  `STYRMAN_UPDATE_STATUS_FILE=${ETC_DIR}/status/updater.json`, so a forced
+  redeploy records its result at once. `docker-compose.yml` gives the
+  server the same variable and the read-only mount
+  `/etc/styrman/status:/etc/styrman/status:ro`; Docker creates a missing
+  directory as an empty root-owned 0755 one, so a host without auto-update
+  starts fine and shows nothing. The server (`internal/updatestatus`,
+  config `UpdateStatusFile`, no default; unset turns the feature off) reads
+  at most 4 KiB, decodes strictly and re-validates every field: `ok`,
+  `failing`, `stale` (a valid file whose `checkedAt` is more than 60
+  minutes old; the timer runs every 5 minutes and one tick may take 45), or
+  `unknown` (present but unreadable, malformed, or a value outside its set;
+  never shown as ok). No file: nothing. Admins see it in Settings
+  (`api.md`). The first status appears one tick (about 5 minutes) after a
+  host takes this release, because the deploying tick runs the previous
+  updater, which then installs the new one (`self_install`).
 - **Tags must be SSH-signed, against an allowed-signers allowlist.** The
   updater checks out, `docker build`s, and `docker compose up`s the tag AS
   ROOT, and `docker-compose.yml` itself lives inside that checkout — so it

@@ -5,7 +5,8 @@
 // / History / Diff tabs, settings, deep links, and cleanup.
 //
 // Usage: node web/e2e/run.mjs [--base http://127.0.0.1:8080] [--shots /tmp/shots]
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { chromium } from "playwright";
 
 const arg = (name, def) => {
@@ -1406,6 +1407,48 @@ try {
   await check("settings shows runtime info", () =>
     page.waitForSelector("text=Kata microVM"),
   );
+
+  // Updater status (ADR-081). run.sh starts the server with
+  // STYRMAN_UPDATE_STATUS_FILE and hands this process the same variable; the
+  // file is planted here with times of NOW — a literal would be over an hour
+  // old and read "stale". This server runs with auth off, where the caller is
+  // an admin. The plant is removed in a finally and the page stays on
+  // /settings, where the checks below start.
+  await check("settings tells an admin when the host's auto-updater is failing", async () => {
+    const file = process.env.STYRMAN_UPDATE_STATUS_FILE;
+    if (!file) throw new Error("STYRMAN_UPDATE_STATUS_FILE is not set (web/e2e/run.sh sets it)");
+    const notice = page.locator('[data-testid="updater-notice"]');
+    if ((await notice.count()) !== 0) throw new Error("a notice is shown with no status file");
+    const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+    try {
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(
+        file,
+        JSON.stringify({
+          result: "failing",
+          code: "fetch-auth",
+          checkedAt: now,
+          since: now,
+          deployed: "v1.38.0",
+          latest: "",
+        }) + "\n",
+      );
+      await page.reload();
+      await notice.waitFor({ timeout: 15000 });
+      const text = (await notice.textContent()) ?? "";
+      for (const want of [
+        `Auto-update has been failing since ${now}`,
+        "GitHub rejected this host's token",
+        "This host stays on v1.38.0.",
+      ]) {
+        if (!text.includes(want)) throw new Error(`the notice lacks "${want}": ${text}`);
+      }
+    } finally {
+      rmSync(file, { force: true });
+      await page.reload().catch(() => {});
+      await page.waitForSelector("text=Terminal username").catch(() => {});
+    }
+  });
 
   // ── Appearance: fonts (v1.22.0) ─────────────────────────────────────────
   // NOTE ON SCOPE: /settings is a different route, so opening it UNMOUNTS the

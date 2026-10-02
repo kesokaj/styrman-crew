@@ -113,6 +113,11 @@ services:
       - STYRMAN_PREVIEW_BASE=${STYRMAN_PUBLIC_DOMAIN:-}
       # Private share links (1.2): must equal the ingress PRIVATE_DOMAIN.
       - STYRMAN_PRIVATE_BASE=${STYRMAN_PRIVATE_DOMAIN:-}
+      # Updater status (ADR-081): the file in which the host's auto-updater
+      # records how its last tick ended, shown to admins in Settings. The same
+      # value styrman-update.service pins for the writer; mounted read-only
+      # below. No file there (auto-update not set up) = nothing shown.
+      - STYRMAN_UPDATE_STATUS_FILE=/etc/styrman/status/updater.json
     # SECURITY: no auth-bypass dev listener in production. It bound 0.0.0.0
     # inside a container joined to every project bridge, handing any project
     # VM unauthenticated admin (confirmed live in the 2026-08-27 review). Local
@@ -123,6 +128,11 @@ services:
       # Same path inside as on the host: bind sources passed to project
       # containers must be valid host paths.
       - /var/lib/styrman:/var/lib/styrman
+      # Read-only, and the ONLY thing under /etc/styrman the server sees: root
+      # (the updater) writes updater.json here, the server only reads it
+      # (ADR-081). Docker creates a missing source as a root-owned 0755
+      # directory, so a host without auto-update starts all the same.
+      - /etc/styrman/status:/etc/styrman/status:ro
     networks: [styrman-ingress]
     labels:
       # Discovered by the vendored ingress: https://${STYRMAN_HOSTNAME}.${BASE_DOMAIN}

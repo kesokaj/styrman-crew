@@ -88,6 +88,15 @@ test-only internal verb exercising that same `verify_tag` function directly
 (prerequisites, signing, rollback): `../.agents/docs/specs/styrman/deploy.md`
 → Auto-update.
 
+At the end of every real tick the updater writes its outcome (`result`,
+`code`, `checkedAt`, `since`, `deployed`, `latest`) as one JSON line to
+`/etc/styrman/status/updater.json` (ADR-081; `styrman-update.service` sets
+`STYRMAN_UPDATE_STATUS_FILE`, the script has no default). The compose file
+mounts `/etc/styrman/status` read-only into the server, the only part of
+`/etc/styrman` it sees, and Settings shows admins a notice when the updater
+is failing, stale or unreadable. Codes and mechanics:
+`../.agents/docs/specs/styrman/versioning.md` and `deploy.md`.
+
 ## GCP
 
 `gcp/` — a disposable GCP Compute Engine target, same host path as above

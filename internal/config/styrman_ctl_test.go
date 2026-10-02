@@ -531,7 +531,7 @@ func TestStyrmanCtlUpdateSetupPlan(t *testing.T) {
 	// The updater's every input is named — token and signers files included
 	// (review finding: they default to /etc/styrman inside the updater).
 	check := lines[indexOf(lines, "styrman-update --check")]
-	for _, w := range []string{"STYRMAN_GH_TOKEN_FILE=" + filepath.Join(e.root, "etc", "styrman", "gh-token"), "STYRMAN_ALLOWED_SIGNERS=" + filepath.Join(e.root, "etc", "styrman", "allowed_signers"), "STYRMAN_DEPLOY_DIR=" + filepath.Join(e.root, "opt", "styrman")} {
+	for _, w := range []string{"STYRMAN_GH_TOKEN_FILE=" + filepath.Join(e.root, "etc", "styrman", "gh-token"), "STYRMAN_ALLOWED_SIGNERS=" + filepath.Join(e.root, "etc", "styrman", "allowed_signers"), "STYRMAN_DEPLOY_DIR=" + filepath.Join(e.root, "opt", "styrman"), "STYRMAN_UPDATE_STATUS_FILE=" + filepath.Join(e.root, "etc", "styrman", "status", "updater.json")} {
 		if !strings.Contains(check, w) {
 			t.Fatalf("--check lacks %q: %s", w, check)
 		}
