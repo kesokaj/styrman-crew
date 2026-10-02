@@ -2,7 +2,7 @@
 
 <!-- Division of labor: ROADMAP.md = where the project is going; TODO.md = small deferred items; .agents/docs/plans/ = how. -->
 
-Last reviewed: 2026-09-22
+Last reviewed: 2026-10-02
 
 Empty by design past "Now" (operator directive 2026-08-30: "I want nothing
 in todo and roadmap — start fresh with new things"). See `TODO.md` for the
@@ -12,8 +12,9 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-- In-project tool updates, the terminal freeze, harness v2.3.2 —
-  `.agents/docs/plans/2026-10-02-tool-updates-freeze-harness-v2.md`
+<!-- Nothing in progress. In-project tool updates, the terminal freeze and
+harness v2.3.2 shipped as v1.40.0 on 2026-10-02; the plan is closed
+(.agents/docs/plans/2026-10-02-tool-updates-freeze-harness-v2.md). -->
 
 <!-- The 2026-09-22 whole-project review remediation is
 closed, all five phases (.agents/docs/plans/2026-09-22-project-review-remediation.md);

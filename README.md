@@ -114,11 +114,22 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.39.0**, deployed on the GCP VM: https://crew.spgo.demo.altostrat.com (Google sign-in). The NUC (https://crew.styrman.xyz) did not take v1.39.0: on 2026-10-02 it still ran `styrman-server:1.38.0` and `styrman-caddy:1.38.0`, because its `styrman-update.service` failed on every tick — `/etc/styrman/gh-token` is rejected by GitHub (BUG-084, open: the operator installs a fresh token that reads both `kesokaj/styrman-crew` and `kesokaj/styrman-harness`).
+**v1.40.0**, tagged 2026-10-02. Both hosts take a signed tag by themselves: the GCP VM (https://crew.spgo.demo.altostrat.com, Google sign-in) on its next updater tick; the NUC (https://crew.styrman.xyz), which still ran `styrman-server:1.38.0` on 2026-10-02, only after its updater's token is replaced — `/etc/styrman/gh-token` is rejected by GitHub (BUG-084, open: the operator installs a fresh token that reads both `kesokaj/styrman-crew` and `kesokaj/styrman-harness`). v1.39.0 reached the GCP VM only.
 
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
 
+- **v1.40.0** (2026-10-02): `claude` and `agy` update themselves inside a
+  project (agy in its own directory owned by the project user; the npm prefix
+  Claude's updater needs is created at boot); a terminal recovers without a
+  page reload — a terminal taken by another tab has "Use here" and comes back
+  when its tab is shown again, and a connection that died during sleep is
+  noticed by a ping and replaced in place; agent harness v2.3.2 (36 skills, 8
+  subagents), its install moved behind ready so first boots stay near 3 s;
+  runtime image pins refreshed (Node 22.23.3, Claude Code 2.1.287, OpenTofu
+  1.13.1, yq 4.54.1); the ingress no longer takes a failed Caddy config load
+  for a success (crew had been down six hours after a host reboot);
+  `styrman-ctl install` writes a Cloudflare token the answers file carries.
 - **v1.39.0** (2026-09-22): GCP target migrated to `daring-lioness-uwgw` (300 GB
   Hyperdisk Balanced, domain `spgo.demo.altostrat.com`, deployed to
   `https://crew.spgo.demo.altostrat.com` via signed tag + auto-updater);
