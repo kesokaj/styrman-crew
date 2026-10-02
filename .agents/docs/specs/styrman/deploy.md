@@ -495,7 +495,9 @@ disabled for exactly this reason.
   real tick (keys and codes: `versioning.md`'s auto-updater section).
   `/etc/styrman/status` must be a real directory owned by root, not
   group/world-writable; the updater creates it (0755) when missing and its
-  parent passes the same check, otherwise it logs `WARN: status not
+  parent passes the same check. The status file's path must also be
+  absolute and canonical, with no symlink, `..` or `//` anywhere on it,
+  like the state dir's; otherwise it logs `WARN: status not
   written: …` and the tick's own result is unchanged. `--check` and a tick
   that found the lock busy or refused before taking it write nothing.
   `styrman-ctl`'s hand runs (`update --setup`'s `--check`,

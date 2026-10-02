@@ -1438,7 +1438,7 @@ try {
       const text = (await notice.textContent()) ?? "";
       for (const want of [
         `Auto-update has been failing since ${now}`,
-        "GitHub rejected this host's token",
+        "GitHub did not accept this host's token",
         "This host stays on v1.38.0.",
       ]) {
         if (!text.includes(want)) throw new Error(`the notice lacks "${want}": ${text}`);

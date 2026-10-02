@@ -37,7 +37,9 @@ export function updaterNotice(u: UpdaterStatus | undefined): UpdaterNotice | nul
   let why: string;
   switch (u.code) {
     case "fetch-auth":
-      why = "GitHub rejected this host's token (/etc/styrman/gh-token)";
+      // git says the same for a missing token as for a rejected one, and
+      // the token file's path is the host's own setting: name neither.
+      why = "GitHub did not accept this host's token (missing, expired or revoked)";
       break;
     case "fetch":
       why = "the host cannot reach the repository";

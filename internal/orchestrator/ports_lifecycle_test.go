@@ -4,35 +4,96 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/kesokaj/styrman-crew/internal/config"
 )
 
 // BUG-088: a project being stopped is still reported RUNNING, with the same
 // container id, until its PID 1 exits — and an exec the shutdown kills exits
 // non-zero (9, observed on Kata during a mode toggle). BUG-023's re-check
 // asks only "is it gone or replaced?", so that window answered the Ports
-// panel's poll with a 500. A lifecycle change holds the project's lock for
-// its whole duration; a failed exec while that lock is held is the change's,
-// not the command's.
+// panel's poll with a 500. Every lifecycle change holds the project's lock
+// for its whole duration; after a failed exec, GuestGoingAway waits for that
+// lock and asks again. Holding the lock is NOT itself the answer (review of
+// v1.40.0..5571b57, finding 1): an attach's no-op EnsureRunning and the idle
+// reaper's busy probe hold it too, and a real failure in that window must
+// still be reported.
 
-func TestListeningPortsFailureDuringALifecycleChangeIsNoPorts(t *testing.T) {
+type portsResult struct {
+	ports []Port
+	err   error
+}
+
+// scanWhileLocked holds the project's lock, starts ListeningPorts against a
+// running container whose exec exits 9, lets it reach the wait, runs change
+// (the lifecycle change's effect, or nothing), and releases the lock.
+func scanWhileLocked(t *testing.T, change func(fd *fakeDocker)) portsResult {
+	t.Helper()
 	o, fd, cfg := seamOrch(t)
 	plant(fd, cfg, true, false)
-	fd.execExit = 9 // the exec the shutdown killed; inspect still says running
+	fd.execExit = 9
 
-	l := o.lockProject(key(tUser, tProj)) // a stop / mode toggle / boot in flight
+	l := o.lockProject(key(tUser, tProj))
 	l.Lock()
-	ports, err := o.ListeningPorts(context.Background(), tUser, tProj)
-	l.Unlock()
-	if err != nil {
-		t.Fatalf("a scan killed by a lifecycle change in flight must be no ports, not an error: %v", err)
+	done := make(chan portsResult, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() {
+		p, err := o.ListeningPorts(ctx, tUser, tProj)
+		done <- portsResult{p, err}
+	}()
+	time.Sleep(3 * lifecycleRecheck) // the scan has failed and is waiting on the lock
+	select {
+	case r := <-done:
+		l.Unlock()
+		t.Fatalf("ListeningPorts answered while the lock was held: %#v", r)
+	default:
 	}
-	if ports == nil || len(ports) != 0 {
-		t.Fatalf("want an empty list, got %#v", ports)
+	change(fd)
+	l.Unlock()
+	select {
+	case r := <-done:
+		return r
+	case <-time.After(5 * time.Second):
+		t.Fatal("ListeningPorts did not answer after the lock was released")
+	}
+	return portsResult{}
+}
+
+func setContainer(fd *fakeDocker, fn func(c *fakeContainer)) {
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	fn(fd.containers[config.ContainerName(tProj)])
+}
+
+func TestListeningPortsFailureDuringAStopIsNoPorts(t *testing.T) {
+	r := scanWhileLocked(t, func(fd *fakeDocker) {
+		setContainer(fd, func(c *fakeContainer) { c.running = false })
+	})
+	if r.err != nil || r.ports == nil || len(r.ports) != 0 {
+		t.Fatalf("a scan killed by a stop in flight must be no ports, got %#v %v", r.ports, r.err)
 	}
 }
 
-// The other half: with NOTHING in flight, the same failure against the same
-// running container is a real one and is still reported.
+func TestListeningPortsFailureDuringAModeToggleIsNoPorts(t *testing.T) {
+	r := scanWhileLocked(t, func(fd *fakeDocker) {
+		setContainer(fd, func(c *fakeContainer) { c.id = "id-recreated" })
+	})
+	if r.err != nil || r.ports == nil || len(r.ports) != 0 {
+		t.Fatalf("a scan killed by a container replacement must be no ports, got %#v %v", r.ports, r.err)
+	}
+}
+
+// The review's case: the lock was held by something that left the guest as
+// it was. The failure is the command's and is reported.
+func TestListeningPortsFailureUnderANoOpLockHolderIsAnError(t *testing.T) {
+	r := scanWhileLocked(t, func(*fakeDocker) {})
+	if r.err == nil || !strings.Contains(r.err.Error(), "port scan exited 9") {
+		t.Fatalf("want the scan's failure reported, got %#v %v", r.ports, r.err)
+	}
+}
+
 func TestListeningPortsFailureWithNothingInFlightIsAnError(t *testing.T) {
 	o, fd, cfg := seamOrch(t)
 	plant(fd, cfg, true, false)
@@ -42,10 +103,32 @@ func TestListeningPortsFailureWithNothingInFlightIsAnError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "port scan exited 9") {
 		t.Fatalf("want the scan's failure reported, got %v", err)
 	}
-	// And the lock was not left held by the check itself.
 	if l := o.lockProject(key(tUser, tProj)); !l.TryLock() {
 		t.Fatal("the project's lock is held after ListeningPorts returned")
 	} else {
 		l.Unlock()
+	}
+}
+
+// A request that gives up while the change is still in flight gets its
+// answer at once (the failure), and the wait never takes the lock it could
+// not get.
+func TestListeningPortsWaitIsBoundedByTheRequest(t *testing.T) {
+	o, fd, cfg := seamOrch(t)
+	plant(fd, cfg, true, false)
+	fd.execExit = 9
+
+	l := o.lockProject(key(tUser, tProj))
+	l.Lock()
+	defer l.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*lifecycleRecheck)
+	defer cancel()
+	start := time.Now()
+	_, err := o.ListeningPorts(ctx, tUser, tProj)
+	if err == nil {
+		t.Fatal("a request that gave up while the lock was held must get the failure")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("the wait outlived its request by far: %v", d)
 	}
 }

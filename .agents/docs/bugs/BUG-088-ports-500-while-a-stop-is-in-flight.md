@@ -35,37 +35,50 @@ guard read "same container, still running" and returned the failure as a 500.
 The scan script ends in `|| true` and never exits non-zero on its own. The
 same guard was copied into `browserExec` (`internal/httpapi/browser.go`) with
 the same gap.
-`Diagnosis missed:` none; no separate diagnosis was dispatched, the repro
-gave the exact message and location.
+The first fix then over-corrected (see Fix): it read "the lock is held" as
+"the guest is going away". The lock is also held when nothing is going away,
+by `EnsureRunning` on an already-running project (every terminal attach) and
+by the idle reaper's busy check, so a real scan or launcher failure in that
+window would have been hidden as "no ports" or "not running" (code review of
+v1.40.0..5571b57, `reviews/2026-10-02-review-v1.40.0-5571b57-code.md`,
+finding 1, medium).
+`Diagnosis missed:` the first fix's reading of the lock ("held means the guest
+is going away") was not checked against every holder of that lock; grepping
+`lockProject(` and `WithProject(` callers would have shown `EnsureRunning`'s
+no-op path.
 
 ## Fix
-New `Orchestrator.GuestGoingAway(ctx, user, project, ran Status) bool` in
-`internal/orchestrator/ports.go`: true when the project is no longer that
-running container (BUG-023), OR when the project's lock is held right now
-(`TryLock` fails), since every lifecycle change (stop, mode toggle via
-`WithProject`, boot via `EnsureRunning`) holds that lock for its whole
-duration. `ListeningPorts` returns an empty list and `browserExec` returns
-"not running". The `guestRuntime` interface (`internal/httpapi/server.go`)
-gained the method; the fake in `internal/httpapi/guestexec_test.go` gained it
-with a `goingAway` field. Working tree of the 2026-10-02 round (plan
-`plans/2026-10-02-stale-keys-browser-liveness-updater-status.md`), before the
-release.
+First fix (commit 5571b57): new `Orchestrator.GuestGoingAway(ctx, user,
+project, ran Status) bool` in `internal/orchestrator/ports.go` answered true
+when the project was no longer that running container (BUG-023) OR when
+`TryLock` failed. Wrong, per the review above.
 
-Tests: `internal/orchestrator/ports_lifecycle_test.go`
-`TestListeningPortsFailureDuringALifecycleChangeIsNoPorts` (lock held, exec
-exit 9, container still running -> no ports, no error; failed before the fix
-with "port scan exited 9") and
-`TestListeningPortsFailureWithNothingInFlightIsAnError` (no lock -> failure
-still reported, lock not left held). `internal/httpapi/browser_goingaway_test.go`
-`TestBrowserStatusDuringALifecycleChangeIsNotRunning`; with the browser
-site's guard reverted it fails with a 500 "browser status is not available
-right now".
+Revised fix (working tree after 5571b57, before the release): after a failed
+exec, `GuestGoingAway` first asks whether the project is still the same
+running container (BUG-023). If it is, it WAITS for the project's lock to come
+free, re-checking every 100 ms and bounded by the request's context, then asks
+again. A stop or mode toggle then reads stopped or replaced (no ports / not
+running); a no-op holder leaves the same container running, so the failure is
+reported; a request that gives up first gets the failure. `ListeningPorts`
+and `browserExec` (`internal/httpapi/browser.go`) call it; the `guestRuntime`
+interface and the fake in `internal/httpapi/guestexec_test.go` carry the
+method.
+
+Tests, `internal/orchestrator/ports_lifecycle_test.go` (five, replacing
+`TestListeningPortsFailureDuringALifecycleChangeIsNoPorts`):
+`TestListeningPortsFailureDuringAStopIsNoPorts`,
+`...DuringAModeToggleIsNoPorts`, `...UnderANoOpLockHolderIsAnError` (the
+review's case), `...WithNothingInFlightIsAnError`,
+`TestListeningPortsWaitIsBoundedByTheRequest`. With the first fix's "lock held
+means gone" logic put back, four of the five fail; all pass with `-race`.
+`internal/httpapi/browser_goingaway_test.go`
+`TestBrowserStatusDuringALifecycleChangeIsNotRunning` covers the browser site.
 
 ## Prevention
-A guest exec that fails while the project's lock is held belongs to the
-lifecycle change, not the command: "is it still the same running container?"
-is not enough, because a container being stopped is still reported running;
-ask `GuestGoingAway`, never re-derive the check at a call site.
+A held lock says that something is in flight, not WHAT it is. Wait for it and
+ask again (is it still the same running container?), and list every holder of
+a lock before giving its being held a meaning. Ask `GuestGoingAway`, never
+re-derive the check at a call site.
 
 ## Related
 BUG-023 (same family; its guard covered a vanished container, not one

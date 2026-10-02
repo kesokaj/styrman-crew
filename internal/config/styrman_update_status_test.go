@@ -424,3 +424,34 @@ func TestStyrmanUpdateStatusEarlyRefusalWritesNothing(t *testing.T) {
 		t.Errorf("an unarmed exit wrote %v", entries)
 	}
 }
+
+// The path itself, not only its last directory (security review of
+// v1.40.0..5571b57, finding 2): absolute and canonical like the state dir —
+// a relative path, a `..`, or a symlink ANYWHERE above the directory is
+// refused, with nothing written through it and the tick's status untouched.
+func TestStyrmanUpdateStatusWriteRefusesANonCanonicalPath(t *testing.T) {
+	realParent := t.TempDir()
+	if err := os.Chmod(realParent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(realParent, "status"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	linkRoot := t.TempDir()
+	if err := os.Symlink(realParent, filepath.Join(linkRoot, "etc")); err != nil {
+		t.Fatal(err)
+	}
+	for name, file := range map[string]string{
+		"relative":         "status/updater.json",
+		"dot-dot":          realParent + "/status/../status/updater.json", // not filepath.Join: it would clean the .. away
+		"symlinked parent": filepath.Join(linkRoot, "etc", "status", "updater.json"),
+	} {
+		code, out := runUpdaterHook(t, true, "__write-status", file, "ok", "ok", "", "")
+		if code != 0 || !strings.Contains(out, "WARN: status not written") {
+			t.Errorf("%s: want a WARN and exit 0, got %d %q", name, code, out)
+		}
+	}
+	if entries, _ := os.ReadDir(filepath.Join(realParent, "status")); len(entries) != 0 {
+		t.Errorf("a status was written through a non-canonical path: %v", entries)
+	}
+}

@@ -333,8 +333,10 @@ version:
   (`ok`|`failing`), `code`, `checkedAt` (UTC), `since` (first failing tick
   of the current streak, empty when ok), `deployed` and `latest` (release
   tags `vX.Y.Z` or empty). `code` is `ok` or one of:
-  - `fetch-auth`: git fetch failed with an authentication error (the token
-    in `/etc/styrman/gh-token` was rejected).
+  - `fetch-auth`: git fetch failed with an authentication error: the token
+    is missing, expired or revoked (git prints the same thing for a missing
+    token file as for a rejected token). Settings says "GitHub did not
+    accept this host's token (missing, expired or revoked)".
   - `fetch`: git fetch failed otherwise.
   - `no-tags`: no stable release tag.
   - `signature`: the newest tag is not signed by a key in the host's
@@ -352,7 +354,9 @@ version:
   or refused before taking it (not root, a bad state dir) — the previous
   file stays. `/etc/styrman/status` must be a real directory owned by root,
   not group/world-writable; the updater creates it (0755) when missing and
-  its parent passes the same check. Otherwise it logs
+  its parent passes the same check. The status file's path must also be
+  absolute and canonical, with no symlink, `..` or `//` anywhere on it,
+  like the state dir's. Otherwise it logs
   `WARN: status not written: …` and the tick's own result is unchanged.
   The server reads the file (read-only mount) and shows admins in
   Settings; see `deploy.md`. The first status appears one tick (about 5

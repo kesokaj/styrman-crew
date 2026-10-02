@@ -111,6 +111,17 @@ write_status() {
     if [ "$(basename -- "${STATUS_FILE}")" != "updater.json" ]; then
         log "WARN: status not written: ${STATUS_FILE} is not named updater.json"; return 0
     fi
+    # Absolute and canonical, like the state dir below: a relative path, a
+    # `..`, a `//` or a symlink anywhere on the way is refused, so the checks
+    # that follow are about the directory the write really lands in
+    # (security review of v1.40.0..5571b57, finding 2).
+    case "${STATUS_FILE}" in
+        /*) ;;
+        *) log "WARN: status not written: ${STATUS_FILE} is not an absolute path"; return 0 ;;
+    esac
+    if [ "$(realpath -m -- "${STATUS_FILE}" 2>/dev/null)" != "${STATUS_FILE}" ]; then
+        log "WARN: status not written: ${STATUS_FILE} is not canonical (a symlink, .. or // on its path)"; return 0
+    fi
     dir="$(dirname -- "${STATUS_FILE}")"
     if [ ! -e "${dir}" ] && [ ! -L "${dir}" ]; then
         # Created only under a parent that meets the same bar; mkdir, so the

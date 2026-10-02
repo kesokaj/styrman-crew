@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/errdefs"
 
@@ -119,25 +120,41 @@ func (o *Orchestrator) ListeningPorts(ctx context.Context, user, project string)
 }
 
 // GuestGoingAway answers, after an exec into ran.ContainerID failed, whether
-// the failure belongs to the guest going away rather than to the command.
-// True when the project is no longer that running container (BUG-023), or
-// when a lifecycle change — a stop, an ADR-067 mode toggle, a boot — holds
-// the project's lock right now (BUG-088): a container being stopped is still
-// reported running, with the same id, until its PID 1 exits, and the exec the
-// shutdown killed exits non-zero (9, observed on Kata). Never call it while
+// the failure belongs to the guest going away rather than to the command:
+// whether the project is no longer that running container (BUG-023). A
+// container being stopped is still reported running, with the same id, until
+// its PID 1 exits, and the exec the shutdown killed exits non-zero (9,
+// observed on Kata; BUG-088) — so when the answer is "still the same" while a
+// lifecycle change holds the project's lock, it waits for the lock to come
+// free and asks again. A stop or a mode toggle then reads stopped or
+// replaced; a change that leaves the guest as it was (an attach's no-op
+// EnsureRunning, the idle reaper's busy probe) reads the same, and the
+// failure stays the command's. Bounded by ctx: a request that gives up first
+// gets false, and its caller reports the failure. Never call it while
 // holding the project's lock.
 func (o *Orchestrator) GuestGoingAway(ctx context.Context, user, project string, ran Status) bool {
-	if now, err := o.Status(ctx, user, project); err == nil &&
-		(now.State != "running" || now.ContainerID != ran.ContainerID) {
+	gone := func() bool {
+		now, err := o.Status(ctx, user, project)
+		return err == nil && (now.State != "running" || now.ContainerID != ran.ContainerID)
+	}
+	if gone() {
 		return true
 	}
 	l := o.lockProject(key(user, project))
-	if !l.TryLock() {
-		return true
+	for !l.TryLock() {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(lifecycleRecheck):
+		}
 	}
 	l.Unlock()
-	return false
+	return gone()
 }
+
+// lifecycleRecheck is how often GuestGoingAway looks again for the end of a
+// lifecycle change in flight.
+const lifecycleRecheck = 100 * time.Millisecond
 
 // splitPortScan separates portScanScript's output into the socket lines and
 // the inner-docker port → image map. No sentinel (an older runtime image

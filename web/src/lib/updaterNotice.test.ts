@@ -19,8 +19,13 @@ describe("updaterNotice", () => {
       }),
     ).toEqual({
       tone: "danger",
-      text: "Auto-update has been failing since 2026-09-22T09:14:02Z: GitHub rejected this host's token (/etc/styrman/gh-token). This host stays on v1.38.0.",
+      text: "Auto-update has been failing since 2026-09-22T09:14:02Z: GitHub did not accept this host's token (missing, expired or revoked). This host stays on v1.38.0.",
     });
+  });
+
+  it("names no token path: it is the host's own setting", () => {
+    const n = updaterNotice({ state: "failing", code: "fetch-auth", since: "2026-10-01T00:00:00Z" });
+    expect(n?.text).not.toContain("/etc/styrman");
   });
 
   it("has a sentence for every failing code", () => {
