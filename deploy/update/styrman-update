@@ -141,6 +141,12 @@ write_status() {
         /*) ;;
         *) log "WARN: status not written: ${STATUS_FILE} is not an absolute path"; return 0 ;;
     esac
+    # Plain characters only: the ancestor walk splits the path with `read`,
+    # which stops at a newline, so `/x/ok<NL>evil/...` would be judged by
+    # `/x/ok` alone (gate security review of 57179a4..624808d, finding 2).
+    if ! [[ "${STATUS_FILE}" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+        log "WARN: status not written: the path holds a character outside [A-Za-z0-9._/-]"; return 0
+    fi
     if [ "$(realpath -m -- "${STATUS_FILE}" 2>/dev/null)" != "${STATUS_FILE}" ]; then
         log "WARN: status not written: ${STATUS_FILE} is not canonical (a symlink, .. or // on its path)"; return 0
     fi

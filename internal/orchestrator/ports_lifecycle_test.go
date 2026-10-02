@@ -14,8 +14,10 @@ import (
 // non-zero (9, observed on Kata during a mode toggle). BUG-023's re-check
 // asks only "is it gone or replaced?", so that window answered the Ports
 // panel's poll with a 500. Every lifecycle change holds the project's lock
-// for its whole duration; after a failed exec, GuestGoingAway waits for that
-// lock and asks again. Holding the lock is NOT itself the answer (review of
+// for its whole duration; after a failed exec, GuestGoingAway keeps asking
+// Docker while that lock is held, answers as soon as the container is down or
+// replaced, and asks once more when the lock comes free — within a ceiling
+// (lifecycleWaitMax). Holding the lock is NOT itself the answer (review of
 // v1.40.0..5571b57, finding 1): an attach's no-op EnsureRunning and the idle
 // reaper's busy probe hold it too, and a real failure in that window must
 // still be reported.
@@ -177,5 +179,35 @@ func TestListeningPortsAnswersAsSoonAsTheGuestIsGone(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the scan kept waiting on the lock after the container was already down")
+	}
+}
+
+// The wait has a ceiling of its own (gate security review of
+// 57179a4..624808d, finding 1): a request whose client never gives up must
+// not park on a toggle's 90 s waitReady, asking Docker ten times a second.
+// Past lifecycleWaitMax the failure is reported as it stands.
+func TestListeningPortsWaitHasACeiling(t *testing.T) {
+	o, fd, cfg := seamOrch(t)
+	plant(fd, cfg, true, false)
+	fd.execExit = 9
+	saved := lifecycleWaitMax
+	lifecycleWaitMax = 4 * lifecycleRecheck
+	defer func() { lifecycleWaitMax = saved }()
+
+	l := o.lockProject(key(tUser, tProj))
+	l.Lock()
+	defer l.Unlock() // never released while the scan waits
+	done := make(chan error, 1)
+	go func() {
+		_, err := o.ListeningPorts(context.Background(), tUser, tProj) // a client that never gives up
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "port scan exited 9") {
+			t.Fatalf("past the ceiling the failure is reported, got %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait has no ceiling: it outlived lifecycleWaitMax by far")
 	}
 }

@@ -130,14 +130,17 @@ func (o *Orchestrator) ListeningPorts(ctx context.Context, user, project string)
 // stopped or replaced as soon as its container is down; a change that
 // leaves the guest as it was (an attach's no-op EnsureRunning, the idle
 // reaper's busy probe) reads the same when it lets go, and the failure stays
-// the command's. A held lock alone never answers the question. Bounded by ctx: a request that gives up first
-// gets false, and its caller reports the failure. Never call it while
-// holding the project's lock.
+// the command's. A held lock alone never answers the question. Bounded by
+// ctx and by lifecycleWaitMax: a wait that ends first gets false, and its
+// caller reports the failure. Never call it while holding the project's
+// lock.
 func (o *Orchestrator) GuestGoingAway(ctx context.Context, user, project string, ran Status) bool {
 	gone := func() bool {
 		now, err := o.Status(ctx, user, project)
 		return err == nil && (now.State != "running" || now.ContainerID != ran.ContainerID)
 	}
+	ctx, cancel := context.WithTimeout(ctx, lifecycleWaitMax)
+	defer cancel()
 	l := o.lockProject(key(user, project))
 	for {
 		if gone() {
@@ -158,6 +161,14 @@ func (o *Orchestrator) GuestGoingAway(ctx context.Context, user, project string,
 		}
 	}
 }
+
+// lifecycleWaitMax bounds GuestGoingAway's wait whatever the request's own
+// deadline: a mode toggle holds the lock through waitReady (up to 90 s), the
+// page gives up on a poll after 20 s, and a client that never gives up must
+// not keep asking Docker ten times a second for the rest of the toggle (gate
+// security review of 57179a4..624808d, finding 1). Past it the failure is
+// reported as it stands. A var only so a test can shorten it.
+var lifecycleWaitMax = 20 * time.Second
 
 // lifecycleRecheck is how often GuestGoingAway looks again for the end of a
 // lifecycle change in flight.

@@ -87,14 +87,30 @@ func readStatus(t *testing.T, path string) statusFile {
 
 // trustedTempDir is t.TempDir() made 0755: Go creates it 0777 less the
 // umask, which is group-writable under umask 002 (this host), and the writer
-// refuses any ancestor others can write without the sticky bit.
+// refuses any ancestor others can write without the sticky bit. The
+// directories ABOVE it come from TMPDIR, which a test cannot fix: one that
+// fails the same bar stops the test with its name, rather than failing every
+// "written" case as if the writer were wrong (gate review of
+// 57179a4..624808d, finding 1).
 func trustedTempDir(t *testing.T) string {
 	t.Helper()
 	d := t.TempDir()
 	if err := os.Chmod(d, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return d
+	for p := filepath.Dir(d); ; p = filepath.Dir(p) {
+		info, err := os.Lstat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := info.Mode()
+		if m&os.ModeSymlink != 0 || (m.Perm()&0o022 != 0 && m&os.ModeSticky == 0) {
+			t.Fatalf("TMPDIR's ancestor %s (%v) is a symlink or writable by others without the sticky bit; the status writer refuses it — run with TMPDIR on a trusted path", p, m)
+		}
+		if p == "/" {
+			return d
+		}
+	}
 }
 
 // statusDir returns a directory that passes the updater's bar (the caller's,
@@ -510,4 +526,38 @@ func TestStyrmanUpdateStatusWriteRefusesAWritableAncestor(t *testing.T) {
 		t.Fatalf("a sticky ancestor must be accepted, got %d %q", code, out)
 	}
 	readStatus(t, file)
+}
+
+// A newline (or any character outside the plain set) in the path is refused
+// before anything else (gate security review of 57179a4..624808d, finding 2):
+// the ancestor walk splits the path with `read`, which stops at the first
+// newline, so `/x/ok<NL>evil/...` would be judged by `/x/ok` alone.
+func TestStyrmanUpdateStatusWriteRefusesAPathOutsideThePlainSet(t *testing.T) {
+	base := trustedTempDir(t)
+	// A real, trusted `ok` beside it: what the truncated walk would judge.
+	if err := os.Mkdir(filepath.Join(base, "ok"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	evil := filepath.Join(base, "ok\nevil")
+	if err := os.Mkdir(evil, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(evil, 0o777); err != nil { // past the umask: world-writable, not sticky
+		t.Fatal(err)
+	}
+	mid := filepath.Join(evil, "mid")
+	if err := os.Mkdir(mid, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(mid, "status"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(mid, "status", "updater.json")
+	code, out := runUpdaterHook(t, true, "__write-status", file, "ok", "ok", "", "")
+	if code != 0 || !strings.Contains(out, "WARN: status not written") {
+		t.Fatalf("want a WARN and exit 0, got %d %q", code, out)
+	}
+	if _, err := os.Lstat(file); err == nil {
+		t.Fatal("a status was written below a newline-named, world-writable ancestor")
+	}
 }

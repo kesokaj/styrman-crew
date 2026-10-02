@@ -152,13 +152,6 @@ type Config struct {
 	// Empty = disabled (current behavior) — enable with the ingress.
 	IngressToken string
 
-	// IngressNetwork is the Docker network the ingress and the server share.
-	// Only used to CROSS-CHECK the root firewall's INGRESS_BRIDGE (ADR-066):
-	// root excludes that bridge from the published-port allowlist but cannot
-	// ask the daemon whether it named the right one, so the server — which
-	// can — compares and surfaces a mismatch.
-	IngressNetwork string
-
 	// UpdateStatusFile is where the host's auto-updater records how its last
 	// tick ended (STYRMAN_UPDATE_STATUS_FILE, ADR-081). No default, like the
 	// updater's own side of the same variable: the compose file pins it and
@@ -185,14 +178,13 @@ func Load() (*Config, error) {
 		// boots it back exactly where it left off. Real in-guest work (running
 		// DinD containers, a non-shell foreground process in any tmux pane)
 		// blocks the stop regardless of this timer (stopIfIdle's busy probe).
-		idleTimeout:    envDurationOr("STYRMAN_IDLE_TIMEOUT", 8*time.Hour),
-		TranscriptTTL:  envDurationOr("STYRMAN_TRANSCRIPT_TTL", 30*24*time.Hour),
-		BrokerAddr:     envOr("STYRMAN_BROKER_ADDR", ":8091"),
-		AuthMode:       envOr("STYRMAN_AUTH", "none"),
-		DevAddr:        os.Getenv("STYRMAN_DEV_ADDR"),
-		SelfContainer:  os.Getenv("STYRMAN_SELF_CONTAINER"),
-		IngressToken:   os.Getenv("STYRMAN_INGRESS_TOKEN"),
-		IngressNetwork: envOr("STYRMAN_INGRESS_NETWORK", "styrman-ingress"),
+		idleTimeout:   envDurationOr("STYRMAN_IDLE_TIMEOUT", 8*time.Hour),
+		TranscriptTTL: envDurationOr("STYRMAN_TRANSCRIPT_TTL", 30*24*time.Hour),
+		BrokerAddr:    envOr("STYRMAN_BROKER_ADDR", ":8091"),
+		AuthMode:      envOr("STYRMAN_AUTH", "none"),
+		DevAddr:       os.Getenv("STYRMAN_DEV_ADDR"),
+		SelfContainer: os.Getenv("STYRMAN_SELF_CONTAINER"),
+		IngressToken:  os.Getenv("STYRMAN_INGRESS_TOKEN"),
 	}
 	for _, e := range strings.Split(os.Getenv("STYRMAN_ALLOWED_EMAILS"), ",") {
 		if e = strings.TrimSpace(e); e != "" {

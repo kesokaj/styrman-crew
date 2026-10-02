@@ -353,7 +353,9 @@ version:
   `--check` never writes a status; nor does a tick that found the lock busy
   or refused before taking it (not root, a bad state dir) — the previous
   file stays. The status file's path must be absolute and canonical: no
-  symlink, `..` or `//` anywhere on it. Every directory above the status
+  symlink, `..` or `//` anywhere on it. It must also consist of plain
+  characters only, `A-Z a-z 0-9 . _ / -`; any other character (a newline, a
+  space) is refused the same way. Every directory above the status
   directory, from `/` down, must be a real directory owned by root (or by
   the updater's own uid) that no one else can write; a directory others can
   write is accepted only with the sticky bit, which stops them renaming

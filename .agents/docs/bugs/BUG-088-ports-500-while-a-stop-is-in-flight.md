@@ -89,6 +89,18 @@ against the previous loop with "the scan never reached GuestGoingAway's wait"
 client's recorded calls, not a fixed sleep. `ports_lifecycle_test.go` has six
 tests.
 
+Fourth step (release gate, round 3): the security review
+(`reviews/2026-10-02-security-57179a4-624808d.md`, finding 1, low) found that a
+parked request whose client never gives up asked Docker about 10 times a second
+for the whole of a lock hold (up to 90 s in a toggle's `waitReady`), with
+nothing bounding it server-side. `GuestGoingAway` now has its own ceiling,
+`lifecycleWaitMax` = 20 s (the page gives up on a poll after 20 s anyway),
+whatever the request's deadline. Past it the failure is reported as it stands.
+New test `TestListeningPortsWaitHasACeiling`: the lock is held for good and the
+client never gives up, and the scan must answer with the failure. Before the fix
+it never answered. `ports_lifecycle_test.go` now has seven tests. The operator
+chose to fix this before the release ("Fix all five, then ship").
+
 ## Prevention
 A held lock says that something is in flight, not WHAT it is. Wait for it and
 ask again (is it still the same running container?), and list every holder of
