@@ -110,7 +110,8 @@ Follow-ups noted, not built:
 - A shutdown does not wait for a running install: the stamp is written last, so an
   interrupted install is repeated on the next boot (install is idempotent).
 
-**Image.** agy's binary lives at `/opt/agy/agy`; `/opt/agy` is mode 0777; `/usr/local/bin/agy`
+**Image.** agy's binary lives at `/opt/agy/agy`; `/opt/agy` is mode 0777 (SUPERSEDED by D21:
+0755, chowned to the project user at boot); `/usr/local/bin/agy`
 is a symlink to it. The build fails if the installer leaves no agy to move. Root never
 executes agy after the build: the entrypoint's one call is under `runuser -u <user>`
 (`entrypoint.sh:239-241`), `styrman-setup` runs as the user, and the server execs as the guest
@@ -333,4 +334,6 @@ D17 — 2026-10-02 — The bridge's pong (`classifyControl`, the bounded reply, 
 D18 — 2026-10-02 — A blocker found by Phase 1's Tier 1 is fixed in this plan: two Go tests red since v1.39.0 (167f605), one of them a real defect — `styrman-ctl install --env-file` dropped a `CLOUDFLARE_API_TOKEN` the answers file carried once the key left the must-fill list. `install` now writes optional keys the answers file gives (`OPTIONAL_FILL`), validated; the `private_file` drift test asserts the GNU/BSD difference `deploy/gcp/lib.sh` has on purpose. Through the `bug` skill, record BUG-081 — by: implementer; found in: Phase 1 Tier 1
 D19 — 2026-10-02 — The bug skill's independent diagnosis ran after the fix was drafted, not before it (the plan's cold reads had stood in for it): an `explorer` given only the symptom and the code at `1fe28a0` ranked the same two causes first (`plans/2026-10-02-recon-ui-freeze-diagnosis.md`). Its third candidate, a WebSocket handshake that never triggers re-authentication, is left as it is: the page's polls reload on an expired session (BUG-001) — by: implementer
 D20 — 2026-10-02 — The e2e suite creates an explicit browser context (`browser.newContext()`), because Playwright refuses `context.newPage()` on the implicit one; D13's "same browser context" needed it — by: implementer, from the first red run
+D21 — 2026-10-02 — `/opt/agy` is 0755 in the image and chowned to the project user by the entrypoint at boot; never 0777 — supersedes D2's mode (the Interfaces paragraph "**Image.**" above describes the superseded mode) — by: security review, reviews/2026-10-02-security-1fe28a0-4460e1b.md finding 1; ADR-080
+D22 — 2026-10-02 — The read loop's handling of a text frame is `applyControl(data, touch, resize, reply)`, so that "a ping is not activity" is tested at the call site and not only in the classifier — by: code review, reviews/2026-10-02-review-1fe28a0-4460e1b-code.md finding 1
 Rejected: copying agy into every home (213 MB and seconds of boot per project); `DISABLE_AUTOUPDATER` (no in-project updates at all); the whole seed before ready with a higher cap (first boots at ~15 s against the Latency SLA's hard limit); the whole seed behind ready (its `claude mcp add` would race the first login shell's write of `~/.claude.json`); server-pushed heartbeats in place of ping/pong (a wake would wait a full interval before noticing); serialising terminals on `harness-done` (it would put the 13 s back in front of the first prompt); a SKIP for the boot budget on tmpfs (a gate would read an unmeasured budget as met).

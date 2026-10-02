@@ -57,6 +57,16 @@ echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/${USERNAME}"
 chmod 440 "/etc/sudoers.d/${USERNAME}"
 usermod -aG docker "${USERNAME}" 2>/dev/null || true
 
+# agy updates itself by replacing its binary in the directory it lives in
+# (ADR-077), so that directory belongs to the project user — and to nobody
+# else (ADR-080): world-writable, any other uid in the VM could swap the
+# binary the user runs next. The DIRECTORY only: replacing a file needs
+# write access to its directory, not to the file, and leaving the 220 MB
+# binary root-owned keeps this a metadata change instead of a copy-up.
+# Before the minimal-mode branch on purpose: the setup VM runs agy too.
+chown "${UID_}:${GID_}" /opt/agy 2>/dev/null \
+    || log "WARN: could not hand /opt/agy to ${USERNAME} — \`agy update\` will not work in this VM"
+
 # Self-heal home ownership: if the home was ever missing at mount time,
 # Docker auto-creates the bind source owned by root, which makes every write
 # by the guest fail (git config, ssh-keygen, gh). Claim the mount point for

@@ -84,6 +84,7 @@
 | BUG-083 | 2026-10-02 | process (integration.sh runs) | fixed | integration run aborted (`line 565: syntax error`, `aborted=1`) because the main agent rewrote the script mid-run | never write to a script or file a running suite reads, including your own background run; check with a self-excluding `pgrep` first; `aborted=1` is evidence only above the abort |
 | BUG-084 | 2026-10-02 | deploy: host styrman-update.service | open | host auto-updater failing on a rejected `/etc/styrman/gh-token`; host still on 1.38.0 while v1.39.0 was tagged 2026-09-22 | after a release tag read `docker ps`/`styrman-ctl status` on every target host and name them in the change entry; find a failing updater with `systemctl status styrman-update.service` |
 | BUG-085 | 2026-10-02 | web/src/components/TerminalPane.tsx, internal/terminal/bridge.go | fixed | terminal stopped responding until page reload: close 4001 left a dead "Opened in another tab" pane, a silent socket was never detected (browser pane not fixed) | a state the page can enter offers its way out on the same page; a long-lived connection needs a liveness check owned by the side that must react |
+| BUG-086 | 2026-10-02 | image/Dockerfile, image/entrypoint.sh | fixed | runtime image created `/opt/agy` mode 0777 (agy resolves into it): any uid in the VM could replace the binary the project user runs next | "the user is root anyway" names one principal; before making a path writable list every uid there, and grant write by ownership to the one that needs it, never by mode |
 
 ## Graduated
 

@@ -49,8 +49,13 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 # verified against the publisher's own published sha256 (never a sum computed
 # from whatever the download returned); Claude Code is pinned by npm version
 # (its postinstall is what installs the CLI, so no --ignore-scripts);
-# chrome-devtools-mcp is pinned further down. The ONE thing that floats is
-# the Antigravity CLI (`agy`): Google publishes it as latest-only behind a
+# chrome-devtools-mcp is pinned further down. The ONE thing that floats AT
+# BUILD is the Antigravity CLI (`agy`). At RUN TIME a second thing floats
+# since ADR-077: Claude Code updates itself from npm into each project's home
+# (~/.npm-global), unattended, so what a project runs may be newer than the
+# version pinned here — the pin fixes what the IMAGE carries, not what a
+# project's user has let update (security review 2026-10-02). agy:
+# Google publishes it as latest-only behind a
 # manifest whose sha512 the installer verifies, offers no versioned artifact,
 # and the CLI updates itself at run time (`agy update`, which works in a
 # project since ADR-077 put the binary in a directory its user can write —
@@ -121,13 +126,18 @@ RUN set -eux; \
 # - agy replaces its own binary in the directory it really lives in (it
 #   resolves symlinks) and refuses when that directory is not writable —
 #   "/usr/local/bin is not fully accessible" was every project's `agy update`
-#   before this layout. So the binary lives alone in /opt/agy, mode 0777, behind
-#   the /usr/local/bin/agy symlink: the update lands in the container's own
-#   filesystem, survives stop/start, and a container rebuild falls back to
-#   this image's agy. The mode opens no boundary: the project user is root in
-#   its own VM already (passwordless sudo, entrypoint.sh), and nothing runs
-#   agy as root after this build step (the entrypoint's one call is under
-#   runuser).
+#   before this layout. So the binary lives alone in /opt/agy behind the
+#   /usr/local/bin/agy symlink, and the ENTRYPOINT hands that directory to
+#   the project user at boot (the uid is not known here): the update lands in
+#   the container's own filesystem, survives stop/start, and a container
+#   rebuild falls back to this image's agy. The directory is 0755 here and
+#   owner-only after boot, NEVER world-writable: the first cut made it 0777
+#   on the reasoning that the project user is root in its own VM anyway, and
+#   that reasoning missed every OTHER uid in the VM (a daemon's worker,
+#   `_apt`), any of which could then swap the binary the user runs next and
+#   inherit their sudo and brokered credentials (security review 2026-10-02,
+#   BUG-086, ADR-080). Nothing runs agy as root after this build step (the
+#   entrypoint's one call is under runuser).
 # - Claude's updater installs with npm into the user's prefix
 #   (NPM_CONFIG_PREFIX=$HOME/.npm-global, skel/bash_exports); the entrypoint
 #   creates that tree, and the copy there then wins on PATH over this one.
@@ -138,7 +148,7 @@ RUN set -eux; \
     curl -fsSL -o /tmp/agy-install.sh https://antigravity.google/cli/install.sh; \
     bash /tmp/agy-install.sh; rm -f /tmp/agy-install.sh; \
     src=/root/.local/bin/agy; [ -x "${src}" ] || src="$(command -v agy)"; \
-    install -d -m 0777 /opt/agy; \
+    install -d -m 0755 /opt/agy; \
     mv "${src}" /opt/agy/agy; \
     ln -sfn /opt/agy/agy /usr/local/bin/agy; \
     claude --version && agy --version

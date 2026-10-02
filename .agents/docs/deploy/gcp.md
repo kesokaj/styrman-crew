@@ -108,7 +108,7 @@ records itself.
 `install.sh` also delivers the OPTIONAL keys in `env` — `STYRMAN_HOSTNAME`,
 `STYRMAN_PUBLIC_DOMAIN`, `STYRMAN_PRIVATE_DOMAIN` — with `styrman-ctl edit`
 after the install, because `styrman-ctl install --env-file` itself carries
-only the five must-fill keys plus (since this change) `CLOUDFLARE_API_TOKEN`, and the host would otherwise keep its defaults
+only the five must-fill keys plus (from the release after v1.39.0) `CLOUDFLARE_API_TOKEN`, and the host would otherwise keep its defaults
 (BUG-072). It then reads the hostname back from the host and verifies that
 URL, so a mismatch is reported rather than probed blindly.
 

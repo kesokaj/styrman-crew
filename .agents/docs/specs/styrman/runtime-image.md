@@ -64,7 +64,12 @@ GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN \
   the package's own `postinstall` is what installs the CLI; bump procedure:
   `npm view @anthropic-ai/claude-code versions`, bump the ARG, `docker
   build`); `agy` (official installer; the binary is `/opt/agy/agy`, `/opt/agy` is
-  mode 0777, `/usr/local/bin/agy` is a symlink to it — ADR-077) is
+  built mode 0755, root-owned; the entrypoint chowns the DIRECTORY (not the
+  binary) to the project user on every boot, before the minimal-mode branch
+  so the setup VM too; never world-writable, because mode 0777 let any other
+  uid in the VM replace the binary the project user runs next (BUG-086);
+  `/usr/local/bin/agy` is a symlink to `/opt/agy/agy` — ADR-077, directory
+  mode superseded by ADR-080) is
   deliberately UNPINNED (ADR-069) — the installer fetches a "latest"
   manifest from Google's own origin and verifies the payload's sha512
   against that manifest, no versioned artifact URL is offered, and the CLI
@@ -72,7 +77,12 @@ GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN \
   binary in `/opt/agy`; the update lives in the container's filesystem,
   survives stop/start, and a container rebuild falls back to the image's
   agy; earlier images failed with `directory /usr/local/bin is not fully
-  accessible`), so a build-time pin would be theatre. Base images
+  accessible`; replacing a file needs write access to its directory, which
+  the chown provides), so a build-time pin would be theatre. Claude Code is
+  a second run-time float (ADR-080): agy floats at image build, and at run
+  time both agy and Claude Code update themselves inside a project, so the
+  image's pin fixes what the image carries, not what a project's user has
+  let update. Base images
   (`debian:trixie`, `debian:trixie-slim`, `golang:1.25.13-trixie` — the
   builder stage) are digest-pinned the same way `deploy/caddy/Dockerfile`
   pins its own bases.

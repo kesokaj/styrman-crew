@@ -253,6 +253,13 @@ check "claude doctor reports auto-updates usable (no unwritable-prefix warning)"
 # resolves symlinks), and refuses when that directory is not writable.
 check "project user can write agy's directory; /usr/local/bin/agy resolves into it" \
     "docker exec ${CN} runuser -u ${ME} -- sh -c 'd=\"\$(dirname \"\$(readlink -f /usr/local/bin/agy)\")\" && [ \"\$d\" = /opt/agy ] && test -w \"\$d\" && [ \"\$(readlink -f \"\$(command -v agy)\")\" = /opt/agy/agy ]'"
+# ADR-080 (security review 2026-10-02): that directory is the project user's
+# ALONE. The first cut shipped it 0777, and any other uid in the VM could
+# then swap the binary the user runs next. `runuser -u nobody -- true` is the
+# positive control: a runuser that cannot run at all must not read as "nobody
+# cannot write".
+check "agy's directory is owner-only: the project user's, mode 755, not writable by another uid" \
+    "[ \"\$(docker exec ${CN} stat -c '%U %a' /opt/agy)\" = '${ME} 755' ] && docker exec ${CN} runuser -u nobody -- true && ! docker exec ${CN} runuser -u nobody -- test -w /opt/agy"
 
 # R1 boot budget, from the container's own clock: the gap between its start
 # and the entrypoint's ready line. The quick half of the harness seed (the

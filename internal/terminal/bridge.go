@@ -125,6 +125,26 @@ func classifyControl(data []byte) (msg controlMessage, ok bool, reply []byte, ac
 	}
 }
 
+// applyControl carries out one text frame: it counts as activity unless it
+// is a ping, resizes on a well-formed resize, and sends the reply a ping
+// asks for. Split from serve's read loop so the effects are tested without a
+// WebSocket — above all that a ping never reaches touch (code review
+// 2026-10-02: classifyControl's test alone stayed green with the call site
+// reverted). A non-nil error is the reply's write error.
+func applyControl(data []byte, touch func(), resize func(cols, rows uint), reply func([]byte) error) error {
+	msg, ok, out, activity := classifyControl(data)
+	if activity {
+		touch()
+	}
+	if ok && msg.Type == "resize" && msg.Cols > 0 && msg.Rows > 0 {
+		resize(uint(msg.Cols), uint(msg.Rows))
+	}
+	if out != nil {
+		return reply(out)
+	}
+	return nil
+}
+
 func clientSize(r *http.Request) (cols, rows uint16) {
 	cols, rows = 80, 24
 	if v, err := strconv.ParseUint(r.URL.Query().Get("cols"), 10, 16); err == nil && v > 0 {
@@ -467,25 +487,21 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 				return
 			}
 			if msgType == websocket.MessageText {
-				msg, ok, reply, activity := classifyControl(data)
-				if activity {
-					touch()
-				}
-				if ok && msg.Type == "resize" && msg.Cols > 0 && msg.Rows > 0 {
-					_ = ex.Resize(hctx, uint(msg.Cols), uint(msg.Rows))
-				}
-				if reply != nil {
-					// Bounded: a peer that stopped reading must not park this
-					// loop — and with it every keystroke — behind one reply.
-					wctx, wcancel := context.WithTimeout(hctx, 5*time.Second)
-					err := conn.Write(wctx, websocket.MessageText, reply)
-					wcancel()
-					if err != nil {
-						if hctx.Err() == nil {
-							browserGone.Store(true)
-						}
-						return
+				err := applyControl(data, touch,
+					func(cols, rows uint) { _ = ex.Resize(hctx, cols, rows) },
+					func(frame []byte) error {
+						// Bounded: a peer that stopped reading must not park
+						// this loop — and with it every keystroke — behind
+						// one reply.
+						wctx, wcancel := context.WithTimeout(hctx, 5*time.Second)
+						defer wcancel()
+						return conn.Write(wctx, websocket.MessageText, frame)
+					})
+				if err != nil {
+					if hctx.Err() == nil {
+						browserGone.Store(true)
 					}
+					return
 				}
 				continue
 			}

@@ -19,7 +19,7 @@ image bumps; a home carrying the pre-ADR-062 harness is migrated first by
 `~/.styrman/harness-backup-<ts>/`, sets up per-project Docker-in-Docker on
 a loop-mounted ext4 disk, and
 makes the agent CLIs self-updatable in a project (ADR-077: agy lives in
-the 0777 `/opt/agy` with `/usr/local/bin/agy` symlinked to it; the
+`/opt/agy` built 0755 root-owned and chowned, as a directory, to the project user on every boot, never world-writable (ADR-080), with `/usr/local/bin/agy` symlinked to it; the
 entrypoint creates `~/.npm-global/bin` and `lib` for Claude's updater),
 installs the credential materialization snippet
 (`configs/styrman-credentials.sh`, ADR-032). Also carries the per-language
