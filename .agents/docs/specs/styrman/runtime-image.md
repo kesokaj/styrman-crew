@@ -53,21 +53,26 @@ GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN \
   (Dockerfile/Containerfile/`*.dockerfile`)
 - Go and Node, both pinned by exact version + publisher sha256, same shape
   as OpenTofu/yq/hadolint above: `ARG GO_VERSION=1.27.1 GO_SHA256=…` (go.dev's
-  published sum) and `ARG NODE_VERSION=22.23.2 NODE_SHA256=…`
+  published sum) and `ARG NODE_VERSION=22.23.3 NODE_SHA256=…`
   (`nodejs.org/dist/vX.Y.Z/SHASUMS256.txt` — replaces the former NodeSource
   `curl | bash` installer). Bump procedure: re-read the publisher's sums
   (`go.dev/dl/?mode=json`, `nodejs.org/dist/vX/SHASUMS256.txt`), move the
   `ARG …_VERSION`/`ARG …_SHA256` pair together in one commit, `docker build`.
 - Agents: `claude` (npm `@anthropic-ai/claude-code`, pinned:
-  `ARG CLAUDE_CODE_VERSION=2.1.270` → `npm install -g
+  `ARG CLAUDE_CODE_VERSION=2.1.287` → `npm install -g
   @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}`, no `--ignore-scripts` —
   the package's own `postinstall` is what installs the CLI; bump procedure:
   `npm view @anthropic-ai/claude-code versions`, bump the ARG, `docker
-  build`); `agy` (official installer → `/usr/local/bin/agy`) is deliberately
-  UNPINNED (ADR-069) — the installer fetches a "latest" manifest from
-  Google's own origin and verifies the payload's sha512 against that
-  manifest, no versioned artifact URL is offered, and the CLI self-updates
-  at run time anyway, so a build-time pin would be theatre. Base images
+  build`); `agy` (official installer; the binary is `/opt/agy/agy`, `/opt/agy` is
+  mode 0777, `/usr/local/bin/agy` is a symlink to it — ADR-077) is
+  deliberately UNPINNED (ADR-069) — the installer fetches a "latest"
+  manifest from Google's own origin and verifies the payload's sha512
+  against that manifest, no versioned artifact URL is offered, and the CLI
+  self-updates at run time (from ADR-077 on: `agy update` replaces the
+  binary in `/opt/agy`; the update lives in the container's filesystem,
+  survives stop/start, and a container rebuild falls back to the image's
+  agy; earlier images failed with `directory /usr/local/bin is not fully
+  accessible`), so a build-time pin would be theatre. Base images
   (`debian:trixie`, `debian:trixie-slim`, `golang:1.25.13-trixie` — the
   builder stage) are digest-pinned the same way `deploy/caddy/Dockerfile`
   pins its own bases.
@@ -219,8 +224,13 @@ Steps, in order:
    reserved name (root, daemon, …) that already exists at a different uid is
    rejected — the boot fails loudly instead of every `docker exec` silently
    running as the wrong uid on a home it doesn't own (I11).
-5. `~/projects/<dir>`, `~/.dockerd`, `~/.config`, `~/.cache`, `~/.local/bin`
-   (as the user; skipped in minimal mode). `~/.ssh` (mode 700) is created
+5. `~/projects/<dir>`, `~/.dockerd`, `~/.config`, `~/.cache`, `~/.local/bin`,
+   `~/.npm-global/bin` and `~/.npm-global/lib` (as the user, on every
+   non-minimal boot; the npm prefix `skel/bash_exports` names via
+   `NPM_CONFIG_PREFIX`, where Claude's updater installs and whose copy wins
+   on `PATH` — ADR-077; before it `claude doctor` reported `Can't
+   auto-update: npm global folder isn't writable`; skipped in minimal
+   mode). `~/.ssh` (mode 700) is created
    unconditionally, even in minimal mode. (The `~/.local/share/keyrings` mkdir
    and the dbus/gnome-keyring packages were dropped with the keyring tier,
    ADR-040.)
@@ -232,9 +242,10 @@ Steps, in order:
    time from `kesokaj/styrman-harness` (ADR-074, superseding ADR-062's
    `image/harness/` mirror and ADR-073's host harness channel; mechanics:
    `.agents/docs/specs/styrman/deploy.md` "Agent harness in the image
-   (ADR-074)"). The harness is 27 skills and 7 subagents (`bugs`,
-   `changelog`, `documentation`, `explorer`, `reviewer`, `security`,
-   `verifier`) plus the global context (`AGENTS.md`); `sh-agent install
+   (ADR-074)"). The harness (`ARG HARNESS_VERSION=v2.3.2`; `sh-agent list` reports
+   36 skills and 8 subagents, an install writes 1,788 files; the v1.6.0
+   release carried 27 skills and 7 subagents — `bugs`, `changelog`,
+   `documentation`, `explorer`, `reviewer`, `security`, `verifier`) plus the global context (`AGENTS.md`); `sh-agent install
    --home <home>` (no `--repo` — the harness travels inside the binary)
    copies it into `~/.claude` (`AGENTS.md`, a two-line `CLAUDE.md` stub
    importing it, `skills/`, `agents/`) and `~/.gemini/config`
@@ -268,6 +279,18 @@ Steps, in order:
    `~/.styrman/harness-backup-<ts>/`, never deletes, and touches nothing else
    (credentials, `~/.gemini/antigravity-cli`, `~/projects`, user dotfiles).
    The stamp is written only when migration AND install both succeed.
+   The seed runs in two parts (ADR-078). Before `/run/styrman/ready`:
+   `harness-migrate.sh` (20 s cap), the never-downgrade decision, and the two
+   browser-MCP registrations (20 s each; they run BEFORE the install now) —
+   worst case 60 s. After the ready line, as a background job: `sh-agent
+   install` under a 120 s cap, then the stamp and the pass or WARN line.
+   `/run/styrman/harness-done` is cleared at the top of every boot and
+   written when the harness step is over, whatever the outcome, on every
+   non-minimal boot. Measured 2026-10-02: `sh-agent v2.3.2 install` takes
+   10.9 s on the host's ext4, 12.8 s in a microVM on a disk-backed home,
+   0.06 s on tmpfs; boot-to-ready was 16.16 s and 16.40 s with the install in
+   front of ready, 3.01 s and 3.20 s after. A `claude` or `agy` started
+   before the install finishes sees no skills until restarted.
    6b. Login-shell `/etc/profile.d` snippets: `zzz-styrman-motd.sh` (zzz- so it
    runs LAST, after credentials are materialized — it probes
    `~/.claude/.credentials.json` etc. and would otherwise nag "run

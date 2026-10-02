@@ -420,7 +420,11 @@ func TestStyrmanCtlInstallPlan(t *testing.T) {
 	if !strings.Contains(lines[up], "--env-file "+envFile) {
 		t.Fatalf("compose must be pinned to the env file: %s", lines[up])
 	}
-	// The six must-fill keys were validated and written (dry-run: the moves are planned, the file untouched).
+	// Six planned writes: the five must-fill keys, plus CLOUDFLARE_API_TOKEN,
+	// which is optional since v1.39.0 and written because THIS answers file
+	// carries it (BUG-081: from v1.39.0 it was dropped, five writes, and this
+	// assertion was red until 2026-10-02). Dry-run: the moves are planned,
+	// the file untouched.
 	if n := strings.Count(out, "+ env_set "); n != 6 {
 		t.Fatalf("expected 6 planned .env writes, got %d:\n%s", n, out)
 	}

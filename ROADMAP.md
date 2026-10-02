@@ -12,7 +12,10 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
-<!-- Nothing in progress. The 2026-09-22 whole-project review remediation is
+- In-project tool updates, the terminal freeze, harness v2.3.2 —
+  `.agents/docs/plans/2026-10-02-tool-updates-freeze-harness-v2.md`
+
+<!-- The 2026-09-22 whole-project review remediation is
 closed, all five phases (.agents/docs/plans/2026-09-22-project-review-remediation.md);
 its entries are changes/2026-09-22-review-remediation-phase-{0,0b,1,2,3,4,5}.md. -->
 

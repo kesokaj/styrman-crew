@@ -52,6 +52,12 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${STYRMAN_ENV_FILE:-${REPO}/deploy/.env}"
 OPERATOR="${SUDO_USER:-}"
 MUST_FILL="BASE_DOMAIN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET ADMIN_EMAIL STYRMAN_ALLOWED_EMAILS"
+# Keys `install` never asks for but WRITES when the --env-file carries them.
+# CLOUDFLARE_API_TOKEN left MUST_FILL in v1.39.0 (without it the ingress
+# issues certificates over HTTP-01); the loop that fills .env reads MUST_FILL
+# only, so from then on a token the operator supplied was dropped without a
+# word and the host used HTTP-01 anyway (BUG-081).
+OPTIONAL_FILL="CLOUDFLARE_API_TOKEN"
 CLONE_ENV="${DEPLOY_DIR}/deploy/.env"
 # shellcheck disable=SC2034  # used by uninstall (plan phase 4)
 UNITS=(styrman-firewall.service styrman-firewall.timer styrman-update.service styrman-update.timer)
@@ -480,6 +486,19 @@ cmd_install() {
             [ -z "${env_file}" ] || { local given; given="$(env_get "${env_file}" "${key}")"; [ -z "${given}" ] || default="${given}"; }
             ask_env_key "${key}" "${default}"
         done
+        # Optional keys: written only when the --env-file gives a value,
+        # never prompted for, and validated like any other — an invalid one
+        # stops the install rather than being skipped (a skipped token is
+        # the silent fallback this loop exists to end).
+        if [ -n "${env_file}" ]; then
+            local opt
+            for key in ${OPTIONAL_FILL}; do
+                opt="$(env_get "${env_file}" "${key}")"
+                [ -n "${opt}" ] || continue
+                validate "${key}" "${opt}" || die "invalid value for ${key} in ${env_file}"
+                env_set "${ENV_FILE}" "${key}" "${opt}"
+            done
+        fi
     fi
 
     log "install: runtime image and stack at version ${version} (from this checkout — the documented first bring-up)"

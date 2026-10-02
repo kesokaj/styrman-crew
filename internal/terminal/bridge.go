@@ -1,9 +1,12 @@
 // Package terminal bridges browser WebSockets to tmux sessions inside styrman
 // microVMs over Docker's exec API (ADR-002). The wire protocol is ported
 // verbatim from devbox: binary frames carry raw PTY bytes, JSON text frames
-// carry control messages ({"type":"resize","cols":N,"rows":N}), close code
-// 4000 means the shell genuinely exited, 4001 means this connection was
-// replaced by a newer one and the client must not auto-reconnect, 4002 means
+// carry control messages ({"type":"resize","cols":N,"rows":N}, and since
+// ADR-079 {"type":"ping"}, answered with the text frame {"type":"pong"} so a
+// page can tell a dead socket from a quiet one), close code 4000 means the
+// shell genuinely exited, 4001 means this connection was replaced by a newer
+// one and the client must not reconnect BY ITSELF (it may take the session
+// back when its page is shown again or its user asks, ADR-079), 4002 means
 // the project was deliberately stopped and only a boot-intent connect
 // (?boot=1) may bring it back (ADR-042).
 package terminal
@@ -96,6 +99,30 @@ type controlMessage struct {
 	Type string `json:"type"`
 	Cols uint16 `json:"cols,omitempty"`
 	Rows uint16 `json:"rows,omitempty"`
+}
+
+// pongFrame is the reply to a {"type":"ping"} control message (ADR-079).
+var pongFrame = []byte(`{"type":"pong"}`)
+
+// classifyControl parses one text frame. ok is false when it is not a control
+// message the bridge knows how to read (the frame is then ignored, as it
+// always was). reply is non-nil when the frame must be answered. activity is
+// false only for a ping: a page sends one every 25 s to check its socket, and
+// counting that as use would keep a project with an open tab away from the
+// idle reaper forever. Pure, so the three outcomes are unit-tested without a
+// WebSocket.
+func classifyControl(data []byte) (msg controlMessage, ok bool, reply []byte, activity bool) {
+	if json.Unmarshal(data, &msg) != nil {
+		return controlMessage{}, false, nil, true
+	}
+	switch msg.Type {
+	case "ping":
+		return msg, true, pongFrame, false
+	case "resize":
+		return msg, true, nil, true
+	default:
+		return controlMessage{}, false, nil, true
+	}
 }
 
 func clientSize(r *http.Request) (cols, rows uint16) {
@@ -300,8 +327,10 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 		// -x/-y seed the size for a newly created session (avoids the
 		// double-prompt redraw); -c sets the pane's start directory. -D
 		// detaches stale clients (e.g. left by a crashed server). Safe with
-		// -A because a replaced browser gets close 4001 and never reconnects,
-		// so there is no detach/reattach spiral.
+		// -A because a replaced browser gets close 4001 and never reconnects
+		// by itself — only when its page is shown again or its user asks
+		// (ADR-079), and being replaced causes neither — so there is no
+		// detach/reattach spiral.
 		Cmd: []string{"tmux", "new-session", "-A", "-D", "-s", s.tmuxName,
 			"-x", strconv.Itoa(int(cols)), "-y", strconv.Itoa(int(rows)),
 			"-c", s.workdir, s.paneCmd},
@@ -435,14 +464,30 @@ func (b *Bridge) serve(w http.ResponseWriter, r *http.Request, s session) {
 				}
 				return
 			}
-			touch()
 			if msgType == websocket.MessageText {
-				var msg controlMessage
-				if json.Unmarshal(data, &msg) == nil && msg.Type == "resize" && msg.Cols > 0 && msg.Rows > 0 {
+				msg, ok, reply, activity := classifyControl(data)
+				if activity {
+					touch()
+				}
+				if ok && msg.Type == "resize" && msg.Cols > 0 && msg.Rows > 0 {
 					_ = ex.Resize(hctx, uint(msg.Cols), uint(msg.Rows))
+				}
+				if reply != nil {
+					// Bounded: a peer that stopped reading must not park this
+					// loop — and with it every keystroke — behind one reply.
+					wctx, wcancel := context.WithTimeout(hctx, 5*time.Second)
+					err := conn.Write(wctx, websocket.MessageText, reply)
+					wcancel()
+					if err != nil {
+						if hctx.Err() == nil {
+							browserGone.Store(true)
+						}
+						return
+					}
 				}
 				continue
 			}
+			touch()
 			if _, err := ex.Write(data); err != nil {
 				return
 			}

@@ -52,7 +52,11 @@ disk (about USD 20/month). Stop it when idle.
    - `env`: the five must-fill keys of `deploy/.env.example` for THIS host —
      `BASE_DOMAIN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
      `ADMIN_EMAIL`, `STYRMAN_ALLOWED_EMAILS` — plus the optional
-     `STYRMAN_HOSTNAME` and the optional `CLOUDFLARE_API_TOKEN`.
+     `STYRMAN_HOSTNAME` and the optional `CLOUDFLARE_API_TOKEN`
+     (`styrman-ctl install --env-file` writes the token to the host's `.env`
+     when the file carries it — validated, an invalid value stops the
+     install, never prompted for; from v1.39.0 until the release after it a
+     token here was dropped silently).
      When `CLOUDFLARE_API_TOKEN` is unset, the ingress uses HTTP-01 ACME
      challenges (works for non-wildcard hostnames) and DNS records must be
      created manually (e.g. in Cloud DNS — see "Create DNS records" below).
@@ -104,7 +108,7 @@ records itself.
 `install.sh` also delivers the OPTIONAL keys in `env` — `STYRMAN_HOSTNAME`,
 `STYRMAN_PUBLIC_DOMAIN`, `STYRMAN_PRIVATE_DOMAIN` — with `styrman-ctl edit`
 after the install, because `styrman-ctl install --env-file` itself carries
-only the five must-fill keys and the host would otherwise keep its defaults
+only the five must-fill keys plus (since this change) `CLOUDFLARE_API_TOKEN`, and the host would otherwise keep its defaults
 (BUG-072). It then reads the hostname back from the host and verifies that
 URL, so a mismatch is reported rather than probed blindly.
 

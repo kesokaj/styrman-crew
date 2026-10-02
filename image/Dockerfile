@@ -4,7 +4,7 @@
 # sh-agent, the agent harness installer with the harness embedded, is the
 # styrman-harness RELEASE binary named by HARNESS_VERSION, downloaded from
 # GitHub Releases below and verified against the harness's signer (ADR-074).
-FROM debian:trixie@sha256:6788062a1b42ac281f053ac876170b79a3eaed5d61383b8ed7eaca6c6965f3b1
+FROM debian:trixie@sha256:d5ce19d4736f0ebbacd686d1040271a5aeb0cc920f5990c1bfae1717627f0674
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TERM=xterm-256color
@@ -52,8 +52,11 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 # chrome-devtools-mcp is pinned further down. The ONE thing that floats is
 # the Antigravity CLI (`agy`): Google publishes it as latest-only behind a
 # manifest whose sha512 the installer verifies, offers no versioned artifact,
-# and the CLI self-updates at run time anyway — a build-time pin would be
-# theatre, so the floating install is an accepted, recorded exception.
+# and the CLI updates itself at run time (`agy update`, which works in a
+# project since ADR-077 put the binary in a directory its user can write —
+# before that it refused, and this note's "self-updates anyway" was false) —
+# a build-time pin would be theatre, so the floating install is an accepted,
+# recorded exception.
 # What that exception does NOT cover, stated so the next reader does not have
 # to infer it (security review 2026-09-22, which filed the float as a finding
 # because this note reads as more coverage than it gives): the fetch of
@@ -66,10 +69,10 @@ RUN install -m 0755 -d /etc/apt/keyrings && \
 # Before 2026-09-02, OpenTofu and Helm were `curl | bash` too; Helm was
 # removed, OpenTofu pinned. Bump the ARG pairs deliberately and together
 # (specs/styrman/runtime-image.md names the procedure).
-ARG TOFU_VERSION=1.12.6
-ARG TOFU_SHA256=5dc43da4f750f33873dc25e94587128709e819e544b7be9016b255316153c3a8
-ARG YQ_VERSION=4.53.6
-ARG YQ_SHA256=c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385
+ARG TOFU_VERSION=1.13.1
+ARG TOFU_SHA256=8ccbc6f8ee21d2827715f3c6e08a9b3e0209b1e62057c05067ef117e047c1a80
+ARG YQ_VERSION=4.54.1
+ARG YQ_SHA256=8e34fc298390875de416e6a4afcb8cabeceb25d9aa8506c1a2f9353cf702ea5f
 ARG HADOLINT_VERSION=2.15.1
 ARG HADOLINT_SHA256=c7187db94eeeeca956519a6af171adc31453941a1e777961f6e680f697c8c507
 # OpenTofu + yq + hadolint
@@ -92,12 +95,12 @@ RUN set -eux; \
     rm -rf /tmp/tofu.zip /tmp/tofu
 
 # Go + Node, pinned (sums from go.dev/dl and nodejs.org/dist/vX/SHASUMS256.txt,
-# read 2026-09-13; these are the versions production already ran, now
-# explicit). A changed upstream tarball fails the build loudly.
+# re-read from the publishers at each bump by image/bump-pins.sh). A changed
+# upstream tarball fails the build loudly.
 ARG GO_VERSION=1.27.1
 ARG GO_SHA256=63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445
-ARG NODE_VERSION=22.23.2
-ARG NODE_SHA256=d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307
+ARG NODE_VERSION=22.23.3
+ARG NODE_SHA256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
 RUN set -eux; \
     curl -fsSL -o /tmp/go.tgz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz"; \
     echo "${GO_SHA256}  /tmp/go.tgz" | sha256sum -c -; \
@@ -112,12 +115,32 @@ RUN set -eux; \
 # the Antigravity CLI (floats by upstream design — see the note above; the
 # installer downloads to a file first so a failed fetch cannot run a partial
 # script).
-ARG CLAUDE_CODE_VERSION=2.1.270
+#
+# Updating them inside a project (ADR-077). Both tools update THEMSELVES, and
+# each needs somewhere it can write:
+# - agy replaces its own binary in the directory it really lives in (it
+#   resolves symlinks) and refuses when that directory is not writable —
+#   "/usr/local/bin is not fully accessible" was every project's `agy update`
+#   before this layout. So the binary lives alone in /opt/agy, mode 0777, behind
+#   the /usr/local/bin/agy symlink: the update lands in the container's own
+#   filesystem, survives stop/start, and a container rebuild falls back to
+#   this image's agy. The mode opens no boundary: the project user is root in
+#   its own VM already (passwordless sudo, entrypoint.sh), and nothing runs
+#   agy as root after this build step (the entrypoint's one call is under
+#   runuser).
+# - Claude's updater installs with npm into the user's prefix
+#   (NPM_CONFIG_PREFIX=$HOME/.npm-global, skel/bash_exports); the entrypoint
+#   creates that tree, and the copy there then wins on PATH over this one.
+# The build fails if the installer left no agy to move.
+ARG CLAUDE_CODE_VERSION=2.1.287
 RUN set -eux; \
     npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"; \
     curl -fsSL -o /tmp/agy-install.sh https://antigravity.google/cli/install.sh; \
     bash /tmp/agy-install.sh; rm -f /tmp/agy-install.sh; \
-    { mv /root/.local/bin/agy /usr/local/bin/agy 2>/dev/null || true; }; \
+    src=/root/.local/bin/agy; [ -x "${src}" ] || src="$(command -v agy)"; \
+    install -d -m 0777 /opt/agy; \
+    mv "${src}" /opt/agy/agy; \
+    ln -sfn /opt/agy/agy /usr/local/bin/agy; \
     claude --version && agy --version
 
 # Browser view (ADR-068): one headless Chromium per project, driven by the
@@ -139,7 +162,7 @@ RUN set -eux; \
 # recorded at /styrman/npm-global.tree.json so two builds of one version can
 # be diffed: only the top-level versions are pinned, the rest resolves by
 # semver.
-ARG CHROME_DEVTOOLS_MCP_VERSION=1.9.0
+ARG CHROME_DEVTOOLS_MCP_VERSION=1.10.1
 RUN mkdir -p /styrman && apt-get update && apt-get install --no-install-recommends -y chromium fonts-liberation socat \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g --ignore-scripts "chrome-devtools-mcp@${CHROME_DEVTOOLS_MCP_VERSION}" \
@@ -154,7 +177,7 @@ RUN mkdir -p /styrman && apt-get update && apt-get install --no-install-recommen
 # release would otherwise pass (the harness's README § Install without
 # cloning). HARNESS_VERSION must be a canonical vX.Y.Z — only such a build
 # installs the harness built into it. Nothing but the binary stays.
-ARG HARNESS_VERSION=v1.6.0
+ARG HARNESS_VERSION=v2.3.2
 ARG HARNESS_SIGNER='ostling.simon@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBkx0BICH1xG18f0a0F/02Vw0OvBTfSOVNXkPkO62NCR'
 RUN --mount=type=secret,id=gh_token,required=true \
     set -eu; mkdir -p /styrman/bin; d="$(mktemp -d)"; cd "$d"; \

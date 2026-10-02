@@ -36,7 +36,13 @@ fi
 ME="$(id -un)"        # auth-none mode acts as the OS user
 ID=""                 # project UUID, captured after create
 CN=""                 # container name styrman-<uuid>
-STATE="$(mktemp -d /tmp/styrman-itest-XXXX)"
+# On DISK, never /tmp: /tmp is tmpfs on this host, and a project home on
+# tmpfs pays nothing for a sync — on 2026-10-02 the boot-budget check below
+# read 3.26 s for an image whose harness install costs 12.8 s on ext4 (the
+# same run on /var/tmp read 16.16 s and failed). Production homes are on
+# disk, so the budget is measured there (ADR-078; plan 2026-10-02, D12).
+STATE="$(mktemp -d /var/tmp/styrman-itest-XXXX)"
+STATE_FS="$(stat -f -c %T "${STATE}")"
 REPO="$(cd "$(dirname "$0")/../../../.." && pwd)"
 # ADR-067's network-mode checks read JSON fields; fail loudly up front rather
 # than letting every one of them compare against an empty string.
@@ -51,6 +57,20 @@ bad()  { echo -e "\033[31mFAIL\033[0m $*"; FAIL=$((FAIL+1)); }
 skip() { echo -e "\033[33mSKIP\033[0m $*"; SKIP=$((SKIP+1)); }
 check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 SKIP=0
+# wait_seed — block, bounded, until this boot's harness step is over. Since
+# ADR-078 the harness's file install runs AFTER ready, in the background
+# (about 13 s on a disk-backed home), and the entrypoint writes
+# /run/styrman/harness-done last on every path. Every harness assertion that
+# follows a boot calls this first. It never fails by itself: a marker that
+# does not appear shows as the FAIL of the checks that follow, and the first
+# boot asserts the marker outright.
+wait_seed() {
+    for _ in $(seq 1 150); do
+        docker exec "${CN}" test -f /run/styrman/harness-done 2>/dev/null && return 0
+        sleep 1
+    done
+    return 0
+}
 
 cleanup() {
     say "cleanup"
@@ -110,6 +130,9 @@ check "in-guest dockerd runs overlay2" \
     "docker exec ${CN} docker info --format '{{.Driver}}' | grep -q overlay2"
 
 say "agent harness (ADR-074: the image's sh-agent release binary, installed write-once into the home)"
+wait_seed
+check "harness step finished after ready (harness-done marker, ADR-078)" \
+    "docker exec ${CN} test -f /run/styrman/harness-done"
 GH="/home/${ME}"
 # The stamp is version+release (ADR-074): read once from the guest, as the
 # entrypoint composes it, and compared verbatim below and after the recreate.
@@ -213,14 +236,48 @@ check "login shell resolves GOPATH to \$HOME/.go" \
 # shell tests nothing, the guard has already run by then.
 check "\$HOME/.go/bin joins PATH once it exists" \
     "docker exec ${CN} runuser -u ${ME} -- mkdir -p ${GH}/.go/bin && docker exec ${CN} runuser -u ${ME} -- bash -lic 'echo \$PATH' 2>/dev/null | tr : '\\n' | grep -qx '${GH}/.go/bin'"
+say "in-project tool updates (ADR-077: claude into ~/.npm-global, agy in /opt/agy)"
+# Claude's updater installs with npm into the prefix skel/bash_exports names
+# (NPM_CONFIG_PREFIX=$HOME/.npm-global). The entrypoint creates that tree on
+# every boot: absent, Claude reports the prefix unwritable and turns its
+# updater off, and skel/bashrc leaves ~/.npm-global/bin off PATH.
+check "~/.npm-global/bin and lib exist, user-writable, bin on a login shell's PATH" \
+    "docker exec ${CN} runuser -u ${ME} -- sh -c 'test -w ${GH}/.npm-global/bin && test -w ${GH}/.npm-global/lib' && docker exec ${CN} runuser -u ${ME} -- bash -lic 'echo \$PATH' 2>/dev/null | tr : '\\n' | grep -qx '${GH}/.npm-global/bin'"
+# What Claude itself says, from an INTERACTIVE login shell (see the GOPATH
+# check above for why -lic). `Auto-updates:` is the positive control: a
+# doctor that printed nothing must not read as "no warning".
+DOCTOR="$(docker exec "${CN}" runuser -u "${ME}" -- env HOME="${GH}" bash -lic 'timeout 60 claude doctor </dev/null' 2>&1 || true)"
+check "claude doctor reports auto-updates usable (no unwritable-prefix warning)" \
+    "printf '%s\\n' \"\${DOCTOR}\" | grep -F 'Auto-updates:' >/dev/null && ! printf '%s\\n' \"\${DOCTOR}\" | grep -F 'auto-update: npm global folder' >/dev/null"
+# agy replaces its own binary in the directory it really lives in (it
+# resolves symlinks), and refuses when that directory is not writable.
+check "project user can write agy's directory; /usr/local/bin/agy resolves into it" \
+    "docker exec ${CN} runuser -u ${ME} -- sh -c 'd=\"\$(dirname \"\$(readlink -f /usr/local/bin/agy)\")\" && [ \"\$d\" = /opt/agy ] && test -w \"\$d\" && [ \"\$(readlink -f \"\$(command -v agy)\")\" = /opt/agy/agy ]'"
+
 # R1 boot budget, from the container's own clock: the gap between its start
-# and the entrypoint's ready line. The harness seed sits on that path — a
-# blocking call there once cost 60 s (ADR-047) and nothing asserted it.
+# and the entrypoint's ready line. The quick half of the harness seed (the
+# migration and the two MCP registrations) sits on that path — a blocking
+# call there once cost 60 s (ADR-047), and the v2 harness's file install
+# cost 13 s there until ADR-078 moved it behind ready.
+# Measured on the state dir's filesystem, named in the label (stat calls
+# ext4 "ext2/ext3"); on tmpfs the check FAILS rather than passing a budget
+# it cannot see (plan 2026-10-02, D12).
 BOOT_AT="$(docker inspect -f '{{.State.StartedAt}}' "${CN}")"
 READY_AT="$(docker logs -t "${CN}" 2>&1 | grep -m1 'project .* ready' | cut -d' ' -f1 || true)"
 BOOT_GAP="$(awk "BEGIN{printf \"%.2f\", $(date -d "${READY_AT:-1970-01-01T00:00:00Z}" +%s.%N) - $(date -d "${BOOT_AT}" +%s.%N)}")"
-check "boot to ready within R1's 15 s hard limit (measured ${BOOT_GAP}s; soft target 5 s)" \
-    "awk 'BEGIN{exit !(${BOOT_GAP} > 0 && ${BOOT_GAP} < 15)}'"
+if [ "${STATE_FS}" = tmpfs ]; then
+    bad "boot to ready within R1's 15 s hard limit (state dir on tmpfs: the boot budget cannot be measured)"
+else
+    check "boot to ready within R1's 15 s hard limit (measured ${BOOT_GAP}s on ${STATE_FS}; soft target 5 s)" \
+        "awk 'BEGIN{exit !(${BOOT_GAP} > 0 && ${BOOT_GAP} < 15)}'"
+fi
+# The harness's file install (1,788 files, synced one by one) runs AFTER
+# ready (ADR-078): the ready line must precede the deployed line. docker's
+# -t stamps are fixed-width RFC 3339, so they compare as strings; both are
+# length-checked so a missing line cannot compare as "earlier".
+DEPLOYED_AT="$(docker logs -t "${CN}" 2>&1 | grep -m1 -F 'agent harness deployed (version' | cut -d' ' -f1 || true)"
+check "ready line precedes the agent harness deployed line (install runs after ready)" \
+    "[ -n '${READY_AT}' ] && [ -n '${DEPLOYED_AT}' ] && [[ '${READY_AT}' < '${DEPLOYED_AT}' ]]"
 
 say "terminals (durable records, ADR-016)"
 NEW=$(curl -fsS -X POST "${API}/api/projects/${ID}/terminals" -d '{"title":"First terminal"}')
@@ -236,6 +293,12 @@ MARK="itest-$$-mark"
 OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/1?cols=120&rows=30" \
     -send "echo ${MARK}; pwd\r" -wait 5s || true)
 check "shell echoes marker" "echo '${OUT}' | grep -q '${MARK}'"
+# Liveness (ADR-079): a ping control frame is answered with a pong text
+# frame, which wsprobe prints as [text:…].
+PONG=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/1?cols=120&rows=30" \
+    -control '{"type":"ping"}' -wait 3s || true)
+check "a ping text frame is answered with a pong" \
+    "printf '%s' \"\${PONG}\" | grep -F '[text:{\"type\":\"pong\"}]' >/dev/null"
 check "cwd is the workspace" "echo '${OUT}' | grep -q 'projects/itest'"
 check "terminal reported live" \
     "curl -fsS ${API}/api/projects/${ID}/terminals | grep -q '\"live\":true'"
@@ -420,6 +483,10 @@ check "file survives container recreate" "echo '${OUT}' | grep -q persisted"
 check "docker.img persisted" "[ -f '${STATE}/homes/${ME}/p/${ID}/.dockerd/${ID}.img' ]"
 check "transcript survives recreate" \
     "curl -fsS ${API}/api/projects/${ID}/history/conv-1 | grep -q '${MARK}'"
+# The recreate above re-seeds (the stamp was removed): its install is in the
+# background, so wait before reading what it logs and stamps — and before the
+# undo below removes the stamp a still-running install would write back.
+wait_seed
 check "boot log carries the installer's note: line for a settings.json it could not judge (BUG-062)" \
     "docker logs ${CN} 2>&1 | grep -F \"note: ${GH}/.claude/settings.json is not a regular file, so the attribution setting could not be checked\" >/dev/null"
 check "the seed still completed around the refused key (stamp rewritten)" \
@@ -477,6 +544,9 @@ check "start switched the restart policy back on (BUG-063)" \
     "[ \"\$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' ${CN})\" = unless-stopped ]"
 # The BUG-062 undo above left the home without a stamp or a settings.json:
 # this boot seeds again and the file comes back with the key (ADR-072).
+# The install is in the background (ADR-078): wait for it, both for this
+# check and so the stop below does not cut it short.
+wait_seed
 check "re-seed after the BUG-062 undo recreates settings.json with the key" \
     "docker logs ${CN} 2>&1 | grep -F \"settings: ${GH}/.claude/settings.json created with\" >/dev/null && docker exec ${CN} runuser -u ${ME} -- jq -e '.attribution.commit == \"\" and .attribution.pr == \"\"' ${GH}/.claude/settings.json >/dev/null"
 # ADR-074 never-downgrade (plan D4): a home whose manifest names a NEWER
@@ -501,7 +571,9 @@ check "boot log says the newer home was left alone (no install, ADR-074)" \
     "docker logs ${CN} 2>&1 | grep -F 'agent harness: home has sh-agent v99.0.0 (sh-agent update), image carries ${HREL}; left alone' >/dev/null"
 # The pass line of a skipped install says "kept", never "deployed": the
 # count of deployed lines is what it was before this boot (code review
-# 2026-09-21, finding 3).
+# 2026-09-21, finding 3). The pass line and the stamp come from the
+# background step (ADR-078), so wait for it.
+wait_seed
 check "the left-alone boot logs 'kept', not a new 'deployed' line" \
     "docker logs ${CN} 2>&1 | grep -F 'agent harness kept (version' >/dev/null && [ \"\$(docker logs ${CN} 2>&1 | grep -cF 'agent harness deployed (version')\" = '${DEPLOYED_BEFORE}' ]"
 check "home sh-agent and manifest untouched by the boot" \

@@ -10,9 +10,12 @@
 #
 # --secrets-dir (default ~/.config/styrman/gcp, mode 700) holds three files,
 # each mode 600 and owned by you:
-#   env              the six must-fill keys of deploy/.env.example (BASE_DOMAIN,
+#   env              the five must-fill keys of deploy/.env.example (BASE_DOMAIN,
 #                    GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ADMIN_EMAIL,
-#                    STYRMAN_ALLOWED_EMAILS) + optional CLOUDFLARE_API_TOKEN + optional STYRMAN_HOSTNAME
+#                    STYRMAN_ALLOWED_EMAILS) + optional CLOUDFLARE_API_TOKEN
+#                    (styrman-ctl install writes it when this file carries
+#                    it; without it certificates come over HTTP-01)
+#                    + optional STYRMAN_HOSTNAME
 #   gh-token         a fine-grained GitHub token that reads this repository AND
 #                    kesokaj/styrman-harness (the image build, ADR-074)
 #   allowed_signers  one line: <git email> <key type> <public key> of the release signer
@@ -153,7 +156,9 @@ log "install: sudo styrman-ctl install --yes on the VM (host-setup.sh, image bui
 run "${VM}" ssh -- "cd \"\$HOME/styrman-crew\" && sudo ./deploy/styrman-ctl install --yes --user ${USER_NAME} --version ${VERSION} --env-file \"\$HOME/.styrman-install/env\" --gh-token-file \"\$HOME/.styrman-install/gh-token\" --allowed-signers-file \"\$HOME/.styrman-install/allowed_signers\""
 
 # ─── 5b. The optional keys styrman-ctl install does not carry ───────────────
-# `styrman-ctl install --env-file` prompts for the SIX must-fill keys only, so
+# `styrman-ctl install --env-file` fills the five must-fill keys and, when the
+# file carries it, CLOUDFLARE_API_TOKEN (its OPTIONAL_FILL list) — nothing
+# else, so
 # anything else in the secrets env never reaches the host and it silently uses
 # the default (BUG-072: the first bring-up served styrman.<domain> while this
 # script verified crew.<domain>). `styrman-ctl edit` is the supported way to

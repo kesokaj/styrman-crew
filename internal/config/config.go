@@ -67,7 +67,10 @@ const (
 	// 2026-09-10, item I).
 	CloseAccessRevoked = 4003
 	// CloseReplaced: a newer WebSocket attached to the same conversation.
-	// The frontend must NOT auto-reconnect on this code.
+	// The frontend must NOT reconnect by itself on this code. It may take the
+	// conversation back when its page is shown again or its user presses
+	// "Use here" (ADR-079): both are actions on the replaced page, and being
+	// replaced causes neither, so two pages cannot trade it in a loop.
 	CloseReplaced = 4001
 	// CloseBrowserUnavailable: the project's browser (ADR-068) could not be
 	// started — the close reason carries the launcher's message. The Browser

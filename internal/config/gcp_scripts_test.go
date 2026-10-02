@@ -572,16 +572,31 @@ func TestGCPLibEnvGetMatchesStyrmanCtl(t *testing.T) {
 	// Asserting only env_get here is what the comment in lib.sh and the
 	// change entry both claimed to cover and did not (security review
 	// 2026-09-22).
+	// The three stat reads differ on purpose since v1.39.0 (167f605): lib.sh
+	// runs on the operator's own machine, macOS included, so each read tries
+	// GNU `stat -c` and then BSD `stat -f` before its fail-closed default;
+	// styrman-ctl runs on the Debian host only and keeps the GNU form. That
+	// commit changed lib.sh and left these needles asserting the GNU text in
+	// BOTH files, so the test was red from v1.39.0 until 2026-10-02
+	// (BUG-081). What must stay identical is asserted identically: the GNU
+	// read first, and the same fail-closed default (`?`, `777`) last.
 	for name, src := range map[string]string{"deploy/styrman-ctl": ctl, "deploy/gcp/lib.sh": lib} {
+		bsd := name == "deploy/gcp/lib.sh"
+		read := func(gnu, bsdFallback, dflt string) string {
+			if bsd {
+				return gnu + ` 2>/dev/null || ` + bsdFallback + ` 2>/dev/null || echo ` + dflt + `)"`
+			}
+			return gnu + ` 2>/dev/null || echo ` + dflt + `)"`
+		}
 		for _, check := range []struct{ what, needle string }{
 			{"symlink refusal", `[ -L "${f}" ] && die`},
-			{"owner read", `owner="$(stat -c %U "${f}" 2>/dev/null || echo ?)"`},
-			{"file mode read", `mode="$(stat -c %a "${f}" 2>/dev/null || echo 777)"`},
+			{"owner read", read(`owner="$(stat -c %U "${f}"`, `stat -f %Su "${f}"`, `?`)},
+			{"file mode read", read(`mode="$(stat -c %a "${f}"`, `stat -f %Lp "${f}"`, `777`)},
 			{"file not group/other readable", `[ "$(( 8#${mode} & 8#077 ))" = 0 ]`},
-			{"parent mode read", `pmode="$(stat -c %a "$(dirname -- "${f}")" 2>/dev/null || echo 777)"`},
+			{"parent mode read", read(`pmode="$(stat -c %a "$(dirname -- "${f}")"`, `stat -f %Lp "$(dirname -- "${f}")"`, `777`)},
 		} {
 			if !strings.Contains(src, check.needle) {
-				t.Errorf("%s: private_file lost its %s; the two copies have drifted", name, check.what)
+				t.Errorf("%s: private_file lost its %s (want %q); the two copies have drifted", name, check.what, check.needle)
 			}
 		}
 	}

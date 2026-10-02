@@ -3,18 +3,24 @@
 The per-project Kata microVM image: pure tooling, no server binary
 (ADR-002). The entrypoint seeds each project's OWN home write-once from
 `skel/` (dotfiles) and installs the agent harness with `/styrman/bin/sh-agent`
-— the `styrman-harness` RELEASE binary, harness embedded (global context, 27
-skills, 7 subagents; no hooks, no scripts, no settings file but the one
+— the `styrman-harness` RELEASE binary, harness embedded (global context, 36
+skills, 8 subagents at v2.3.2; no hooks, no scripts, no settings file but the one
 `attribution` key), downloaded from GitHub Releases at image build at the
 version `ARG HARNESS_VERSION` names and verified against the harness's
 signer (ADR-074, replacing the ADR-062 mirror and the ADR-073 channel).
 `sh-agent install` runs once per image version + harness release into each
-home and never downgrades a home whose user ran `sh-agent update` inside the
+home, as a background job AFTER the `/run/styrman/ready` line under a 120 s
+cap (ADR-078; migrate and the browser-MCP registrations stay before ready;
+`/run/styrman/harness-done` marks the end of the harness step; a `claude` or
+`agy` started earlier sees no skills until restarted), and never downgrades a home whose user ran `sh-agent update` inside the
 project — that command is how a project moves to a newer harness between
 image bumps; a home carrying the pre-ADR-062 harness is migrated first by
 `configs/harness-migrate.sh`, which moves its artifacts to
 `~/.styrman/harness-backup-<ts>/`, sets up per-project Docker-in-Docker on
 a loop-mounted ext4 disk, and
+makes the agent CLIs self-updatable in a project (ADR-077: agy lives in
+the 0777 `/opt/agy` with `/usr/local/bin/agy` symlinked to it; the
+entrypoint creates `~/.npm-global/bin` and `lib` for Claude's updater),
 installs the credential materialization snippet
 (`configs/styrman-credentials.sh`, ADR-032). Also carries the per-language
 syntax checkers the editor's Check feature runs inside the guest —

@@ -37,8 +37,12 @@ ships).
 | server → client | binary | Raw PTY bytes. Write straight into xterm.js. |
 | client → server | binary | Raw input bytes (keystrokes, paste). |
 | client → server | text (JSON) | Control: `{"type":"resize","cols":N,"rows":N}`. |
+| client → server | text (JSON) | Control: `{"type":"ping"}` (ADR-079). |
+| server → client | text (JSON) | `{"type":"pong"}`, the answer to a ping, written under a 5 s bound. |
 
-There are no other text messages; unknown control types are ignored.
+A ping does not count as activity for the idle reaper. Both `/ws/term/...`
+and `/ws/setup` answer it. There are no other text messages; unknown control
+types are ignored.
 
 The client intercepts Ctrl/Cmd+V / Ctrl+Shift+V paste via the clipboard API,
 and Cmd+C or Ctrl+Shift+C to copy a selection explicitly. Plain Ctrl+C is

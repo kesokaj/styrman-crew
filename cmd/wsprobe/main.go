@@ -5,6 +5,10 @@
 //
 //	wsprobe -url ws://127.0.0.1:8080/ws/term/alpha/1?kind=shell \
 //	        -send "echo hello-$$\r" -wait 3s
+//
+// -control sends one TEXT frame (a control message, e.g. {"type":"ping"})
+// before any -send input; a text frame the server sends back is printed as
+// [text:<data>] so a script can tell it from PTY bytes.
 package main
 
 import (
@@ -20,6 +24,7 @@ import (
 func main() {
 	url := flag.String("url", "", "terminal WebSocket URL")
 	send := flag.String("send", "", "input to send after connecting (\\r for Enter)")
+	control := flag.String("control", "", "one JSON control message to send as a text frame after connecting, before -send")
 	wait := flag.Duration("wait", 3*time.Second, "how long to collect output")
 	flag.Parse()
 	if *url == "" {
@@ -38,6 +43,13 @@ func main() {
 	defer conn.CloseNow()
 	conn.SetReadLimit(-1)
 
+	if *control != "" {
+		if err := conn.Write(ctx, websocket.MessageText, []byte(*control)); err != nil {
+			fmt.Fprintln(os.Stderr, "wsprobe: write control:", err)
+			os.Exit(1)
+		}
+	}
+
 	if *send != "" {
 		// Give tmux a beat to attach before typing.
 		time.Sleep(500 * time.Millisecond)
@@ -50,7 +62,7 @@ func main() {
 	deadline := time.Now().Add(*wait)
 	for time.Now().Before(deadline) {
 		readCtx, readCancel := context.WithDeadline(ctx, deadline)
-		_, data, err := conn.Read(readCtx)
+		msgType, data, err := conn.Read(readCtx)
 		readCancel()
 		if err != nil {
 			// Surface a server-initiated close code (e.g. 4000 exited, 4002
@@ -59,6 +71,10 @@ func main() {
 				fmt.Printf("[close:%d]", code)
 			}
 			break
+		}
+		if msgType == websocket.MessageText {
+			fmt.Printf("[text:%s]", data)
+			continue
 		}
 		os.Stdout.Write(data)
 	}

@@ -48,7 +48,7 @@ executes nothing.
 
 | Verb | Wraps |
 |---|---|
-| `install` | `host-setup.sh --user <operator>`; prompts for the five must-fill `.env` keys (validated) with `--env-file` supplying defaults unattended; `resolve_version` (`--version`, else the checkout's newest reachable release tag, never a bare commit sha, ADR-053); `docker build -t styrman-runtime:${V} --secret id=gh_token,… --build-arg STYRMAN_VERSION=${V} image/` (the secret is required since ADR-074; `styrman-ctl` takes it from `--gh-token-file`, else `GH_TOKEN`, else `/etc/styrman/gh-token`, and refuses to build without one); `STYRMAN_VERSION=${V} docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build`; waits up to 120s for `styrman-server` to report healthy; then offers auto-update setup |
+| `install` | `host-setup.sh --user <operator>`; prompts for the five must-fill `.env` keys (`BASE_DOMAIN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ADMIN_EMAIL`, `STYRMAN_ALLOWED_EMAILS`; validated) with `--env-file` supplying defaults unattended; when the env file carries `CLOUDFLARE_API_TOKEN` it is written too (validated, an invalid value stops the install, never prompted for; v1.39.0 to the release after it dropped it silently and the host used HTTP-01); `resolve_version` (`--version`, else the checkout's newest reachable release tag, never a bare commit sha, ADR-053); `docker build -t styrman-runtime:${V} --secret id=gh_token,… --build-arg STYRMAN_VERSION=${V} image/` (the secret is required since ADR-074; `styrman-ctl` takes it from `--gh-token-file`, else `GH_TOKEN`, else `/etc/styrman/gh-token`, and refuses to build without one); `STYRMAN_VERSION=${V} docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build`; waits up to 120s for `styrman-server` to report healthy; then offers auto-update setup |
 | `update --setup` | the "Setup" steps below, as prompts: GitHub token → `/etc/styrman/gh-token` (600); clone-or-fetch `/opt/styrman` under a one-shot `GIT_ASKPASS`; `chown -R root:root` the clone; copy `deploy/.env` into it; write `/etc/styrman/allowed_signers`; `styrman-update --check` with `STYRMAN_UPDATE_STATE_DIR`/`STYRMAN_DEPLOY_DIR`/`STYRMAN_GH_TOKEN_FILE`/`STYRMAN_ALLOWED_SIGNERS` all named explicitly; `systemctl enable --now styrman-update.timer`; `systemctl start styrman-update.service` for the first tick |
 | `update` | `systemctl start styrman-update.service` (one tick now) + `journalctl -u styrman-update.service -n 20` |
 | `update --redeploy` | `styrman-update --force` (clears a latched failed-version, rebuilds the current tag) |
@@ -306,7 +306,7 @@ harness channel (deleted: the two harness units, `styrman-update`'s
 `STYRMAN_HARNESS_DIR` and the server's read-only harness binds).
 
 **Image build.** `image/Dockerfile` downloads the release named by
-`ARG HARNESS_VERSION` (default `v1.6.0`) with `gh release download` from
+`ARG HARNESS_VERSION` (default `v2.3.2`; was `v1.6.0` until 2026-10-02) with `gh release download` from
 `kesokaj/styrman-harness` (assets `sh-agent-linux-amd64`, `SHA256SUMS`,
 `SHA256SUMS.sig`), verifies `SHA256SUMS.sig` with `ssh-keygen -Y verify`
 against the signer line in `ARG HARNESS_SIGNER`, checks the `SHA256SUMS`
@@ -329,10 +329,18 @@ without a token plans the `src=` form and says a real run needs one),
 **Boot.** `image/entrypoint.sh` compares
 `~/.styrman/.harness-version` (`<image VERSION>+<sh-agent release>`)
 against the image's own; when it differs it runs `harness-migrate.sh`
-(unchanged), then `sh-agent install --home <home>` (no `--repo`, since the
-harness is embedded in the binary) as the project user, then the browser MCP
-registration (unchanged), and logs `agent harness deployed (version
-<VERSION>, sh-agent vX.Y.Z; browser MCP registered for claude and agy)`.
+(unchanged), then the browser MCP registration, and — since ADR-078, as a
+background job AFTER `/run/styrman/ready` — `sh-agent install --home <home>`
+(no `--repo`, since the harness is embedded in the binary) as the project
+user under a 120 s cap, then the stamp, and logs `agent harness deployed
+(version <VERSION>, sh-agent vX.Y.Z; browser MCP registered for claude and
+agy)` (or a WARN line). Before ready: migrate (20 s cap), the
+never-downgrade decision and the two MCP registrations (20 s each), worst
+case 60 s. `/run/styrman/harness-done` is cleared at the top of every boot
+and written when the harness step ends, whatever the outcome, on every
+non-minimal boot. A `claude` or `agy` started before the install finishes
+sees no skills until restarted. (Before ADR-078 the install ran before the
+ready line, and the MCP registrations after it.)
 `install` copies the binary to `~/.local/bin/sh-agent` (first on `PATH` via
 skel/bashrc) and writes `~/.config/sh-agent/state.json` with
 `"repo": "embedded:vX.Y.Z"`. Never-downgrade: when that manifest already

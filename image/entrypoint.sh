@@ -17,9 +17,10 @@ log() { echo "[styrman] $*"; }
 
 # /run is NOT a tmpfs in this container — a marker from the previous boot
 # survives docker stop/start and would let waitReady pass while dockerd is
-# still coming up (review finding). Clear it first thing.
+# still coming up (review finding). Clear it first thing. harness-done (the
+# end of this boot's harness step, ADR-078) is a per-boot marker too.
 mkdir -p /run/styrman
-rm -f /run/styrman/ready
+rm -f /run/styrman/ready /run/styrman/harness-done
 
 # ─── Guest tuning (Kata mounts /proc/sys and /sys/fs/cgroup read-only) ──────
 mount -o remount,rw /proc/sys 2>/dev/null || true
@@ -69,10 +70,16 @@ MINIMAL="${STYRMAN_MINIMAL:-}"
 # Standard home dirs — the home is now PER-PROJECT and starts empty
 # (ADR-031), so the image seeds the skeleton. ~/projects/<dir> is the
 # workspace bind mount (mkdir is a no-op on it); ~/.dockerd stays in the home.
+# ~/.npm-global/{bin,lib} is the npm prefix skel/bash_exports names
+# (NPM_CONFIG_PREFIX): Claude's own updater installs there, and while the
+# tree did not exist Claude reported the prefix unwritable and switched its
+# updater off, and skel/bashrc left ~/.npm-global/bin off PATH (ADR-077).
+# Created on EVERY boot, so homes that predate this get it too.
 if [ -z "${MINIMAL}" ]; then
     runuser -u "${USERNAME}" -- mkdir -p \
         "${HOME_DIR}/projects/${PROJECT_DIR}" "${HOME_DIR}/.dockerd" \
         "${HOME_DIR}/.config" "${HOME_DIR}/.cache" "${HOME_DIR}/.local/bin" \
+        "${HOME_DIR}/.npm-global/bin" "${HOME_DIR}/.npm-global/lib" \
         2>/dev/null || true
 fi
 runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/.ssh" 2>/dev/null || true
@@ -107,7 +114,7 @@ if [ ! -f "${HOME_DIR}/.tmux.conf" ]; then
         || log "WARN: could not seed ~/.tmux.conf (home not writable?)"
 fi
 
-# ─── Agent harness from the base image (R5/ADR-030, ADR-074) ────────────────
+# ─── Agent harness from the base image (R5/ADR-030, ADR-074, ADR-078) ───────
 # The image carries /styrman/bin/sh-agent, the styrman-harness RELEASE binary
 # with the harness embedded, downloaded and verified at image build. Seeded
 # write-once, keyed on the image version plus the binary's release, as the
@@ -128,10 +135,25 @@ fi
 # an older image from undoing that. install is a file copier — no network,
 # no agy/claude call, no git, no `go build` (a release binary installs what
 # it carries; of its stdout only the settings.json lines are logged below —
-# the "agent harness deployed" line is this boot's pass signal). So the PATH
-# trim ADR-047 needed for the old harness's `agy -p` self-check is gone;
-# measured 0.02 s into an empty home on the host and ~0.5 s through
-# `docker run` including container start (testing/2026-09-03-verify-harness-phase2.md).
+# the "agent harness deployed" line is this boot's pass signal).
+#
+# The seed runs in TWO parts since ADR-078. install is no longer quick: the
+# v2 harness is 1,788 files and the binary syncs each one — 0.06 s on tmpfs,
+# 12.8 s on a disk-backed home in a microVM (measured 2026-10-02), where
+# v1.6.0 took 0.02 s. In front of /run/styrman/ready that put a first boot,
+# and the first boot after every release, at 16 s against the 15 s hard
+# limit. So:
+#   BEFORE ready (here): the migration, the never-downgrade decision and the
+#     two MCP registrations — all quick, and the registrations write
+#     ~/.claude.json, which the first login shell's credential snippet and
+#     the user's own `claude` write too; before ready no terminal exists, so
+#     nothing can race them.
+#   AFTER ready (harness_finish, in the background): `sh-agent install`, then
+#     the stamp and the pass or WARN lines. A `claude` or `agy` started in
+#     those seconds sees no skills until it is restarted — the accepted cost
+#     of an unchanged boot time.
+# /run/styrman/harness-done marks the end of this boot's harness step,
+# whatever its outcome; the integration suite waits on it.
 # Non-fatal: a harness hiccup must never block the project from booting.
 # harness_home_newer <home release> <image release> — true only when BOTH
 # are canonical vX.Y.Z and the home's is strictly newer (sort -V). An
@@ -144,6 +166,10 @@ harness_home_newer() {
     printf '%s\n' "$2" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' || return 1
     [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | tail -1)" = "$1" ]
 }
+# What harness_finish reads: set here so a boot with nothing to seed (stamp
+# current, minimal mode, no binary) still has them defined under `set -u`.
+HARNESS_PENDING=0   # 1: this boot has a seed to finish (stamp differs)
+HARNESS_INSTALL=0   # 1: the finish step runs `sh-agent install`
 if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
     HARNESS_VER="$(cat /styrman/VERSION 2>/dev/null || echo dev)"
     # ADR-074: /styrman/bin/sh-agent is the styrman-harness RELEASE binary the
@@ -157,44 +183,25 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
     HARNESS_ID="${HARNESS_VER}+${HARNESS_REL}"
     HARNESS_STAMP="${HOME_DIR}/.styrman/.harness-version"
     if [ "$(cat "${HARNESS_STAMP}" 2>/dev/null || true)" != "${HARNESS_ID}" ]; then
+        HARNESS_PENDING=1
         runuser -u "${USERNAME}" -- mkdir -p "${HOME_DIR}/.styrman" 2>/dev/null || true
-        # Both steps run as the user, each under a timeout: this block sits
-        # ahead of /run/styrman/ready and the home is user-controlled, so a
-        # stall here must never brick a boot. (The 2026-09-03 security review
-        # feared a ~/.gitconfig include of a FIFO hanging the installer's
-        # `git rev-parse`, and the install line carried GIT_CONFIG_GLOBAL=
-        # /dev/null against it; a release binary never runs git, so that
-        # guard is gone and the timeout is the whole defence.) The stamp is
-        # written only when EVERY step succeeds, so a failure is retried next
-        # boot (all are idempotent);
-        # install runs even after a partial migration so a single unmovable
-        # old file cannot withhold the harness — the WARN says what was left.
-        # 20 s each: both finish in well under a second — install is a file
-        # copy, never a `go build`, never a git call — so the cap only bounds
-        # a stall. Each step is well under R1's 15 s soft budget on its own;
-        # the four capped steps in this block (migrate, install, two MCP
-        # registrations) sum to 80 s worst case, inside the server's 90 s
-        # ready wait only just — a stall in every one of them still leaves
-        # the boot late (security review round 2; the claim corrected in the
-        # 2026-09-14 round 3).
+        # Every step runs as the user, each under a timeout: the home is
+        # user-controlled, so a stall here must never brick a boot. (The
+        # 2026-09-03 security review feared a ~/.gitconfig include of a FIFO
+        # hanging the installer's `git rev-parse`, and the install line
+        # carried GIT_CONFIG_GLOBAL=/dev/null against it; a release binary
+        # never runs git, so that guard is gone and the timeout is the whole
+        # defence.) The stamp is written only when EVERY step succeeds, so a
+        # failure is retried next boot (all are idempotent); install runs
+        # even after a partial migration so a single unmovable old file
+        # cannot withhold the harness — the WARN says what was left.
+        # The three capped steps in FRONT of ready (migrate, two MCP
+        # registrations, 20 s each) sum to 60 s worst case, inside the
+        # server's 90 s ready wait; each finishes in well under a second
+        # when nothing stalls. install's own cap (120 s, harness_finish) is
+        # behind ready and bounds only the background job.
         HM_OK=1; HI_OK=1; HR_OK=1; HR_FAIL=""
         timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" bash /styrman/configs/harness-migrate.sh || HM_OK=0
-        # stdout is KEPT for one thing: what the installer says about
-        # ~/.claude/settings.json — its one write outside the customization
-        # directories (the attribution key, ADR-072). That is the `settings:`
-        # line of the create, add and could-not-write paths, and the
-        # `note: … attribution …` advisory it prints INSTEAD when the file
-        # cannot be judged (not a regular file, unreadable, not a JSON
-        # object): the key is not written then and only that line says so
-        # (BUG-062 — the first filter kept `settings:` alone). The note is
-        # matched on the hint's own wording, not on the word "attribution",
-        # which a terminal username could carry into the PATH hint's path.
-        # Its other note, that PATH hint printed on every seed, stays out,
-        # as does everything else; stderr passes through as before (security
-        # review of the 4aa19be refresh, finding 2). These lines are a
-        # DIAGNOSTIC, not an attestation: the project user is root inside
-        # its own VM and can write anything to this stdout, so a check that
-        # needs the fact reads ~/.claude/settings.json itself (Tier 2 does).
         # Never downgrade: the home's manifest names the release its harness
         # came from ("repo": "embedded:vX.Y.Z" — the binary's own shape; a
         # path there is a pre-ADR-074 install and re-seeds). A home the user
@@ -209,20 +216,16 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
         fi
         if [ "${HARNESS_REL}" = unknown ]; then
             # No release to key on: nothing is installed, nothing stamped —
-            # the WARN below fires and the next boot retries.
+            # the WARN in harness_finish fires and the next boot retries.
             HI_OK=0
             log "WARN: /styrman/bin/sh-agent did not report a version — harness not deployed this boot"
         elif harness_home_newer "${HOME_REL}" "${HARNESS_REL}"; then
             HI_SKIPPED=1
             log "agent harness: home has sh-agent ${HOME_REL} (sh-agent update), image carries ${HARNESS_REL}; left alone"
         else
-            HI_OUT="$(timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" \
-                /styrman/bin/sh-agent install --home "${HOME_DIR}")" || HI_OK=0
-            printf '%s\n' "${HI_OUT}" | grep -E '^settings:|^note: .*(attribution setting could not be checked|does not set "attribution")' \
-                | tr -cd '[:print:]\n' | cut -c1-200 \
-                | while IFS= read -r line; do log "  ${line}"; done
+            HARNESS_INSTALL=1
         fi
-        # Third step (ADR-068 D4): register the project's browser as an MCP
+        # Browser MCP (ADR-068 D4): register the project's browser as an MCP
         # server with each agent's OWN command — the tools' MCP registries
         # (~/.claude.json, ~/.gemini/config/mcp_config.json), still no
         # settings.json, hooks or scripts. `claude mcp add` refuses a duplicate
@@ -233,12 +236,50 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
         # guards). Neither command needs a login (verified 2026-09-11).
         # Output is KEPT (last line) so a home that makes the write fail is
         # diagnosable from the boot log, not a silent every-boot retry.
+        # They run BEFORE install since ADR-078 (they ran after it): neither
+        # registry is a file install manages, so the order between them is
+        # free, and in front of ready is where nothing else writes them.
         HR_OUT="$(timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" sh -c \
             'claude mcp remove --scope user styrman-browser >/dev/null 2>&1 || true; claude mcp add --scope user styrman-browser -- /styrman/bin/styrman-browser mcp' 2>&1 >/dev/null)" \
             || { HR_OK=0; HR_FAIL="claude"; log "  claude mcp add: $(printf '%s' "${HR_OUT}" | tail -1 | tr -cd '[:print:]' | cut -c1-200)"; }
         HR_OUT="$(timeout 20 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" \
             agy mcp add styrman-browser /styrman/bin/styrman-browser mcp 2>&1 >/dev/null)" \
             || { HR_OK=0; HR_FAIL="${HR_FAIL:+both}"; HR_FAIL="${HR_FAIL:-agy}"; log "  agy mcp add: $(printf '%s' "${HR_OUT}" | tail -1 | tr -cd '[:print:]' | cut -c1-200)"; }
+    fi
+fi
+
+# harness_finish — the part of the seed that runs AFTER /run/styrman/ready,
+# as a background job of this shell (it reads the results the block above
+# left in HM_OK, HR_OK, HI_SKIPPED and the HARNESS_* variables). Writes
+# /run/styrman/harness-done last, on every path: stamp already current, no
+# binary in the image, deployed, kept, or failed.
+harness_finish() {
+    if [ "${HARNESS_PENDING}" = 1 ]; then
+        if [ "${HARNESS_INSTALL}" = 1 ]; then
+            # stdout is KEPT for one thing: what the installer says about
+            # ~/.claude/settings.json — its one write outside the customization
+            # directories (the attribution key, ADR-072). That is the `settings:`
+            # line of the create, add and could-not-write paths, and the
+            # `note: … attribution …` advisory it prints INSTEAD when the file
+            # cannot be judged (not a regular file, unreadable, not a JSON
+            # object): the key is not written then and only that line says so
+            # (BUG-062 — the first filter kept `settings:` alone). The note is
+            # matched on the hint's own wording, not on the word "attribution",
+            # which a terminal username could carry into the PATH hint's path.
+            # Its other note, that PATH hint printed on every seed, stays out,
+            # as does everything else; stderr passes through as before (security
+            # review of the 4aa19be refresh, finding 2). These lines are a
+            # DIAGNOSTIC, not an attestation: the project user is root inside
+            # its own VM and can write anything to this stdout, so a check that
+            # needs the fact reads ~/.claude/settings.json itself (Tier 2 does).
+            # 120 s: the copy takes about 13 s on a disk-backed home; the cap
+            # only bounds a stall, and nothing waits on this job.
+            HI_OUT="$(timeout 120 runuser -u "${USERNAME}" -- env HOME="${HOME_DIR}" \
+                /styrman/bin/sh-agent install --home "${HOME_DIR}")" || HI_OK=0
+            printf '%s\n' "${HI_OUT}" | grep -E '^settings:|^note: .*(attribution setting could not be checked|does not set "attribution")' \
+                | tr -cd '[:print:]\n' | cut -c1-200 \
+                | while IFS= read -r line; do log "  ${line}"; done
+        fi
         if [ "${HM_OK}" = 1 ] && [ "${HI_OK}" = 1 ] && [ "${HR_OK}" = 1 ]; then
             # The version and the path travel as ARGUMENTS, never interpolated
             # into the sh -c string: a quote in a hand-built STYRMAN_VERSION
@@ -255,7 +296,8 @@ if [ -z "${MINIMAL}" ] && [ -x /styrman/bin/sh-agent ]; then
             [ "${HR_OK}" = 1 ] || log "WARN: browser MCP registration failed for ${HR_FAIL} — retried next boot (continuing)"
         fi
     fi
-fi
+    touch /run/styrman/harness-done
+}
 
 # ─── Terminal transcripts (history) ─────────────────────────────────────────
 # Every tmux session pipes its output to a log in the project home, so the
@@ -388,6 +430,12 @@ fi
 # ─── Ready (only after everything above actually succeeded) ────────────────
 touch /run/styrman/ready
 log "project ${PROJECT} ready (user=${USERNAME} uid=${UID_})"
+
+# ─── Agent harness, second part (ADR-078) ──────────────────────────────────
+# The file install, behind ready and in the background: the boot does not
+# wait on it. A shutdown does not wait on it either — the stamp is its last
+# write, so an interrupted install is simply repeated on the next boot.
+harness_finish &
 
 # ─── apt persistence (operator Q7, ADR-028) ────────────────────────────────
 # The rootfs survives stop/start but dies on container REMOVAL (delete,
