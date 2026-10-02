@@ -1286,6 +1286,7 @@ try {
       }
       window.WebSocket = FreezableSocket;
       window.__termSockets = () => all.filter((s) => s.url.includes("/ws/term/"));
+      window.__browserSockets = () => all.filter((s) => s.url.includes("/ws/browser/"));
     });
   const termHas = (p, needle) =>
     p.evaluate(
@@ -1659,6 +1660,46 @@ try {
     );
     await page.getByRole("button", { name: "Browser", exact: true }).click();
     await waitBrowserFrames(before + 1);
+  });
+
+  await check("a browser view whose socket went silent streams again once its tab is shown", async () => {
+    // The browser pane's half of the dead-socket fix. A throwaway page (the
+    // suite's own page is not touched) opens the Browser view with the
+    // socket fixture installed, its relay socket is FROZEN (sends dropped,
+    // events withheld, readyState still OPEN), and the tab is shown again:
+    // the pane must notice (a CDP probe, 5 s unanswered) and reconnect — a
+    // new, unfrozen relay socket and a pane that is ready again.
+    const fifth = await context.newPage();
+    try {
+      await installSocketFixture(fifth);
+      await fifth.goto(`${BASE}/p/${PID}/2`);
+      await fifth.getByRole("button", { name: "Browser", exact: true }).click();
+      await fifth.waitForFunction(
+        () => Number(document.querySelector("canvas[data-frames]")?.getAttribute("data-frames") ?? 0) >= 1,
+        null,
+        { timeout: 30000 },
+      );
+      const frozen = await fifth.evaluate(() => {
+        const open = window.__browserSockets().filter((s) => s.readyState === 1);
+        for (const s of open) s.__frozen = true;
+        return open.length;
+      });
+      if (frozen !== 1) throw new Error(`expected one open browser socket to freeze, froze ${frozen}`);
+      await setVisibility(fifth, "hidden");
+      await setVisibility(fifth, "visible");
+      await fifth.waitForFunction(
+        () => window.__browserSockets().some((s) => !s.__frozen && s.readyState === 1),
+        null,
+        { timeout: 20000 },
+      );
+      await fifth.waitForFunction(
+        () => document.querySelector("[data-phase]")?.getAttribute("data-phase") === "ready",
+        null,
+        { timeout: 20000 },
+      );
+    } finally {
+      await fifth.close().catch(() => {});
+    }
   });
 
   await check("terminal session survived the browser round-trip", async () => {

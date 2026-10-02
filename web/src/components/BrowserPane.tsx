@@ -36,6 +36,12 @@ import { ChevronLeftIcon, ChevronRightIcon, PlusIcon, RefreshIcon, XIcon } from 
  * the tab strip stays current, but the screencast is stopped and no viewport
  * is pushed: a hidden box is 0×0, and forcing that (or a floor) onto the
  * browser the agents share would shrink THEIR page (review, 2026-09-13).
+ *
+ * A relay socket that dies WITHOUT a close (sleep, a network change) is the
+ * one case that reconnects by itself: a CDP probe on tab shown, network back
+ * and every 25 s while the document is visible — hidden inside the app or not
+ * — and no frame at all within 5 s reconnects through `reconnect()`. Every
+ * close above keeps its own state and button.
  */
 
 type Phase = "connecting" | "ready" | "stopped" | "unavailable" | "disconnected" | "revoked";
@@ -433,14 +439,45 @@ export function BrowserPane({
       });
     };
 
+    // Dead-socket check (ADR-079's second cause, for this pane). A relay
+    // socket that died without a close event — sleep, a network change —
+    // still reads OPEN: the screencast just stops and nothing on the page
+    // says why. When the tab is shown again, when the network comes back, and
+    // every 25 s while the tab is visible, ask the browser one harmless
+    // question through the relay; no answer in 5 s means the socket is gone
+    // and the pane reconnects, by the same path as its Reconnect button. A
+    // socket that CLOSED is not this case: onClose has already put the pane
+    // in a state with its own button, and `clientRef` no longer names it.
+    let probing = false;
+    const probe = () => {
+      if (disposed || !opened || client.closed || probing) return;
+      probing = true;
+      void client.alive().then((ok) => {
+        probing = false;
+        // Only a probe that TIMED OUT on a socket still reading open: a
+        // socket that closed went through onClose, which chose the state
+        // and its button, and is never reconnected from here.
+        if (!ok && !disposed && !client.closed && clientRef.current === client) reconnect();
+      });
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") probe();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("online", probe);
+    const probeTimer = setInterval(onVisibility, 25_000);
+
     return () => {
       disposed = true;
       clearTimeout(retryTimer);
+      clearInterval(probeTimer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", probe);
       client.close();
       clientRef.current = null;
     };
-    // `attach`/`say`/`setTabList` are stable callbacks; `epoch` is the
-    // reconnect trigger.
+    // `attach`/`say`/`setTabList`/`reconnect` are stable callbacks; `epoch`
+    // is the reconnect trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, epoch]);
 

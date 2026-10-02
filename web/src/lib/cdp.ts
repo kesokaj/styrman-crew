@@ -43,6 +43,9 @@ export class CdpClient {
   private readonly pending = new Map<number, Pending>();
   private readonly handlers = new Map<string, Set<CdpEventHandler>>();
   private closedState = false;
+  // One-shot listeners of alive(): any frame, and the close.
+  private readonly frameWaiters = new Set<() => void>();
+  private readonly closeWaiters = new Set<() => void>();
   /** Called once, when the socket closes (from either side). */
   onClose: ((code: number, reason: string) => void) | null = null;
 
@@ -77,6 +80,40 @@ export class CdpClient {
     });
   }
 
+  /**
+   * Ask whether the socket still carries traffic: one harmless command
+   * (`Browser.getVersion`) through the relay to the browser. Resolves true as
+   * soon as ANY frame arrives inside the window — the reply, an error reply,
+   * or an unrelated event such as a screencast frame: a relay that is busy
+   * streaming is alive, and a reply queued behind frames must not read as
+   * dead. Resolves false when nothing at all arrives within `timeoutMs`, and
+   * false when the client is closed or closes under the probe. A WebSocket
+   * that died without a close event (sleep, a network change) still reads
+   * OPEN; this is how the pane finds out (ADR-079's dead-socket cause, for
+   * the browser view).
+   */
+  alive(timeoutMs = 5000): Promise<boolean> {
+    if (this.closedState) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      const done = (ok: boolean) => {
+        clearTimeout(timer);
+        this.frameWaiters.delete(onFrame);
+        this.closeWaiters.delete(onGone);
+        resolve(ok);
+      };
+      const onFrame = () => done(true);
+      const onGone = () => done(false);
+      const timer = setTimeout(() => done(false), timeoutMs);
+      this.frameWaiters.add(onFrame);
+      this.closeWaiters.add(onGone);
+      // The reply itself resolves through onFrame; a send that fails means
+      // the socket is gone, which onGone or this catch reports.
+      this.send("Browser.getVersion").catch((e: unknown) => {
+        if (e instanceof CdpError && e.code === CDP_CLOSED) done(false);
+      });
+    });
+  }
+
   /** Subscribe to an event; returns the unsubscribe function. */
   on(method: string, fn: CdpEventHandler): () => void {
     let set = this.handlers.get(method);
@@ -103,6 +140,7 @@ export class CdpClient {
 
   private handleMessage(raw: unknown): void {
     if (typeof raw !== "string") return; // the relay only carries text
+    for (const fn of this.frameWaiters) fn(); // a waiter removes itself; Set iteration tolerates it
     let msg: {
       id?: unknown;
       result?: unknown;
@@ -144,6 +182,7 @@ export class CdpClient {
   private handleClose(code: number, reason: string): void {
     if (this.closedState) return;
     this.closedState = true;
+    for (const fn of this.closeWaiters) fn();
     for (const p of this.pending.values()) {
       p.reject(new CdpError(`socket closed (${code})`, CDP_CLOSED));
     }

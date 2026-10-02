@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CDP_CLOSED, CdpClient, CdpError, type CdpTransport } from "./cdp";
 
 // A scripted transport: records what the client sent, lets the test inject
@@ -102,5 +102,70 @@ describe("CdpClient", () => {
     t.closeFromServer(1000, "");
     expect(t.closed).toBe(true);
     expect(n).toBe(1);
+  });
+});
+
+// CdpClient.alive: the browser pane's dead-socket check. A socket that died
+// without a close event still accepts sends and simply never answers.
+describe("CdpClient.alive", () => {
+  it("is true when the browser answers", async () => {
+    const t = fakeTransport();
+    const c = new CdpClient(t);
+    const p = c.alive(1000);
+    const sent = JSON.parse(t.sent[0] ?? "") as { id: number; method: string };
+    expect(sent.method).toBe("Browser.getVersion");
+    t.receive(JSON.stringify({ id: sent.id, result: { product: "Chrome/1" } }));
+    await expect(p).resolves.toBe(true);
+  });
+
+  it("is true on an error REPLY: the round trip happened", async () => {
+    const t = fakeTransport();
+    const c = new CdpClient(t);
+    const p = c.alive(1000);
+    const sent = JSON.parse(t.sent[0] ?? "") as { id: number };
+    t.receive(JSON.stringify({ id: sent.id, error: { code: -32601, message: "not found" } }));
+    await expect(p).resolves.toBe(true);
+  });
+
+  it("is true on an unrelated event inside the window: a streaming relay is alive", async () => {
+    const t = fakeTransport();
+    const c = new CdpClient(t);
+    const p = c.alive(1000);
+    t.receive(JSON.stringify({ method: "Page.screencastFrame", params: {}, sessionId: "S1" }));
+    await expect(p).resolves.toBe(true);
+  });
+
+  it("is false when nothing comes back in time", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = fakeTransport();
+      const c = new CdpClient(t);
+      const p = c.alive(5000);
+      vi.advanceTimersByTime(4999);
+      let settled = false;
+      void p.then(() => (settled = true));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      vi.advanceTimersByTime(1);
+      await expect(p).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is false when the socket closes under the probe", async () => {
+    const t = fakeTransport();
+    const c = new CdpClient(t);
+    const p = c.alive(1000);
+    t.closeFromServer(1006, "");
+    await expect(p).resolves.toBe(false);
+  });
+
+  it("is false at once on a client that is already closed, and sends nothing", async () => {
+    const t = fakeTransport();
+    const c = new CdpClient(t);
+    c.close();
+    await expect(c.alive(1000)).resolves.toBe(false);
+    expect(t.sent).toHaveLength(0);
   });
 });

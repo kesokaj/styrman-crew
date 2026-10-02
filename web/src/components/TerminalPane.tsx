@@ -12,6 +12,7 @@ import {
   terminalTheme,
   type StyrmanTerminal,
 } from "../lib/terminal";
+import { createOutbox } from "../lib/termOutbox";
 import {
   createLiveness,
   isPong,
@@ -347,12 +348,14 @@ export function TerminalPane({
       reconnectTimer = undefined;
       dropSocket();
       // Coming back from a pane that had given up: whatever was queued while
-      // it was still reconnecting is stale now — the wake may come hours
-      // later — and must not be typed into the shell behind the user's back
-      // (security review 2026-10-02). A reconnect from a state that had NOT
-      // given up (a dead socket just noticed, a backoff cut short) keeps the
-      // queue: those keys are seconds old and the user is waiting on them.
-      if (closedForGood) outbox.length = 0;
+      // it was still reconnecting belongs to a session the user had left,
+      // and must not be typed into the shell behind their back (security
+      // review 2026-10-02). A reconnect from a state that had NOT given up (a
+      // dead socket just noticed, a backoff cut short) keeps the queue — and
+      // the queue itself refuses to be replayed once it is older than 30 s
+      // (lib/termOutbox.ts), which is what covers a machine that slept inside
+      // the retry window.
+      if (closedForGood) outbox.clear();
       closedForGood = false;
       resumable = "no";
       retries = 0;
@@ -404,10 +407,10 @@ export function TerminalPane({
     // N6: keystrokes typed during a brief reconnect window used to vanish
     // silently ("I typed and nothing happened"). Queue them (bounded) and
     // flush on reconnect.
-    const outbox: string[] = [];
+    const outbox = createOutbox();
     const flushOutbox = () => {
       if (ws?.readyState !== WebSocket.OPEN) return;
-      for (const d of outbox.splice(0)) {
+      for (const d of outbox.drain()) {
         ws.send(new TextEncoder().encode(d).buffer as ArrayBuffer);
       }
     };
@@ -415,7 +418,7 @@ export function TerminalPane({
       if (ws?.readyState === WebSocket.OPEN) {
         // Binary frame = raw input bytes (text frames are control messages).
         ws.send(new TextEncoder().encode(d).buffer as ArrayBuffer);
-      } else if (!closedForGood && outbox.length < 256) {
+      } else if (!closedForGood) {
         // Queue only while a reconnect is under way. Bytes typed at a pane
         // that is closed for good are dropped: after exited/stopped they
         // could never flush, and a replaced pane that is later taken back

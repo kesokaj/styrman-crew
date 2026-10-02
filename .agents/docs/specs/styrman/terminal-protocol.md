@@ -174,13 +174,22 @@ reconnects once it has been open.
   may come hours later, and replaying stale keys into a live shell is unsafe
   (security review 2026-10-02). A reconnect from a state that had not given
   up (a dead socket just noticed by the liveness probe, a backoff cut short
-  by a wake) keeps the queue.
+  by a wake) keeps the queue — unless its OLDEST entry is more than 30 s old
+  (wall clock, so a machine that slept inside the retry window counts the
+  sleep), in which case the whole queue is dropped, never trimmed: half a
+  command line is worse than none (`web/src/lib/termOutbox.ts`).
 - **4001.** Only the **Use here** button and a hidden → visible transition
   take the terminal back; `online` and the interval do not. With two pages
   both visible, the second holds the terminal and the first shows the button.
 - 4000, 4002 and 4003 are unchanged.
-- **Not covered:** the browser pane (`/ws/browser/...`): a dead relay socket
-  there still shows a frozen frame (open follow-up question for the operator).
+- **The browser pane** (`/ws/browser/...`) has the same dead-socket case and
+  the same three triggers (tab shown, network back, every 25 s while the
+  document is visible, whether or not the Browser view is the one selected).
+  Its probe is a CDP call through the relay (`Browser.getVersion`); ANY frame
+  arriving within 5 s — the reply, an error, a screencast frame — counts as
+  alive, and nothing at all reconnects the pane through its Reconnect path. A
+  relay socket that CLOSED (4002, 4003, 4004, any code) never reconnects by
+  itself: its state and button are unchanged.
 
 ## Browser relay (`/ws/browser/{project}`, ADR-068)
 
