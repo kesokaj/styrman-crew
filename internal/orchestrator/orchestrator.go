@@ -52,6 +52,10 @@ type Orchestrator struct {
 	// unbounded Docker API calls (review finding).
 	ipCacheMu sync.Mutex
 	ipCache   map[string]ipCacheEntry
+
+	// lifecycleWaits holds the GuestGoingAway wait shared by every request
+	// parked on one project and container: key → *lifecycleWait (ports.go).
+	lifecycleWaits sync.Map
 }
 
 type ipCacheEntry struct {

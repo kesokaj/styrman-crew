@@ -101,6 +101,20 @@ client never gives up, and the scan must answer with the failure. Before the fix
 it never answered. `ports_lifecycle_test.go` now has seven tests. The operator
 chose to fix this before the release ("Fix all five, then ship").
 
+Fifth step (fixed 2026-10-03): shipped as known in v1.41.0
+(`reviews/2026-10-02-preflight-v1.41.0.md`, item 2). The 20 s ceiling bounded
+each parked request, but ten parked requests on one project asked Docker ten
+times as often. Operator: "Do it fix them". `GuestGoingAway` still makes its
+two quick checks itself. If it must wait, every request parked on the same
+project and container shares ONE wait, `awaitLifecycle`, keyed in
+`Orchestrator.lifecycleWaits`. That wait runs on its own context, capped at
+`lifecycleWaitMax` (20 s), so one client going away does not end the wait for
+the others. Each request still returns when its own ctx ends.
+New test `TestListeningPortsParkedRequestsShareOneWait`: 10 parked requests
+asked Docker 50 times in 5 ticks before the fix; the test allows at most 8.
+`ports_lifecycle_test.go` now has eight tests, all passing three times under
+`-race`.
+
 ## Prevention
 A held lock says that something is in flight, not WHAT it is. Wait for it and
 ask again (is it still the same running container?), and list every holder of

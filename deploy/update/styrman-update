@@ -144,7 +144,12 @@ write_status() {
     # Plain characters only: the ancestor walk splits the path with `read`,
     # which stops at a newline, so `/x/ok<NL>evil/...` would be judged by
     # `/x/ok` alone (gate security review of 57179a4..624808d, finding 2).
-    if ! [[ "${STATUS_FILE}" =~ ^/[A-Za-z0-9._/-]+$ ]]; then
+    # Spelled out, not as ranges: a range follows the locale's collation, and
+    # under the UTF-8 locale systemd hands this unit `[A-Za-z]` matched `é`
+    # (round-4 reviews of 624808d..adef20e). A literal list means the same in
+    # every locale.
+    local plain='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._/-'
+    if [ "${STATUS_FILE:0:1}" != / ] || [ -n "${STATUS_FILE//[$plain]/}" ]; then
         log "WARN: status not written: the path holds a character outside [A-Za-z0-9._/-]"; return 0
     fi
     if [ "$(realpath -m -- "${STATUS_FILE}" 2>/dev/null)" != "${STATUS_FILE}" ]; then

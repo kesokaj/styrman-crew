@@ -69,3 +69,11 @@ No high or medium finding in any of them. Every finding is fixed or carried abov
 - The GCP VM: not reachable from this machine (no `gcloud`). Its own updater takes every signed tag.
 
 VERDICT: SHIP
+
+## Outcome
+(Written by the main agent, 2026-10-03, in the commit that fixes items 1–3. The operator: "Do it fix them".)
+- Item 1 (the locale-dependent character rule): **fixed**. The set is spelled out with no ranges (`${STATUS_FILE//[$plain]/}` must be empty), so it means the same in every locale. Test `TestStyrmanUpdateStatusPlainSetIgnoresTheLocale` runs the hook under `en_US.UTF-8` with `café` in the path; it was written before the fix and failed against the old rule.
+- Item 2 (the ceiling bounds each request, not how many are parked): **fixed**. Requests parked on one project and container share one wait (`awaitLifecycle`, `Orchestrator.lifecycleWaits`), which runs on its own 20 s context. Test `TestListeningPortsParkedRequestsShareOneWait` parks 10 requests: before the fix they asked Docker 50 times in 5 ticks; the test allows at most 8.
+- Item 3 (`trustedTempDir` ignores owners): **fixed**. Its check (`ancestorProblem`) also refuses an owner other than root or the test's user. Test `TestStyrmanUpdateStatusTempHelperChecksOwners` feeds it stand-in directories, because a real one owned by another user needs root to create; the two other-user cases failed before the fix.
+- Item 4 (signing-key custody): recorded in ADR-082 on 2026-10-03, apart from the Mac key's protection, which is the operator's to tell.
+- Item 5 (`js-yaml`): still left: operator.

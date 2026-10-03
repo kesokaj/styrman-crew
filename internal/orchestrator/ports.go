@@ -130,34 +130,80 @@ func (o *Orchestrator) ListeningPorts(ctx context.Context, user, project string)
 // stopped or replaced as soon as its container is down; a change that
 // leaves the guest as it was (an attach's no-op EnsureRunning, the idle
 // reaper's busy probe) reads the same when it lets go, and the failure stays
-// the command's. A held lock alone never answers the question. Bounded by
-// ctx and by lifecycleWaitMax: a wait that ends first gets false, and its
-// caller reports the failure. Never call it while holding the project's
-// lock.
+// the command's. A held lock alone never answers the question. The wait is
+// shared by every request parked on the same project and container
+// (awaitLifecycle) and ends at lifecycleWaitMax; a request whose own ctx ends
+// first gets false, and its caller reports the failure. Never call it while
+// holding the project's lock.
 func (o *Orchestrator) GuestGoingAway(ctx context.Context, user, project string, ran Status) bool {
-	gone := func() bool {
-		now, err := o.Status(ctx, user, project)
-		return err == nil && (now.State != "running" || now.ContainerID != ran.ContainerID)
+	if o.guestGone(ctx, user, project, ran) {
+		return true
 	}
-	ctx, cancel := context.WithTimeout(ctx, lifecycleWaitMax)
+	l := o.lockProject(key(user, project))
+	if l.TryLock() {
+		l.Unlock()
+		return o.guestGone(ctx, user, project, ran)
+	}
+	// A lifecycle change is in flight. Every request parked on the same
+	// project and container shares ONE wait (round-4 security review of
+	// 624808d..adef20e, finding 1): the cost of asking Docker stays one call
+	// per tick however many requests are waiting.
+	k := key(user, project) + "\x00" + ran.ContainerID
+	w := &lifecycleWait{done: make(chan struct{})}
+	if v, loaded := o.lifecycleWaits.LoadOrStore(k, w); loaded {
+		w = v.(*lifecycleWait)
+	} else {
+		go o.awaitLifecycle(k, w, user, project, ran)
+	}
+	select {
+	case <-w.done:
+		return w.gone
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// guestGone: is the project no longer the running container ran names?
+func (o *Orchestrator) guestGone(ctx context.Context, user, project string, ran Status) bool {
+	now, err := o.Status(ctx, user, project)
+	return err == nil && (now.State != "running" || now.ContainerID != ran.ContainerID)
+}
+
+// lifecycleWait is one shared GuestGoingAway wait; gone is written before
+// done is closed and read only after.
+type lifecycleWait struct {
+	done chan struct{}
+	gone bool
+}
+
+// awaitLifecycle is the shared wait: it asks on every tick (a mode toggle
+// holds the lock through waitReady, up to 90 s, while its container is down
+// after a second or two — gate review, finding 1), asks once more when the
+// lock comes free, and gives up at lifecycleWaitMax. It runs on its own
+// context, not a request's, so one client going away does not end the wait
+// for the others.
+func (o *Orchestrator) awaitLifecycle(k string, w *lifecycleWait, user, project string, ran Status) {
+	ctx, cancel := context.WithTimeout(context.Background(), lifecycleWaitMax)
 	defer cancel()
+	defer func() {
+		o.lifecycleWaits.Delete(k) // before close: a request after the answer starts afresh
+		close(w.done)
+	}()
 	l := o.lockProject(key(user, project))
 	for {
-		if gone() {
-			return true
-		}
-		// Asked on every tick, not only once the lock is free: a mode
-		// toggle holds the lock through waitReady (up to 90 s), far longer
-		// than the page waits for a poll, while its container is already
-		// down after the first second or two (gate review, finding 1).
-		if l.TryLock() {
-			l.Unlock()
-			return gone()
-		}
 		select {
 		case <-ctx.Done():
-			return false
+			return
 		case <-time.After(lifecycleRecheck):
+		}
+		if o.guestGone(ctx, user, project, ran) {
+			w.gone = true
+			return
+		}
+		if l.TryLock() {
+			l.Unlock()
+			w.gone = o.guestGone(ctx, user, project, ran)
+			return
 		}
 	}
 }

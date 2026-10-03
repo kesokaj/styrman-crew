@@ -2,11 +2,14 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // ADR-081: every real tick of deploy/update/styrman-update ends by recording
@@ -103,14 +106,29 @@ func trustedTempDir(t *testing.T) string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		m := info.Mode()
-		if m&os.ModeSymlink != 0 || (m.Perm()&0o022 != 0 && m&os.ModeSticky == 0) {
-			t.Fatalf("TMPDIR's ancestor %s (%v) is a symlink or writable by others without the sticky bit; the status writer refuses it — run with TMPDIR on a trusted path", p, m)
+		if why := ancestorProblem(info); why != "" {
+			t.Fatalf("TMPDIR's ancestor %s %s; the status writer refuses it — run with TMPDIR on a trusted path", p, why)
 		}
 		if p == "/" {
 			return d
 		}
 	}
+}
+
+// ancestorProblem is the status writer's bar for a directory above the
+// status dir (status_ancestors_ok), as a test-side check: "" when it passes.
+func ancestorProblem(info os.FileInfo) string {
+	m := info.Mode()
+	if m&os.ModeSymlink != 0 {
+		return "is a symlink"
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Uid != 0 && int(st.Uid) != os.Getuid() {
+		return fmt.Sprintf("is owned by uid %d, neither root nor this user", st.Uid)
+	}
+	if m.Perm()&0o022 != 0 && m&os.ModeSticky == 0 {
+		return fmt.Sprintf("(%v) is writable by others without the sticky bit", m)
+	}
+	return ""
 }
 
 // statusDir returns a directory that passes the updater's bar (the caller's,
@@ -561,3 +579,67 @@ func TestStyrmanUpdateStatusWriteRefusesAPathOutsideThePlainSet(t *testing.T) {
 		t.Fatal("a status was written below a newline-named, world-writable ancestor")
 	}
 }
+
+// The plain set is the same in every locale (round-4 reviews of
+// 624808d..adef20e): bracket ranges follow the locale's collation, and under
+// the UTF-8 locale systemd hands the unit on the NUC, `[A-Za-z]` matched `é`.
+func TestStyrmanUpdateStatusPlainSetIgnoresTheLocale(t *testing.T) {
+	if out, err := exec.Command("locale", "-a").Output(); err != nil || !strings.Contains(strings.ToLower(string(out)), "en_us.utf8") {
+		t.Skip("no en_US.UTF-8 locale on this host to run under")
+	}
+	t.Setenv("LANG", "en_US.UTF-8")
+	t.Setenv("LC_ALL", "en_US.UTF-8")
+	base := trustedTempDir(t)
+	dir := filepath.Join(base, "café", "status")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Dir(dir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "updater.json")
+	code, out := runUpdaterHook(t, true, "__write-status", file, "ok", "ok", "", "")
+	if code != 0 || !strings.Contains(out, "outside [A-Za-z0-9._/-]") {
+		t.Fatalf("want the plain-set WARN under a UTF-8 locale, got %d %q", code, out)
+	}
+	if _, err := os.Lstat(file); err == nil {
+		t.Fatal("a status was written below a directory named with a non-ASCII letter")
+	}
+}
+
+// The helper holds TMPDIR's ancestors to the writer's WHOLE bar — owner as
+// well as mode (round-4 code review of 624808d..adef20e, finding 2): a
+// directory owned by another user fails every "written" case otherwise, with
+// no name. A real one needs root to create, so the check is fed a stand-in.
+func TestStyrmanUpdateStatusTempHelperChecksOwners(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		uid  uint32
+		mode os.FileMode
+		bad  bool
+	}{
+		{"root, 0755", 0, os.ModeDir | 0o755, false},
+		{"ours, 0755", uint32(os.Getuid()), os.ModeDir | 0o755, false},
+		{"root, sticky 1777", 0, os.ModeDir | os.ModeSticky | 0o777, false},
+		{"another user's, 0755", 12345, os.ModeDir | 0o755, true},
+		{"another user's, sticky 1777", 12345, os.ModeDir | os.ModeSticky | 0o777, true},
+		{"root, 0775", 0, os.ModeDir | 0o775, true},
+	} {
+		got := ancestorProblem(fakeDir{c.mode, c.uid}) != ""
+		if got != c.bad {
+			t.Errorf("%s: refused=%v, want %v", c.name, got, c.bad)
+		}
+	}
+}
+
+type fakeDir struct {
+	mode os.FileMode
+	uid  uint32
+}
+
+func (f fakeDir) Name() string       { return "d" }
+func (f fakeDir) Size() int64        { return 0 }
+func (f fakeDir) Mode() os.FileMode  { return f.mode }
+func (f fakeDir) ModTime() time.Time { return time.Time{} }
+func (f fakeDir) IsDir() bool        { return true }
+func (f fakeDir) Sys() any           { return &syscall.Stat_t{Uid: f.uid} }

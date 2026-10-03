@@ -211,3 +211,55 @@ func TestListeningPortsWaitHasACeiling(t *testing.T) {
 		t.Fatal("the wait has no ceiling: it outlived lifecycleWaitMax by far")
 	}
 }
+
+// Requests parked on the SAME project share one wait (round-4 security review
+// of 624808d..adef20e, finding 1): the 20 s ceiling bounds each request, but
+// ten parked requests polled Docker ten times as often. Shared, the poll costs
+// the same however many requests wait, and each still answers.
+func TestListeningPortsParkedRequestsShareOneWait(t *testing.T) {
+	o, fd, cfg := seamOrch(t)
+	plant(fd, cfg, true, false)
+	fd.execExit = 9
+	const n = 10
+
+	l := o.lockProject(key(tUser, tProj))
+	l.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan portsResult, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			p, err := o.ListeningPorts(ctx, tUser, tProj)
+			done <- portsResult{p, err}
+		}()
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for fd.callsTo("ContainerExecInspect") < n {
+		if time.Now().After(deadline) {
+			l.Unlock()
+			t.Fatal("the scans never all failed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(2 * lifecycleRecheck) // everyone is inside the wait
+	before := fd.callsTo("ContainerInspect")
+	time.Sleep(5 * lifecycleRecheck)
+	polled := fd.callsTo("ContainerInspect") - before
+	setContainer(fd, func(c *fakeContainer) { c.running = false })
+	l.Unlock()
+	for i := 0; i < n; i++ {
+		select {
+		case r := <-done:
+			if r.err != nil || r.ports == nil || len(r.ports) != 0 {
+				t.Fatalf("a parked request did not get the shared answer: %#v %v", r.ports, r.err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("a parked request never answered")
+		}
+	}
+	// One shared poll asks about once per tick; ten private ones asked ten
+	// times as often. Allow slack for timer jitter, not for a second poller.
+	if polled > 8 {
+		t.Fatalf("%d parked requests asked Docker %d times in 5 ticks: they are not sharing one wait", n, polled)
+	}
+}
