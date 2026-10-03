@@ -114,7 +114,7 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.41.0**, tagged 2026-10-02. Both hosts take a signed tag by themselves: the GCP VM (https://crew.spgo.demo.altostrat.com, Google sign-in) on its next updater tick; the NUC (https://crew.styrman.xyz) runs v1.41.0 since 2026-10-03, deployed by hand through the break-glass fallback because its updater's token is rejected by GitHub (BUG-084, open: until the operator installs a fresh token that reads both `kesokaj/styrman-crew` and `kesokaj/styrman-harness`, the NUC takes no tag by itself). From this release on, Settings tells admins when a host's auto-updater is failing; a host shows it one updater tick after it takes the release. v1.39.0 reached the GCP VM only.
+**v1.41.0**, tagged 2026-10-02. Both hosts take a signed tag by themselves: the GCP VM (https://crew.spgo.demo.altostrat.com, Google sign-in) on its next updater tick; the NUC (https://crew.styrman.xyz) runs v1.41.0 since 2026-10-03, and its updater works again with a replaced token (BUG-084, fixed: its first real tick wrote the Settings status file, `ok`). From this release on, Settings tells admins when a host's auto-updater is failing; a host shows it one updater tick after it takes the release. v1.39.0 reached the GCP VM only.
 
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
