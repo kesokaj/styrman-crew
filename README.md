@@ -114,11 +114,15 @@ stores — a restart or reboot recovers everything by adoption.
 
 ## Status
 
-**v1.41.0**, tagged 2026-10-02. Both hosts take a signed tag by themselves: the GCP VM (https://crew.spgo.demo.altostrat.com, Google sign-in) on its next updater tick; the NUC (https://crew.styrman.xyz) runs v1.41.0 since 2026-10-03, and its updater works again with a replaced token (BUG-084, fixed: its first real tick wrote the Settings status file, `ok`). From this release on, Settings tells admins when a host's auto-updater is failing; a host shows it one updater tick after it takes the release. v1.39.0 reached the GCP VM only.
+**v1.41.1**, tagged 2026-10-03. Both hosts take a signed tag by themselves: the GCP VM (https://crew.spgo.demo.altostrat.com, Google sign-in) on its next updater tick; the NUC (https://crew.styrman.xyz) has taken releases by itself again since 2026-10-03, when its updater was fixed with a replaced token (BUG-084, fixed: its first real tick wrote the Settings status file, `ok`). From this release on, Settings tells admins when a host's auto-updater is failing; a host shows it one updater tick after it takes the release. v1.39.0 reached the GCP VM only.
 
 Since v1.22.0, one line per release; the full entry for each is
 `.agents/docs/changes/<date>-vX.Y.Z-release.md`:
 
+- **v1.41.1** (2026-10-03): the three lows v1.41.0 shipped with — the
+  updater's status-path check is the same in every locale, requests parked on
+  a project during a stop or rebuild share one wait, and a test helper checks
+  owners.
 - **v1.41.0** (2026-10-02): Settings tells admins when the host's
   auto-updater is failing, has stopped running or cannot be read, and why
   (ADR-081: the updater records each tick in `/etc/styrman/status/updater.json`,
