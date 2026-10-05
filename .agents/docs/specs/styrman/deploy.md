@@ -260,7 +260,11 @@ omitted, Caddy uses HTTP-01 ACME challenges, which cover the base app and the au
 # `sudo GH_TOKEN=…` and `sudo --preserve-env=GH_TOKEN` both log the value
 # (`ENV=GH_TOKEN=…`, checked on dave 2026-10-05). Or
 # `sudo deploy/styrman-ctl install --gh-token-file <600 file>`.
-test -s ~/fine-grained-token && sudo install -D -m 600 -o root -g root ~/fine-grained-token /etc/styrman/gh-token
+# Only when the host has no token yet (never overwrite the updater's), and
+# never with an empty file; the plaintext copy is removed once installed.
+sudo test -e /etc/styrman/gh-token || { test -s ~/fine-grained-token \
+  && sudo install -D -m 600 -o root -g root ~/fine-grained-token /etc/styrman/gh-token \
+  && shred -u ~/fine-grained-token || echo "no token installed: ~/fine-grained-token missing or empty" >&2; }
 sudo bash deploy/host-setup.sh --user $USER   # also seeds deploy/.env identity values
 vi deploy/.env                                # fill: BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET,
                                               #       ADMIN_EMAIL, STYRMAN_ALLOWED_EMAILS
