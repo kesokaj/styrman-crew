@@ -12,6 +12,9 @@ closed out. History lives in `.agents/docs/changes/` and git.
 
 ## Now
 
+v1.42.4 — memory budget, tenant fairness, admin resource cap, BUG-074/091:
+`.agents/docs/plans/2026-10-05-v1-42-4-budget-fairness-cap.md`.
+
 <!-- Per-project resources (ADR-083) shipped as v1.42.0 on 2026-10-05; the
 plan is closed (.agents/docs/plans/2026-10-05-project-resources.md). -->
 
