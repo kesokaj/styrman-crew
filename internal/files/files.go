@@ -42,7 +42,14 @@ const MaxReadBytes = 2 << 20 // 2 MiB
 // short of what costs the shared process anything.
 const maxListEntries = 5000
 
-// Listing is one directory's entries, capped at maxListEntries. Truncated
+// maxListBytes bounds the same listing by the bytes of its names and paths:
+// entries alone do not, since guest-chosen names (up to 255 bytes) under a
+// deep path make 5000 entries several MiB before JSON escaping. The server's
+// memory budget prices a listing at this bound (ADR-086).
+const maxListBytes = 2 << 20
+
+// Listing is one directory's entries, capped at maxListEntries and
+// maxListBytes. Truncated
 // says the cap was hit, so a caller can tell a big directory from a complete
 // one instead of silently showing a prefix.
 type Listing struct {
@@ -222,7 +229,13 @@ func List(root, rel string) (*Listing, error) {
 		base = rel
 	}
 	out := make([]Entry, 0, len(des))
+	size := 0
 	for _, de := range des {
+		p := path.Join(base, de.Name())
+		if size += len(de.Name()) + len(p); size > maxListBytes {
+			truncated = true
+			break
+		}
 		// rt.Lstat, not de.Info(): for a root reached through Root.OpenRoot
 		// (every root below a trusted tenant base) a DirEntry's Info()
 		// lstats a path with the sub-root's prefix repeated and fails under
@@ -243,7 +256,7 @@ func List(root, rel string) (*Listing, error) {
 		}
 		out = append(out, Entry{
 			Name:     de.Name(),
-			Path:     path.Join(base, de.Name()),
+			Path:     p,
 			Dir:      isDir,
 			Size:     info.Size(),
 			Modified: info.ModTime().UTC().Format("2006-01-02 15:04"),

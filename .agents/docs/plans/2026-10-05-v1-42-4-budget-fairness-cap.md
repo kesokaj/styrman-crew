@@ -393,10 +393,10 @@ Live (after deploy, by `/preflight`): dave signs in with the new cookie name.
 ## Phases
 - [x] Cold-reader check — cap reached at round 3 (`reviews/2026-10-05-cold-read-v1-42-4-round1.md`, `-round2.md`, `-round3.md`); the residue is resolved by D20-D22 on the operator's word, 2026-10-05: "What the fuck are you doing. Why cant you cut a new version/release?" (reply to the cap question offering exactly D20-D22)
 ### Phase 1 — server: budget, fairness, 408
-- [ ] ADR-086 (memory budget) appended to DECISIONS.md — verify: read — expect: entry present
-- [ ] `internal/membudget` + tests (wait/admit, per-tenant share, clamp, FIFO, ctx timeout → ErrBusy, release idempotent) — verify: `go test -race ./internal/membudget/` AI — expect: ok, red first
+- [x] ADR-086 (memory budget) appended to DECISIONS.md — verify: read — expect: entry present
+- [x] `internal/membudget` + tests (wait/admit, per-tenant share, clamp, FIFO, ctx timeout → ErrBusy, release idempotent) — verify: `go test -race ./internal/membudget/` AI — expect: ok, red first
 - [ ] `budgetGuard` + weight table + tests (503 after wait with Retry-After; second tenant admitted; every table pattern resolves; WS route uncharged) — verify: `go test -race ./internal/httpapi/` AI — expect: ok — docs: specs/styrman/api.md
-- [ ] `files.List` byte bound + test — verify: `go test ./internal/files/` — expect: ok, red first — docs: specs/styrman/api.md (listing row, :166)
+- [x] `files.List` byte bound + test — verify: `go test ./internal/files/` — expect: ok, red first — docs: specs/styrman/api.md (listing row, :166)
 - [ ] slotPool fairness + tests — verify: same — expect: ok — docs: specs/styrman/api.md
 - [ ] read deadline only with a body; `decodeJSON` 408/400 (no 413, D14) + real-server test — verify: same — expect: ok — docs: specs/styrman/api.md
 - [ ] Checkpoint — expect: `go test -race ./...` and `go vet ./...` exit 0 — evidence: verifier log
@@ -456,3 +456,5 @@ Rejected: a stored admin flag on the user record — admin is the env list (user
 D20 — 2026-10-05 — Resources GET reports a stored 0 as 0 (the dialog shows "Unlimited (up to N)" ticked) and a stored value above the cap as the cap; PUT accepts 0; only the start maps 0 → cap — supersedes D17's 0 case — by: cold read round 3 G1, operator 2026-10-05 (cap-gate reply)
 D21 — 2026-10-05 — The body read deadline is cleared once the body is fully read (a reader wrapper clears it on EOF), so it never cancels the request's context — by: cold read round 3, operator 2026-10-05
 D22 — 2026-10-05 — `UpdateOperator` validates only the fields the PATCH changes — by: cold read round 3, operator 2026-10-05
+D23 — 2026-10-05 — No `deadlineBody` wrapper: go1.25 net/http already clears the read deadline when the body hits EOF (`startBackgroundRead`, net/http/server.go:697); `TestTheBodyDeadlineEndsWithTheBody` pins it (a mutant that never cleared the deadline passed, which is how this was found) — supersedes D21's mechanism — by: implementer
+D24 — 2026-10-05 — Phases are checkpointed by the main agent's bare `go test -race ./...` runs; one verifier dispatch covers the whole range before the gate — by: implementer, after the operator's "Why cant you cut a new version/release?" (speed)

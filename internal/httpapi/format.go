@@ -58,10 +58,11 @@ func formatInPlace(ext string) string {
 // formatFile formats the posted content with the appropriate CLI formatter in
 // the project's guest VM and returns the formatted text.
 func (s *Server) formatFile(w http.ResponseWriter, r *http.Request) {
-	if !s.fileSlot(w) {
+	release := s.fileSlot(w, r)
+	if release == nil {
 		return
 	}
-	defer func() { <-s.fileSlots }()
+	defer release()
 	_, cid, guest, ws, _, err := s.gitContext(r)
 	if err != nil {
 		if errors.Is(err, errVMNotRunning) {
@@ -76,6 +77,10 @@ func (s *Server) formatFile(w http.ResponseWriter, r *http.Request) {
 		Content string `json:"content"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Path == "" {
+		if bodyTimedOut(err) {
+			writeErr(w, http.StatusRequestTimeout, errors.New("request body took too long"))
+			return
+		}
 		writeErr(w, http.StatusBadRequest, errors.New("path and content required"))
 		return
 	}

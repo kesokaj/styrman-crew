@@ -42,14 +42,14 @@ func TestASlowReaderReleasesItsSlotAtTheWriteDeadline(t *testing.T) {
 	// Read nothing. Positive control first: the request did take a slot (a
 	// write that never completes holds it until the deadline).
 	taken := time.Now().Add(5 * time.Second)
-	for len(n.s.readSlots) != 1 {
+	for len(n.s.readSlots.ch) != 1 {
 		if time.Now().After(taken) {
 			t.Fatal("the request never took a read slot")
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
 	deadline := time.Now().Add(8 * time.Second)
-	for len(n.s.readSlots) != 0 {
+	for len(n.s.readSlots.ch) != 0 {
 		if time.Now().After(deadline) {
 			t.Fatalf("the slot is still held 8 s after a %v write deadline", historyWriteTimeout)
 		}
@@ -74,14 +74,14 @@ func TestASlowBodyReleasesItsSlotAtTheReadDeadline(t *testing.T) {
 	fmt.Fprintf(conn, "PUT /api/projects/%s/file?path=a.txt HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: %d\r\n%s: %s\r\n%s: test-ingress-token\r\n\r\n",
 		n.pid, 1<<20, HeaderEmail, n.admin, HeaderIngress)
 	taken := time.Now().Add(5 * time.Second)
-	for len(n.s.fileSlots) != 1 {
+	for len(n.s.fileSlots.ch) != 1 {
 		if time.Now().After(taken) {
 			t.Fatal("the request never took a file slot")
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
 	freed := time.Now().Add(8 * time.Second)
-	for len(n.s.fileSlots) != 0 {
+	for len(n.s.fileSlots.ch) != 0 {
 		if time.Now().After(freed) {
 			t.Fatalf("the slot is still held 8 s after a %v read deadline", slotReadTimeout)
 		}

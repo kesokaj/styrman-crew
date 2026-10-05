@@ -30,20 +30,20 @@ func TestHistorySearchIsLimitedServerWide(t *testing.T) {
 		t.Fatalf("an idle server refused a search: %d %s", w.Code, w.Body.String())
 	}
 	// Every slot taken by searches in flight.
-	for range cap(n.s.searchSlots) {
-		n.s.searchSlots <- struct{}{}
+	for range cap(n.s.searchSlots.ch) {
+		n.s.searchSlots.ch <- struct{}{}
 	}
 	w := doAs(t, n.h, n.admin, http.MethodGet, path, "")
 	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "search") {
 		t.Fatalf("a search past the limit: %d %s, want 429", w.Code, w.Body.String())
 	}
 	// A slot frees up: searches work again.
-	<-n.s.searchSlots
+	<-n.s.searchSlots.ch
 	if w := doAs(t, n.h, n.admin, http.MethodGet, path, ""); w.Code != http.StatusOK {
 		t.Fatalf("after a slot freed: %d %s", w.Code, w.Body.String())
 	}
-	if len(n.s.searchSlots) != cap(n.s.searchSlots)-1 {
-		t.Fatalf("a finished search did not give its slot back: %d of %d in use", len(n.s.searchSlots), cap(n.s.searchSlots))
+	if len(n.s.searchSlots.ch) != cap(n.s.searchSlots.ch)-1 {
+		t.Fatalf("a finished search did not give its slot back: %d of %d in use", len(n.s.searchSlots.ch), cap(n.s.searchSlots.ch))
 	}
 }
 
@@ -63,17 +63,17 @@ func TestHistoryReadIsLimitedServerWide(t *testing.T) {
 	if w := doAs(t, n.h, n.admin, http.MethodGet, path, ""); w.Code != http.StatusOK {
 		t.Fatalf("an idle server refused a read: %d %s", w.Code, w.Body.String())
 	}
-	for range cap(n.s.readSlots) {
-		n.s.readSlots <- struct{}{}
+	for range cap(n.s.readSlots.ch) {
+		n.s.readSlots.ch <- struct{}{}
 	}
 	if w := doAs(t, n.h, n.admin, http.MethodGet, path, ""); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("a read past the limit: %d, want 429", w.Code)
 	}
-	<-n.s.readSlots
+	<-n.s.readSlots.ch
 	if w := doAs(t, n.h, n.admin, http.MethodGet, path, ""); w.Code != http.StatusOK {
 		t.Fatalf("after a slot freed: %d", w.Code)
 	}
-	if len(n.s.readSlots) != cap(n.s.readSlots)-1 {
-		t.Fatalf("a finished read kept its slot: %d of %d", len(n.s.readSlots), cap(n.s.readSlots))
+	if len(n.s.readSlots.ch) != cap(n.s.readSlots.ch)-1 {
+		t.Fatalf("a finished read kept its slot: %d of %d", len(n.s.readSlots.ch), cap(n.s.readSlots.ch))
 	}
 }

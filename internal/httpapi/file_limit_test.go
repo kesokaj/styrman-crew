@@ -19,23 +19,23 @@ func TestEditorFileEndpointsAreLimitedServerWide(t *testing.T) {
 		{http.MethodPost, base + "/format", `{"path":"a.txt","content":"x"}`},
 		{http.MethodPost, base + "/check", `{"path":"a.txt","content":"x"}`},
 	}
-	for range cap(n.s.fileSlots) {
-		n.s.fileSlots <- struct{}{}
+	for range cap(n.s.fileSlots.ch) {
+		n.s.fileSlots.ch <- struct{}{}
 	}
 	for _, c := range calls {
 		if w := doAs(t, n.h, n.admin, c.method, c.path, c.body); w.Code != http.StatusTooManyRequests {
 			t.Errorf("%s %s with every slot taken: %d %s, want 429", c.method, c.path, w.Code, w.Body.String())
 		}
 	}
-	for range cap(n.s.fileSlots) {
-		<-n.s.fileSlots
+	for range cap(n.s.fileSlots.ch) {
+		<-n.s.fileSlots.ch
 	}
 	for _, c := range calls {
 		if w := doAs(t, n.h, n.admin, c.method, c.path, c.body); w.Code == http.StatusTooManyRequests {
 			t.Errorf("%s %s on an idle server: 429", c.method, c.path)
 		}
 	}
-	if len(n.s.fileSlots) != 0 {
-		t.Fatalf("finished requests kept %d slots", len(n.s.fileSlots))
+	if len(n.s.fileSlots.ch) != 0 {
+		t.Fatalf("finished requests kept %d slots", len(n.s.fileSlots.ch))
 	}
 }

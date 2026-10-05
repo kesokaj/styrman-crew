@@ -75,10 +75,11 @@ func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
-	if !s.fileSlot(w) {
+	release := s.fileSlot(w, r)
+	if release == nil {
 		return
 	}
-	defer func() { <-s.fileSlots }()
+	defer release()
 	root, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
@@ -271,10 +272,11 @@ func (s *Server) makeDir(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
-	if !s.fileSlot(w) {
+	release := s.fileSlot(w, r)
+	if release == nil {
 		return
 	}
-	defer func() { <-s.fileSlots }()
+	defer release()
 	root, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
@@ -284,6 +286,10 @@ func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 		Content string `json:"content"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if bodyTimedOut(err) {
+			writeErr(w, http.StatusRequestTimeout, errors.New("request body took too long"))
+			return
+		}
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
@@ -459,9 +465,9 @@ const readConcurrency = 8
 // slot is taken before the body is read, so it bounds that memory too.
 const fileConcurrency = 8
 
-// fileSlot takes an editor-file slot or answers 429; release with <-.
-func (s *Server) fileSlot(w http.ResponseWriter) bool {
-	return acquireSlot(w, s.fileSlots, "too many file operations in progress — try again in a moment")
+// fileSlot takes an editor-file slot or answers 429 (nil release).
+func (s *Server) fileSlot(w http.ResponseWriter, r *http.Request) func() {
+	return s.acquireSlot(w, r, s.fileSlots, "too many file operations in progress — try again in a moment")
 }
 
 // historyWriteTimeout bounds how long a search or a read may take to hand
@@ -469,30 +475,13 @@ func (s *Server) fileSlot(w http.ResponseWriter) bool {
 // hold the response's memory, and its slot, for as long as it likes.
 var historyWriteTimeout = 30 * time.Second // a var so a test can shorten it
 
-// slotReadTimeout bounds how long a slot holder may take to SEND its request
-// body: the editor's slot is taken before the body is read, and the server
-// sets only a header timeout, so a client trickling 8 bodies would otherwise
-// hold every slot and lock all tenants out of the editor (review of
-// v1.42.2..a265b48, medium). A var so a test can shorten it.
+// slotReadTimeout bounds how long a request may take to SEND its body: a
+// slot or a budget reservation is taken before the body is read, and the
+// server sets only a header timeout, so a client trickling bodies would
+// otherwise hold them all (review of v1.42.2..a265b48, medium). It applies
+// only to requests that carry a body, and is cleared once the body is read
+// (bodyDeadline). A var so a test can shorten it.
 var slotReadTimeout = 30 * time.Second
-
-// acquireSlot takes a slot from sem without waiting, or answers 429 with
-// msg. The caller releases the slot (<-sem) when its response is written.
-func acquireSlot(w http.ResponseWriter, sem chan struct{}, msg string) bool {
-	select {
-	case sem <- struct{}{}:
-		// The production writer supports it (pinned by
-		// TestASlowReaderReleasesItsSlotAtTheWriteDeadline); httptest's
-		// recorder does not, and there the request simply has no deadline.
-		rc := http.NewResponseController(w)
-		_ = rc.SetWriteDeadline(time.Now().Add(historyWriteTimeout))
-		_ = rc.SetReadDeadline(time.Now().Add(slotReadTimeout))
-		return true
-	default:
-		writeErr(w, http.StatusTooManyRequests, errors.New(msg))
-		return false
-	}
-}
 
 // searchHistory greps all of the project's transcripts (agent sessions
 // included — they're raw PTY captures) for ?q=, case-insensitive. Past
@@ -509,10 +498,11 @@ func (s *Server) searchHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("query too long"))
 		return
 	}
-	if !acquireSlot(w, s.searchSlots, "too many history searches in progress — try again in a moment") {
+	release := s.acquireSlot(w, r, s.searchSlots, "too many history searches in progress — try again in a moment")
+	if release == nil {
 		return
 	}
-	defer func() { <-s.searchSlots }()
+	defer release()
 	matches, err := history.Search(r.Context(), s.cfg.ProjectHome(u.Username, p.ID), p.ID, q)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -545,10 +535,11 @@ func (s *Server) readHistory(w http.ResponseWriter, r *http.Request) {
 	} else if max > 4<<20 {
 		max = 4 << 20
 	}
-	if !acquireSlot(w, s.readSlots, "too many transcripts being read at once — try again in a moment") {
+	release := s.acquireSlot(w, r, s.readSlots, "too many transcripts being read at once — try again in a moment")
+	if release == nil {
 		return
 	}
-	defer func() { <-s.readSlots }()
+	defer release()
 	text, err := history.Read(s.cfg.ProjectHome(u.Username, p.ID), p.ID, r.PathValue("id"), max)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)

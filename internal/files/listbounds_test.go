@@ -188,3 +188,37 @@ func BenchmarkListLargeDirectory(b *testing.B) {
 		}
 	}
 }
+
+// Entry count alone does not bound a listing's size: guest-chosen names (up
+// to 255 bytes) under a deep path make 5000 entries several MiB, which JSON
+// escaping multiplies. List also stops at maxListBytes of names and paths,
+// the bound the server's memory budget prices a listing at (ADR-086).
+func TestListIsBoundedInBytes(t *testing.T) {
+	root := t.TempDir()
+	rel := strings.Repeat("d", 100) + "/" + strings.Repeat("e", 99)
+	dir := filepath.Join(root, rel)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 4000 { // 4000 x ~700 B of name + path: ~2.7 MiB, under the entry cap
+		f, err := os.Create(filepath.Join(dir, fmt.Sprintf("%06d%s", i, strings.Repeat("n", 240))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+	}
+	lst, err := List(root, rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	for _, e := range lst.Entries {
+		n += len(e.Name) + len(e.Path)
+	}
+	if n > maxListBytes || !lst.Truncated {
+		t.Fatalf("listing holds %d bytes of names and paths (bound %d), truncated=%v", n, maxListBytes, lst.Truncated)
+	}
+	if len(lst.Entries) == 0 {
+		t.Fatal("the byte bound emptied the listing")
+	}
+}

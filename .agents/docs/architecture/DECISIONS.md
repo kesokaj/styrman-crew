@@ -2895,3 +2895,29 @@ Supersedes ADR-084 (never released: v1.42.1 was re-gated before its tag).
 
 ADR-085's Rejected list says raising the VMs' score is impossible because "the VMM is a child of the Kata shim on the host, out of the containerized server's reach". That premise is wrong (security review of v1.42.1, `reviews/2026-10-05-security-v1.42.1-2ba3f79-aa2f3b4.md`). `host-setup.sh` already installs the shim wrapper (`deploy/lib/kata-config.sh`, BUG-089). A wrapper that raised its own `oom_score_adj` before `exec` would hand that score to the shim and every VMM it starts. The VMs would then be the preferred victims, without the platform sharing their -999. This is not adopted in v1.42.2: it changes every VM's kill order and needs its own measurement. It is the cleaner alternative for a later release, and the -999 decision stands until then.
 
+
+## ADR-086: A server-wide memory budget prices every API request     (2026-10-05) — Accepted
+**Context:** the server runs under `mem_limit: 4g` with `GOMEMLIMIT=3GiB`
+(ADR-085). Many endpoints build responses from guest-written data (git
+output, listings, transcripts, file reads) that JSON escaping can grow up to
+6x, and the slot pools of v1.42.2/v1.42.3 bounded only three of them. Enough
+concurrent large requests from one tenant could OOM-kill the server and drop
+every tenant's sessions.
+**Decision:** one byte budget in `internal/membudget` (stdlib only): 1 GiB in
+total, 256 MiB per tenant, FIFO per tenant. `budgetGuard` sits between
+csrfGuard and the mux, looks the matched pattern up in a weight table
+(`internal/httpapi/budget.go`) and reserves the route's worst case before the
+handler runs; an unlisted route costs 2 MiB plus its body, priced at most at
+csrfGuard's cap. A request that does not fit waits up to 2 s, then gets 503
+"server busy, try again" with `Retry-After: 1`. WebSocket, preview/link
+tunnels, downloads and the SPA are not charged (streamed). Every charged
+request that carries a body (uploads excepted) gets a 30 s read deadline,
+which net/http clears when the body ends. The slot pools stay beside the
+budget (they bound CPU and disk work) and each tenant holds at most half of
+each pool. `files.List` gained a 2 MiB name+path bound so a listing has a
+price.
+**Consequences:** the budget is an upper bound only as good as its weights;
+a new heavy route must get its own row (the table test catches a stale
+pattern, not a missing one). With 1 GiB = 4 x 256 MiB, a tenant at its share
+never blocks another while at most three tenants are at theirs; four or five
+tenants all at their share make the rest wait, then 503 (accepted, plan D16).

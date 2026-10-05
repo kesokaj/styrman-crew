@@ -34,6 +34,7 @@ import (
 	"github.com/kesokaj/styrman-crew/internal/gitrepo"
 	"github.com/kesokaj/styrman-crew/internal/identity"
 	"github.com/kesokaj/styrman-crew/internal/links"
+	"github.com/kesokaj/styrman-crew/internal/membudget"
 	"github.com/kesokaj/styrman-crew/internal/orchestrator"
 	"github.com/kesokaj/styrman-crew/internal/project"
 	"github.com/kesokaj/styrman-crew/internal/terminal"
@@ -182,12 +183,15 @@ type Server struct {
 
 	// searchSlots bounds history searches server-wide (searchConcurrency);
 	// see searchHistory.
-	searchSlots chan struct{}
+	searchSlots *slotPool
 	// readSlots bounds transcript reads server-wide (readConcurrency); see
 	// readHistory.
-	readSlots chan struct{}
+	readSlots *slotPool
 	// fileSlots bounds the editor's file endpoints (fileConcurrency).
-	fileSlots chan struct{}
+	fileSlots *slotPool
+	// budget is the server-wide memory budget every API request is charged
+	// against (budgetGuard, ADR-086); a test may replace it with a small one.
+	budget *membudget.Budget
 
 	// creds is the credential broker's store (ADR-030); nil disables the
 	// onboarding endpoints. Set by main after construction.
@@ -265,9 +269,10 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		logger:        logger,
 		spaces:        map[string]*userSpace{},
 		deleting:      map[string]bool{},
-		searchSlots:   make(chan struct{}, searchConcurrency),
-		readSlots:     make(chan struct{}, readConcurrency),
-		fileSlots:     make(chan struct{}, fileConcurrency),
+		searchSlots:   newSlotPool(searchConcurrency),
+		readSlots:     newSlotPool(readConcurrency),
+		fileSlots:     newSlotPool(fileConcurrency),
+		budget:        membudget.New(budgetTotal, budgetPerTenant),
 		deleteErrs:    map[string]string{},
 		provisionErrs: map[string]string{},
 
@@ -427,6 +432,16 @@ func (s *Server) Routes() http.Handler { return s.RoutesWithAuth(s.cfg.AuthMode)
 // RoutesWithAuth builds the handler with an explicit auth mode — the dev
 // listener (loopback-published, see config.DevAddr) uses "none".
 func (s *Server) RoutesWithAuth(authMode string) http.Handler {
+	mux := s.newMux()
+	// previewHostRewrite outermost so a <token>.preview host is mapped to the
+	// public /link route before auth even looks at it; then auth (identity /
+	// permission), then CSRF, then the memory budget (ADR-086), then routing.
+	return s.previewHostRewrite(s.authGuard(authMode, csrfGuard(s.budgetGuard(mux))))
+}
+
+// newMux registers every route; budgetGuard looks the matched pattern up in
+// routeWeight, so the table test reads the same mux.
+func (s *Server) newMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/projects", s.listProjects)
 	mux.HandleFunc("POST /api/projects", s.createProject)
@@ -604,10 +619,7 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeFileFS(w, r, dist, "_shell.html")
 	})
-	// previewHostRewrite outermost so a <token>.preview host is mapped to the
-	// public /link route before auth even looks at it; then auth (identity /
-	// permission), then CSRF, then routing.
-	return s.previewHostRewrite(s.authGuard(authMode, csrfGuard(mux)))
+	return mux
 }
 
 // previewHostRewrite maps a preview subdomain to its internal token route:
@@ -698,25 +710,13 @@ func csrfGuard(next http.Handler) http.Handler {
 					return
 				}
 			}
-			// Uploads carry real payloads; editor saves carry file content
-			// (2 MiB read cap × JSON escaping overhead — without the higher
-			// cap a 1–2 MiB file opens editable but can never save);
-			// everything else is small JSON.
-			limit := int64(1 << 20)
-			switch {
-			case strings.HasSuffix(r.URL.Path, "/upload"):
-				limit = 512 << 20
-			case strings.HasSuffix(r.URL.Path, "/file"),
-				strings.HasSuffix(r.URL.Path, "/format"),
-				strings.HasSuffix(r.URL.Path, "/check"):
-				// /format and /check post the SAME editor content as /file.
-				// On the default 1 MiB cap their own 5 MiB guard could never
-				// fire, and a 1-2 MiB file — openable and saveable — failed
-				// Format with a confusing 400 instead of the intended 413
-				// (security review noted maxCheckBytes was dead code).
-				limit = 8 << 20
-			}
-			r.Body = http.MaxBytesReader(w, r.Body, limit)
+			// bodyCap: uploads carry real payloads; editor saves carry file
+			// content (2 MiB read cap × JSON escaping overhead — without the
+			// higher cap a 1–2 MiB file opens editable but can never save).
+			// /format and /check post the SAME editor content as /file: on
+			// the default 1 MiB cap their own 5 MiB guard could never fire
+			// (security review noted maxCheckBytes was dead code).
+			r.Body = http.MaxBytesReader(w, r.Body, bodyCap(r.URL.Path))
 		}
 		next.ServeHTTP(w, r)
 	})
