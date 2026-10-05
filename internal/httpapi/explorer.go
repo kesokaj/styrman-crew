@@ -469,6 +469,13 @@ func (s *Server) fileSlot(w http.ResponseWriter) bool {
 // hold the response's memory, and its slot, for as long as it likes.
 var historyWriteTimeout = 30 * time.Second // a var so a test can shorten it
 
+// slotReadTimeout bounds how long a slot holder may take to SEND its request
+// body: the editor's slot is taken before the body is read, and the server
+// sets only a header timeout, so a client trickling 8 bodies would otherwise
+// hold every slot and lock all tenants out of the editor (review of
+// v1.42.2..a265b48, medium). A var so a test can shorten it.
+var slotReadTimeout = 30 * time.Second
+
 // acquireSlot takes a slot from sem without waiting, or answers 429 with
 // msg. The caller releases the slot (<-sem) when its response is written.
 func acquireSlot(w http.ResponseWriter, sem chan struct{}, msg string) bool {
@@ -477,7 +484,9 @@ func acquireSlot(w http.ResponseWriter, sem chan struct{}, msg string) bool {
 		// The production writer supports it (pinned by
 		// TestASlowReaderReleasesItsSlotAtTheWriteDeadline); httptest's
 		// recorder does not, and there the request simply has no deadline.
-		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(historyWriteTimeout))
+		rc := http.NewResponseController(w)
+		_ = rc.SetWriteDeadline(time.Now().Add(historyWriteTimeout))
+		_ = rc.SetReadDeadline(time.Now().Add(slotReadTimeout))
 		return true
 	default:
 		writeErr(w, http.StatusTooManyRequests, errors.New(msg))

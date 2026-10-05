@@ -733,14 +733,16 @@ operator:
 
 1. A deploy CLONE at `/opt/styrman`. **The host holds NO SSH key at all**
    (operator decision 2026-09-01): auth is instead a **FINE-GRAINED GitHub
-   token**, scoped to this ONE repository, `Contents: Read-only`, root-owned
+   token** with `Contents: Read-only` on this repository AND
+   `kesokaj/styrman-harness` (the image build downloads `sh-agent` from it,
+   ADR-074) and nothing else, root-owned
    at `/etc/styrman/gh-token`, fed to git over HTTPS via an inline
    credential helper — never embedded in the remote URL (that would land in
    `.git/config` and every process listing). TLS to `github.com` replaces
    the SSH `known_hosts` trust anchor the old deploy-key flow needed, so
    there is nothing to seed or pin here. Mint the token in the GitHub UI
    (Settings → Developer settings → Personal access tokens → Fine-grained
-   tokens: Repository access = only this repo; Permissions = Contents:
+   tokens: Repository access = only those two; Permissions = Contents:
    Read-only; pick an expiry you will honor — a lapsed token makes the
    updater fail LOUDLY at fetch, not silently):
    ```bash

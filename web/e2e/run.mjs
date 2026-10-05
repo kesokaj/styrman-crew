@@ -4,7 +4,7 @@
 // renderer, so terminal text is assertable), the side panel's Files / Ports
 // / History / Diff tabs, settings, deep links, and cleanup.
 //
-// Usage: node web/e2e/run.mjs [--base http://127.0.0.1:8080] [--shots /tmp/shots]
+// Usage: node web/e2e/run.mjs --base <the suite's own server URL> [--shots <dir>] (normally via web/e2e/run.sh)
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
