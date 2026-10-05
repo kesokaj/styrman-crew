@@ -9,6 +9,7 @@ import {
   type ThemePref,
 } from "../lib/hooks";
 import { DeleteProjectDialog } from "./DeleteProjectDialog";
+import { ResourcesDialog } from "./ResourcesDialog";
 import { LanBadge } from "./LanBadge";
 import { projectBadge } from "../lib/projectBadge";
 import { NewProjectDialog } from "./NewProjectDialog";
@@ -74,6 +75,7 @@ export function Sidebar({
   const [showNew, setShowNew] = useState(false);
   const [deleting, setDeleting] = useState<Project | null>(null);
   const [renaming, setRenaming] = useState<Project | null>(null);
+  const [sizing, setSizing] = useState<Project | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
   // Optimistic stop/start feedback per project id, cleared when the request
   // settles — the dot pulses amber and the row says what's happening.
@@ -115,12 +117,16 @@ export function Sidebar({
 
   const projectAction = (
     p: Project,
-    action: "stop" | "start" | "delete" | "rename",
+    action: "stop" | "start" | "delete" | "rename" | "resources",
   ) =>
     tryUI(async () => {
       setMenuFor(null);
       if (action === "rename") {
         setRenaming(p);
+        return;
+      }
+      if (action === "resources") {
+        setSizing(p);
         return;
       }
       if (action === "delete") {
@@ -340,6 +346,12 @@ export function Sidebar({
                   Rename
                 </button>
                 <button
+                  className="flex-1 rounded-md px-2 py-1 hover:bg-bg-hover"
+                  onClick={() => projectAction(p, "resources")}
+                >
+                  Resources…
+                </button>
+                <button
                   className="flex-1 rounded-md px-2 py-1 text-danger hover:bg-danger-soft"
                   onClick={() => projectAction(p, "delete")}
                 >
@@ -406,6 +418,14 @@ export function Sidebar({
             })
           }
           onClose={() => setRenaming(null)}
+        />
+      )}
+      {sizing && (
+        <ResourcesDialog
+          projectId={sizing.id}
+          projectName={sizing.name}
+          onClose={() => setSizing(null)}
+          onSaved={refresh}
         />
       )}
       {deleting && (

@@ -872,7 +872,7 @@ function SettingsPage() {
             />
           ) : (
             <>
-              <Row label="Docker disk / project">{data.dockerDiskGB} GB</Row>
+              <Row label="Default Docker disk for new projects">{data.dockerDiskGB} GB</Row>
               <Row label="Idle stop after">{data.idleTimeout}</Row>
             </>
           )}
@@ -998,7 +998,7 @@ function RuntimeEditor({
 
   return (
     <>
-      <Row label="Docker disk / project">
+      <Row label="Default Docker disk for new projects">
         <span className="flex items-center gap-2">
           <input
             value={disk}

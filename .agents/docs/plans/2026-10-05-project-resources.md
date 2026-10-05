@@ -387,9 +387,9 @@ E2E criteria:
 - [x] Checkpoint — expect: `go test -race ./...` exit 0, `go vet ./...` exit 0; verifier log `project-resources-phase-2` PASS; changes entry; commit — evidence: .agents/docs/testing/2026-10-05-verify-project-resources-phase-2.md (PASS: race 16 packages ok; 401 top-level PASS vs 366 at HEAD; RunOpts built only in runOptsFor), 2026-10-05
 
 ### Phase 3 — Web
-- [ ] api.ts calls + encoding test entries — verify: `(cd web && npm test)` — who: AI — expect: pass
-- [ ] ResourcesDialog + Sidebar item + settings label — verify: `(cd web && npm run check && npm run lint && npm test)` — who: AI — expect: exit 0 each; `web/dist/client` rebuilt and committed
-- [ ] Checkpoint — expect: verifier log `project-resources-phase-3` PASS; changes entry; commit — evidence: <log>, <date>
+- [x] api.ts calls + encoding test entries — verify: `(cd web && npm test)` — who: AI — expect: pass
+- [x] ResourcesDialog + Sidebar item + settings label — verify: `(cd web && npm run check && npm run lint && npm test)` — who: AI — expect: exit 0 each; `web/dist/client` rebuilt and committed — plus `web/src/lib/resources.ts` (form validation) with `resources.test.ts`
+- [x] Checkpoint — expect: verifier log `project-resources-phase-3` PASS; changes entry; commit — evidence: .agents/docs/testing/2026-10-05-verify-project-resources-phase-3.md (PASS: check/lint exit 0, 19 files / 230 tests vs 18 / 211 at HEAD, bundle fresh, go build ok), 2026-10-05
 
 ### Phase 4 — End to end, docs
 - [ ] Tier 2 checks in `integration.sh`: default size = host (`nproc`, `MemTotal` ≥ 97%); PUT 2/4 on a running project → rebuilt:true, `cpu.max`/`memory.max`, `nproc` 3; PUT on a stopped project → rebuilt:false, then start → `cpu.max 200000 100000`; a stop/start cycle keeps `HostConfig.NanoCpus`/`Memory` and the cgroup; disk +1 → `df` ≈ +1G; disk −1 → 400; cpus host+1 → 400 — verify: `bash .agents/docs/testing/styrman/integration.sh` bare, rc read — who: AI — expect: rc 0; count line updated in README in the same commit

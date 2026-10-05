@@ -39,6 +39,27 @@ export interface ProjectNetwork {
   rebuilt?: boolean;
 }
 
+/** GET /api/projects/{id}/resources (ADR-083). cpus and memoryGiB 0 mean
+ *  unlimited: the whole host. diskGB is the project's effective Docker disk. */
+export interface ProjectResources {
+  cpus: number;
+  memoryGiB: number;
+  diskGB: number;
+  /** The project is running at another size than this; saving restarts it
+   *  at this one. */
+  pending: boolean;
+  limits: {
+    maxCpus: number;
+    /** 0: the host is too small to set a memory size. */
+    maxMemoryGiB: number;
+    /** The current disk: it can only grow. */
+    minDiskGB: number;
+    maxDiskGB: number;
+  };
+  /** PUT only: whether the request restarted the project. */
+  rebuilt?: boolean;
+}
+
 /** Live resource snapshot of a project's microVM (terminal status bar). */
 export interface ProjectStats {
   state: "running" | "stopped" | "absent" | "creating" | "provisioning" | "deleting";
@@ -496,7 +517,7 @@ export const api = {
   // the rebuild went on to succeed server-side, and the UI reported a failure
   // for a change that had worked.
   //
-  // 210 s because the SERVER bounds this at `lanRebuildTimeout = 3 * time.Minute`
+  // 210 s because the SERVER bounds this at `rebuildTimeout = 3 * time.Minute`
   // (internal/httpapi/network.go). The client has to outlast the server or it
   // recreates the very bug it is fixing, just in a narrower window — and that
   // is not hypothetical: the first fix here copied start/stop's 150 s, which
@@ -507,6 +528,20 @@ export const api = {
     request<ProjectNetwork>(u`/api/projects/${id}/network`, {
       method: "PUT",
       body: JSON.stringify({ lanAccess }),
+      signal: AbortSignal.timeout(210000),
+    }),
+  // Per-project size (ADR-083). A change restarts a running project at the
+  // new size, so the PUT shares the network PUT's budget: 210 s against the
+  // server's `rebuildTimeout` (BUG-022).
+  projectResources: (id: string) =>
+    request<ProjectResources>(u`/api/projects/${id}/resources`),
+  setProjectResources: (
+    id: string,
+    body: { cpus: number; memoryGiB: number; diskGB: number },
+  ) =>
+    request<ProjectResources>(u`/api/projects/${id}/resources`, {
+      method: "PUT",
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(210000),
     }),
   deleteProject: (id: string, wipe: boolean) =>
