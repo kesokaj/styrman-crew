@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ProjectResources } from "./api";
 import { bodyFrom, formFrom, unchanged } from "./resources";
 
-const limits = { maxCpus: 16, maxMemoryGiB: 60, minDiskGB: 20, maxDiskGB: 500 };
+const limits = { maxCpus: 16, maxMemoryGiB: 60, minDiskGB: 20, maxDiskGB: 500, capped: false };
 const unlimited: ProjectResources = { cpus: 0, memoryGiB: 0, diskGB: 20, pending: false, limits };
 
 describe("formFrom", () => {

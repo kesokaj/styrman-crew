@@ -105,21 +105,38 @@ type sizeRuntime interface {
 // the network mode and the size. RunOpts.Resources is required (a nil one
 // refuses the start), so a start path that built its own would fail on its
 // first start rather than run a limited project at the whole host (ADR-083,
-// plan D18; rule mechanism-reaches-every-caller).
-func runOptsFor(sp *userSpace, p project.Project, guest string) orchestrator.RunOpts {
+// plan D18; rule mechanism-reaches-every-caller). user is the project's
+// owner: a non-admin's project starts at most at the admin cap (ADR-087).
+func (s *Server) runOptsFor(sp *userSpace, user string, p project.Project, guest string) orchestrator.RunOpts {
 	return orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest,
-		Lan: lanOf(sp, p.ID), Resources: resourcesOf(sp, p.ID)}
+		Lan: lanOf(sp, p.ID), Resources: s.resourcesOf(sp, user, p.ID)}
 }
 
 // resourcesOf is the RunOpts.Resources read: the record's size as of the
-// moment the orchestrator sizes the container, like lanOf.
-func resourcesOf(sp *userSpace, id string) func() (orchestrator.Resources, error) {
+// moment the orchestrator sizes the container, like lanOf, with the non-admin
+// cap applied. The record is never rewritten, so raising the cap restores
+// what the owner asked for. A host read that fails fails the start, as a
+// record read does — never a silent uncapped start.
+func (s *Server) resourcesOf(sp *userSpace, user, id string) func() (orchestrator.Resources, error) {
 	return func() (orchestrator.Resources, error) {
 		p, err := sp.projects.Get(id)
 		if err != nil {
 			return orchestrator.Resources{}, err
 		}
-		return orchestrator.Resources{CPUs: p.CPUs, MemoryGiB: p.MemoryGiB, DiskGB: p.DiskGB}, nil
+		r := recordResources(p)
+		if s.ownerIsAdmin(user) {
+			return r, nil
+		}
+		// RunOpts.Resources takes no ctx (orchestrator.go); Host is cached
+		// after its first success, so this is a map read on every start but
+		// the first.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		h, err := s.size.Host(ctx)
+		if err != nil {
+			return orchestrator.Resources{}, fmt.Errorf("read the host size for the project cap: %w", err)
+		}
+		return s.startCapped(h, false, r), nil
 	}
 }
 
@@ -333,7 +350,7 @@ func (s *Server) ensureFor(ctx context.Context, user, projectID string) (contain
 		return "", "", "", err
 	}
 	guest := sp.profile.GuestUser()
-	id, err := wsBoot(ctx, s.orch, user, p.ID, runOptsFor(sp, p, guest))
+	id, err := wsBoot(ctx, s.orch, user, p.ID, s.runOptsFor(sp, user, p, guest))
 	return id, guest, p.Dir, err
 }
 
@@ -994,7 +1011,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			github:   req.GitHub,
 			attach:   func() bool { return s.orch.EnsureSelfAttached(u.Username, p.ID) },
 		}
-		containerID, err := s.orch.EnsureRunning(ctx, u.Username, p.ID, runOptsFor(sp, p, guest))
+		containerID, err := s.orch.EnsureRunning(ctx, u.Username, p.ID, s.runOptsFor(sp, u.Username, p, guest))
 		if err != nil {
 			s.logger.Error("background project boot failed", "project", p.Name, "error", err)
 			s.bootFailed(ctx, spec)
@@ -1189,7 +1206,7 @@ func (s *Server) startProject(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	// Reuse sp from getProjectFor (N23: the old sp2, _ := s.space(...) ignored
 	// the error and could nil-deref).
-	if _, err := s.orch.EnsureRunning(ctx, u.Username, p.ID, runOptsFor(sp, p, sp.profile.GuestUser())); err != nil {
+	if _, err := s.orch.EnsureRunning(ctx, u.Username, p.ID, s.runOptsFor(sp, u.Username, p, sp.profile.GuestUser())); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}

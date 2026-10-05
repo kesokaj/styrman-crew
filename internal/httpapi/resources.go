@@ -33,6 +33,9 @@ type resourceLimits struct {
 	MaxMemoryGiB int `json:"maxMemoryGiB"` // 0: the host is too small to set any
 	MinDiskGB    int `json:"minDiskGB"`    // the current size: the disk only grows
 	MaxDiskGB    int `json:"maxDiskGB"`
+	// Capped: the maxima are the admin cap for a non-admin's projects
+	// (ADR-087), not the host; "unlimited" means up to them.
+	Capped bool `json:"capped"`
 }
 
 // resourcesView is GET /api/projects/{id}/resources's body.
@@ -63,8 +66,88 @@ func limitsFor(h orchestrator.Host, diskGB int) resourceLimits {
 		MinDiskGB: max(minDiskGB, diskGB), MaxDiskGB: maxDiskGB}
 }
 
+// ── Admin cap (ADR-087) ─────────────────────────────────────────────────────
+// A non-admin's project is capped at the operator's ceiling: the configured
+// value, or half the host when 0. The record keeps what the owner asked for;
+// the cap is applied where the size is used (start, the dialog's view, the
+// PUT's rebuild decision), so raising the cap restores the wish.
+
+// ownerIsAdmin mirrors authGuard for a project's owner, who at start time is
+// only a username: every request on an AuthMode "none" listener is admin
+// (auth.go — the e2e and Tier 2 servers), as is the dev listener's default
+// user; otherwise the environment's admin list decides.
+func (s *Server) ownerIsAdmin(username string) bool {
+	if s.cfg.AuthMode == "none" {
+		return true
+	}
+	if s.cfg.DevAddr != "" {
+		if _, def := s.cfg.DefaultUser(); def == username {
+			return true
+		}
+	}
+	return s.users != nil && s.users.IsAdminUsername(username)
+}
+
+// userCap is the non-admin ceiling on host h. Memory 0: no memory cap, the
+// host is too small to set any size (MaxMemoryGiB 0), as for an admin.
+func (s *Server) userCap(h orchestrator.Host) (cpus, memoryGiB int) {
+	c, m := s.cfg.UserCaps()
+	if c <= 0 {
+		c = max(1, h.CPUs/2)
+	}
+	cpus = min(c, h.CPUs)
+	if maxGiB := h.MaxMemoryGiB(); maxGiB > 0 {
+		if m <= 0 {
+			m = max(1, maxGiB/2)
+		}
+		memoryGiB = min(m, maxGiB)
+	}
+	return cpus, memoryGiB
+}
+
+// startCapped is the size a project starts at: for a non-admin, unlimited
+// (0) or anything above the cap becomes the cap.
+func (s *Server) startCapped(h orchestrator.Host, admin bool, r orchestrator.Resources) orchestrator.Resources {
+	if admin {
+		return r
+	}
+	c, m := s.userCap(h)
+	if r.CPUs == 0 || r.CPUs > c {
+		r.CPUs = c
+	}
+	if m > 0 && (r.MemoryGiB == 0 || r.MemoryGiB > m) {
+		r.MemoryGiB = m
+	}
+	return r
+}
+
+// viewCapped is what the dialog shows a non-admin (plan D20): unlimited stays
+// 0 ("Unlimited (up to N)"), a value above the cap reads as the cap, so the
+// form always opens valid.
+func (s *Server) viewCapped(h orchestrator.Host, admin bool, r orchestrator.Resources) orchestrator.Resources {
+	if admin {
+		return r
+	}
+	c, m := s.userCap(h)
+	r.CPUs = min(r.CPUs, c)
+	if m > 0 {
+		r.MemoryGiB = min(r.MemoryGiB, m)
+	}
+	return r
+}
+
+// limitsForOwner is limitsFor with the non-admin cap as the maxima.
+func (s *Server) limitsForOwner(h orchestrator.Host, admin bool, diskGB int) resourceLimits {
+	l := limitsFor(h, diskGB)
+	if !admin {
+		l.MaxCPUs, l.MaxMemoryGiB = s.userCap(h)
+		l.Capped = true
+	}
+	return l
+}
+
 func (s *Server) projectResources(w http.ResponseWriter, r *http.Request) {
-	_, _, p, err := s.getProjectFor(r)
+	u, _, p, err := s.getProjectFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return
@@ -85,11 +168,13 @@ func (s *Server) projectResources(w http.ResponseWriter, r *http.Request) {
 	} else if found {
 		live = &l
 	}
-	want := s.size.WantSizing(h, recordResources(p), live)
+	admin := s.ownerIsAdmin(u.Username)
+	want := s.size.WantSizing(h, s.startCapped(h, admin, recordResources(p)), live)
+	view := s.viewCapped(h, admin, recordResources(p))
 	writeJSON(w, http.StatusOK, resourcesView{
-		CPUs: p.CPUs, MemoryGiB: p.MemoryGiB, DiskGB: want.DiskGB,
+		CPUs: view.CPUs, MemoryGiB: view.MemoryGiB, DiskGB: want.DiskGB,
 		Pending: live != nil && live.Running && live.Sizing != want,
-		Limits:  limitsFor(h, want.DiskGB),
+		Limits:  s.limitsForOwner(h, admin, want.DiskGB),
 	})
 }
 
@@ -147,13 +232,25 @@ func (s *Server) setProjectResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := orchestrator.Resources{CPUs: *body.CPUs, MemoryGiB: *body.MemoryGiB, DiskGB: *body.DiskGB}
-	if req.CPUs != 0 && (req.CPUs < 1 || req.CPUs > h.CPUs) {
-		writeErr(w, http.StatusBadRequest, fmt.Errorf("cpus must be 0 (unlimited) or 1-%d", h.CPUs))
+	// The owner is the requester (projects are owner-scoped), judged as the
+	// start judges them.
+	admin := s.ownerIsAdmin(u.Username)
+	lim := s.limitsForOwner(h, admin, 0)
+	if req.CPUs != 0 && (req.CPUs < 1 || req.CPUs > lim.MaxCPUs) {
+		if !admin && req.CPUs > lim.MaxCPUs {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("at most %d CPUs for your projects; an admin can raise this in Settings", lim.MaxCPUs))
+			return
+		}
+		writeErr(w, http.StatusBadRequest, fmt.Errorf("cpus must be 0 (unlimited) or 1-%d", lim.MaxCPUs))
 		return
 	}
-	if maxGiB := h.MaxMemoryGiB(); req.MemoryGiB != 0 && (req.MemoryGiB < 1 || req.MemoryGiB > maxGiB) {
+	if maxGiB := lim.MaxMemoryGiB; req.MemoryGiB != 0 && (req.MemoryGiB < 1 || req.MemoryGiB > maxGiB) {
 		if maxGiB == 0 {
 			writeErr(w, http.StatusBadRequest, errors.New("memoryGiB must be 0 (unlimited): this host is too small to set a memory size"))
+			return
+		}
+		if !admin && req.MemoryGiB > maxGiB {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("at most %d GiB of memory for your projects; an admin can raise this in Settings", maxGiB))
 			return
 		}
 		writeErr(w, http.StatusBadRequest, fmt.Errorf("memoryGiB must be 0 (unlimited) or 1-%d", maxGiB))
@@ -188,14 +285,16 @@ func (s *Server) setProjectResources(w http.ResponseWriter, r *http.Request) {
 			live = &l
 		}
 		// The disk only grows: the floor is what the project has now.
-		cur := s.size.WantSizing(h, recordResources(rec), live)
+		cur := s.size.WantSizing(h, s.startCapped(h, admin, recordResources(rec)), live)
 		if floor := max(minDiskGB, cur.DiskGB); req.DiskGB < floor || req.DiskGB > maxDiskGB {
 			res = fail(http.StatusBadRequest, fmt.Errorf("diskGB must be %d-%d (the Docker disk can only grow)", floor, maxDiskGB))
 			return
 		}
-		want := s.size.WantSizing(h, req, live)
+		// The decision uses the size the project would START at: a capped
+		// project going from the cap to unlimited is persist-only.
+		want := s.size.WantSizing(h, s.startCapped(h, admin, req), live)
 		view := resourcesView{CPUs: req.CPUs, MemoryGiB: req.MemoryGiB, DiskGB: req.DiskGB,
-			Limits: limitsFor(h, req.DiskGB)}
+			Limits: s.limitsForOwner(h, admin, req.DiskGB)}
 		logChange := func(rebuilt bool) {
 			s.logger.Info("project resources changed", "by", u.Email, "project", p.ID, "projectName", p.Name,
 				"from", recordResources(rec), "to", req, "rebuilt", rebuilt)
@@ -231,7 +330,7 @@ func (s *Server) setProjectResources(w http.ResponseWriter, r *http.Request) {
 				fmt.Errorf("the project was stopped but the size could not be saved — start it to continue at its old size: %w", err))
 			return
 		}
-		if _, err := pr.EnsureRunning(ctx, runOptsFor(sp, rec, sp.profile.GuestUser())); err != nil {
+		if _, err := pr.EnsureRunning(ctx, s.runOptsFor(sp, u.Username, rec, sp.profile.GuestUser())); err != nil {
 			res = fail(http.StatusInternalServerError,
 				fmt.Errorf("the new size was saved, but the project could not be restarted: %w — it applies on the next start", err))
 			return

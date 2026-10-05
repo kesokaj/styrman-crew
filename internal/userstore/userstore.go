@@ -113,6 +113,22 @@ func (s *Store) IsAdmin(email string) bool {
 	return s.envUsers[normalize(email)]
 }
 
+// IsAdminUsername reports whether username is an environment-provided
+// administrator's — the same fact IsAdmin reports for an email, for the
+// places that only have the username (a project's owner when it starts,
+// ADR-087). Unambiguous: no two authorized emails may share a username
+// (New, slugCollision).
+func (s *Store) IsAdminUsername(username string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for e, admin := range s.envUsers {
+		if admin && identity.DeriveUsername(e) == username {
+			return true
+		}
+	}
+	return false
+}
+
 // IsAuthorized reports whether email may use styrman.
 func (s *Store) IsAuthorized(email string) bool {
 	e := normalize(email)

@@ -227,7 +227,7 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 				fmt.Errorf("the project was stopped but the setting could not be saved, so the mode was NOT changed — start it to continue in the previous mode: %w", err))
 			return
 		}
-		if _, err := pr.EnsureRunning(ctx, runOptsFor(sp, rec, sp.profile.GuestUser())); err != nil {
+		if _, err := pr.EnsureRunning(ctx, s.runOptsFor(sp, u.Username, rec, sp.profile.GuestUser())); err != nil {
 			// Container down, record ahead of it: the next start applies it.
 			res = fail(http.StatusInternalServerError,
 				fmt.Errorf("saved, but the project could not be restarted: %w — start it to apply the change", err))

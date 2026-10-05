@@ -3,6 +3,8 @@ package userstore
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/kesokaj/styrman-crew/internal/identity"
 )
 
 func newStore(t *testing.T, env ...string) *Store {
@@ -77,5 +79,24 @@ func TestSlugCollision(t *testing.T) {
 	// The same email in both env and (future) file is not a collision.
 	if _, err := New(filepath.Join(t.TempDir(), "u.json"), []string{"joe@a.com", "JOE@a.com"}); err != nil {
 		t.Fatalf("duplicate of the same email must be allowed: %v", err)
+	}
+}
+
+func TestIsAdminUsername(t *testing.T) {
+	s, err := New(filepath.Join(t.TempDir(), "users.json"), []string{"Boss@Example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add("member@example.com", "boss@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if !s.IsAdminUsername(identity.DeriveUsername("boss@example.com")) {
+		t.Error("the env admin's username is not admin")
+	}
+	if s.IsAdminUsername(identity.DeriveUsername("member@example.com")) {
+		t.Error("a runtime-added user's username reads as admin")
+	}
+	if s.IsAdminUsername("") || s.IsAdminUsername("nobody") {
+		t.Error("an unknown username reads as admin")
 	}
 }

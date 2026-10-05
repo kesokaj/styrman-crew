@@ -117,6 +117,9 @@ type Config struct {
 	persistMu   sync.Mutex
 	dockerDisk  int           // per-project docker.img size in GB (new VMs)
 	idleTimeout time.Duration // stop project containers idle this long (0 = never)
+	// userMaxCPUs / userMaxMemoryGiB cap a NON-admin's projects (ADR-087);
+	// 0 = half the host, resolved against the live host where it is used.
+	userMaxCPUs, userMaxMemoryGiB int
 	// TranscriptTTL: terminal transcripts older than this are pruned by the
 	// janitor (0 = keep forever). Transcripts live in each per-project home
 	// (~/.styrman/logs, ADR-017) and grew unbounded before v1.14.0.
@@ -281,8 +284,10 @@ func Load() (*Config, error) {
 
 // operatorOverrides is the persisted shape of StateDir/settings.json.
 type operatorOverrides struct {
-	DockerDiskGB int    `json:"dockerDiskGB,omitempty"`
-	IdleTimeout  string `json:"idleTimeout,omitempty"`
+	DockerDiskGB     int    `json:"dockerDiskGB,omitempty"`
+	IdleTimeout      string `json:"idleTimeout,omitempty"`
+	UserMaxCPUs      int    `json:"userMaxCpus,omitempty"`      // 0 (absent) = half the host
+	UserMaxMemoryGiB int    `json:"userMaxMemoryGiB,omitempty"` // 0 (absent) = half the host
 }
 
 func (c *Config) overridesPath() string {
@@ -318,6 +323,19 @@ func (c *Config) loadOverrides() {
 			c.idleTimeout = d
 		}
 	}
+	// The caps' upper bound is the live host, which config cannot know;
+	// a negative value is the only thing to refuse here.
+	for _, f := range []struct {
+		name string
+		v    int
+		dst  *int
+	}{{"userMaxCpus", o.UserMaxCPUs, &c.userMaxCPUs}, {"userMaxMemoryGiB", o.UserMaxMemoryGiB, &c.userMaxMemoryGiB}} {
+		if f.v < 0 {
+			fmt.Fprintf(os.Stderr, "WARN: ignoring %s=%d in %s (must be 0 or more)\n", f.name, f.v, c.overridesPath())
+			continue
+		}
+		*f.dst = f.v
+	}
 }
 
 // removedEnvWarnings names the server-wide sizing variables ADR-083 removed
@@ -350,12 +368,39 @@ func (c *Config) IdleTimeoutD() time.Duration {
 	return c.idleTimeout
 }
 
-// SetOperator validates, persists, then applies the tunable settings —
-// persist FIRST, so a write failure never leaves live state diverged from
-// what the next restart will load. diskGB 0 / idle < 0 mean "keep".
+// UserCaps is the non-admin project ceiling as configured (ADR-087): 0 =
+// half the host, resolved by the caller against the live host.
+func (c *Config) UserCaps() (cpus, memoryGiB int) {
+	c.opMu.RLock()
+	defer c.opMu.RUnlock()
+	return c.userMaxCPUs, c.userMaxMemoryGiB
+}
+
+// OperatorUpdate is one change to the tunable settings. Only the fields it
+// sets are validated and changed (plan D22): DockerDiskGB 0, IdleTimeout < 0
+// and a nil cap mean "keep", so a setting that came from the environment
+// out of the API's range never blocks a change to another one.
+type OperatorUpdate struct {
+	DockerDiskGB                  int
+	IdleTimeout                   time.Duration
+	UserMaxCPUs, UserMaxMemoryGiB *int // 0 = half the host
+}
+
+// SetOperator is UpdateOperator for the disk and idle settings only.
 func (c *Config) SetOperator(diskGB int, idle time.Duration) error {
+	return c.UpdateOperator(OperatorUpdate{DockerDiskGB: diskGB, IdleTimeout: idle})
+}
+
+// UpdateOperator validates, persists, then applies the tunable settings —
+// persist FIRST, so a write failure never leaves live state diverged from
+// what the next restart will load.
+func (c *Config) UpdateOperator(u OperatorUpdate) error {
+	diskGB, idle := u.DockerDiskGB, u.IdleTimeout
 	if diskGB != 0 && (diskGB < 5 || diskGB > 500) {
 		return fmt.Errorf("docker disk must be 5-500 GB")
+	}
+	if (u.UserMaxCPUs != nil && *u.UserMaxCPUs < 0) || (u.UserMaxMemoryGiB != nil && *u.UserMaxMemoryGiB < 0) {
+		return fmt.Errorf("a project cap must be 0 (half the host) or more")
 	}
 	// persistMu serializes concurrent SetOperator calls end-to-end; the value
 	// lock (opMu) is only held for the snapshot and the final in-memory apply,
@@ -364,10 +409,18 @@ func (c *Config) SetOperator(diskGB int, idle time.Duration) error {
 	defer c.persistMu.Unlock()
 	c.opMu.RLock()
 	next := operatorOverrides{
-		DockerDiskGB: c.dockerDisk,
-		IdleTimeout:  c.idleTimeout.String(),
+		DockerDiskGB:     c.dockerDisk,
+		IdleTimeout:      c.idleTimeout.String(),
+		UserMaxCPUs:      c.userMaxCPUs,
+		UserMaxMemoryGiB: c.userMaxMemoryGiB,
 	}
 	c.opMu.RUnlock()
+	if u.UserMaxCPUs != nil {
+		next.UserMaxCPUs = *u.UserMaxCPUs
+	}
+	if u.UserMaxMemoryGiB != nil {
+		next.UserMaxMemoryGiB = *u.UserMaxMemoryGiB
+	}
 	if diskGB != 0 {
 		next.DockerDiskGB = diskGB
 	}
@@ -400,6 +453,7 @@ func (c *Config) SetOperator(diskGB int, idle time.Duration) error {
 	if idle >= 0 {
 		c.idleTimeout = idle
 	}
+	c.userMaxCPUs, c.userMaxMemoryGiB = next.UserMaxCPUs, next.UserMaxMemoryGiB
 	c.opMu.Unlock()
 	return nil
 }

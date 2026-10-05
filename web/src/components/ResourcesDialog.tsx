@@ -83,7 +83,7 @@ export function ResourcesDialog({
                   checked={form.cpusUnlimited}
                   onChange={(e) => set({ cpusUnlimited: e.target.checked })}
                 />
-                Unlimited
+                {saved.limits.capped ? `Unlimited (up to ${saved.limits.maxCpus})` : "Unlimited"}
               </label>
               <span className="flex items-center gap-1.5">
                 <input
@@ -111,7 +111,7 @@ export function ResourcesDialog({
                   checked={form.memoryUnlimited}
                   onChange={(e) => set({ memoryUnlimited: e.target.checked })}
                 />
-                Unlimited
+                {saved.limits.capped ? `Unlimited (up to ${saved.limits.maxMemoryGiB} GiB)` : "Unlimited"}
               </label>
               <span className="flex items-center gap-1.5">
                 <input

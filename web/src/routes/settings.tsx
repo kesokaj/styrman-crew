@@ -868,6 +868,8 @@ function SettingsPage() {
             <RuntimeEditor
               dockerDiskGB={data.dockerDiskGB}
               idleTimeout={data.idleTimeout}
+              userMaxCpus={data.userMaxCpus}
+              userMaxMemoryGiB={data.userMaxMemoryGiB}
               onSaved={refresh}
             />
           ) : (
@@ -965,16 +967,26 @@ function FontRows({
 function RuntimeEditor({
   dockerDiskGB,
   idleTimeout,
+  userMaxCpus,
+  userMaxMemoryGiB,
   onSaved,
 }: {
   dockerDiskGB: number;
   idleTimeout: string;
+  userMaxCpus: number;
+  userMaxMemoryGiB: number;
   onSaved: () => void;
 }) {
   const [disk, setDisk] = useState(String(dockerDiskGB));
   const [idle, setIdle] = useState(idleTimeout);
+  const [capCpus, setCapCpus] = useState(String(userMaxCpus));
+  const [capMem, setCapMem] = useState(String(userMaxMemoryGiB));
   const [busy, setBusy] = useState(false);
-  const dirty = disk !== String(dockerDiskGB) || idle !== idleTimeout;
+  const dirty =
+    disk !== String(dockerDiskGB) ||
+    idle !== idleTimeout ||
+    capCpus !== String(userMaxCpus) ||
+    capMem !== String(userMaxMemoryGiB);
   // A typed 0 (or cleared field) must be a visible error, not a silent
   // "keep" — the API treats 0 as keep-current (review finding).
   const diskValid = Number(disk) >= 5 && Number(disk) <= 500;
@@ -986,9 +998,13 @@ function RuntimeEditor({
         const r = await api.updateRuntime({
           dockerDiskGB: Number(disk),
           idleTimeout: idle.trim(),
+          userMaxCpus: Number(capCpus || 0),
+          userMaxMemoryGiB: Number(capMem || 0),
         });
         setDisk(String(r.dockerDiskGB));
         setIdle(r.idleTimeout);
+        setCapCpus(String(r.userMaxCpus));
+        setCapMem(String(r.userMaxMemoryGiB));
         toast("success", "Runtime settings saved");
         onSaved();
       } finally {
@@ -1020,6 +1036,28 @@ function RuntimeEditor({
           <span className="text-text-dim">
             e.g. 24h, 90m — 0s never stops; applies immediately
           </span>
+        </span>
+      </Row>
+      <Row label="Max CPUs per non-admin project">
+        <span className="flex items-center gap-2">
+          <input
+            value={capCpus}
+            onChange={(e) => setCapCpus(e.target.value.replace(/\D/g, ""))}
+            className="w-16 rounded border border-border bg-bg px-2 py-1 text-right outline-none focus:border-accent"
+            aria-label="Max CPUs per non-admin project"
+          />
+          <span className="text-text-dim">0 = half the host; applies at each project's next start</span>
+        </span>
+      </Row>
+      <Row label="Max memory per non-admin project">
+        <span className="flex items-center gap-2">
+          <input
+            value={capMem}
+            onChange={(e) => setCapMem(e.target.value.replace(/\D/g, ""))}
+            className="w-16 rounded border border-border bg-bg px-2 py-1 text-right outline-none focus:border-accent"
+            aria-label="Max memory per non-admin project in GiB"
+          />
+          <span className="text-text-dim">GiB — 0 = half the host; admins are not capped</span>
         </span>
       </Row>
       {dirty && (

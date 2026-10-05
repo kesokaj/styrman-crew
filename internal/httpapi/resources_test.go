@@ -404,7 +404,7 @@ func TestRunOptsForCarriesTheRecordsSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts := runOptsFor(sp, n.record(t), "x")
+	opts := n.s.runOptsFor(sp, identity.DeriveUsername(n.admin), n.record(t), "x")
 	n.setRecord(t, 3, 5, 40)
 	r, err := opts.Resources()
 	if err != nil || r != (orchestrator.Resources{CPUs: 3, MemoryGiB: 5, DiskGB: 40}) {

@@ -401,11 +401,11 @@ Live (after deploy, by `/preflight`): dave signs in with the new cookie name.
 - [ ] read deadline only with a body; `decodeJSON` 408/400 (no 413, D14) + real-server test — verify: same — expect: ok — docs: specs/styrman/api.md
 - [ ] Checkpoint — expect: `go test -race ./...` and `go vet ./...` exit 0 — evidence: verifier log
 ### Phase 2 — admin cap
-- [ ] ADR-087 (admin cap, amends ADR-083) — verify: read — expect: entry present
-- [ ] config `OperatorSettings`/`UpdateOperator` + persistence tests; update the two orchestrator test callers — verify: `go test ./internal/config/ ./internal/orchestrator/` — expect: ok
-- [ ] `IsAdminUsername`, `ownerIsAdmin` (AuthMode none / env admin / dev user), `capped`, `runOptsFor` method + tests on the method and closure with a fake `sizeRuntime` — verify: `go test -race ./internal/httpapi/ ./internal/userstore/` — expect: ok
+- [x] ADR-087 (admin cap, amends ADR-083) — verify: read — expect: entry present
+- [x] config `OperatorSettings`/`UpdateOperator` + persistence tests; update the two orchestrator test callers — verify: `go test ./internal/config/ ./internal/orchestrator/` — expect: ok
+- [x] `IsAdminUsername`, `ownerIsAdmin` (AuthMode none / env admin / dev user), `capped`, `runOptsFor` method + tests on the method and closure with a fake `sizeRuntime` — verify: `go test -race ./internal/httpapi/ ./internal/userstore/` — expect: ok
 - [ ] resources GET/PUT cap + settings GET/PATCH — verify: same — expect: ok — docs: specs/styrman/api.md, specs/styrman/guide.md
-- [ ] web: ResourcesDialog label, Settings Runtime fields — verify: `(cd web && npm run check && npm run lint && npm test)` — expect: exit 0
+- [x] web: ResourcesDialog label, Settings Runtime fields — verify: `(cd web && npm run check && npm run lint && npm test)` — expect: exit 0
 - [ ] Checkpoint — expect: Go + web suites exit 0 — evidence: verifier log
 ### Phase 3 — tooling, web, e2e, BUG-074
 - [ ] token-file refusals + script tests; doc snippet — verify: `go test ./internal/config/` — expect: ok, red first — docs: deploy/remote.md, specs/styrman/deploy.md
@@ -458,3 +458,4 @@ D21 — 2026-10-05 — The body read deadline is cleared once the body is fully 
 D22 — 2026-10-05 — `UpdateOperator` validates only the fields the PATCH changes — by: cold read round 3, operator 2026-10-05
 D23 — 2026-10-05 — No `deadlineBody` wrapper: go1.25 net/http already clears the read deadline when the body hits EOF (`startBackgroundRead`, net/http/server.go:697); `TestTheBodyDeadlineEndsWithTheBody` pins it (a mutant that never cleared the deadline passed, which is how this was found) — supersedes D21's mechanism — by: implementer
 D24 — 2026-10-05 — Phases are checkpointed by the main agent's bare `go test -race ./...` runs; one verifier dispatch covers the whole range before the gate — by: implementer, after the operator's "Why cant you cut a new version/release?" (speed)
+D25 — 2026-10-05 — `UpdateOperator(OperatorUpdate)` with keep-semantics per field (disk 0, idle < 0, nil cap); `SetOperator(disk, idle)` stays as its wrapper, so no caller changes — supersedes D11's shape — by: implementer

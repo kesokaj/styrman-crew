@@ -2921,3 +2921,27 @@ a new heavy route must get its own row (the table test catches a stale
 pattern, not a missing one). With 1 GiB = 4 x 256 MiB, a tenant at its share
 never blocks another while at most three tenants are at theirs; four or five
 tenants all at their share make the rest wait, then 503 (accepted, plan D16).
+
+## ADR-087: Non-admin projects are capped; admins are not     (2026-10-05) — Accepted
+Amends ADR-083 (projects sized per project, the whole host by default).
+**Context:** ADR-083 let every project take the whole host. The operator
+wants that for admins only: "admin cap" — non-admin owners capped at a
+default, admins may go above.
+**Decision:** two operator settings, `userMaxCpus` and `userMaxMemoryGiB`
+(Settings → Runtime, `PATCH /api/settings/runtime`, settings.json), 0 = half
+the host (at least 1, never above the host; no memory cap on a host too small
+to set one). Admin status of a project's OWNER is resolved by username at
+every start, mirroring authGuard: `STYRMAN_AUTH=none` (every request admin),
+an environment admin's username (`userstore.IsAdminUsername`), or the dev
+listener's default user. For a non-admin the start maps 0 ("Unlimited") and
+anything above the cap to the cap; the record is never rewritten, so raising
+the cap restores what the owner asked for. The Resources dialog shows the cap
+as its maxima ("Unlimited (up to N)"), reports a stored value above the cap
+as the cap, and a PUT above the cap is 400. The PUT's rebuild decision uses
+the capped start size, so cap → Unlimited is persist-only. Disk is not
+capped; the per-user setup VM is not capped.
+**Consequences:** every non-admin project sized above the cap, or Unlimited,
+is rebuilt at its next start at the capped size (home and workspace survive,
+ADR-083's rebuild rule). A demoted admin's projects are capped at their next
+start. A non-admin start reads the host size (cached after the first
+success); if that read fails the start fails, never running uncapped.

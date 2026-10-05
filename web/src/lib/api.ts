@@ -55,6 +55,9 @@ export interface ProjectResources {
     /** The current disk: it can only grow. */
     minDiskGB: number;
     maxDiskGB: number;
+    /** The maxima are the admin's cap for a non-admin's projects (ADR-087);
+     *  "Unlimited" then means up to them. */
+    capped: boolean;
   };
   /** PUT only: whether the request restarted the project. */
   rebuilt?: boolean;
@@ -236,6 +239,9 @@ export interface Settings {
   runtime: string;
   dockerDiskGB: number;
   idleTimeout: string;
+  /** Non-admin project caps (ADR-087); 0 = half the host. */
+  userMaxCpus: number;
+  userMaxMemoryGiB: number;
   terminalUsername: string;
   /** True once the user explicitly picked a name (setup won't re-ask). */
   terminalUsernameChosen: boolean;
@@ -843,8 +849,13 @@ export const api = {
 
   settings: () => request<Settings>("/api/settings"),
   tools: () => request<{ tools: ToolInfo[] }>("/api/settings/tools"),
-  updateRuntime: (patch: { dockerDiskGB?: number; idleTimeout?: string }) =>
-    request<{ dockerDiskGB: number; idleTimeout: string }>(
+  updateRuntime: (patch: {
+    dockerDiskGB?: number;
+    idleTimeout?: string;
+    userMaxCpus?: number;
+    userMaxMemoryGiB?: number;
+  }) =>
+    request<{ dockerDiskGB: number; idleTimeout: string; userMaxCpus: number; userMaxMemoryGiB: number }>(
       "/api/settings/runtime",
       { method: "PATCH", body: JSON.stringify(patch) },
     ),

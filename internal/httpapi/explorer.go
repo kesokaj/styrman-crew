@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kesokaj/styrman-crew/internal/config"
 	"github.com/kesokaj/styrman-crew/internal/conversation"
 	"github.com/kesokaj/styrman-crew/internal/credstore"
 	"github.com/kesokaj/styrman-crew/internal/files"
@@ -563,6 +564,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	// user-management UI was removed (operator Q4, 2026-08-28) — access is
 	// managed via STYRMAN_ALLOWED_EMAILS plus the admin-only /settings/users
 	// endpoints, and the list shouldn't leak to non-admin sessions.
+	userMaxCPUs, userMaxMemoryGiB := s.cfg.UserCaps() // 0 = half the host (ADR-087)
 	resp := map[string]any{
 		"version":          Version,
 		"user":             email,
@@ -575,6 +577,8 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		"runtime":          s.cfg.Runtime,
 		"dockerDiskGB":     s.cfg.DockerDiskGB(),
 		"idleTimeout":      s.cfg.IdleTimeoutD().String(),
+		"userMaxCpus":      userMaxCPUs,
+		"userMaxMemoryGiB": userMaxMemoryGiB,
 		"terminalUsername": s.guestUserFor(u.Username),
 		// Whether the user explicitly picked a terminal username (vs. the
 		// email-derived default) — the setup flow skips the picker if so.
@@ -602,18 +606,40 @@ func updaterFor(admin bool, path string, now time.Time) (updatestatus.Status, bo
 
 // updateRuntime changes the operator-tunable settings (admin only): idle
 // timeout applies to the reaper immediately; docker disk applies to newly
-// created project VMs. Persisted in StateDir/settings.json.
+// created project VMs; the non-admin caps (ADR-087) apply at each project's
+// next start. Persisted in StateDir/settings.json. dockerDiskGB 0 and
+// idleTimeout "" keep their value (the client always sends both); an absent
+// cap keeps its value, 0 means half the host.
 func (s *Server) updateRuntime(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdmin(w, r) {
 		return
 	}
 	var body struct {
-		DockerDiskGB int    `json:"dockerDiskGB"`
-		IdleTimeout  string `json:"idleTimeout"`
+		DockerDiskGB     int    `json:"dockerDiskGB"`
+		IdleTimeout      string `json:"idleTimeout"`
+		UserMaxCPUs      *int   `json:"userMaxCpus"`
+		UserMaxMemoryGiB *int   `json:"userMaxMemoryGiB"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
+	}
+	if body.UserMaxCPUs != nil || body.UserMaxMemoryGiB != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		h, err := s.size.Host(ctx)
+		if err != nil {
+			writeErr(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		if v := body.UserMaxCPUs; v != nil && (*v < 0 || *v > h.CPUs) {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("max CPUs per non-admin project must be 0 (half the host) or 1-%d", h.CPUs))
+			return
+		}
+		if v := body.UserMaxMemoryGiB; v != nil && (*v < 0 || *v > h.MaxMemoryGiB()) {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("max memory per non-admin project must be 0 (half the host) or 1-%d GiB", h.MaxMemoryGiB()))
+			return
+		}
 	}
 	// Validation → 400 here; anything SetOperator returns after this is a
 	// persistence failure → 500 (disk full is not the client's fault).
@@ -630,18 +656,23 @@ func (s *Server) updateRuntime(w http.ResponseWriter, r *http.Request) {
 		}
 		idle = d
 	}
-	if err := s.cfg.SetOperator(body.DockerDiskGB, idle); err != nil {
+	if err := s.cfg.UpdateOperator(config.OperatorUpdate{DockerDiskGB: body.DockerDiskGB, IdleTimeout: idle,
+		UserMaxCPUs: body.UserMaxCPUs, UserMaxMemoryGiB: body.UserMaxMemoryGiB}); err != nil {
 		s.logger.Error("runtime settings persist failed", "error", err)
 		writeErr(w, http.StatusInternalServerError, errors.New("cannot persist settings"))
 		return
 	}
+	userMaxCPUs, userMaxMemoryGiB := s.cfg.UserCaps()
 	s.logger.Info("runtime settings changed",
 		"by", identity.FromContext(r.Context()).Email,
 		"dockerDiskGB", s.cfg.DockerDiskGB(),
-		"idleTimeout", s.cfg.IdleTimeoutD().String())
+		"idleTimeout", s.cfg.IdleTimeoutD().String(),
+		"userMaxCpus", userMaxCPUs, "userMaxMemoryGiB", userMaxMemoryGiB)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"dockerDiskGB": s.cfg.DockerDiskGB(),
-		"idleTimeout":  s.cfg.IdleTimeoutD().String(),
+		"dockerDiskGB":     s.cfg.DockerDiskGB(),
+		"idleTimeout":      s.cfg.IdleTimeoutD().String(),
+		"userMaxCpus":      userMaxCPUs,
+		"userMaxMemoryGiB": userMaxMemoryGiB,
 	})
 }
 
