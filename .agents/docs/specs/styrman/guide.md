@@ -160,7 +160,13 @@ selections before a keypress can land — the runtime image's tmux
    cards with live transcript tails per running terminal (15s refresh,
    click to jump in), plus an OPS ROW per running card (v1.14.0):
    cpu/mem/disk/procs chips and a Logs dialog with the microVM console
-   tail. The sidebar shows per-project GIT BADGES (branch, amber ±N when
+   tail. The sidebar project menu's "Resources…" dialog (ADR-083) sizes
+   the project: CPU and Memory are each an "Unlimited" checkbox (the
+   default, the whole host) or a number; Docker disk is a number, grow
+   only; a "Running at its previous size" line shows while a saved size is
+   not yet in force; Save restarts a running project. See `api.md`
+   (`/api/projects/{id}/resources`) and `deploy.md` for the mechanics.
+   The sidebar shows per-project GIT BADGES (branch, amber ±N when
    dirty — one batched /api/git/summary call). One shared listProjects
    poll feeds every surface; polling pauses app-wide in hidden tabs, and
    an expired session triggers one toast + reload into the OAuth flow.
@@ -644,7 +650,7 @@ rotated token, or a tool signed into inside a project instead of at setup).
   DATABASE_URL, …); "Import from a project" is marked optional (setup
   already auto-syncs, ADR-034) — theme (Light / Dark / System), and —
   admins only — LIVE runtime tunables: idle-stop timeout (applies to the
-  reaper immediately) and docker disk size for new project VMs, persisted
+  reaper immediately) and "Default Docker disk for new projects" (20 GB; recorded into each project at creation, ADR-083), persisted
   in `StateDir/settings.json` over the env defaults. (The user-access card
   was removed in v1.3 — access = env + admin API.) An admin's `DELETE
   /api/settings/users/{email}` is TERMINAL revocation only (TODO close-out

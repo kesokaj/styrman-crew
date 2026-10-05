@@ -110,6 +110,13 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
   exited, 4001 = replaced (the page may take the terminal back when it is
   shown again or its user presses "Use here").
 - Per-project dockerd: overlay2 on loop-mounted `~/.dockerd/<uuid>.img`.
+- Per-project sizing (ADR-083): each project record carries `cpus`,
+  `memoryGiB` (0 = unlimited = the whole host) and `diskGB`, edited via
+  `GET/PUT /api/projects/{id}/resources` (sidebar "Resources…"); a size change
+  or a pre-ADR-083 record rebuilds the container on (re)start. `STYRMAN_VCPUS`/
+  `STYRMAN_MEMORY_MB` are removed. Host side, `host-setup.sh` pins Kata to
+  Cloud Hypervisor and enables memory reclaim; the updater never runs it, so
+  re-run it by hand per host (`.agents/docs/specs/styrman/deploy.md`).
 - Project networks are isolated from each other (R12); the server joins
   them in the background for the port-preview proxy (ip_forward=0, asserted
   at boot since v1.33.0: a containerized server refuses to start with

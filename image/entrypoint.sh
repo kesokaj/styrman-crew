@@ -388,11 +388,15 @@ mkdir -p /var/lib/docker-project
 # recreates the container with a larger STYRMAN_DOCKER_DISK_GB, and this boot
 # applies it offline, before the mount. Never shrinks. Any failure leaves the
 # image as it was (a file grown but not resized still mounts at its old
-# size) and the next boot retries.
+# size) and the next boot retries — which is why the gate reads the
+# FILESYSTEM's size, not the file's: after a truncate that succeeded and a
+# resize2fs that did not, the file is already the wanted size and a file
+# check would never try again (review 2026-10-05, finding 1).
 if [ -f "${IMG}" ]; then
     HAVE_BYTES=$(stat -c %s "${IMG}" 2>/dev/null || echo 0)
+    FS_BYTES=$(dumpe2fs -h "${IMG}" 2>/dev/null | awk -F: '/^Block count:/{c=$2} /^Block size:/{s=$2} END{print (c+0)*(s+0)}')
     WANT_BYTES=$((DISK_GB * 1024 * 1024 * 1024))
-    if [ "${HAVE_BYTES}" -gt 0 ] && [ "${HAVE_BYTES}" -lt "${WANT_BYTES}" ]; then
+    if [ "${FS_BYTES:-0}" -gt 0 ] && [ "${FS_BYTES}" -lt "${WANT_BYTES}" ]; then
         log "growing docker image ${IMG} to ${DISK_GB}G"
         AVAIL_KB=$(df -Pk "${HOME_DIR}/.dockerd" 2>/dev/null | awk 'NR==2{print $4}')
         NEED_KB=$(( (WANT_BYTES - HAVE_BYTES) / 1024 ))
@@ -403,7 +407,7 @@ if [ -f "${IMG}" ]; then
         e2fsck -f -p "${IMG}" >/dev/null 2>&1; FSCK_RC=$?
         if [ "${FSCK_RC}" -gt 1 ]; then
             log "WARN: docker image grow to ${DISK_GB}G failed at e2fsck (exit ${FSCK_RC}); keeping the current size"
-        elif ! runuser -u "${USERNAME}" -- truncate -s "${DISK_GB}G" "${IMG}"; then
+        elif [ "${HAVE_BYTES}" -lt "${WANT_BYTES}" ] && ! runuser -u "${USERNAME}" -- truncate -s "${DISK_GB}G" "${IMG}"; then
             log "WARN: docker image grow to ${DISK_GB}G failed at truncate; keeping the current size"
         elif ! resize2fs "${IMG}" >/dev/null 2>&1; then
             log "WARN: docker image grow to ${DISK_GB}G failed at resize2fs; the filesystem keeps its old size"

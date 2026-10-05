@@ -457,6 +457,75 @@ check "malformed body is 400" \
 check "unknown project is 404" \
     "[ \$(curl -s -o /dev/null -w '%{http_code}' ${API}/api/projects/00000000-0000-4000-8000-000000000000/network) = 404 ]"
 
+# Per-project resources (ADR-083). Kata adds a container's limits to its own
+# base VM (1 vCPU, 2 GiB) and caps the workload at exactly the limit through
+# the guest cgroup, so the guest shows `nproc` = setting + 1 while cpu.max
+# reads the setting. "Unlimited" is the whole host as `docker info` reports
+# it. Every resize rebuilds the container, so this section sits after the
+# network-mode section and restores unlimited at its end.
+say "resources (ADR-083)"
+RES="${API}/api/projects/${ID}/resources"
+HOSTCPU="$(docker info -f '{{.NCPU}}')"
+HOSTMEM_KB="$(( $(docker info -f '{{.MemTotal}}') / 1024 ))"
+put_res() { curl -s -X PUT -H 'content-type: application/json' -d "$1" "${RES}"; }
+put_code() { curl -s -o /dev/null -w '%{http_code}' -X PUT -H 'content-type: application/json' -d "$1" "${RES}"; }
+guest() { docker exec "${CN}" sh -c "$1" 2>/dev/null; }
+disk_bytes() { guest 'df -B1 --output=size /var/lib/docker-project | tail -1' | tr -d ' '; }
+
+check "a new project records the operator's Docker disk default (20)" \
+    "[ \"\$(jq -r --arg id ${ID} '.projects[] | select(.id == \$id) | .diskGB' '${STATE}/users/${ME}/projects.json')\" = 20 ]"
+check "GET reports unlimited, disk 20, nothing pending, the host's limits" \
+    "curl -fsS ${RES} | jq -e --argjson c ${HOSTCPU} '.cpus == 0 and .memoryGiB == 0 and .diskGB == 20 and .pending == false and .limits.maxCpus == \$c and .limits.minDiskGB == 20 and .limits.maxDiskGB == 500' >/dev/null"
+check "unlimited: the guest sees every host CPU" \
+    "[ \"\$(guest nproc)\" = ${HOSTCPU} ]"
+check "unlimited: the guest's MemTotal is at least 97% of the host's" \
+    "[ \"\$(guest \"awk '/MemTotal/{print \\\$2}' /proc/meminfo\")\" -ge \$(( HOSTMEM_KB * 97 / 100 )) ]"
+DISK0="$(disk_bytes)"
+check "PUT 2 CPUs / 4 GiB / 21 GB on a running project rebuilds it" \
+    "[ \"\$(put_res '{\"cpus\":2,\"memoryGiB\":4,\"diskGB\":21}' | jq -r .rebuilt)\" = true ]"
+check "the guest cgroup caps the workload at 2 CPUs" \
+    "[ \"\$(guest 'cat /sys/fs/cgroup/cpu.max')\" = '200000 100000' ]"
+check "the guest cgroup caps memory at 4 GiB" \
+    "[ \"\$(guest 'cat /sys/fs/cgroup/memory.max')\" = 4294967296 ]"
+check "the guest shows 3 CPUs (the setting plus Kata's own)" \
+    "[ \"\$(guest nproc)\" = 3 ]"
+check "the Docker disk grew by 1 GiB at boot (within 2%)" \
+    "d=\$(( \$(disk_bytes) - DISK0 )); [ \"\$d\" -ge \$(( 1073741824 * 98 / 100 )) ] && [ \"\$d\" -le \$(( 1073741824 * 102 / 100 )) ]"
+check "the Docker disk cannot shrink (20 after 21 is 400)" \
+    "[ \"\$(put_code '{\"cpus\":2,\"memoryGiB\":4,\"diskGB\":20}')\" = 400 ]"
+check "more CPUs than the host is 400" \
+    "[ \"\$(put_code \"{\\\"cpus\\\":\$((HOSTCPU + 1)),\\\"memoryGiB\\\":0,\\\"diskGB\\\":21}\")\" = 400 ]"
+check "a missing field is 400" \
+    "[ \"\$(put_code '{\"cpus\":2}')\" = 400 ]"
+
+curl -fsS -X POST "${API}/api/projects/${ID}/stop" >/dev/null
+check "PUT on a stopped project only records (rebuilt=false)" \
+    "[ \"\$(put_res '{\"cpus\":3,\"memoryGiB\":4,\"diskGB\":21}' | jq -r .rebuilt)\" = false ]"
+curl -fsS -X POST "${API}/api/projects/${ID}/start" >/dev/null
+check "its next start runs at the new size (cpu.max 3)" \
+    "[ \"\$(guest 'cat /sys/fs/cgroup/cpu.max')\" = '300000 100000' ]"
+CID1="$(docker inspect -f '{{.Id}}' "${CN}")"
+curl -fsS -X POST "${API}/api/projects/${ID}/stop" >/dev/null
+curl -fsS -X POST "${API}/api/projects/${ID}/start" >/dev/null
+check "an unchanged project is not recreated across stop/start (same container)" \
+    "[ \"\$(docker inspect -f '{{.Id}}' ${CN})\" = \"${CID1}\" ]"
+check "stop/start keeps HostConfig at 3 CPUs / 4 GiB" \
+    "[ \"\$(docker inspect -f '{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}' ${CN})\" = '3000000000 4294967296' ]"
+# The attach path's restart-policy update on a LIVE sandbox carries all-zero
+# Resources (security review 2026-09-16, low): flip the policy the way a
+# half-failed stop leaves it, then a start call re-asserts it on the running
+# VM — the guest's limits must be untouched.
+docker update --restart no "${CN}" >/dev/null
+curl -fsS -X POST "${API}/api/projects/${ID}/start" >/dev/null
+check "a live restart-policy update leaves the size alone (policy back on, cgroup and HostConfig unchanged)" \
+    "[ \"\$(docker inspect -f '{{.HostConfig.RestartPolicy.Name}} {{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}' ${CN})\" = 'unless-stopped 3000000000 4294967296' ] && [ \"\$(guest 'cat /sys/fs/cgroup/cpu.max')\" = '300000 100000' ] && [ \"\$(guest 'cat /sys/fs/cgroup/memory.max')\" = 4294967296 ]"
+check "back to unlimited rebuilds the running project" \
+    "[ \"\$(put_res '{\"cpus\":0,\"memoryGiB\":0,\"diskGB\":21}' | jq -r .rebuilt)\" = true ]"
+check "unlimited again: every host CPU" \
+    "[ \"\$(guest nproc)\" = ${HOSTCPU} ]"
+check "the record keeps the grown disk (21)" \
+    "[ \"\$(curl -fsS ${RES} | jq -r .diskGB)\" = 21 ]"
+
 
 # Git side panel is a real in-guest client now (the host-side /diff route and the
 # checkpoint machinery were removed as a guest→server RCE vector — ADR-039).
@@ -503,7 +572,10 @@ sleep 1
 # section): a failed setup must read as one FAIL, not abort the suite.
 check "BUG-062 setup: stamp removed, a directory planted in settings.json's place" \
     "docker exec ${CN} runuser -u ${ME} -- sh -c 'rm -f ${GH}/.styrman/.harness-version ${GH}/.claude/settings.json && mkdir ${GH}/.claude/settings.json'"
-docker rm -f "${CN}" >/dev/null
+# Bounded retry: a force-remove that lands while the Kata VM is exiting is
+# refused "PID … is zombie" until the shim reaps it — the same window the
+# orchestrator's forceRemove waits out (2026-10-05); a bare rm aborted the run.
+for _ in $(seq 1 30); do docker rm -f "${CN}" >/dev/null 2>&1 && break; sleep 2; done
 curl -fsS -X POST "${API}/api/projects/${ID}/start" >/dev/null
 OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/1" \
     -send "cat ~/projects/itest/proof.txt\r" -wait 4s || true)

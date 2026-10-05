@@ -189,6 +189,14 @@ rollback per `specs/styrman/versioning.md` "Rollback". `install.sh` re-run
 against an installed VM re-checks out the requested tag and re-runs
 `styrman-ctl install`, which is idempotent.
 
+The auto-updater never runs `host-setup.sh`, so a release that changes it
+needs a by-hand re-run. After the per-project sizing release (ADR-083,
+BUG-089) run it on the VM once, as root from the verified tree, so the Kata
+shim wrapper (Cloud Hypervisor) and memory reclaim are in place:
+`deploy/gcp/vm.sh ssh -- 'sudo GH_TOKEN=… bash /opt/styrman/deploy/host-setup.sh --user <operator>'`.
+Until then a host without the wrapper (QEMU) may refuse project starts at
+full size. Details: `specs/styrman/deploy.md`.
+
 ## Stop, start, tear down
 
 ```bash

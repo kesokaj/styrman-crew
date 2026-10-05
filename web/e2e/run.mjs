@@ -1767,6 +1767,67 @@ try {
     await panel().getByText("Sandboxed.", { exact: false }).waitFor({ timeout: 20000 });
   });
 
+  // ── Resources (ADR-083) — also LAST, for the same reason as the network
+  // toggle: saving a new size rebuilds the running project. The dialog is
+  // closed in a `finally` whatever happens, so a failure here cannot leave a
+  // modal over the cleanup below (rule e2e-checks-leave-the-suite-as-they-found-it).
+  const openResources = async () => {
+    const row = page.locator("aside .group", { hasText: PROJECT }).first();
+    await row.hover();
+    await page.getByRole("button", { name: `Project ${PROJECT} actions` }).click({ force: true });
+    await page.getByRole("button", { name: "Resources…" }).click();
+    await page.getByRole("dialog").getByLabel("CPUs").waitFor({ timeout: 20000 });
+  };
+  const resDialog = () => page.getByRole("dialog");
+  await check("Resources dialog: unlimited by default, an out-of-range CPU is refused before saving", async () => {
+    try {
+      await openResources();
+      const d = resDialog();
+      const cpuUnlimited = d.getByRole("checkbox").first();
+      if (!(await cpuUnlimited.isChecked())) throw new Error("CPU must default to Unlimited");
+      await cpuUnlimited.uncheck();
+      await d.getByLabel("CPUs").fill("999");
+      await d.getByText(/CPU must be a whole number from 1 to/).waitFor({ timeout: 5000 });
+      if (await d.getByRole("button", { name: "Save" }).isEnabled())
+        throw new Error("Save must be disabled for an out-of-range CPU");
+    } finally {
+      await page.keyboard.press("Escape").catch(() => {});
+      await resDialog().waitFor({ state: "detached", timeout: 5000 }).catch(() => {});
+    }
+  });
+  await check("Resources dialog: 2 CPUs / 4 GiB saves, restarts the project, and reads back", async () => {
+    try {
+      await openResources();
+      const d = resDialog();
+      await d.getByRole("checkbox").nth(0).uncheck();
+      await d.getByLabel("CPUs").fill("2");
+      await d.getByRole("checkbox").nth(1).uncheck();
+      await d.getByLabel("Memory in GiB").fill("4");
+      await d.getByRole("button", { name: "Save" }).click();
+      // The PUT rebuilds a running project synchronously (server bound 3 min).
+      await d.waitFor({ state: "detached", timeout: 210000 });
+      const r = await (await page.request.get(`${BASE}/api/projects/${PID}/resources`)).json();
+      if (r.cpus !== 2 || r.memoryGiB !== 4 || r.pending)
+        throw new Error(`after save: ${JSON.stringify(r)}`);
+      await openResources();
+      if ((await resDialog().getByLabel("CPUs").inputValue()) !== "2")
+        throw new Error("the dialog did not read back 2 CPUs");
+      if ((await resDialog().getByLabel("Memory in GiB").inputValue()) !== "4")
+        throw new Error("the dialog did not read back 4 GiB");
+      // Back to unlimited through the dialog, so the cleanup below deletes a
+      // project in its default state.
+      await resDialog().getByRole("checkbox").nth(0).check();
+      await resDialog().getByRole("checkbox").nth(1).check();
+      await resDialog().getByRole("button", { name: "Save" }).click();
+      await resDialog().waitFor({ state: "detached", timeout: 210000 });
+      const back = await (await page.request.get(`${BASE}/api/projects/${PID}/resources`)).json();
+      if (back.cpus !== 0 || back.memoryGiB !== 0) throw new Error(`after unlimited: ${JSON.stringify(back)}`);
+    } finally {
+      await page.keyboard.press("Escape").catch(() => {});
+      await resDialog().waitFor({ state: "detached", timeout: 5000 }).catch(() => {});
+    }
+  });
+
   // ── Cleanup: delete terminal + project via UI ───────────────────────────
   await page.goto(`${BASE}/p/${PID}/2`);
   // Any NATIVE browser dialog is a v1.3 regression (everything moved to

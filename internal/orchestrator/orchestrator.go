@@ -788,7 +788,7 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context, user, guestUser string) 
 	if exists && containerGuest(insp.Config.Env) != guestUser {
 		o.logger.Info("setup VM guest changed — recreating", "user", user,
 			"from", containerGuest(insp.Config.Env), "to", guestUser)
-		if err := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+		if err := o.forceRemove(ctx, insp.ID); err != nil {
 			// Don't fall through to create — it would fail "name already in
 			// use" and surface a misleading 500 with no self-heal.
 			return "", fmt.Errorf("remove stale setup container: %w", err)
@@ -800,7 +800,7 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context, user, guestUser string) 
 	// recreate it so the layout change takes effect without an operator step.
 	if exists && setupHomeStale(insp.Mounts, guestUser, o.cfg.UserHome(user)) {
 		o.logger.Info("setup VM home moved — recreating", "user", user, "want", o.cfg.UserHome(user))
-		if err := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+		if err := o.forceRemove(ctx, insp.ID); err != nil {
 			return "", fmt.Errorf("remove stale setup container: %w", err)
 		}
 		exists = false
@@ -887,8 +887,7 @@ func (o *Orchestrator) SetupStatus(ctx context.Context, user string) (bool, erro
 
 // DestroySetup removes the hidden onboarding microVM and its network.
 func (o *Orchestrator) DestroySetup(ctx context.Context, user string) error {
-	err := o.docker.ContainerRemove(ctx, config.SetupContainer(user), container.RemoveOptions{Force: true})
-	if err != nil && !errdefs.IsNotFound(err) {
+	if err := o.forceRemove(ctx, config.SetupContainer(user)); err != nil {
 		return err
 	}
 	if err := o.docker.NetworkRemove(ctx, config.SetupNetwork(user)); err != nil && !errdefs.IsNotFound(err) {
@@ -1470,12 +1469,41 @@ func busyReason(out string) string {
 // home-dir state persist; only runtime state is lost. Holds the per-project
 // lock: without it, a terminal WS reconnect's EnsureRunning could recreate
 // the container/network mid-removal and leave an orphan behind.
+// zombieRetryEvery is how often Destroy retries a force-remove that Docker
+// refused because the VM's process is exiting (a variable for tests).
+var zombieRetryEvery = 2 * time.Second
+
+// forceRemove force-removes a container, waiting out the window in which a
+// Kata VM is exiting. A Kata container's PID is its cloud-hypervisor
+// process; between that process exiting and the shim reaping it, Docker
+// refuses the kill with "PID … is zombie and can not be killed" instead of
+// waiting. Found by Tier 2 on 2026-10-05: once project VMs were sized to the
+// whole host (ADR-083) the exit outlasted Docker's own wait often enough
+// that a delete failed two runs in three. Any other error is returned at
+// once; the wait ends with ctx.
+func (o *Orchestrator) forceRemove(ctx context.Context, name string) error {
+	for {
+		err := o.docker.ContainerRemove(ctx, name, container.RemoveOptions{Force: true})
+		if err == nil || errdefs.IsNotFound(err) {
+			return nil
+		}
+		if !strings.Contains(err.Error(), "is zombie") {
+			return err
+		}
+		o.logger.Info("container's VM is still exiting; retrying the remove", "container", name)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%w (gave up waiting for the VM to exit: %v)", err, ctx.Err())
+		case <-time.After(zombieRetryEvery):
+		}
+	}
+}
+
 func (o *Orchestrator) Destroy(ctx context.Context, user, project string) error {
 	l := o.lockProject(key(user, project))
 	l.Lock()
 	defer l.Unlock()
-	err := o.docker.ContainerRemove(ctx, config.ContainerName(project), container.RemoveOptions{Force: true})
-	if err != nil && !errdefs.IsNotFound(err) {
+	if err := o.forceRemove(ctx, config.ContainerName(project)); err != nil {
 		return err
 	}
 	// Detach ourselves first or the network removal fails on the active
@@ -1769,7 +1797,7 @@ func (o *Orchestrator) RemoveStaleSetupVMs(ctx context.Context) (int, error) {
 		if user == "" || !setupHomeStale(insp.Mounts, containerGuest(insp.Config.Env), o.cfg.UserHome(user)) {
 			continue
 		}
-		if err := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); err != nil && !errdefs.IsNotFound(err) {
+		if err := o.forceRemove(ctx, insp.ID); err != nil {
 			o.logger.Warn("stale setup VM: remove failed", "user", user, "error", err)
 			continue
 		}
