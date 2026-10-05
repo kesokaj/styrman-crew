@@ -27,7 +27,7 @@ shim wrapper that pins Cloud Hypervisor and turns on
 `reclaim_guest_freed_memory`. The auto-updater never runs `host-setup.sh`
 (its `host_converge` applies only the firewall files), so after a release
 that changes these steps, re-run it from the verified tree once the host has
-updated: `sudo GH_TOKEN=$(gh auth token) bash /opt/styrman/deploy/host-setup.sh --user <operator>`
+updated: `sudo bash /opt/styrman/deploy/host-setup.sh --user <operator>`. It reads the GitHub token from `/etc/styrman/gh-token` (root, 600), which every auto-updating host has; never put the token on the sudo command line, where other local accounts and sudo's log can see it (security review 2026-10-05)
 (on the GCP VM over `deploy/gcp/vm.sh ssh`, with a token file — see `gcp.md`).
 It prints `Kata shim wrapper (Cloud Hypervisor): changed|unchanged` and
 `Kata memory reclaim: changed|unchanged`; running project VMs pick both up on

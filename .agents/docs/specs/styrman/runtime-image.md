@@ -221,7 +221,7 @@ Inputs (env, set by the orchestrator):
 | `STYRMAN_PROJECT`                              | Project UUID — keys the docker disk and transcript dir                                                                              |
 | `STYRMAN_PROJECT_DIR`                          | Workspace dir name under ~/projects                                                                                                 |
 | `STYRMAN_MINIMAL`                              | System VMs (onboarding): skip workspace + DinD                                                                                      |
-| `STYRMAN_DOCKER_DISK_GB`                       | Size for a newly created docker.img                                                                                                 |
+| `STYRMAN_DOCKER_DISK_GB`                       | The project's Docker disk size (ADR-083): a new docker.img is created at it, and a smaller existing one is grown to it at boot      |
 | `STYRMAN_CRED_BROKER`                          | Credential broker URL on this project's bridge (ADR-030/032); consumed by the git helper + login-shell snippet. Empty = broker off. |
 
 Steps, in order:
@@ -378,7 +378,10 @@ Steps, in order:
    `monitor-bell on`, `bell-action any`, `visual-bell off` (unattended-bell
    notifications) and `set-clipboard on` (OSC 52, so tmux/TUIs can write the
    browser's clipboard through the terminal's OSC 52 handler).
-8. DinD (ADR-008): create sparse ext4 `~/.dockerd/<uuid>.img` if absent,
+8. DinD (ADR-008): create sparse ext4 `~/.dockerd/<uuid>.img` if absent;
+   if its FILESYSTEM is smaller than `STYRMAN_DOCKER_DISK_GB`, grow it
+   offline (`e2fsck -f -p`, `truncate` when the file is short, `resize2fs`;
+   never shrinks; a failure WARNs and the next boot retries, ADR-083);
    loop-mount at `/var/lib/docker-project`, start dockerd with **overlay2**;
    fall back to **vfs** directly on the home if the loop mount fails.
 9. `touch /run/styrman/ready` — the orchestrator's readiness probe target.

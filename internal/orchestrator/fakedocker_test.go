@@ -41,7 +41,10 @@ type fakeDocker struct {
 	fail       map[string]error
 	execExit   int
 	// info is what Info returns: the host's size (ADR-083).
-	info   system.Info
+	info system.Info
+	// list opts a test into ContainerList returning the table (filtered by
+	// label); off, it returns nothing, as every older test assumes.
+	list   bool
 	calls  []string
 	onCall func(method string) // observe the orchestrator's state mid-call (not under f.mu)
 }
@@ -65,6 +68,10 @@ type fakeContainer struct {
 	// the sizing recreate (ADR-083) has something to compare.
 	nanoCPUs, memory int64
 	env              []string
+	// labels and startedAt feed ContainerList's label filter and
+	// ContainerInspect's State.StartedAt (the setup-VM reaper reads both).
+	labels    map[string]string
+	startedAt string
 }
 
 type fakeNetwork struct {
@@ -133,7 +140,7 @@ func (f *fakeDocker) ContainerInspect(_ context.Context, id string) (container.I
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	resp := container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
-		ID: c.id, Image: c.image, State: &container.State{Running: c.running}, RestartCount: c.restartCount,
+		ID: c.id, Image: c.image, State: &container.State{Running: c.running, StartedAt: c.startedAt}, RestartCount: c.restartCount,
 		HostConfig: &container.HostConfig{Binds: append([]string(nil), c.binds...),
 			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(c.restart)},
 			Resources:     container.Resources{NanoCPUs: c.nanoCPUs, Memory: c.memory}},
@@ -162,6 +169,7 @@ func (f *fakeDocker) ContainerCreate(_ context.Context, cfg *container.Config, h
 	}
 	if cfg != nil {
 		c.env = append([]string(nil), cfg.Env...)
+		c.labels = cfg.Labels
 	}
 	if nc != nil {
 		for n := range nc.EndpointsConfig {
@@ -230,11 +238,27 @@ func (f *fakeDocker) ContainerRemove(_ context.Context, id string, _ container.R
 	return nil
 }
 
-func (f *fakeDocker) ContainerList(_ context.Context, _ container.ListOptions) ([]container.Summary, error) {
+func (f *fakeDocker) ContainerList(_ context.Context, opts container.ListOptions) ([]container.Summary, error) {
 	if err := f.record("ContainerList()"); err != nil {
 		return nil, err
 	}
-	return nil, nil
+	if !f.list {
+		return nil, nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []container.Summary
+next:
+	for _, c := range f.containers {
+		for _, kv := range opts.Filters.Get("label") {
+			k, v, _ := strings.Cut(kv, "=")
+			if c.labels[k] != v {
+				continue next
+			}
+		}
+		out = append(out, container.Summary{ID: c.id, Names: []string{"/" + c.name}, Labels: c.labels})
+	}
+	return out, nil
 }
 
 func (f *fakeDocker) ContainerLogs(_ context.Context, id string, _ container.LogsOptions) (io.ReadCloser, error) {

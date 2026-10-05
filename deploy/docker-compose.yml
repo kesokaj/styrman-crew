@@ -56,6 +56,9 @@ services:
       - PRIVATE_DOMAIN=${STYRMAN_PRIVATE_DOMAIN:-}
     dns: [8.8.8.8, 1.1.1.1]
     restart: unless-stopped
+    # Never the OOM killer's pick (ADR-084): project VMs run at -999 and are
+    # sized to the whole host (ADR-083), so anything above -999 dies first.
+    oom_score_adj: -1000
 
   styrman:
     container_name: styrman-server
@@ -150,6 +153,8 @@ services:
       # Backs the public preview wildcard (*.PREVIEW_DOMAIN) when enabled.
       caddy_preview_target: 'true'
     restart: unless-stopped
+    # Same as the ingress (ADR-084): the platform outlives any project VM.
+    oom_score_adj: -1000
 
 networks:
   styrman-ingress:

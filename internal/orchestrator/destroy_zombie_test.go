@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/container"
+
 	"github.com/kesokaj/styrman-crew/internal/config"
 )
 
@@ -95,5 +97,82 @@ func TestDestroySetupRetriesAVMStillExiting(t *testing.T) {
 	}
 	if removes != 2 {
 		t.Fatalf("ContainerRemove called %d times, want 2", removes)
+	}
+}
+
+// The setup-VM reaper removes an abandoned VM through the same wait, so a
+// VM still exiting is not left behind as an exited container the reaper
+// skips from then on.
+func TestReapSetupVMsWaitsOutAnExitingVM(t *testing.T) {
+	o, fd, _ := seamOrch(t)
+	if _, err := o.EnsureSetup(context.Background(), tUser, "x"); err != nil {
+		t.Fatal(err)
+	}
+	c, ok := fd.byName(config.SetupContainer(tUser))
+	if !ok {
+		t.Fatal("no setup container")
+	}
+	c.startedAt = time.Now().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	fd.list = true
+	defer func(d time.Duration) { zombieRetryEvery = d }(zombieRetryEvery)
+	zombieRetryEvery = time.Millisecond
+	fd.fail["ContainerRemove"] = errors.New(zombieErr)
+	removes := 0
+	fd.onCall = func(method string) {
+		if method == "ContainerRemove" {
+			removes++
+			if removes == 3 {
+				fd.mu.Lock()
+				delete(fd.fail, "ContainerRemove")
+				fd.mu.Unlock()
+			}
+		}
+	}
+	o.ReapSetupVMs(context.Background(), time.Hour)
+	if _, ok := fd.byName(config.SetupContainer(tUser)); ok {
+		t.Fatalf("the abandoned setup VM is still there after %d removes", removes)
+	}
+}
+
+// A young setup VM is left alone.
+func TestReapSetupVMsLeavesAYoungVM(t *testing.T) {
+	o, fd, _ := seamOrch(t)
+	if _, err := o.EnsureSetup(context.Background(), tUser, "x"); err != nil {
+		t.Fatal(err)
+	}
+	c, _ := fd.byName(config.SetupContainer(tUser))
+	c.startedAt = time.Now().Format(time.RFC3339Nano)
+	fd.list = true
+	o.ReapSetupVMs(context.Background(), time.Hour)
+	if _, ok := fd.byName(config.SetupContainer(tUser)); !ok {
+		t.Fatal("a young setup VM was reaped")
+	}
+}
+
+// The pre-ADR-027 recreate stops the container and then removes it; a stop
+// that left the VM still exiting must not fail the start (BUG-090).
+func TestThePreADR027RecreateWaitsOutAnExitingVM(t *testing.T) {
+	o, fd, cfg := seamOrch(t)
+	plant(fd, cfg, true, false)
+	created(t, fd).binds = nil // no workspace bind: the pre-ADR-027 shape
+	defer func(d time.Duration) { zombieRetryEvery = d }(zombieRetryEvery)
+	zombieRetryEvery = time.Millisecond
+	fd.fail["ContainerRemove"] = errors.New(zombieErr)
+	removes := 0
+	fd.onCall = func(method string) {
+		if method == "ContainerRemove" {
+			removes++
+			if removes == 2 {
+				fd.mu.Lock()
+				delete(fd.fail, "ContainerRemove")
+				fd.mu.Unlock()
+			}
+		}
+	}
+	if _, err := o.EnsureRunning(context.Background(), tUser, tProj, opts(false)); err != nil {
+		t.Fatalf("EnsureRunning: %v", err)
+	}
+	if fd.callsTo("ContainerCreate") != 1 || !hasWorkspaceBind(&container.HostConfig{Binds: created(t, fd).binds}, cfg.ProjectWorkspace(tUser, tProj)) {
+		t.Fatalf("want one recreate with the workspace bind; calls %v", fd.calls)
 	}
 }

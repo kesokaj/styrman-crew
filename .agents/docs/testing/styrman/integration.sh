@@ -533,8 +533,11 @@ check "the record keeps the grown disk (21)" \
 # skip it.
 IMGF="${STATE}/homes/${ME}/p/${ID}/.dockerd/${ID}.img"
 curl -fsS -X POST "${API}/api/projects/${ID}/stop" >/dev/null
+# The image lives in the guest-writable home: truncate only a regular file
+# that is not a link (realpath equal to its path), only while the VM is
+# stopped, and never create one (-c) (security addendum 2026-10-05, low 1).
 check "retry setup: the image file is 22 GiB, its filesystem still 21" \
-    "truncate -s 22G '${IMGF}' && [ \"\$(stat -c %s '${IMGF}')\" = 23622320128 ]"
+    "! docker ps --format '{{.Names}}' | grep -qx ${CN} && [ -f '${IMGF}' ] && [ ! -L '${IMGF}' ] && [ \"\$(realpath '${IMGF}')\" = '${IMGF}' ] && truncate -c -s 22G '${IMGF}' && [ \"\$(stat -c %s '${IMGF}')\" = 23622320128 ]"
 check "a PUT of 22 GB on the stopped project records it" \
     "[ \"\$(put_res '{\"cpus\":0,\"memoryGiB\":0,\"diskGB\":22}' | jq -r .diskGB)\" = 22 ]"
 curl -fsS -X POST "${API}/api/projects/${ID}/start" >/dev/null

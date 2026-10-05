@@ -140,8 +140,11 @@ Per-project sizing (ADR-083) is a per-project record, not environment:
 WARN and ignores them). Default is the whole host: CPUs = `docker info`
 NCPU, memory = floor((host MiB − 2048)/128)×128 (read on first need,
 cached once it succeeds); the setup VM is unlimited too. Kata adds the
-limit to its own base (1 vCPU, 2 GiB), so `nproc` in a terminal shows the
-CPU setting + 1. The Docker disk defaults to the operator's "Default Docker
+limit to its own base (1 vCPU, 2 GiB), so `nproc` in a terminal shows a
+set CPU count + 1, and the host's count when unlimited (vCPUs clamp at the
+host). The server and Caddy run at `oom_score_adj -1000` (compose,
+ADR-084): project VMs sit at -999, so under memory exhaustion the kernel
+never picks the platform. The Docker disk defaults to the operator's "Default Docker
 disk for new projects" setting (20 GB), recorded into the project at
 creation, and grows offline at boot in `image/entrypoint.sh` (`e2fsck -f`,
 `truncate`, `resize2fs`); it never shrinks, and a failure WARNs in the boot
@@ -156,7 +159,7 @@ the `/usr/local/bin/containerd-shim-mvm-v2` wrapper pinning Kata to Cloud
 Hypervisor (`configuration-clh.toml`) and sets `reclaim_guest_freed_memory
 = true` (`deploy/lib/kata-config.sh`, checked by content each run,
 BUG-089). The auto-updater never runs `host-setup.sh`, so the operator runs
-`sudo GH_TOKEN=… bash /opt/styrman/deploy/host-setup.sh --user <operator>`
+`sudo bash /opt/styrman/deploy/host-setup.sh --user <operator>` (the token comes from `/etc/styrman/gh-token`; never on the command line)
 as root from the verified tree (on the GCP VM over `deploy/gcp/vm.sh ssh`).
 Until then a host without the wrapper (QEMU) may refuse project starts at
 full size; memory sizing was measured on Cloud Hypervisor only. Measured on

@@ -193,7 +193,7 @@ The auto-updater never runs `host-setup.sh`, so a release that changes it
 needs a by-hand re-run. After the per-project sizing release (ADR-083,
 BUG-089) run it on the VM once, as root from the verified tree, so the Kata
 shim wrapper (Cloud Hypervisor) and memory reclaim are in place:
-`deploy/gcp/vm.sh ssh -- 'sudo GH_TOKEN=… bash /opt/styrman/deploy/host-setup.sh --user <operator>'`.
+`deploy/gcp/vm.sh ssh -- 'sudo bash /opt/styrman/deploy/host-setup.sh --user <operator>'`. The VM's `/etc/styrman/gh-token` (written by `install.sh`) supplies the GitHub token; never put it on the command line (the 2026-09-21 High that `--gh-token-file` fixed).
 Until then a host without the wrapper (QEMU) may refuse project starts at
 full size. Details: `specs/styrman/deploy.md`.
 

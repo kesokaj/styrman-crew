@@ -2851,3 +2851,16 @@ Kata's behaviour, measured on the NUC (Kata 3.31.0, Cloud Hypervisor, 2026-10-05
 - A recreate keeps home and workspace; apt packages are replayed (ADR-028); anything else in the container filesystem is lost, as with a mode toggle.
 - The memory math is measured on Cloud Hypervisor only. A host on the QEMU symlink (any host before `host-setup.sh` is re-run) may refuse starts at the full size. The updater does not run `host-setup.sh`, so the operator re-runs it after the release reaches each host; the GCP VM may refuse project starts until then (operator: "B sounds smarter.").
 - Kata's base memory (2048) is a constant in the server; a Kata upgrade that changes it makes starts fail loudly rather than truncate.
+
+## ADR-084: The server and the ingress are exempt from the OOM killer     (2026-10-05) — Accepted
+
+**Context:** ADR-083 sized every project VM to the whole host and said memory is overcommitted by design. Its Consequences assumed that if a host ran out of memory, a project VM would be killed. The release security review of v1.42.0 measured otherwise on the NUC: cloud-hypervisor runs at `oom_score_adj -999` (inherited from containerd's shim), and `styrman-server` and Caddy run at 0. So a full-size VM exhausting memory gets the server and the ingress killed first, which takes the platform down for every tenant while the VMs keep running (`reviews/2026-10-05-security-v1.42.0-v1.41.1-f507278.md`, finding 1). The operator chose to ship v1.42.0 and fix this next ("go all approved").
+
+**Decision:** Both compose services, `caddy` and `styrman`, run with `oom_score_adj: -1000`, the only value that ranks below the VMs, and the value sshd already runs at on the NUC. `internal/config/compose_oom_test.go` pins it. This supersedes ADR-083's Consequences line on which process an OOM kills; the rest of ADR-083 stands.
+
+**Rejected:**
+- -900 or similar: still above the VMs' -999, so the platform would still die first.
+- Raising the VMs' score instead: the VMM is a child of the Kata shim on the host, which the containerized server cannot reach, and a containerd-wide change would also expose containerd.
+- A memory reserve per VM: the operator asked for the whole host.
+
+**Consequences:** Under memory exhaustion the kernel picks among the host's ordinary processes and the VMs; the server and Caddy survive, so the platform stays reachable to stop or resize a project. A server that leaks memory is never killed by the kernel; its own health check and restart policy remain the guard. Takes effect when the auto-updater recreates the containers at the release.

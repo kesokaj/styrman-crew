@@ -329,7 +329,9 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 		if serr := o.docker.ContainerStop(ctx, insp.ID, container.StopOptions{Timeout: &stopTimeout}); serr != nil {
 			o.logger.Warn("pre-recreate stop failed — removing anyway", "project", project, "error", serr)
 		}
-		if rerr := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); rerr != nil {
+		// forceRemove: a stop that failed can leave the VM still exiting
+		// (BUG-090).
+		if rerr := o.forceRemove(ctx, insp.ID); rerr != nil {
 			return "", fmt.Errorf("recreate for workspace bind: %w", rerr)
 		}
 		err = errdefs.NotFound(fmt.Errorf("recreated"))
@@ -1465,9 +1467,12 @@ func busyReason(out string) string {
 	return strings.Join(fields, ",")
 }
 
-// zombieRetryEvery is how often Destroy retries a force-remove that Docker
-// refused because the VM's process is exiting (a variable for tests).
+// zombieRetryEvery is how often forceRemove retries a force-remove that
+// Docker refused because the VM's process is exiting (a variable for tests).
 var zombieRetryEvery = 2 * time.Second
+
+// reapPassBound bounds one ReapSetupVMs pass, every VM in it together.
+var reapPassBound = time.Minute
 
 // forceRemove force-removes a container, waiting out the window in which a
 // Kata VM is exiting. A Kata container's PID is its cloud-hypervisor
@@ -1668,8 +1673,14 @@ func (o *Orchestrator) ReapSetupVMs(ctx context.Context, maxAge time.Duration) {
 	if err != nil {
 		return
 	}
+	// One deadline for the whole pass, not one per VM: the reaper runs inside
+	// the idle-reaper tick, and several setup VMs exiting at once must not
+	// hold the idle-project pass for a minute each (security addendum
+	// 2026-10-05, low 2).
+	rctx, cancel := context.WithTimeout(ctx, reapPassBound)
+	defer cancel()
 	for _, c := range list {
-		insp, err := o.docker.ContainerInspect(ctx, c.ID)
+		insp, err := o.docker.ContainerInspect(rctx, c.ID)
 		if err != nil || insp.State == nil || !insp.State.Running {
 			continue
 		}
@@ -1678,14 +1689,11 @@ func (o *Orchestrator) ReapSetupVMs(ctx context.Context, maxAge time.Duration) {
 			continue
 		}
 		o.logger.Info("reaping abandoned setup VM", "id", c.ID[:12], "age", time.Since(started))
-		// forceRemove, bounded: a one-shot remove refused while the VM exits
-		// (BUG-090) left an EXITED setup container, which this loop skips
-		// from then on. The bound keeps one stuck VM from stalling the tick.
-		rctx, cancel := context.WithTimeout(ctx, time.Minute)
+		// forceRemove: a one-shot remove refused while the VM exits (BUG-090)
+		// left an EXITED setup container, which this loop skips from then on.
 		if err := o.forceRemove(rctx, c.ID); err != nil {
 			o.logger.Warn("reaping setup VM failed", "id", c.ID[:12], "error", err)
 		}
-		cancel()
 	}
 }
 
