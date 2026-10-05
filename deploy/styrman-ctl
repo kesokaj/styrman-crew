@@ -442,7 +442,7 @@ https_origin() {
 run_host_setup() {
     local token_file="$1" operator="$2" script="${3:-${REPO}/deploy/host-setup.sh}"
     if [ -n "${token_file}" ]; then
-        private_file "${token_file}"
+        require_token_file "${token_file}"
         [ "${DRY}" = 1 ] || { GH_TOKEN="$(tr -d '\n' < "${token_file}")"; export GH_TOKEN; }
         log "install: GH_TOKEN for host-setup.sh exported from --gh-token-file (environment only)"
     fi
@@ -507,9 +507,9 @@ cmd_install() {
     # build site follows — --gh-token-file, else GH_TOKEN, else the installed
     # token file, else stop. The same token serves auto-update below.
     local secret_args=()
-    if [ -n "${gh_token_file}" ]; then private_file "${gh_token_file}"; secret_args=(--secret "id=gh_token,src=${gh_token_file}")
+    if [ -n "${gh_token_file}" ]; then require_token_file "${gh_token_file}"; secret_args=(--secret "id=gh_token,src=${gh_token_file}")
     elif [ -n "${GH_TOKEN:-}" ]; then secret_args=(--secret "id=gh_token,env=GH_TOKEN")   # already in the environment docker inherits
-    elif [ -f "${ETC_DIR}/gh-token" ]; then private_file "${ETC_DIR}/gh-token"; secret_args=(--secret "id=gh_token,src=${ETC_DIR}/gh-token")
+    elif [ -f "${ETC_DIR}/gh-token" ]; then require_token_file "${ETC_DIR}/gh-token"; secret_args=(--secret "id=gh_token,src=${ETC_DIR}/gh-token")
     elif [ "${DRY}" = 1 ]; then secret_args=(--secret "id=gh_token,src=${ETC_DIR}/gh-token"); log "install: (dry run) a real run needs --gh-token-file F or GH_TOKEN — the token that reads kesokaj/styrman-harness"
     else die "no GitHub token for the styrman-harness download — pass --gh-token-file F (a token that reads kesokaj/styrman-harness) or run with GH_TOKEN set"; fi
     run docker build -t "styrman-runtime:${version}" "${secret_args[@]}" --build-arg "STYRMAN_VERSION=${version}" "${REPO}/image"
@@ -556,12 +556,21 @@ private_file() {
     [ "$(( 8#${pmode} & 8#022 ))" = 0 ] || die "$(dirname -- "${f}") is writable by group or others (mode ${pmode}); a secret file must not sit in a shared directory"
 }
 
+# require_token_file PATH: a GitHub token file handed in by path — private_file's
+# ownership and mode bar, and not empty. An empty or newline-only file would
+# reach host-setup as an empty GH_TOKEN or a docker build as an empty secret
+# and fail far from its cause (v1.42.3 gate report, low).
+require_token_file() {
+    private_file "$1"
+    [ -n "$(tr -d '[:space:]' < "$1")" ] || die "token file $1 is empty — put the GitHub token in it"
+}
+
 # setup_auto_update [TOKEN_FILE] [SIGNERS_FILE]
 setup_auto_update() {
     local token_file="${1:-}" signers_file="${2:-}" token="" signers="" origin
     [ -x "${BIN_DIR}/styrman-update" ] || [ "${DRY}" = 1 ] || die "${BIN_DIR}/styrman-update is not installed — run install first"
     if [ -n "${token_file}" ]; then
-        private_file "${token_file}"
+        require_token_file "${token_file}"
         token="$(tr -d '\n' < "${token_file}")"
     else
         ask token "GitHub fine-grained token for this repository (Contents: read-only; never echoed)" "" secret

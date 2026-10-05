@@ -79,8 +79,8 @@ func TestGenerateCaddyfile_PublicApp(t *testing.T) {
 	assertContains(t, result, "request_header -X-Caddy-Email")
 	assertContains(t, result, "request_header -X-Styrman-Ingress")
 	assertNotContains(t, result, `X-Caddy-Email "{`)
-	// And the portal's session cookie never reaches a public app.
-	assertContains(t, result, `request_header Cookie "(?:^|;\s*)`+AuthCookieName+`=[^;]*" ""`)
+	// And no portal cookie, of any deployment, reaches a public app.
+	assertContains(t, result, `request_header Cookie "`+PortalCookieStrip+`" ""`)
 
 	// No auth portal needed (all apps are public)
 	assertNotContains(t, result, "security {")
@@ -419,15 +419,20 @@ func TestGenerateCaddyfile_PortalRedirectSuffixCookieAndPreviewCookieStrip(t *te
 	assertNotContains(t, result, "domain suffix "+cfg.BaseDomain+" path")
 	assertContains(t, result, "cookie samesite lax")
 	if cfg.PreviewDomain != "" {
-		assertContains(t, result, `request_header Cookie "(?:^|;\s*)`+AuthCookieName+`=[^;]*" ""`)
+		assertContains(t, result, `request_header Cookie "`+PortalCookieStrip+`" ""`)
 	}
 	// Caddy compiles that pattern with Go's regexp: it must compile here too,
-	// and cut exactly the portal cookie out of a header that carries others.
-	re := regexp.MustCompile(`(?:^|;\s*)` + AuthCookieName + `=[^;]*`)
-	if got := re.ReplaceAllString("a=1; "+AuthCookieName+"=tok.en; b=2", ""); got != "a=1; b=2" {
+	// and cut every portal cookie — this deployment's, the legacy unprefixed
+	// one and another deployment's (BUG-074) — out of a header that carries
+	// others, which survive.
+	re := regexp.MustCompile(PortalCookieStrip)
+	own, foreign := AuthCookieName(cfg.BaseDomain), AuthCookieName("other.example.org")
+	hdr := "a=1; " + own + "=tok.en; app_session=x; AUTHP_ACCESS_TOKEN=old; " + foreign + "=f; " +
+		CookiePrefix(cfg.BaseDomain) + "_SESSION_ID=s; b=2"
+	if got := re.ReplaceAllString(hdr, ""); got != "a=1; app_session=x; b=2" {
 		t.Fatalf("cookie strip regex: %q", got)
 	}
-	if got := re.ReplaceAllString(AuthCookieName+"=tok", ""); got != "" {
+	if got := re.ReplaceAllString(own+"=tok", ""); got != "" {
 		t.Fatalf("cookie strip regex (only cookie): %q", got)
 	}
 	if out := os.Getenv("STYRMAN_CADDYFILE_OUT"); out != "" {
@@ -441,5 +446,28 @@ func TestSanitizeHostnameRefusesEmpty(t *testing.T) {
 	labels := map[string]string{LabelCaddy: "true", LabelHostname: "___", LabelPort: "80"}
 	if _, err := ParseLabels(labels, "c1", []int{80}, 100); err == nil {
 		t.Fatal("a hostname that sanitizes to nothing was accepted")
+	}
+}
+
+// BUG-074: two deployments never share a cookie name, the portal writes this
+// deployment's prefix, and every authorization policy reads exactly its
+// access-token cookie (the plugin's default list names only AUTHP_*).
+func TestCookieNamesArePerDeployment(t *testing.T) {
+	a, b := CookiePrefix("styrman.xyz"), CookiePrefix("gcp.styrman.xyz")
+	if a == b || !regexp.MustCompile(`^AUTHP[0-9A-F]{8}$`).MatchString(a) {
+		t.Fatalf("prefixes %q / %q", a, b)
+	}
+	if CookiePrefix("Styrman.XYZ.") != a {
+		t.Fatal("the prefix depends on the domain's case or trailing dot")
+	}
+	if !regexp.MustCompile(PortalCookieStrip).MatchString(AuthCookieName("styrman.xyz") + "=x") {
+		t.Fatal("the strip misses this deployment's cookie")
+	}
+	apps := []App{{Name: "crew", Hostname: "crew", ContainerIP: "172.18.0.2", Port: 8080, Mode: ModeAuthenticated, RPS: 100}}
+	cfg := testConfig()
+	result := GenerateCaddyfile(apps, cfg)
+	assertContains(t, result, "set cookie name prefix "+CookiePrefix(cfg.BaseDomain)+"\n")
+	if n, m := strings.Count(result, "authorization policy "), strings.Count(result, "set access_token cookie name "+AuthCookieName(cfg.BaseDomain)+"\n"); n == 0 || n != m {
+		t.Fatalf("%d policies, %d read this deployment's cookie", n, m)
 	}
 }

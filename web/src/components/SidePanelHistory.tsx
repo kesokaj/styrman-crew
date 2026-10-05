@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, type HistoryMatch } from "../lib/api";
+import { createHistorySearch } from "../lib/historySearch";
 import { usePolled } from "../lib/hooks";
 import { toast } from "../lib/toast";
 
@@ -10,9 +11,20 @@ export function HistoryTab({ project }: { project: string }) {
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<HistoryMatch[] | null>(null);
   const [searching, setSearching] = useState(false);
-  // Two quick Enters can resolve out of order — only the newest wins.
-  const searchGen = useRef(0);
-  const searchAbort = useRef<AbortController | null>(null);
+  // Search state lives in a tested controller (lib/historySearch): a newer
+  // search, an emptied box, the clear button and leaving the panel all
+  // cancel the one in flight.
+  const search = useMemo(
+    () =>
+      createHistorySearch({
+        search: (q, signal) => api.searchHistory(project, q, signal).then((r) => r.matches),
+        onMatches: setMatches,
+        onSearching: setSearching,
+        onError: (msg) => toast("error", msg),
+      }),
+    [project],
+  );
+  useEffect(() => () => search.cancel(), [search]);
   const transcripts = data?.transcripts ?? [];
   const titleOf = (id: string) =>
     transcripts.find((t) => t.id === id)?.title || id;
@@ -26,30 +38,6 @@ export function HistoryTab({ project }: { project: string }) {
       .readHistory(project, id)
       .catch((e: Error) => ({ text: e.message }));
     if (gen === openGen.current) setText(r.text);
-  };
-
-  const runSearch = async (q: string) => {
-    const trimmed = q.trim();
-    if (!trimmed) {
-      setMatches(null);
-      return;
-    }
-    const gen = ++searchGen.current;
-    // A new search supersedes the previous one: abort it, so it stops
-    // holding one of the server's search slots (v1.42.3).
-    searchAbort.current?.abort();
-    const ac = new AbortController();
-    searchAbort.current = ac;
-    setSearching(true);
-    try {
-      const r = await api.searchHistory(project, trimmed, ac.signal);
-      if (gen !== searchGen.current) return; // stale response
-      setMatches(r.matches);
-    } catch (e) {
-      if (gen === searchGen.current && !ac.signal.aborted) toast("error", (e as Error).message);
-    } finally {
-      if (gen === searchGen.current) setSearching(false);
-    }
   };
 
   if (openId) {
@@ -79,8 +67,11 @@ export function HistoryTab({ project }: { project: string }) {
       <div className="border-b border-border p-2">
         <input
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && runSearch(query)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            if (!e.target.value.trim()) search.cancel();
+          }}
+          onKeyDown={(e) => e.key === "Enter" && search.run(query)}
           placeholder="Search all transcripts (Enter)"
           className="w-full rounded-lg border border-border bg-bg px-2.5 py-1.5 text-xs outline-none focus:border-accent"
           aria-label="Search history"
@@ -92,17 +83,17 @@ export function HistoryTab({ project }: { project: string }) {
             Could not load history — retrying…
           </p>
         )}
-        {matches !== null ? (
+        {matches !== null || searching ? (
           <>
             <div className="flex items-center px-1 pb-1">
               <span className="flex-1 text-[11px] text-text-dim">
-                {searching
+                {searching || matches === null
                   ? "Searching…"
                   : `${matches.length} match${matches.length === 1 ? "" : "es"}`}
               </span>
               <button
                 onClick={() => {
-                  setMatches(null);
+                  search.cancel();
                   setQuery("");
                 }}
                 className="text-[11px] text-text-dim hover:text-text"
@@ -110,7 +101,7 @@ export function HistoryTab({ project }: { project: string }) {
                 clear
               </button>
             </div>
-            {matches.map((m, i) => (
+            {(matches ?? []).map((m, i) => (
               <button
                 key={`${m.transcript}-${i}`}
                 onClick={() => open(m.transcript)}

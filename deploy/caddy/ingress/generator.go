@@ -144,12 +144,12 @@ func writePreviewWildcard(b *strings.Builder, app App, cfg GeneratorConfig) {
 	for _, h := range []string{HeaderEmail, HeaderUser, HeaderRole, HeaderSubject, HeaderIngress} {
 		fmt.Fprintf(b, "    request_header -%s\n", h)
 	}
-	// The portal's session cookie is scoped to the base domain, so a browser
-	// sends it to the public preview host too — and the preview tunnels the
-	// request into a guest app someone else runs. Cut that one cookie out of
-	// the header (the guest app's own cookies must survive, so the whole
-	// header cannot go) — audit 2026-09-13.
-	fmt.Fprintf(b, "    request_header Cookie \"(?:^|;\\s*)%s=[^;]*\" \"\"\n", AuthCookieName)
+	// The portal's session cookies are scoped to the base domain, so a
+	// browser sends them to the public preview host too — and the preview
+	// tunnels the request into a guest app someone else runs. Cut every
+	// portal cookie out of the header (the guest app's own cookies must
+	// survive, so the whole header cannot go) — audit 2026-09-13, BUG-074.
+	fmt.Fprintf(b, "    request_header Cookie \"%s\" \"\"\n", PortalCookieStrip)
 	if cfg.IngressToken != "" {
 		fmt.Fprintf(b, "    request_header %s %q\n", HeaderIngress, cfg.IngressToken)
 	}
@@ -280,6 +280,8 @@ func writeSecurityBlock(b *strings.Builder, apps []App, cfg GeneratorConfig) {
 	// session (the server also refuses cross-origin sockets before any side
 	// effect; this closes the other half, audit 2026-09-13).
 	fmt.Fprintf(b, "            cookie samesite lax\n")
+	// A per-deployment cookie name (BUG-074): see CookiePrefix.
+	fmt.Fprintf(b, "            set cookie name prefix %s\n", CookiePrefix(cfg.BaseDomain))
 	// Leading dot: go-authcrunch matches the redirect host with a bare
 	// HasSuffix, so a bare domain trusted "evil<base>" as a post-login
 	// redirect target — an open redirect on the portal (audit 2026-09-13).
@@ -362,6 +364,9 @@ func writeAuthzPolicy(b *strings.Builder, app App, cfg GeneratorConfig) {
 	fmt.Fprintf(b, "        authorization policy %s_policy {\n", policyName)
 	// Point directly to Google OAuth to skip the portal login page
 	fmt.Fprintf(b, "            set auth url https://%s/oauth2/google/\n", cfg.AuthDomain)
+	// Read this deployment's session cookie: the policy's default list names
+	// only the plugin's default, which the portal no longer writes (BUG-074).
+	fmt.Fprintf(b, "            set access_token cookie name %s\n", AuthCookieName(cfg.BaseDomain))
 	if cfg.JWTKey != "" {
 		b.WriteString("            crypto key verify {env.STYRMAN_JWT_KEY}\n")
 	}
@@ -432,9 +437,9 @@ func writeAppBlock(b *strings.Builder, app App, cfg GeneratorConfig) {
 			fmt.Fprintf(b, "    request_header -%s\n", h)
 		}
 		// A public app is someone's container on the base domain, where the
-		// portal's session cookie is sent too: cut that one cookie out before
+		// portal's session cookies are sent too: cut them out before
 		// proxying, as the preview block does (security review, 2026-09-13).
-		fmt.Fprintf(b, "    request_header Cookie \"(?:^|;\\s*)%s=[^;]*\" \"\"\n", AuthCookieName)
+		fmt.Fprintf(b, "    request_header Cookie \"%s\" \"\"\n", PortalCookieStrip)
 		fmt.Fprintf(b, "    request_header %s \"%s\"\n", HeaderRole, RolePublic)
 		fmt.Fprintf(b, "    reverse_proxy %s:%d\n", app.ContainerIP, app.Port)
 	} else {

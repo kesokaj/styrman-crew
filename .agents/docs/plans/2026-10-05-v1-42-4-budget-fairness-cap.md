@@ -408,10 +408,10 @@ Live (after deploy, by `/preflight`): dave signs in with the new cookie name.
 - [x] web: ResourcesDialog label, Settings Runtime fields — verify: `(cd web && npm run check && npm run lint && npm test)` — expect: exit 0
 - [ ] Checkpoint — expect: Go + web suites exit 0 — evidence: verifier log
 ### Phase 3 — tooling, web, e2e, BUG-074
-- [ ] token-file refusals + script tests; doc snippet — verify: `go test ./internal/config/` — expect: ok, red first — docs: deploy/remote.md, specs/styrman/deploy.md
-- [ ] `historySearch.ts` controller + vitest; SidePanelHistory uses it — verify: `(cd web && npm run check && npm run lint && npm test)` — expect: exit 0
+- [x] token-file refusals + script tests; doc snippet — verify: `go test ./internal/config/` — expect: ok, red first — docs: deploy/remote.md, specs/styrman/deploy.md
+- [x] `historySearch.ts` controller + vitest; SidePanelHistory uses it — verify: `(cd web && npm run check && npm run lint && npm test)` — expect: exit 0
 - [ ] run.sh SHOTS removal; run.mjs BUG-091 focus wait (must-fail run per rule e2e-checks-leave-the-suite) — verify: `bash web/e2e/run.sh` twice — expect: failed=0 both, no `DIAG BUG-091`, no new `/tmp/styrman-shots-*` left — docs: testing/styrman/README.md
-- [ ] ADR-088 (per-deployment cookie name); ingress CookiePrefix + generator + tests — verify: `(cd deploy/caddy/ingress && go test ./...)`; caddy image build + `caddy adapt` — expect: ok; adapted JSON names the new cookie
+- [x] ADR-088 (per-deployment cookie name); ingress CookiePrefix + generator + tests — verify: `(cd deploy/caddy/ingress && go test ./...)`; caddy image build + `caddy adapt` — expect: ok; adapted JSON names the new cookie
 - [ ] Checkpoint — expect: verify-commit.sh, Tier 2, e2e ×2 green — evidence: verifier log
 ### Phase 4 — Done
 - [ ] reviewer + security over the range; docs lens; changes entry; bugs BUG-074/091 closed

@@ -150,5 +150,13 @@ echo "== running Playwright checks =="
 # exit code, which is how a green run came to report failure (see cleanup).
 status=0
 node "${REPO}/web/e2e/run.mjs" --base "${API}" --shots "${SHOTS}" || status=$?
-echo "screenshots: ${SHOTS}"
+# A green run leaves nothing behind: its screenshots are deleted (the path is
+# checked against mktemp's pattern first). A failed run keeps them — they are
+# the evidence — and prints where.
+if [ "${status}" = 0 ] && [[ "${SHOTS}" == /tmp/styrman-shots-* ]] && [ -d "${SHOTS}" ]; then
+    rm -rf -- "${SHOTS}"
+    echo "screenshots removed (green run)"
+else
+    echo "screenshots: ${SHOTS}"
+fi
 exit "${status}"

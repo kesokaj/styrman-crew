@@ -1,5 +1,11 @@
 package ingress
 
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
+)
+
 // config.go — Single source of truth for all caddy-ingress constants,
 // defaults, and env var keys. Values are grouped by lifecycle:
 //   - Static:  baked into binary, never changes
@@ -43,10 +49,30 @@ const (
 	UpstreamHeaderSub   = "X-Token-Subject"
 )
 
-// JWT cookie name set by caddy-security.
-// AuthCookieName is the portal's session cookie; the public preview block
-// strips exactly this cookie before tunnelling into a guest app.
-const AuthCookieName = "AUTHP_ACCESS_TOKEN"
+// CookiePrefix is this deployment's caddy-security cookie prefix: "AUTHP"
+// plus the first 8 upper-case hex digits of sha256(base domain). The
+// plugin's default prefix is the same "AUTHP" everywhere, so a browser
+// holding a session for a deployment on a PARENT domain sent both
+// deployments' same-named cookies to the child, and the child's authorizer
+// found no valid one: an endless sign-in redirect (BUG-074). The portal
+// names every cookie <prefix>_<NAME> (session id, access token, ...).
+func CookiePrefix(baseDomain string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSuffix(baseDomain, "."))))
+	return "AUTHP" + strings.ToUpper(hex.EncodeToString(sum[:4]))
+}
+
+// AuthCookieName is this deployment's session (access token) cookie, the
+// one every authorization policy reads.
+func AuthCookieName(baseDomain string) string { return CookiePrefix(baseDomain) + "_ACCESS_TOKEN" }
+
+// PortalCookieStrip matches EVERY deployment's portal cookies, the legacy
+// unprefixed AUTHP_* names included: the public preview and public-app
+// blocks cut them all out before tunnelling into a guest app. Stripping only
+// this deployment's name would hand a guest app the legacy cookie (valid for
+// a session lifetime after the rename, signed with the same pinned key) and
+// a parent-domain deployment's cookie, either replayable under this
+// deployment's derivable name. Raw: Caddy compiles it with Go's regexp.
+const PortalCookieStrip = `(?:^|;\s*)AUTHP[0-9A-F]*_[A-Z_]+=[^;]*`
 
 // Role strings used in X-Caddy-Role header values.
 const (

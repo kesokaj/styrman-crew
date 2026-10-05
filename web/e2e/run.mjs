@@ -1012,7 +1012,18 @@ try {
   // git then falls back to.
   await check("git diff opens in the MAIN pane, not the side panel", async () => {
     await page.getByRole("button", { name: "Terminal", exact: true }).click();
-    await page.locator(".xterm textarea").first().focus();
+    // BUG-091 = BUG-092's race: typing before the terminal holds the focus
+    // loses the head of the line. Focus it, then wait until it really has
+    // the focus before every attempt to type the identity.
+    const focusTerminal = async () => {
+      await page.locator(".xterm textarea").first().focus();
+      await page.waitForFunction(
+        () => document.activeElement?.classList.contains("xterm-helper-textarea"),
+        null,
+        { timeout: 5000 },
+      );
+    };
+    await focusTerminal();
     // BUG-091: in some runs the commit and stash below failed 409 while this
     // line's echoes had landed, which is consistent with the head of the line
     // (the identity) being lost on the way into the shell. The fixture now
@@ -1029,7 +1040,7 @@ try {
       await mainContains("idok-e2e", 10000);
     } catch {
       console.log("  DIAG BUG-091: the git identity was not set on the first try (keystrokes lost?); typing it again");
-      await page.locator(".xterm textarea").first().focus();
+      await focusTerminal();
       await setIdentity();
       await mainContains("idok-e2e", 15000);
     }

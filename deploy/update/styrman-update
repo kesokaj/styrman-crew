@@ -357,6 +357,20 @@ retire_harness_units() {
     return 0
 }
 
+# token_file_ok <file> — the GitHub token file the fetch helper and the
+# runtime-image build secret both read: owned by TRUST_UID (root on a real
+# tick), no group/world bits, and not empty. An empty or newline-only file
+# would authenticate as nobody and surface later as "repository not found"
+# (v1.42.3 gate report, low); refuse it here, by name.
+token_file_ok() {
+    [ "$(stat -c %u "$1")" = "${TRUST_UID}" ] \
+        || fail "$1 is not root-owned — refusing to authenticate with a token another user controls"
+    [ -z "$(find "$1" -perm /077 2>/dev/null)" ] \
+        || fail "$1 is readable or writable beyond root (chmod 600 it)"
+    [ -n "$(tr -d '[:space:]' < "$1")" ] \
+        || fail "token file $1 is empty — put the GitHub token in it (host-setup.sh step 8c)"
+}
+
 # ─── Test hook: styrman-update __verify-tag <tag> <allowed_signers> <repo> ──
 # Runs verify_tag against a scratch repo and allowed_signers, as a non-root
 # user, without the fetch/deploy flow — only under the Go test
@@ -370,6 +384,14 @@ if [ "${1:-}" = "__verify-tag" ]; then
     DEPLOY_DIR="$4"
     cd "$4" || fail "cannot cd to $4"
     if verify_tag "$2"; then exit 0; else exit 1; fi
+fi
+# The token-file check under the same test gate, with the caller's uid as the
+# trust bar (internal/config/styrman_update_token_test.go).
+if [ "${1:-}" = "__check-token-file" ]; then
+    [ "${STYRMAN_UPDATE_TEST:-}" = 1 ] || fail "internal test hooks are disabled (set STYRMAN_UPDATE_TEST=1 only under the Go test)"
+    [ $# -eq 2 ] || fail "usage: __check-token-file <file>"
+    TRUST_UID="$(id -u)"
+    token_file_ok "$2"; exit 0
 fi
 # The retire step under the same test gate: a scratch unit dir and state
 # dir, the caller's uid as the trust bar, `systemctl` from PATH (the Go test
@@ -565,11 +587,10 @@ export GH_TOKEN_FILE
 # GIT_CRED_ARGS starts as "no inherited helper" (see the functions block);
 # the scoped GitHub helper is appended here when a token file exists.
 if [ -f "${GH_TOKEN_FILE}" ]; then
-    # Same trust bar as every other root input this script reads.
-    [ "$(stat -c %u "${GH_TOKEN_FILE}")" = "0" ] \
-        || fail "${GH_TOKEN_FILE} is not root-owned — refusing to authenticate with a token another user controls"
-    [ -z "$(find "${GH_TOKEN_FILE}" -perm /077 2>/dev/null)" ] \
-        || fail "${GH_TOKEN_FILE} is readable or writable beyond root (chmod 600 it)"
+    # Same trust bar as every other root input this script reads, and not
+    # empty. This check also covers the runtime-image build secret below,
+    # which reads the same file in the same tick.
+    token_file_ok "${GH_TOKEN_FILE}"
     # URL-SCOPED to https://github.com (security review, verified: an
     # unscoped helper hands the token to a probe for ANY host; the scoped
     # form fails closed elsewhere). Single-quoted: nothing expands here —

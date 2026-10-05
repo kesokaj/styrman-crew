@@ -2945,3 +2945,26 @@ is rebuilt at its next start at the capped size (home and workspace survive,
 ADR-083's rebuild rule). A demoted admin's projects are capped at their next
 start. A non-admin start reads the host size (cached after the first
 success); if that read fails the start fails, never running uncapped.
+
+## ADR-088: Each deployment names its own session cookies     (2026-10-05) — Accepted
+**Context:** BUG-074. caddy-security's default cookie prefix is `AUTHP`
+everywhere. A browser holding a session for a deployment on a PARENT domain
+(`styrman.xyz`) sent its `AUTHP_ACCESS_TOKEN` to a deployment on a child
+domain (`gcp.styrman.xyz`) too; the child's authorizer saw two same-named
+cookies, validated neither, and redirected forever.
+**Decision:** the generated portal sets `set cookie name prefix
+AUTHP<8 hex of sha256(lower-cased base domain)>`, and every authorization
+policy sets `set access_token cookie name <prefix>_ACCESS_TOKEN` (the
+policy's default list names only the plugin default). The cookie strip on
+the public preview and public-app blocks removes the whole portal cookie
+family of every deployment, `AUTHP[0-9A-F]*_[A-Z_]+`, the legacy names
+included: stripping only this deployment's name would hand a guest app the
+legacy cookie (valid for a session lifetime after the rename, signed with the
+same pinned key) or a parent deployment's cookie, replayable under this
+deployment's derivable name. Verified by `caddy adapt` of a generated config
+in the built ingress image and a live request through caddy (2026-10-05).
+**Consequences:** every browser is signed out once when this ships. With the
+names set, the gatekeeper also accepts a header or query parameter named
+`<prefix>_access_token` (go-authcrunch authz/gatekeeper.go) — the same token
+by another carrier, no new capability. A guest app's own cookie named
+`AUTHP…_X` would be stripped too; the prefix is the portal's namespace.
