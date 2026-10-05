@@ -58,6 +58,10 @@ func formatInPlace(ext string) string {
 // formatFile formats the posted content with the appropriate CLI formatter in
 // the project's guest VM and returns the formatted text.
 func (s *Server) formatFile(w http.ResponseWriter, r *http.Request) {
+	if !s.fileSlot(w) {
+		return
+	}
+	defer func() { <-s.fileSlots }()
 	_, cid, guest, ws, _, err := s.gitContext(r)
 	if err != nil {
 		if errors.Is(err, errVMNotRunning) {

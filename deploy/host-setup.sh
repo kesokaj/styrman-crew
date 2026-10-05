@@ -237,14 +237,19 @@ if [[ ! -f "${SCRIPT_DIR}/.env" && -f "${SCRIPT_DIR}/.env.example" ]]; then
     # Ingress origin secret (URL-safe: no +/= that need shell/sed escaping).
     INGRESS_TOKEN=$(openssl rand -hex 32 2>/dev/null || head -c32 /dev/urandom | od -An -tx1 | tr -d ' \n')
     JWT_KEY=$(openssl rand -hex 32 2>/dev/null || head -c32 /dev/urandom | od -An -tx1 | tr -d " \n")
-    sed -e "s/^STYRMAN_UID=.*/STYRMAN_UID=${OP_UID}/" \
+    # umask 077: the file is created 600, never world-readable for a moment.
+    (umask 077 && sed -e "s/^STYRMAN_UID=.*/STYRMAN_UID=${OP_UID}/" \
         -e "s/^STYRMAN_GID=.*/STYRMAN_GID=${OP_GID}/" \
         -e "s/^DOCKER_GID=.*/DOCKER_GID=${DOCKER_GID}/" \
         -e "s/^STYRMAN_USER=.*/STYRMAN_USER=${OPERATOR}/" \
         -e "s/^STYRMAN_INGRESS_TOKEN=.*/STYRMAN_INGRESS_TOKEN=${INGRESS_TOKEN}/" \
         -e "s/^STYRMAN_JWT_KEY=.*/STYRMAN_JWT_KEY=${JWT_KEY}/" \
-        "${SCRIPT_DIR}/.env.example" > "${SCRIPT_DIR}/.env"
-    chown "${OPERATOR}:${OPERATOR}" "${SCRIPT_DIR}/.env"
+        "${SCRIPT_DIR}/.env.example" > "${SCRIPT_DIR}/.env.tmp.$$")
+    # It holds the ingress secret and the JWT key (security addendum of
+    # v1.42.2, low): created 600 above, owner set, then renamed into place.
+    chmod 600 "${SCRIPT_DIR}/.env.tmp.$$"
+    chown "${OPERATOR}:${OPERATOR}" "${SCRIPT_DIR}/.env.tmp.$$"
+    mv -f "${SCRIPT_DIR}/.env.tmp.$$" "${SCRIPT_DIR}/.env"
     chmod 600 "${SCRIPT_DIR}/.env"
     log "created deploy/.env with computed identity — fill in the secrets section"
 fi
@@ -303,6 +308,9 @@ if ! docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
         # root build must not authenticate with a token another user controls.
         [ "$(stat -c %u /etc/styrman/gh-token)" = 0 ] && [ -z "$(find /etc/styrman/gh-token -perm /077 2>/dev/null)" ] \
             || { echo "FATAL: /etc/styrman/gh-token is not root-owned or is readable beyond root (chmod 600 it)"; exit 1; }
+        # An empty file passes the owner/mode check and then fails the build
+        # with a confusing 401 (security addendum of v1.42.2, low).
+        [ -s /etc/styrman/gh-token ] || { echo "FATAL: /etc/styrman/gh-token is empty — install a fine-grained read-only token in it"; exit 1; }
         SECRET_ARGS=(--secret "id=gh_token,src=/etc/styrman/gh-token")
     else echo "FATAL: no GitHub token for the styrman-harness download — install a FINE-GRAINED read-only token (it is also the auto-updater's) from a 600 file: sudo install -D -m 600 -o root -g root <token-file> /etc/styrman/gh-token, or use styrman-ctl install --gh-token-file <file> (never sudo GH_TOKEN=… or sudo --preserve-env: both land in sudo's log)"; exit 1; fi
     docker build -t "${RUNTIME_IMAGE}" "${SECRET_ARGS[@]}" \
@@ -355,10 +363,11 @@ else
     1. A deploy CLONE at ${STYRMAN_DEPLOY_DIR} (production must never build
        from your working tree — an auto checkout would stomp your edits).
        The repo is private and the host holds NO SSH key (operator decision
-       2026-09-01): auth is a FINE-GRAINED GitHub token, scoped to this ONE
-       repository with Contents: Read-only. Mint it in the GitHub UI
-       (Settings → Developer settings → Fine-grained tokens: Repository
-       access = only this repo; Permissions = Contents: Read-only; pick an
+       2026-09-01): auth is a FINE-GRAINED GitHub token with Contents:
+       Read-only on THIS repository and kesokaj/styrman-harness (the image
+       build downloads sh-agent from it, ADR-074) and nothing else. Mint it in
+       the GitHub UI (Settings → Developer settings → Fine-grained tokens:
+       Repository access = only those two; Permissions = Contents: Read-only; pick an
        expiry you will honor — the updater fails loudly when it lapses):
 
          sudo install -d -m 700 /etc/styrman

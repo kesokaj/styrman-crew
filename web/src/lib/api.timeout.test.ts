@@ -41,6 +41,18 @@ describe("request() signal ownership", () => {
     }
   });
 
+  // The history panel aborts its previous search when a new one starts, so a
+  // quick second search does not leave the first holding a server slot.
+  it("searchHistory combines the panel's abort with the 20 s bound", async () => {
+    const ac = new AbortController();
+    await api.searchHistory("11111111-1111-4111-8111-111111111111", "q", ac.signal);
+    const s = seen[0];
+    expect(s).toBeInstanceOf(AbortSignal);
+    expect(s).not.toBe(ac.signal);
+    ac.abort();
+    expect(s?.aborted).toBe(true);
+  });
+
   it("checkFile combines the editor's abort with the 20 s bound", async () => {
     const ac = new AbortController();
     await api.checkFile("11111111-1111-4111-8111-111111111111", "x.ts", "a", ac.signal);

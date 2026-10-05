@@ -736,9 +736,13 @@ export const api = {
 
   listHistory: (project: string) =>
     request<{ transcripts: Transcript[] }>(u`/api/projects/${project}/history`),
-  searchHistory: (project: string, q: string) =>
+  // The panel passes an abort for its previous search (a new one supersedes
+  // it), so the superseded request stops holding one of the server's search
+  // slots; the 20 s bound stays.
+  searchHistory: (project: string, q: string, signal?: AbortSignal) =>
     request<{ matches: HistoryMatch[] }>(
       u`/api/projects/${project}/history/search` + `?q=${encodeURIComponent(q)}`,
+      { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000) },
     ),
   readHistory: (project: string, id: string, bytes?: number) =>
     request<{ id: string; text: string }>(

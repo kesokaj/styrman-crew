@@ -5,16 +5,36 @@
 // / History / Diff tabs, settings, deep links, and cleanup.
 //
 // Usage: node web/e2e/run.mjs [--base http://127.0.0.1:8080] [--shots /tmp/shots]
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { chromium } from "playwright";
 
 const arg = (name, def) => {
   const i = process.argv.indexOf(name);
   return i > -1 ? process.argv[i + 1] : def;
 };
-const BASE = arg("--base", "http://127.0.0.1:8080");
-const SHOTS = arg("--shots", "/tmp/styrman-shots");
+// No default target: the old default, http://127.0.0.1:8080, is production's
+// own listener on this host, and the first request below is a DELETE (security
+// review of v1.42.2, low). run.sh always passes the suite's own server.
+const BASE = arg("--base", "");
+if (!BASE) {
+  console.error("run.mjs: --base <the suite's own server URL> is required (run it through web/e2e/run.sh)");
+  process.exit(2);
+}
+// Screenshots go to a private directory: a fixed /tmp path could be a link
+// another local account planted. run.sh passes a mktemp'd one.
+const SHOTS = arg("--shots", "") || mkdtempSync(join(tmpdir(), "styrman-shots-"));
+// The updater-status check writes and removes STYRMAN_UPDATE_STATUS_FILE: only
+// ever this run's own file, under the run's state dir.
+{
+  const f = process.env.STYRMAN_UPDATE_STATUS_FILE ?? "";
+  const st = process.env.STYRMAN_E2E_STATE ?? "";
+  if (f && (!st || !f.startsWith(st + "/"))) {
+    console.error(`run.mjs: STYRMAN_UPDATE_STATUS_FILE=${f} is not under this run's state dir — refusing (run it through web/e2e/run.sh)`);
+    process.exit(2);
+  }
+}
 const PROJECT = "e2e-ui";
 
 let passed = 0;

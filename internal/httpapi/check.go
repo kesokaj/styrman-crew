@@ -335,6 +335,10 @@ func missingTool(out string) bool {
 // calls it automatically for whatever is open, so "no checker for .txt" is a
 // normal answer (`supported:false`), not a client error.
 func (s *Server) checkFile(w http.ResponseWriter, r *http.Request) {
+	if !s.fileSlot(w) {
+		return
+	}
+	defer func() { <-s.fileSlots }()
 	_, cid, guest, ws, _, err := s.gitContext(r)
 	if err != nil {
 		if errors.Is(err, errVMNotRunning) {

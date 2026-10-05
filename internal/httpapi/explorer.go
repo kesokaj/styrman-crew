@@ -75,6 +75,10 @@ func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
+	if !s.fileSlot(w) {
+		return
+	}
+	defer func() { <-s.fileSlots }()
 	root, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
@@ -267,6 +271,10 @@ func (s *Server) makeDir(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
+	if !s.fileSlot(w) {
+		return
+	}
+	defer func() { <-s.fileSlots }()
 	root, err := s.scopeFor(r)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
@@ -444,18 +452,31 @@ const searchConcurrency = 4
 // cap while ~150 did not (security review of v1.42.1..ef22f5c, finding 2).
 const readConcurrency = 8
 
+// fileConcurrency bounds the editor's file endpoints (read, save, format,
+// check) server-wide. A read returns up to ~12 MiB of JSON and the others
+// accept 8 MiB bodies; under the server's 4g cap (ADR-085) a few hundred in
+// flight would OOM-kill it (security addendum of v1.42.2, finding 1). The
+// slot is taken before the body is read, so it bounds that memory too.
+const fileConcurrency = 8
+
+// fileSlot takes an editor-file slot or answers 429; release with <-.
+func (s *Server) fileSlot(w http.ResponseWriter) bool {
+	return acquireSlot(w, s.fileSlots, "too many file operations in progress — try again in a moment")
+}
+
 // historyWriteTimeout bounds how long a search or a read may take to hand
 // its response to the client: a client that never reads would otherwise
 // hold the response's memory, and its slot, for as long as it likes.
-const historyWriteTimeout = 30 * time.Second
+var historyWriteTimeout = 30 * time.Second // a var so a test can shorten it
 
 // acquireSlot takes a slot from sem without waiting, or answers 429 with
 // msg. The caller releases the slot (<-sem) when its response is written.
 func acquireSlot(w http.ResponseWriter, sem chan struct{}, msg string) bool {
 	select {
 	case sem <- struct{}{}:
-		// Not every ResponseWriter supports a deadline (httptest's does
-		// not); the bound then falls back to the server's own timeouts.
+		// The production writer supports it (pinned by
+		// TestASlowReaderReleasesItsSlotAtTheWriteDeadline); httptest's
+		// recorder does not, and there the request simply has no deadline.
 		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(historyWriteTimeout))
 		return true
 	default:

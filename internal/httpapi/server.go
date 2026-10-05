@@ -186,6 +186,8 @@ type Server struct {
 	// readSlots bounds transcript reads server-wide (readConcurrency); see
 	// readHistory.
 	readSlots chan struct{}
+	// fileSlots bounds the editor's file endpoints (fileConcurrency).
+	fileSlots chan struct{}
 
 	// creds is the credential broker's store (ADR-030); nil disables the
 	// onboarding endpoints. Set by main after construction.
@@ -265,6 +267,7 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		deleting:      map[string]bool{},
 		searchSlots:   make(chan struct{}, searchConcurrency),
 		readSlots:     make(chan struct{}, readConcurrency),
+		fileSlots:     make(chan struct{}, fileConcurrency),
 		deleteErrs:    map[string]string{},
 		provisionErrs: map[string]string{},
 

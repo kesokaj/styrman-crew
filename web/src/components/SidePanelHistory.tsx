@@ -12,6 +12,7 @@ export function HistoryTab({ project }: { project: string }) {
   const [searching, setSearching] = useState(false);
   // Two quick Enters can resolve out of order — only the newest wins.
   const searchGen = useRef(0);
+  const searchAbort = useRef<AbortController | null>(null);
   const transcripts = data?.transcripts ?? [];
   const titleOf = (id: string) =>
     transcripts.find((t) => t.id === id)?.title || id;
@@ -34,13 +35,18 @@ export function HistoryTab({ project }: { project: string }) {
       return;
     }
     const gen = ++searchGen.current;
+    // A new search supersedes the previous one: abort it, so it stops
+    // holding one of the server's search slots (v1.42.3).
+    searchAbort.current?.abort();
+    const ac = new AbortController();
+    searchAbort.current = ac;
     setSearching(true);
     try {
-      const r = await api.searchHistory(project, trimmed);
+      const r = await api.searchHistory(project, trimmed, ac.signal);
       if (gen !== searchGen.current) return; // stale response
       setMatches(r.matches);
     } catch (e) {
-      if (gen === searchGen.current) toast("error", (e as Error).message);
+      if (gen === searchGen.current && !ac.signal.aborted) toast("error", (e as Error).message);
     } finally {
       if (gen === searchGen.current) setSearching(false);
     }

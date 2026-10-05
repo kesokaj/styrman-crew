@@ -406,7 +406,7 @@ background goroutine and hide the bug the boot-before-upgrade fix exists for.
 Prereq: `cd web && npm i && npx playwright install chromium` (once).
 Self-cleaning: deletes any leftover `e2e-ui` project at start.
 To point the Playwright checks at an already-running server instead, call
-`node web/e2e/run.mjs [--base http://127.0.0.1:8080] [--shots /tmp/styrman-shots]`
+`node web/e2e/run.mjs --base <the suite's own server URL> [--shots <dir>]` — `--base` is required since v1.42.3 (the old default was production's own listener on this host); without `--shots` screenshots go to a private `mkdtemp` dir, and `run.sh` prints the one it used. `run.mjs` also refuses a `STYRMAN_UPDATE_STATUS_FILE` outside `STYRMAN_E2E_STATE` (the run's state dir), because its Settings check writes and removes that file. `run.sh`'s exit cleanup removes only networks whose project UUID its own server logged.
 directly.
 
 ## Tier 5 — Agent harness in the image (`/styrman/bin/sh-agent`, ADR-074)

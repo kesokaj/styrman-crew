@@ -84,10 +84,16 @@ cleanup() {
     # "2026-09-09 16:48:14.959530866 +0200 CEST", which GNU date refuses (an
     # offset AND a zone abbreviation), so parsing it in the shell silently
     # `continue`d on every network and the sweep did nothing at all.
+    # And the NAME: only networks of projects THIS run's server created
+    # (it logs every container it makes, `styrman-<uuid>`), so a production
+    # project created on this host while the suite ran is never touched
+    # (security review of v1.42.2, low). No server log, no sweep: fail safe.
+    OWN_IDS="$(grep -oE 'styrman-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "${STATE}/server.log" 2>/dev/null | sed 's/^styrman-//' | sort -u || true)"
     for _ in 1 2 3 4 5 6; do
         left=0
         for n in $(docker network ls --format '{{.Name}}' 2>/dev/null \
                    | grep -E '^(sdb|lan)-' || true); do
+            grep -qx "${n#*-}" <<<"${OWN_IDS}" || continue
             created=$(docker network inspect "$n" \
                       --format '{{.Created.Unix}}' 2>/dev/null) || continue
             [ "${created}" -ge "${RUN_START}" ] || continue
@@ -122,10 +128,14 @@ echo "== starting host server (state=${STATE}, port=${PORT}) =="
 # Updater status (ADR-081): exported, so the server below and run.mjs (which
 # plants the file for its Settings check) read the SAME path.
 export STYRMAN_UPDATE_STATUS_FILE="${STATE}/status/updater.json"
+# run.mjs refuses a status file outside this directory (it writes and removes
+# the file), and writes its screenshots to a private dir of its own.
+export STYRMAN_E2E_STATE="${STATE}"
+SHOTS="$(mktemp -d /tmp/styrman-shots-XXXX)"
 STYRMAN_STATE_DIR="${STATE}" STYRMAN_IMAGE="${IMAGE}" STYRMAN_ADDR="127.0.0.1:${PORT}" \
     "${STATE}/styrman" > "${STATE}/server.log" 2>&1 &
 PID=$!
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
     curl -fsS "${API}/api/health" >/dev/null 2>&1 && break
     sleep 0.5
 done
@@ -139,5 +149,6 @@ echo "== running Playwright checks =="
 # script fall off the end here makes the EXIT trap's last command decide the
 # exit code, which is how a green run came to report failure (see cleanup).
 status=0
-node "${REPO}/web/e2e/run.mjs" --base "${API}" || status=$?
+node "${REPO}/web/e2e/run.mjs" --base "${API}" --shots "${SHOTS}" || status=$?
+echo "screenshots: ${SHOTS}"
 exit "${status}"

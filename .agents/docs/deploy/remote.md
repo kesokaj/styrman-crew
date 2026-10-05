@@ -87,11 +87,15 @@ sudo bash deploy/firewall/install.sh    # from /opt/styrman at the deployed tag
 # (`sudo GH_TOKEN=…` and `sudo --preserve-env=GH_TOKEN` both log it,
 # `ENV=GH_TOKEN=…`, checked on dave 2026-10-05). An existing host already has
 # the file: re-running host-setup.sh needs no token step at all.
-# Only when the host has no token yet (never overwrite the updater's), and
-# never with an empty file; the plaintext copy is removed once installed.
-sudo test -e /etc/styrman/gh-token || { test -s ~/fine-grained-token \
-  && sudo install -D -m 600 -o root -g root ~/fine-grained-token /etc/styrman/gh-token \
-  && shred -u ~/fine-grained-token || echo "no token installed: ~/fine-grained-token missing or empty" >&2; }
+# Paste the token into a file only you can read (umask 077), end with Ctrl-D:
+(umask 077 && cat > ~/fine-grained-token)
+# Install it only when the host has none yet (never overwrite the updater's),
+# never an empty one; remove the plaintext copy once installed.
+if sudo test -e /etc/styrman/gh-token; then echo "a token is already installed; left as is"
+elif ! test -s ~/fine-grained-token; then echo "~/fine-grained-token is missing or empty — nothing installed" >&2
+elif ! sudo install -D -m 600 -o root -g root ~/fine-grained-token /etc/styrman/gh-token; then echo "install failed — nothing installed" >&2
+elif ! shred -u ~/fine-grained-token; then echo "installed, but removing ~/fine-grained-token failed — delete it by hand" >&2
+fi
 sudo bash deploy/host-setup.sh --user $USER
 ```
 
