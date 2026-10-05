@@ -2972,3 +2972,7 @@ by another carrier, no new capability. A guest app's own cookie named
 ### ADR-086 amendment 1     (2026-10-05)
 
 The body cap moved from csrfGuard into `budgetGuard` and is chosen from the MATCHED mux pattern (`bodyCap`), as is the upload exemption from the body read deadline. ADR-086's "priced at most at csrfGuard's cap" now reads "at most at the route's cap". Keyed on the decoded request path, `…/terminals/x%2Fupload` bought the 512 MiB upload cap and no deadline on an ordinary endpoint (security review of v1.42.3..5a8afa1, finding 1).
+
+### ADR-086 amendment 2     (2026-10-05)
+
+Whether a request is a tunnel (preview, link, shared, proxy — uncharged, uncapped, no Origin check) is decided from the route it will take (`isTunnelRoute`, the matched mux pattern) in both `csrfGuard` and `budgetGuard`, never from its decoded path, for the same reason as amendment 1 (security addendum 5a8afa1..07f5517, finding 1).

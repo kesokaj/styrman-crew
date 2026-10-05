@@ -18,7 +18,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -453,7 +452,7 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	// previewHostRewrite outermost so a <token>.preview host is mapped to the
 	// public /link route before auth even looks at it; then auth (identity /
 	// permission), then CSRF, then the memory budget (ADR-086), then routing.
-	return s.previewHostRewrite(s.authGuard(authMode, csrfGuard(s.budgetGuard(mux))))
+	return s.previewHostRewrite(s.authGuard(authMode, csrfGuard(mux, s.budgetGuard(mux))))
 }
 
 // newMux registers every route; budgetGuard looks the matched pattern up in
@@ -710,13 +709,16 @@ func redirectSlash(w http.ResponseWriter, r *http.Request) {
 // Origin on cross-origin POST/DELETE; same-origin requests either omit it or
 // match Host. curl and other non-browser clients send no Origin and pass.
 // (WebSocket origin checking is handled separately by websocket.Accept.)
-func csrfGuard(next http.Handler) http.Handler {
+func csrfGuard(mux *http.ServeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Preview / link paths merely tunnel bytes to a guest app — styrman's
+		// Preview / link routes merely tunnel bytes to a guest app — styrman's
 		// CSRF concern (protecting its OWN API) doesn't apply, and the JSON body
 		// cap would truncate the app's uploads. A sandboxed preview also sends
 		// Origin: null, which would 403 every mutation the app makes (B2).
-		if p := path.Clean(r.URL.Path); isPreviewPath(p) || isLinkPath(p) || isSharedPath(p) {
+		// Judged by the ROUTE the request will take, never its decoded path:
+		// ".../terminals/..%2F..%2F..%2F..%2Flink%2Fx" cleans to /link/x but
+		// routes to the terminal API (security addendum 5a8afa1..07f5517).
+		if isTunnelRoute(mux, r) {
 			next.ServeHTTP(w, r)
 			return
 		}

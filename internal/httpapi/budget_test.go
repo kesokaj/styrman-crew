@@ -313,3 +313,46 @@ func TestAnEncodedSlashDoesNotBuyTheUploadDeadlineExemption(t *testing.T) {
 		t.Fatalf("got %d, want 400 at the deadline", resp.StatusCode)
 	}
 }
+
+// A request that ROUTES to the API is never treated as a tunnel, however
+// its decoded path reads: "..%2F..%2F..%2F..%2Flink%2Fx" cleans to /link/x
+// but stays one {term} segment for the mux. Judged by the path, it skipped
+// the body cap, the budget, the body deadline and the Origin check
+// (security addendum 5a8afa1..07f5517, finding 1).
+func TestATunnelLookingAPIRequestGetsEveryGuard(t *testing.T) {
+	n := newNetHarness(t)
+	mux := n.s.newMux()
+	raw := "/api/projects/" + n.pid + "/terminals/..%2F..%2F..%2F..%2Flink%2Fx"
+	if isTunnelRoute(mux, httptest.NewRequest(http.MethodPatch, raw, nil)) {
+		t.Fatal("an API route was judged a tunnel")
+	}
+	if !isTunnelRoute(mux, httptest.NewRequest(http.MethodPost, "/link/tok/x", nil)) ||
+		!isTunnelRoute(mux, httptest.NewRequest(http.MethodPost, "/p/"+n.pid+"/t1/port/3000/x", nil)) {
+		t.Fatal("a real tunnel route was not recognised")
+	}
+	// Behind authGuard this request carries no identity (authGuard still
+	// reads the path and lets a link through without one), so the handler
+	// fails closed with 404 before reading the body:
+	if w := doAs(t, n.h, n.admin, http.MethodPatch, raw, `{"title":"x"}`); w.Code != http.StatusNotFound {
+		t.Errorf("through authGuard: %d %s, want 404 (no identity)", w.Code, w.Body.String())
+	}
+	// The guards this finding is about, driven with an identity: the body
+	// cap cuts a 2 MiB body at the 1 MiB default, and the Origin check runs.
+	h := csrfGuard(mux, n.s.budgetGuard(mux))
+	as := func(body, origin string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPatch, raw, strings.NewReader(body))
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		r = identity.WithUser(r, identity.User{Email: n.admin, Username: identity.DeriveUsername(n.admin), Admin: true, Authorized: true})
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	if w := as(`{"title":"`+strings.Repeat("a", 2<<20)+`"}`, ""); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "too large") {
+		t.Errorf("body cap: %d %.120s", w.Code, w.Body.String())
+	}
+	if w := as(`{"title":"x"}`, "https://evil.example"); w.Code != http.StatusForbidden {
+		t.Errorf("Origin check: %d %s", w.Code, w.Body.String())
+	}
+}

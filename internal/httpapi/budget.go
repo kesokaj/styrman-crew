@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -129,6 +128,18 @@ func uncharged(p string) bool {
 	return isPreviewPath(p) || isLinkPath(p) || isSharedPath(p)
 }
 
+// isTunnelRoute reports whether r ROUTES to a tunnel pattern. The decoded
+// request path is not evidence: an encoded slash keeps "..%2F..%2Flink%2Fx"
+// inside one {term} segment for the mux while the decoded, cleaned path reads
+// /link/x (security addendum 5a8afa1..07f5517, finding 1).
+func isTunnelRoute(mux *http.ServeMux, r *http.Request) bool {
+	_, pattern := mux.Handler(r)
+	if _, p, ok := strings.Cut(pattern, " "); ok {
+		pattern = p
+	}
+	return pattern != "" && uncharged(pattern)
+}
+
 // bodyCap is the request-body cap for a matched mux PATTERN: budgetGuard
 // applies it, and prices a body of unknown length at it. Uploads carry real
 // payloads; editor saves, /format and /check carry file content (2 MiB read
@@ -199,7 +210,7 @@ func tenantOf(r *http.Request) string {
 func (s *Server) budgetGuard(mux *http.ServeMux) http.Handler {
 	var lastWarn atomic.Int64
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if uncharged(path.Clean(r.URL.Path)) {
+		if isTunnelRoute(mux, r) {
 			mux.ServeHTTP(w, r)
 			return
 		}
