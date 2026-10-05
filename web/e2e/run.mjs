@@ -401,6 +401,16 @@ try {
   // NO explicit .focus() here on purpose: switching back to Terminal must
   // restore keyboard focus by itself, or the first keystrokes go to <body>.
   await check("terminal session survived the editor round-trip", async () => {
+    // BUG-092: focus comes back to the terminal by itself, but not in the
+    // same tick as the toggle; typing at once raced it and lost keystrokes
+    // (the check timed out 4 times on 2026-10-05; with a few ms of slack it
+    // passed at 48 ms). Wait for the focus — still the guard: if it never
+    // returns, this times out and the check fails.
+    await page.waitForFunction(
+      () => document.activeElement?.classList.contains("xterm-helper-textarea"),
+      null,
+      { timeout: 5000 },
+    );
     await page.keyboard.type("echo pane-roundtrip-ok");
     await page.keyboard.press("Enter");
     await page.waitForSelector(".xterm >> text=pane-roundtrip-ok", {
