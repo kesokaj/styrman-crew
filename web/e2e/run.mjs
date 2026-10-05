@@ -983,9 +983,27 @@ try {
   await check("git diff opens in the MAIN pane, not the side panel", async () => {
     await page.getByRole("button", { name: "Terminal", exact: true }).click();
     await page.locator(".xterm textarea").first().focus();
-    await page.keyboard.type(
-      "git config --global user.email e2e@styrman.test; git config --global user.name e2e; echo diffme >> one.txt; echo second >> two.txt",
-    );
+    // BUG-091: in some runs the commit and stash below failed 409 while this
+    // line's echoes had landed, which is consistent with the head of the line
+    // (the identity) being lost on the way into the shell. The fixture now
+    // proves the identity is set and types it again if not, saying so, so a
+    // recurrence names the cause instead of failing six checks later.
+    const setIdentity = async () => {
+      await page.keyboard.type(
+        "git config --global user.email e2e@styrman.test; git config --global user.name e2e; echo idok-$(git config --global user.email | cut -c1-3)",
+      );
+      await page.keyboard.press("Enter");
+    };
+    await setIdentity();
+    try {
+      await mainContains("idok-e2e", 10000);
+    } catch {
+      console.log("  DIAG BUG-091: the git identity was not set on the first try (keystrokes lost?); typing it again");
+      await page.locator(".xterm textarea").first().focus();
+      await setIdentity();
+      await mainContains("idok-e2e", 15000);
+    }
+    await page.keyboard.type("echo diffme >> one.txt; echo second >> two.txt");
     await page.keyboard.press("Enter");
     await page.waitForTimeout(1500);
     await panel().getByText("Git", { exact: true }).click();
