@@ -2864,3 +2864,29 @@ Kata's behaviour, measured on the NUC (Kata 3.31.0, Cloud Hypervisor, 2026-10-05
 - A memory reserve per VM: the operator asked for the whole host.
 
 **Consequences:** Under memory exhaustion the kernel picks among the host's ordinary processes and the VMs; the server and Caddy survive, so the platform stays reachable to stop or resize a project. A server that leaks memory is never killed by the kernel; its own health check and restart policy remain the guard. Takes effect when the auto-updater recreates the containers at the release.
+
+## ADR-085: OOM order — the platform at -999 with memory caps, dockerd beside it     (2026-10-05) — Accepted
+
+Supersedes ADR-084 (never released: v1.42.1 was re-gated before its tag).
+
+**Context:** ADR-084 set `styrman-server` and Caddy to `oom_score_adj -1000`, so that a whole-host-sized project VM (ADR-083, at -999) is killed before the platform. The v1.42.1 security review (`reviews/2026-10-05-security-v1.42.1-v1.42.0-2ba3f79.md`) found three problems with that.
+- **High:** -1000 is inherited by every child, including the host-side `git` the server runs against guest-writable workspaces at every boot. A 12.9 MB `.git/config` made that git allocate 616 MiB (measured), so about 1.3 GB of config exhausts the host. An unkillable process then forces the kernel to kill every VM and host service and finally panic, and dave hangs.
+- ADR-084's "health check and restart policy" guard does not exist: Docker outside Swarm never restarts an unhealthy container, and neither service had a memory limit.
+- dockerd (-500, with systemd's 3-restarts-per-minute limit) still died before the VMs, leaving the server unable to stop or resize anything.
+
+**Decision:**
+- `caddy` and `styrman` run at `oom_score_adj: -999`, the same as the VMs. On a tie the kernel kills the largest process, which is a VM, not a service that uses tens of MiB.
+- Each service gets a memory cap: Caddy `1g`, the server `4g`; measured use is about 40 MiB and about 9 MiB. A leak, or a child that runs away, becomes an OOM kill inside that container's cgroup, and `restart: unless-stopped` brings it back. Pinned by `internal/config/compose_oom_test.go`.
+- The host-side `git` (`internal/gitrepo`) sets its own child back to `oom_score_adj 0` right after it starts; raising a score needs no privilege. Test: `internal/gitrepo/oom_test.go`.
+- `host-setup.sh` writes `/etc/systemd/system/docker.service.d/50-styrman-oom.conf` (`OOMScoreAdjust=-999`, `StartLimitIntervalSec=0`; `deploy/lib/docker-oom.sh`, tested by `docker-oom-test.sh`). It applies the value to the running dockerd at once, with no Docker restart.
+
+**Rejected:**
+- -1000, for the reasons above.
+- Raising the VMs' score: the VMM is a child of the Kata shim on the host, out of the containerized server's reach.
+- A per-VM memory reserve: the operator asked for the whole host.
+- Setting `kernel.panic` here: host policy, left as an operator choice.
+
+**Consequences:**
+- Under memory exhaustion the order is: host processes at 0 (sshd stays at -1000), then the largest -999 process, a VM.
+- The server and Caddy can still die if they themselves grow past the VMs, but their caps make that an in-cgroup OOM kill well before it.
+- The dockerd part needs the post-release `host-setup.sh` re-run, like ADR-083's Kata settings. Until then dockerd stays at -500.

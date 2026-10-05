@@ -7,12 +7,16 @@ import (
 	"testing"
 )
 
-// The server and the ingress must never be the OOM killer's pick (ADR-084).
-// Project VMs run at oom_score_adj -999 (cloud-hypervisor inherits it from
-// containerd's shim) and, since ADR-083, are sized to the whole host, so a
-// process at the default 0 is killed long before any VM: measured on the NUC
-// 2026-10-05, styrman-server and Caddy sat at 0. Only -1000 ranks below the
-// VMs. This pins the setting in the compose file the auto-updater deploys.
+// The server and the ingress must not be the OOM killer's first pick, and
+// must not be unkillable either (ADR-085). Project VMs run at oom_score_adj
+// -999 (cloud-hypervisor inherits it from containerd's shim) and, since
+// ADR-083, are sized to the whole host. At the default 0 the platform died
+// first (security review of v1.42.0); at -1000 (ADR-084, never released) a
+// leak or a child git could hang the host (security review of v1.42.1). At
+// -999 the tie with the VMs goes to the largest process, a VM, and the memory
+// cap makes a leak inside either service an OOM kill of that container,
+// which its restart policy recovers. This pins both in the compose file the
+// auto-updater deploys.
 func TestComposeProtectsServerAndIngressFromTheOOMKiller(t *testing.T) {
 	src, err := os.ReadFile(filepath.Join(repoRoot(t), "deploy", "docker-compose.yml"))
 	if err != nil {
@@ -32,19 +36,27 @@ func TestComposeProtectsServerAndIngressFromTheOOMKiller(t *testing.T) {
 			svc = "" // a new top-level key ends the services
 		}
 	}
+	// Measured 2026-10-05 on the NUC: the server at about 9 MiB, Caddy at
+	// about 40 MiB; the caps leave two orders of magnitude of headroom.
+	memLimits := map[string]string{"caddy": "1g", "styrman": "4g"}
 	for _, name := range []string{"caddy", "styrman"} {
 		lines, ok := blocks[name]
 		if !ok {
 			t.Fatalf("service %q not found in docker-compose.yml", name)
 		}
-		found := false
-		for _, l := range lines {
-			if l == "oom_score_adj: -1000" {
-				found = true
+		has := func(want string) bool {
+			for _, l := range lines {
+				if l == want {
+					return true
+				}
 			}
+			return false
 		}
-		if !found {
-			t.Errorf("service %q: want `oom_score_adj: -1000`", name)
+		if !has("oom_score_adj: -999") {
+			t.Errorf("service %q: want `oom_score_adj: -999`", name)
+		}
+		if !has("mem_limit: " + memLimits[name]) {
+			t.Errorf("service %q: want `mem_limit: %s`", name, memLimits[name])
 		}
 	}
 }

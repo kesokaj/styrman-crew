@@ -38,6 +38,17 @@ const check = async (label, fn) => {
     ok(label);
   } catch (e) {
     bad(label, `— ${e.message.split("\n")[0]}`);
+    // BUG-091: a server error surfaces in the UI's alert/status text, which a
+    // selector timeout alone never shows. Print it, so a recurrence names the
+    // cause (best effort: the page may already be gone).
+    try {
+      const shown = await page
+        .locator('[role="alert"], [role="status"]')
+        .allInnerTexts();
+      if (shown.length) console.log(`  shown on the page: ${JSON.stringify(shown).slice(0, 600)}`);
+    } catch {
+      /* nothing to add */
+    }
   }
 };
 

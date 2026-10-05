@@ -56,9 +56,13 @@ services:
       - PRIVATE_DOMAIN=${STYRMAN_PRIVATE_DOMAIN:-}
     dns: [8.8.8.8, 1.1.1.1]
     restart: unless-stopped
-    # Never the OOM killer's pick (ADR-084): project VMs run at -999 and are
-    # sized to the whole host (ADR-083), so anything above -999 dies first.
-    oom_score_adj: -1000
+    # OOM (ADR-085): project VMs run at -999 and are sized to the whole host
+    # (ADR-083). At -999 the tie goes to the largest process — a VM — and the
+    # cap turns a leak here into an OOM kill of this container, which
+    # restart: unless-stopped recovers. Never -1000: unkillable, a leak would
+    # take the host down instead.
+    oom_score_adj: -999
+    mem_limit: 1g
 
   styrman:
     container_name: styrman-server
@@ -153,8 +157,11 @@ services:
       # Backs the public preview wildcard (*.PREVIEW_DOMAIN) when enabled.
       caddy_preview_target: 'true'
     restart: unless-stopped
-    # Same as the ingress (ADR-084): the platform outlives any project VM.
-    oom_score_adj: -1000
+    # Same as the ingress (ADR-085). The cap also bounds the host-side git
+    # this server runs against guest-writable workspaces (internal/gitrepo,
+    # which sets that child back to oom_score_adj 0).
+    oom_score_adj: -999
+    mem_limit: 4g
 
 networks:
   styrman-ingress:

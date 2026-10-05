@@ -84,7 +84,8 @@ sudo bash deploy/firewall/install.sh    # from /opt/styrman at the deployed tag
 # `sudo deploy/styrman-ctl install --gh-token-file <600 file>` (the token
 # travels as a file), or `sudo --preserve-env=GH_TOKEN bash deploy/host-setup.sh`
 # with GH_TOKEN exported beforehand, for a bare host-setup.sh run.
-sudo GH_TOKEN=$(gh auth token) bash deploy/host-setup.sh --user $USER
+export GH_TOKEN=$(gh auth token)
+sudo --preserve-env=GH_TOKEN bash deploy/host-setup.sh --user $USER
 ```
 
 `install.sh` now also ENABLES `styrman-firewall.service` at boot (`WantedBy=

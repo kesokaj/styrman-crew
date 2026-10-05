@@ -1680,6 +1680,10 @@ func (o *Orchestrator) ReapSetupVMs(ctx context.Context, maxAge time.Duration) {
 	rctx, cancel := context.WithTimeout(ctx, reapPassBound)
 	defer cancel()
 	for _, c := range list {
+		if rctx.Err() != nil {
+			o.logger.Warn("setup reap pass out of time; the rest wait for the next tick", "bound", reapPassBound)
+			return
+		}
 		insp, err := o.docker.ContainerInspect(rctx, c.ID)
 		if err != nil || insp.State == nil || !insp.State.Running {
 			continue

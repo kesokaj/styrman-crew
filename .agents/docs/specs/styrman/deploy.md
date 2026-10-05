@@ -142,9 +142,13 @@ NCPU, memory = floor((host MiB − 2048)/128)×128 (read on first need,
 cached once it succeeds); the setup VM is unlimited too. Kata adds the
 limit to its own base (1 vCPU, 2 GiB), so `nproc` in a terminal shows a
 set CPU count + 1, and the host's count when unlimited (vCPUs clamp at the
-host). The server and Caddy run at `oom_score_adj -1000` (compose,
-ADR-084): project VMs sit at -999, so under memory exhaustion the kernel
-never picks the platform. The Docker disk defaults to the operator's "Default Docker
+host). OOM order (ADR-085): project VMs sit at -999. The server and Caddy
+run at `oom_score_adj -999` with `mem_limit` 4g / 1g (compose), so on a tie
+the kernel kills the largest process (a VM), and a leak in either service is
+an in-container OOM kill that the restart policy recovers. dockerd is put at
+-999 with no start limit by `host-setup.sh` (`deploy/lib/docker-oom.sh`;
+needs the post-release re-run). The host-side git the server runs is set
+back to 0. The Docker disk defaults to the operator's "Default Docker
 disk for new projects" setting (20 GB), recorded into the project at
 creation, and grows offline at boot in `image/entrypoint.sh` (`e2fsck -f`,
 `truncate`, `resize2fs`); it never shrinks, and a failure WARNs in the boot
@@ -255,7 +259,8 @@ omitted, Caddy uses HTTP-01 ACME challenges, which cover the base app and the au
 # travels as a file — `styrman-ctl` exports GH_TOKEN for host-setup.sh in its
 # own process), or `sudo --preserve-env=GH_TOKEN bash deploy/host-setup.sh`
 # with GH_TOKEN exported beforehand, for a bare host-setup.sh run.
-sudo GH_TOKEN=$(gh auth token) bash deploy/host-setup.sh --user $USER   # also seeds deploy/.env identity values
+export GH_TOKEN=$(gh auth token)                                    # in your own shell, never on the sudo line
+sudo --preserve-env=GH_TOKEN bash deploy/host-setup.sh --user $USER  # also seeds deploy/.env identity values
 vi deploy/.env                                # fill: BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET,
                                               #       ADMIN_EMAIL, STYRMAN_ALLOWED_EMAILS
                                               #       (+ optional CLOUDFLARE_API_TOKEN,
@@ -333,10 +338,10 @@ commit to git."
   docker disk with no safety net. The UI's "type delete to confirm" dialog
   is the only gate; there is nothing to restore from afterward.
 - **Rebuilding a host** is: clone the repo, `sudo deploy/styrman-ctl install
-  --gh-token-file <600 file>` (the token travels as a file; the bare
-  `sudo GH_TOKEN=$(gh auth token) bash deploy/host-setup.sh --user $USER` form
-  still works but puts the token on a sudo-logged command line — see
-  "Bring-up" above), fill in a fresh `deploy/.env`, bring the stack up. A
+  --gh-token-file <600 file>` (the token travels as a file; or GH_TOKEN
+  exported in your own shell and passed with `sudo --preserve-env=GH_TOKEN`;
+  never `sudo GH_TOKEN=…`, which puts the token on a sudo-logged command line
+  — see "Bring-up" above), fill in a fresh `deploy/.env`, bring the stack up. A
   GCP host: `deploy/gcp/vm.sh create` + `deploy/gcp/install.sh` (`gcp.md`). There is no state to restore — only project workspaces that
   were actually committed and pushed come back; anything left uncommitted
   in a project's workspace or home is gone with the old host.

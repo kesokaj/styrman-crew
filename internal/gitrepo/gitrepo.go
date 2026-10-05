@@ -17,10 +17,12 @@
 package gitrepo
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -49,7 +51,20 @@ func git(ctx context.Context, ws string, args ...string) (string, error) {
 		"GIT_CONFIG_KEY_0=safe.directory", "GIT_CONFIG_VALUE_0=*",
 		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null",
 	)
-	out, err := cmd.CombinedOutput()
+	var buf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &buf, &buf
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("git %s: %w", args[0], err)
+	}
+	// The server runs at oom_score_adj -999 (ADR-085) and git inherits it.
+	// This git reads a guest-writable .git/config, and an oversized one can
+	// make it allocate gigabytes: give it the default 0 back at once, so the
+	// kernel can kill it before a project VM (security review of v1.42.1,
+	// high). A failed write is ignored: the server's compose memory cap still
+	// bounds git, and the moment before the write lands.
+	_ = setOOMScoreAdj(cmd.Process.Pid, 0)
+	err := cmd.Wait()
+	out := buf.Bytes()
 	if err != nil {
 		// The trimmed output can contain host paths, so callers must not put it
 		// into an API response verbatim.
@@ -82,4 +97,10 @@ func EnsureRepo(ctx context.Context, ws string) error {
 	}
 	_, err := git(ctx, ws, "init", "-b", "main")
 	return err
+}
+
+// setOOMScoreAdj sets a process's OOM score. Raising a score needs no
+// privilege; git() uses it to give its child the default 0 back.
+func setOOMScoreAdj(pid, adj int) error {
+	return os.WriteFile("/proc/"+strconv.Itoa(pid)+"/oom_score_adj", []byte(strconv.Itoa(adj)), 0)
 }

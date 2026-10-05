@@ -176,3 +176,27 @@ func TestThePreADR027RecreateWaitsOutAnExitingVM(t *testing.T) {
 		t.Fatalf("want one recreate with the workspace bind; calls %v", fd.calls)
 	}
 }
+
+// One deadline bounds the whole reap pass: two VMs stuck exiting together
+// hold the idle-reaper tick for reapPassBound, not for the bound once each.
+func TestReapSetupVMsPassIsBoundedAsAWhole(t *testing.T) {
+	o, fd, _ := seamOrch(t)
+	for _, u := range []string{"alice", "bob"} {
+		if _, err := o.EnsureSetup(context.Background(), u, "x"); err != nil {
+			t.Fatal(err)
+		}
+		c, _ := fd.byName(config.SetupContainer(u))
+		c.startedAt = time.Now().Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	}
+	fd.list = true
+	defer func(z, b time.Duration) { zombieRetryEvery, reapPassBound = z, b }(zombieRetryEvery, reapPassBound)
+	zombieRetryEvery = 5 * time.Millisecond
+	reapPassBound = 200 * time.Millisecond
+	fd.fail["ContainerRemove"] = errors.New(zombieErr) // never clears
+	start := time.Now()
+	o.ReapSetupVMs(context.Background(), time.Hour)
+	// Per-VM bounds would take about 2 × 200 ms; one pass bound about 200 ms.
+	if d := time.Since(start); d > 350*time.Millisecond {
+		t.Fatalf("the reap pass took %v, want about one bound (%v)", d, reapPassBound)
+	}
+}
