@@ -48,6 +48,13 @@ Out:
 
 Follow-ups noted, not built: resources in the create dialog; reporting a
 disk grow that failed in the guest back to the UI (D12).
+Follow-ups found in review (2026-10-05): a `ReapSetupVMs` zombie-retry test
+(extend the fake's `ContainerList` with labels and `StartedAt`); a forced-fail
+e2e run with the `finally` restore and the first Resources check; the
+`zombieRetryEvery` comment; the one-shot remove after a failed stop on the
+pre-ADR-027 path (`orchestrator.go:332`); the docs lens's six stale spots
+(`reviews/2026-10-05-review-v1.41.1-f507278-docs.md`); a per-user disk/size
+budget and an admin-only cap (security, operator's choice) — found in: the v1.42.0 reviews
 
 ## Surfaces touched
 Recon brief: `.agents/docs/plans/2026-10-05-recon-project-resources.md`.
@@ -397,7 +404,7 @@ E2E criteria:
 - [x] Docs: api.md, deploy.md, guide.md, AGENTS.md Architecture line — `documentation` agent — who: AI — api.md, deploy.md, guide.md, gcp.md, AGENTS.md
 - [-] Fresh-host path: `deploy/gcp/vm.sh create` + `install.sh` on a new VM, check the wrapper and that a project VM runs cloud-hypervisor at host size — who: user (no gcloud on dave) — expect: done, or "fresh-host path unexercised" in the gate report — moved to the handoff's Next Steps (2026-10-05): the gate report says "fresh-host path unexercised"
 - [x] Post-release host step in the release notes, the gate report and the deploy guides: once each host has auto-updated, re-run `sudo GH_TOKEN=… /opt/styrman/deploy/host-setup.sh` from the verified tree (dave: here; GCP VM: `deploy/gcp/vm.sh ssh` from the Mac). Until then a QEMU host may refuse project starts (D28) — who: AI writes, user runs — docs: `deploy/README.md`, `.agents/docs/deploy/remote.md`, `.agents/docs/deploy/gcp.md` — written (deploy.md, remote.md, gcp.md); the operator's runs go to the handoff's Next Steps
-- [ ] Checkpoint — Definition of Done: verifier, reviewer (diff only), security (input parsing, host root script), documentation, `/review --docs`, changelog, handoff — evidence: <paths>, <date>
+- [x] Checkpoint — Definition of Done: verifier, reviewer (diff only), security (input parsing, host root script), documentation, `/review --docs`, changelog, handoff — evidence: reviews/2026-10-05-preflight-v1.42.0.md (SHIP); verifier logs testing/2026-10-05-verify-v1.42.0-{commit-gate-r2,tiers-r2,e2e-r3}.md; tag v1.42.0 at 77c6140, live on dave 14:17:34 (server healthy, version 1.42.0), 2026-10-05
 
 ## Risks
 Assumptions:
