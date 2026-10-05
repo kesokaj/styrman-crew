@@ -1594,7 +1594,7 @@ try {
   await panel().getByText("Network", { exact: true }).waitFor({ timeout: 20000 });
 
   await check("enabling rebuilds the project and flags it", async () => {
-    // 210 s, pairing with the SERVER's lanRebuildTimeout (3 min), not with
+    // 210 s, pairing with the SERVER's rebuildTimeout (3 min), not with
     // start/stop's client budget: Playwright's 30 s default cut the rebuild
     // off, and 150 s would still be 30 s short of what the server allows.
     const res = await page.request.put(`${BASE}/api/projects/${PID}/network`, {
@@ -1825,6 +1825,19 @@ try {
     } finally {
       await page.keyboard.press("Escape").catch(() => {});
       await resDialog().waitFor({ state: "detached", timeout: 5000 }).catch(() => {});
+      // A failure part-way leaves the project at whatever size was saved:
+      // put it back to unlimited, so the suite ends as it found it.
+      try {
+        const now = await (await page.request.get(`${BASE}/api/projects/${PID}/resources`)).json();
+        if (now.cpus !== 0 || now.memoryGiB !== 0)
+          await page.request.put(`${BASE}/api/projects/${PID}/resources`, {
+            data: { cpus: 0, memoryGiB: 0, diskGB: now.diskGB },
+            headers: { "content-type": "application/json" },
+            timeout: 210000,
+          });
+      } catch {
+        /* best effort: the cleanup below deletes the project anyway */
+      }
     }
   });
 

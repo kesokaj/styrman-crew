@@ -525,6 +525,21 @@ check "unlimited again: every host CPU" \
     "[ \"\$(guest nproc)\" = ${HOSTCPU} ]"
 check "the record keeps the grown disk (21)" \
     "[ \"\$(curl -fsS ${RES} | jq -r .diskGB)\" = 21 ]"
+# The grow's RETRY branch (review 2026-10-05, finding 1): a boot whose
+# truncate succeeded but whose resize2fs did not leaves the FILE at the new
+# size and the filesystem at the old one. Plant exactly that on the stopped
+# project's image from the host, raise the record to match the file, and the
+# next boot must still grow the filesystem — a gate on the file's size would
+# skip it.
+IMGF="${STATE}/homes/${ME}/p/${ID}/.dockerd/${ID}.img"
+curl -fsS -X POST "${API}/api/projects/${ID}/stop" >/dev/null
+check "retry setup: the image file is 22 GiB, its filesystem still 21" \
+    "truncate -s 22G '${IMGF}' && [ \"\$(stat -c %s '${IMGF}')\" = 23622320128 ]"
+check "a PUT of 22 GB on the stopped project records it" \
+    "[ \"\$(put_res '{\"cpus\":0,\"memoryGiB\":0,\"diskGB\":22}' | jq -r .diskGB)\" = 22 ]"
+curl -fsS -X POST "${API}/api/projects/${ID}/start" >/dev/null
+check "the next boot grows the filesystem to the file (2 GiB over the start, within 2%)" \
+    "d=\$(( \$(disk_bytes) - DISK0 )); [ \"\$d\" -ge \$(( 2147483648 * 98 / 100 )) ] && [ \"\$d\" -le \$(( 2147483648 * 102 / 100 )) ]"
 
 
 # Git side panel is a real in-guest client now (the host-side /diff route and the
@@ -576,6 +591,10 @@ check "BUG-062 setup: stamp removed, a directory planted in settings.json's plac
 # refused "PID … is zombie" until the shim reaps it — the same window the
 # orchestrator's forceRemove waits out (2026-10-05); a bare rm aborted the run.
 for _ in $(seq 1 30); do docker rm -f "${CN}" >/dev/null 2>&1 && break; sleep 2; done
+# Without this the recreate checks below could pass on a container that was
+# never removed, had the retries run out (review of f507278, low).
+check "the container was removed before the recreate (zombie window waited out)" \
+    "! docker ps -a --format '{{.Names}}' | grep -qx ${CN}"
 curl -fsS -X POST "${API}/api/projects/${ID}/start" >/dev/null
 OUT=$("${STATE}/wsprobe" -url "ws://127.0.0.1:${PORT}/ws/term/${ID}/1" \
     -send "cat ~/projects/itest/proof.txt\r" -wait 4s || true)

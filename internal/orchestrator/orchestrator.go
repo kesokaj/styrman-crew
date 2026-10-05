@@ -1465,10 +1465,6 @@ func busyReason(out string) string {
 	return strings.Join(fields, ",")
 }
 
-// Destroy removes the project's container and network. The workspace and all
-// home-dir state persist; only runtime state is lost. Holds the per-project
-// lock: without it, a terminal WS reconnect's EnsureRunning could recreate
-// the container/network mid-removal and leave an orphan behind.
 // zombieRetryEvery is how often Destroy retries a force-remove that Docker
 // refused because the VM's process is exiting (a variable for tests).
 var zombieRetryEvery = 2 * time.Second
@@ -1499,6 +1495,10 @@ func (o *Orchestrator) forceRemove(ctx context.Context, name string) error {
 	}
 }
 
+// Destroy removes the project's container and network. The workspace and all
+// home-dir state persist; only runtime state is lost. Holds the per-project
+// lock: without it, a terminal WS reconnect's EnsureRunning could recreate
+// the container/network mid-removal and leave an orphan behind.
 func (o *Orchestrator) Destroy(ctx context.Context, user, project string) error {
 	l := o.lockProject(key(user, project))
 	l.Lock()
@@ -1678,7 +1678,14 @@ func (o *Orchestrator) ReapSetupVMs(ctx context.Context, maxAge time.Duration) {
 			continue
 		}
 		o.logger.Info("reaping abandoned setup VM", "id", c.ID[:12], "age", time.Since(started))
-		_ = o.docker.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true})
+		// forceRemove, bounded: a one-shot remove refused while the VM exits
+		// (BUG-090) left an EXITED setup container, which this loop skips
+		// from then on. The bound keeps one stuck VM from stalling the tick.
+		rctx, cancel := context.WithTimeout(ctx, time.Minute)
+		if err := o.forceRemove(rctx, c.ID); err != nil {
+			o.logger.Warn("reaping setup VM failed", "id", c.ID[:12], "error", err)
+		}
+		cancel()
 	}
 }
 

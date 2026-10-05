@@ -69,3 +69,31 @@ func TestDestroyGivesUpWhenTheContextEnds(t *testing.T) {
 		t.Fatal("Destroy succeeded while every remove was refused")
 	}
 }
+
+// The setup VM's removal goes through the same wait (it is full-size too).
+func TestDestroySetupRetriesAVMStillExiting(t *testing.T) {
+	o, fd, _ := seamOrch(t)
+	if _, err := o.EnsureSetup(context.Background(), tUser, "x"); err != nil {
+		t.Fatal(err)
+	}
+	defer func(d time.Duration) { zombieRetryEvery = d }(zombieRetryEvery)
+	zombieRetryEvery = time.Millisecond
+	fd.fail["ContainerRemove"] = errors.New(zombieErr)
+	removes := 0
+	fd.onCall = func(method string) {
+		if method == "ContainerRemove" {
+			removes++
+			if removes == 2 {
+				fd.mu.Lock()
+				delete(fd.fail, "ContainerRemove")
+				fd.mu.Unlock()
+			}
+		}
+	}
+	if err := o.DestroySetup(context.Background(), tUser); err != nil {
+		t.Fatalf("DestroySetup: %v", err)
+	}
+	if removes != 2 {
+		t.Fatalf("ContainerRemove called %d times, want 2", removes)
+	}
+}
