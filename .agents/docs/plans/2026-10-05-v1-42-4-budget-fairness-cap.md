@@ -391,31 +391,31 @@ controller).
 Live (after deploy, by `/preflight`): dave signs in with the new cookie name.
 
 ## Phases
-- [x] Cold-reader check — cap reached at round 3 (`reviews/2026-10-05-cold-read-v1-42-4-round1.md`, `-round2.md`, `-round3.md`); the residue is resolved by D20-D22 on the operator's word, 2026-10-05: "What the fuck are you doing. Why cant you cut a new version/release?" (reply to the cap question offering exactly D20-D22)
+- [x] Cold-reader check — cap reached at round 3 (`reviews/2026-10-05-cold-read-v1-42-4-round1.md`, `-round2.md`, `-round3.md`); the residue is resolved by D20-D22, the operator's reply to the cap question TAKEN AS go (it does not name them), 2026-10-05: "What the fuck are you doing. Why cant you cut a new version/release?" (reply to the cap question offering exactly D20-D22)
 ### Phase 1 — server: budget, fairness, 408
 - [x] ADR-086 (memory budget) appended to DECISIONS.md — verify: read — expect: entry present
 - [x] `internal/membudget` + tests (wait/admit, per-tenant share, clamp, FIFO, ctx timeout → ErrBusy, release idempotent) — verify: `go test -race ./internal/membudget/` AI — expect: ok, red first
-- [ ] `budgetGuard` + weight table + tests (503 after wait with Retry-After; second tenant admitted; every table pattern resolves; WS route uncharged) — verify: `go test -race ./internal/httpapi/` AI — expect: ok — docs: specs/styrman/api.md
+- [x] `budgetGuard` + weight table + tests (503 after wait with Retry-After; second tenant admitted; every table pattern resolves; WS route uncharged) — verify: `go test -race ./internal/httpapi/` AI — expect: ok — docs: specs/styrman/api.md
 - [x] `files.List` byte bound + test — verify: `go test ./internal/files/` — expect: ok, red first — docs: specs/styrman/api.md (listing row, :166)
-- [ ] slotPool fairness + tests — verify: same — expect: ok — docs: specs/styrman/api.md
-- [ ] read deadline only with a body; `decodeJSON` 408/400 (no 413, D14) + real-server test — verify: same — expect: ok — docs: specs/styrman/api.md
-- [ ] Checkpoint — expect: `go test -race ./...` and `go vet ./...` exit 0 — evidence: verifier log
+- [x] slotPool fairness + tests — verify: same — expect: ok — docs: specs/styrman/api.md
+- [x] read deadline only with a body; `decodeJSON` 408/400 (no 413, D14) + real-server test — verify: same — expect: ok — docs: specs/styrman/api.md
+- [x] Checkpoint — expect: `go test -race ./...` and `go vet ./...` exit 0 — evidence: main agent bare `go vet ./...` + `go test -race -count=1 ./...` rc=0 before 4a2b076 (D24); final `testing/2026-10-05-verify-v1.42.4-full-r4.md` PASS, 2026-10-05
 ### Phase 2 — admin cap
 - [x] ADR-087 (admin cap, amends ADR-083) — verify: read — expect: entry present
 - [x] config `OperatorSettings`/`UpdateOperator` + persistence tests; update the two orchestrator test callers — verify: `go test ./internal/config/ ./internal/orchestrator/` — expect: ok
 - [x] `IsAdminUsername`, `ownerIsAdmin` (AuthMode none / env admin / dev user), `capped`, `runOptsFor` method + tests on the method and closure with a fake `sizeRuntime` — verify: `go test -race ./internal/httpapi/ ./internal/userstore/` — expect: ok
-- [ ] resources GET/PUT cap + settings GET/PATCH — verify: same — expect: ok — docs: specs/styrman/api.md, specs/styrman/guide.md
+- [x] resources GET/PUT cap + settings GET/PATCH — verify: same — expect: ok — docs: specs/styrman/api.md, specs/styrman/guide.md
 - [x] web: ResourcesDialog label, Settings Runtime fields — verify: `(cd web && npm run check && npm run lint && npm test)` — expect: exit 0
-- [ ] Checkpoint — expect: Go + web suites exit 0 — evidence: verifier log
+- [x] Checkpoint — expect: Go + web suites exit 0 — evidence: main agent bare runs rc=0 before c53396a (D24); final `testing/2026-10-05-verify-v1.42.4-full-r4.md` PASS, 2026-10-05
 ### Phase 3 — tooling, web, e2e, BUG-074
 - [x] token-file refusals + script tests; doc snippet — verify: `go test ./internal/config/` — expect: ok, red first — docs: deploy/remote.md, specs/styrman/deploy.md
 - [x] `historySearch.ts` controller + vitest; SidePanelHistory uses it — verify: `(cd web && npm run check && npm run lint && npm test)` — expect: exit 0
-- [ ] run.sh SHOTS removal; run.mjs BUG-091 focus wait (must-fail run per rule e2e-checks-leave-the-suite) — verify: `bash web/e2e/run.sh` twice — expect: failed=0 both, no `DIAG BUG-091`, no new `/tmp/styrman-shots-*` left — docs: testing/styrman/README.md
+- [x] run.sh SHOTS removal; run.mjs BUG-091 focus wait (must-fail run per rule e2e-checks-leave-the-suite) — verify: `bash web/e2e/run.sh` twice — expect: failed=0 both, no `DIAG BUG-091`, no new `/tmp/styrman-shots-*` left — docs: testing/styrman/README.md
 - [x] ADR-088 (per-deployment cookie name); ingress CookiePrefix + generator + tests — verify: `(cd deploy/caddy/ingress && go test ./...)`; caddy image build + `caddy adapt` — expect: ok; adapted JSON names the new cookie
-- [ ] Checkpoint — expect: verify-commit.sh, Tier 2, e2e ×2 green — evidence: verifier log
+- [x] Checkpoint — expect: verify-commit.sh, Tier 2, e2e ×2 green — evidence: `testing/2026-10-05-verify-v1.42.4-full-r4.md` PASS (Tier 2 146/0/3; e2e 101/0/2 twice, no DIAG BUG-091), 2026-10-05
 ### Phase 4 — Done
-- [ ] reviewer + security over the range; docs lens; changes entry; bugs BUG-074/091 closed
-- [ ] `/preflight` v1.42.4
+- [x] reviewer + security over the range; docs lens; changes entry; bugs BUG-074/091 closed
+- [x] `/preflight` v1.42.4
 
 ## Risks
 Assumptions:
