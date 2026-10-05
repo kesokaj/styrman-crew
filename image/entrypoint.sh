@@ -384,6 +384,32 @@ mkdir -p /var/lib/docker-project
 # Check the ext4 image before mounting — a dirty journal from an ungraceful
 # shutdown (now less likely with the SIGTERM trap) is repaired, not tolerated.
 [ -f "${IMG}" ] && fsck.ext4 -p "${IMG}" >/dev/null 2>&1 || true
+# Grow the image to the project's Docker disk size (ADR-083): the server
+# recreates the container with a larger STYRMAN_DOCKER_DISK_GB, and this boot
+# applies it offline, before the mount. Never shrinks. Any failure leaves the
+# image as it was (a file grown but not resized still mounts at its old
+# size) and the next boot retries.
+if [ -f "${IMG}" ]; then
+    HAVE_BYTES=$(stat -c %s "${IMG}" 2>/dev/null || echo 0)
+    WANT_BYTES=$((DISK_GB * 1024 * 1024 * 1024))
+    if [ "${HAVE_BYTES}" -gt 0 ] && [ "${HAVE_BYTES}" -lt "${WANT_BYTES}" ]; then
+        log "growing docker image ${IMG} to ${DISK_GB}G"
+        AVAIL_KB=$(df -Pk "${HOME_DIR}/.dockerd" 2>/dev/null | awk 'NR==2{print $4}')
+        NEED_KB=$(( (WANT_BYTES - HAVE_BYTES) / 1024 ))
+        if [ -n "${AVAIL_KB}" ] && [ "${AVAIL_KB}" -lt "${NEED_KB}" ]; then
+            log "WARN: only ${AVAIL_KB}KiB free to grow the docker image by ${NEED_KB}KiB — DinD may fail on ENOSPC"
+        fi
+        # e2fsck: 0 = clean, 1 = errors corrected; 2 and up = not safe to resize.
+        e2fsck -f -p "${IMG}" >/dev/null 2>&1; FSCK_RC=$?
+        if [ "${FSCK_RC}" -gt 1 ]; then
+            log "WARN: docker image grow to ${DISK_GB}G failed at e2fsck (exit ${FSCK_RC}); keeping the current size"
+        elif ! runuser -u "${USERNAME}" -- truncate -s "${DISK_GB}G" "${IMG}"; then
+            log "WARN: docker image grow to ${DISK_GB}G failed at truncate; keeping the current size"
+        elif ! resize2fs "${IMG}" >/dev/null 2>&1; then
+            log "WARN: docker image grow to ${DISK_GB}G failed at resize2fs; the filesystem keeps its old size"
+        fi
+    fi
+fi
 if [ -f "${IMG}" ] && mount -o loop "${IMG}" /var/lib/docker-project; then
     STORAGE_DRIVER="overlay2"
     DATA_ROOT="/var/lib/docker-project"

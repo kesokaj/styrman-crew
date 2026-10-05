@@ -44,12 +44,17 @@ func plant(fd *fakeDocker, cfg *config.Config, running, lan bool) {
 	net := config.NetworkName(tProj)
 	fd.containers[name] = &fakeContainer{id: "id-" + name, name: name, image: fd.imageID, running: running,
 		binds: []string{cfg.ProjectWorkspace(tUser, tProj) + ":/home/x/projects/p"}, netName: net,
-		restart: "unless-stopped"}
+		restart: "unless-stopped",
+		// At the size an unlimited record asks for on the fake's host (16
+		// CPUs, 63853 MiB), so the ADR-083 resize recreate leaves it alone
+		// and each test sees only the recreate it is about.
+		nanoCPUs: 16e9, memory: 61696 << 20}
 	fd.networks[net] = &fakeNetwork{name: net, bridge: config.BridgeNameFor(net, lan)}
 }
 
 func opts(lan bool) RunOpts {
-	return RunOpts{Name: "p", Dir: "p", GuestUser: "x", Lan: func() (bool, error) { return lan, nil }}
+	return RunOpts{Name: "p", Dir: "p", GuestUser: "x", Lan: func() (bool, error) { return lan, nil },
+		Resources: func() (Resources, error) { return Resources{}, nil }}
 }
 
 // A STOPPED container on a lan- bridge, asked for sandbox: removed, the

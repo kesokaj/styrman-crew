@@ -8,6 +8,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/client"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -43,6 +44,8 @@ type dockerAPI interface {
 	NetworkList(ctx context.Context, options network.ListOptions) ([]network.Summary, error)
 	ImageInspect(ctx context.Context, imageID string, inspectOpts ...client.ImageInspectOption) (image.InspectResponse, error)
 	Ping(ctx context.Context) (types.Ping, error)
+	// Info: the host's CPU count and memory, for sizing projects (ADR-083).
+	Info(ctx context.Context) (system.Info, error)
 }
 
 // Compile-time proof that the real client satisfies the seam.

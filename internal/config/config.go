@@ -103,8 +103,6 @@ type Config struct {
 	HomeDir     string // LEGACY single-user home; migrated to HomesDir on boot
 	Image       string // runtime image for project containers
 	Runtime     string // docker runtime (mvm = Kata)
-	VCPUs       int    // per-project vCPU limit, 0 = Kata's default (STYRMAN_VCPUS)
-	MemoryMB    int    // per-project memory MiB, 0 = Kata's default (STYRMAN_MEMORY_MB)
 	Username    string // in-guest username; owns the shared home
 	UID, GID    int    // host uid/gid the guest user must match
 
@@ -170,8 +168,6 @@ func Load() (*Config, error) {
 		StateDir:    envOr("STYRMAN_STATE_DIR", "/var/lib/styrman"),
 		Image:       os.Getenv("STYRMAN_IMAGE"), // required — validated below
 		Runtime:     envOr("STYRMAN_RUNTIME", "mvm"),
-		VCPUs:       envIntOr("STYRMAN_VCPUS", 0),
-		MemoryMB:    envIntOr("STYRMAN_MEMORY_MB", 0),
 		dockerDisk:  envIntOr("STYRMAN_DOCKER_DISK_GB", 20),
 		// 8h (was 24h): an idle-stop only powers the VM off — workspace, home,
 		// tmux transcripts and the docker disk all persist, and the next attach
@@ -239,6 +235,9 @@ func Load() (*Config, error) {
 	// outside 5-500 GB fails closed like every other config check here,
 	// instead of sizing every new project's Docker disk silently (audit
 	// 2026-09-13).
+	for _, w := range removedEnvWarnings(os.Getenv) {
+		fmt.Fprintln(os.Stderr, w)
+	}
 	if c.dockerDisk < 5 || c.dockerDisk > 500 {
 		return nil, fmt.Errorf("STYRMAN_DOCKER_DISK_GB must be 5-500, got %d", c.dockerDisk)
 	}
@@ -321,7 +320,22 @@ func (c *Config) loadOverrides() {
 	}
 }
 
-// DockerDiskGB is the docker.img size for NEWLY created project VMs.
+// removedEnvWarnings names the server-wide sizing variables ADR-083 removed
+// that are still set: each project is sized by its own record now (the whole
+// host by default), so a leftover value is ignored, said out loud, and never
+// fatal — an old .env must not stop the server.
+func removedEnvWarnings(getenv func(string) string) []string {
+	var out []string
+	for _, k := range []string{"STYRMAN_VCPUS", "STYRMAN_MEMORY_MB"} {
+		if v := getenv(k); v != "" {
+			out = append(out, fmt.Sprintf("WARN: %s=%q is ignored — projects are sized per project now (Resources, ADR-083)", k, v))
+		}
+	}
+	return out
+}
+
+// DockerDiskGB is the Docker disk size a NEW project records at creation
+// (ADR-083); an existing project keeps its own.
 func (c *Config) DockerDiskGB() int {
 	c.opMu.RLock()
 	defer c.opMu.RUnlock()

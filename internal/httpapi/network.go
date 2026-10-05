@@ -32,9 +32,11 @@ import (
 // network and container. Home and workspace are bind mounts and survive; the
 // ADR-028 apt manifest replays installed packages.
 
-// lanRebuildTimeout bounds the synchronous stop+rebuild. startProject gives a
-// plain start 2 minutes and a rebuild is strictly more work.
-const lanRebuildTimeout = 3 * time.Minute
+// rebuildTimeout bounds a synchronous stop+rebuild: a mode change here, a
+// resource change in resources.go. startProject gives a plain start 2
+// minutes and a rebuild is strictly more work. The web client's 210 s
+// timeout on both PUTs is paired with it (BUG-022).
+const rebuildTimeout = 3 * time.Minute
 
 // lanView is GET /api/projects/{id}/network's body and PUT's reply.
 type lanView struct {
@@ -115,7 +117,7 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, errors.New("project is being deleted"))
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), lanRebuildTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), rebuildTimeout)
 	defer cancel()
 	// persist is the record write. netMu serializes it against
 	// deleteProject's record removal; it is always the INNER lock (the
@@ -225,9 +227,7 @@ func (s *Server) setProjectNetwork(w http.ResponseWriter, r *http.Request) {
 				fmt.Errorf("the project was stopped but the setting could not be saved, so the mode was NOT changed — start it to continue in the previous mode: %w", err))
 			return
 		}
-		if _, err := pr.EnsureRunning(ctx, orchestrator.RunOpts{
-			Name: rec.Name, Dir: rec.Dir, GuestUser: sp.profile.GuestUser(), Lan: lanOf(sp, p.ID),
-		}); err != nil {
+		if _, err := pr.EnsureRunning(ctx, runOptsFor(sp, rec, sp.profile.GuestUser())); err != nil {
 			// Container down, record ahead of it: the next start applies it.
 			res = fail(http.StatusInternalServerError,
 				fmt.Errorf("saved, but the project could not be restarted: %w — start it to apply the change", err))

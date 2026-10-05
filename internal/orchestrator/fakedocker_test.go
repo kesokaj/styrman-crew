@@ -14,6 +14,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -39,8 +40,10 @@ type fakeDocker struct {
 	imageID    string
 	fail       map[string]error
 	execExit   int
-	calls      []string
-	onCall     func(method string) // observe the orchestrator's state mid-call (not under f.mu)
+	// info is what Info returns: the host's size (ADR-083).
+	info   system.Info
+	calls  []string
+	onCall func(method string) // observe the orchestrator's state mid-call (not under f.mu)
 }
 
 type fakeContainer struct {
@@ -57,6 +60,11 @@ type fakeContainer struct {
 	// show afterwards.
 	restart      string
 	restartCount int
+	// nanoCPUs, memory and env are what ContainerCreate was given and what
+	// ContainerInspect reports back (HostConfig.Resources, Config.Env), so
+	// the sizing recreate (ADR-083) has something to compare.
+	nanoCPUs, memory int64
+	env              []string
 }
 
 type fakeNetwork struct {
@@ -71,6 +79,7 @@ func newFakeDocker() *fakeDocker {
 		networks:   map[string]*fakeNetwork{},
 		imageID:    "sha256:image-current",
 		fail:       map[string]error{},
+		info:       system.Info{NCPU: 16, MemTotal: 63853 << 20},
 	}
 }
 
@@ -126,8 +135,9 @@ func (f *fakeDocker) ContainerInspect(_ context.Context, id string) (container.I
 	resp := container.InspectResponse{ContainerJSONBase: &container.ContainerJSONBase{
 		ID: c.id, Image: c.image, State: &container.State{Running: c.running}, RestartCount: c.restartCount,
 		HostConfig: &container.HostConfig{Binds: append([]string(nil), c.binds...),
-			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(c.restart)}},
-	}}
+			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyMode(c.restart)},
+			Resources:     container.Resources{NanoCPUs: c.nanoCPUs, Memory: c.memory}},
+	}, Config: &container.Config{Env: append([]string(nil), c.env...)}}
 	if len(c.ips) > 0 {
 		resp.NetworkSettings = &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{}}
 		for n, ip := range c.ips {
@@ -148,6 +158,10 @@ func (f *fakeDocker) ContainerCreate(_ context.Context, cfg *container.Config, h
 	if hc != nil {
 		c.binds = hc.Binds
 		c.restart = string(hc.RestartPolicy.Name)
+		c.nanoCPUs, c.memory = hc.NanoCPUs, hc.Memory
+	}
+	if cfg != nil {
+		c.env = append([]string(nil), cfg.Env...)
 	}
 	if nc != nil {
 		for n := range nc.EndpointsConfig {
@@ -352,6 +366,15 @@ func (f *fakeDocker) Ping(_ context.Context) (types.Ping, error) {
 		return types.Ping{}, err
 	}
 	return types.Ping{APIVersion: "1.47"}, nil
+}
+
+func (f *fakeDocker) Info(_ context.Context) (system.Info, error) {
+	if err := f.record("Info()"); err != nil {
+		return system.Info{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.info, nil
 }
 
 var _ dockerAPI = (*fakeDocker)(nil)

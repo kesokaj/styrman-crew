@@ -37,6 +37,13 @@ type Project struct {
 	// policy — there is no root-side state to reconcile it against, so no
 	// timestamp and no derived state.
 	LanAccess bool `json:"lanAccess,omitempty"`
+	// CPUs, MemoryGiB and DiskGB are the project's size (ADR-083). CPUs and
+	// MemoryGiB 0 mean unlimited: the whole host. DiskGB is the Docker disk;
+	// 0 is a record from before ADR-083 and means "keep what the container
+	// has" — every project created since records the operator's default.
+	CPUs      int `json:"cpus,omitempty"`
+	MemoryGiB int `json:"memoryGiB,omitempty"`
+	DiskGB    int `json:"diskGB,omitempty"`
 }
 
 // nameRe accepts short kebab-case slugs. First char a letter so names are
@@ -242,6 +249,29 @@ func (s *Store) SetLanAccess(id string, on bool) error {
 	}
 	p := prev
 	p.LanAccess = on
+	s.projects[id] = p
+	if err := s.save(); err != nil {
+		s.projects[id] = prev // roll back (M20)
+		return err
+	}
+	return nil
+}
+
+// SetResources writes the project's size (ADR-083). Validation is the
+// caller's: the bounds depend on the host and on the container's current
+// disk, which the store does not know.
+func (s *Store) SetResources(id string, cpus, memoryGiB, diskGB int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	prev, ok := s.projects[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if prev.CPUs == cpus && prev.MemoryGiB == memoryGiB && prev.DiskGB == diskGB {
+		return nil
+	}
+	p := prev
+	p.CPUs, p.MemoryGiB, p.DiskGB = cpus, memoryGiB, diskGB
 	s.projects[id] = p
 	if err := s.save(); err != nil {
 		s.projects[id] = prev // roll back (M20)

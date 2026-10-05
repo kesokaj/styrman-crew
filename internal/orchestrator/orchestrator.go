@@ -35,6 +35,11 @@ type Orchestrator struct {
 	cfg    *config.Config
 	logger *slog.Logger
 
+	// hostMu guards host, the machine's size, read from the daemon on first
+	// need and kept once known (resources.go, ADR-083).
+	hostMu sync.Mutex
+	host   Host
+
 	mu        sync.Mutex             // guards projLocks
 	projLocks map[string]*sync.Mutex // per-project create/start serialization
 	activity  sync.Map               // project name → time.Time of last terminal activity
@@ -183,6 +188,19 @@ type RunOpts struct {
 	// old bridge with the record already saying otherwise (security review
 	// 2026-09-10, round 2). A nil Lan means sandbox, the closed default.
 	Lan func() (bool, error)
+	// Resources reads the project's requested size (ADR-083), under the lock
+	// for the same reason as Lan. It is REQUIRED: there is no closed default
+	// for a size, and "unlimited" would be the wrong guess for a project the
+	// user limited, so a nil Resources refuses the start (plan D18).
+	Resources func() (Resources, error)
+}
+
+// resources evaluates opts.Resources; nil is a refusal, never a default.
+func (r RunOpts) resources() (Resources, error) {
+	if r.Resources == nil {
+		return Resources{}, errNoResources
+	}
+	return r.Resources()
 }
 
 // lan evaluates opts.Lan, defaulting to sandbox.
@@ -274,9 +292,30 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 	if err != nil {
 		return "", fmt.Errorf("network mode: cannot read the project record, refusing to start on an unverified bridge: %w", err)
 	}
+	// The size is read here too, under the lock (ADR-083).
+	res, err := opts.resources()
+	if err != nil {
+		if errors.Is(err, errNoResources) {
+			return "", err
+		}
+		return "", fmt.Errorf("resources: cannot read the project record: %w", err)
+	}
+	host, err := o.Host(ctx)
+	if err != nil {
+		return "", err
+	}
 	name := config.ContainerName(project)
 	id := ""
 	insp, err := o.docker.ContainerInspect(ctx, name)
+	// want is decided from the container as it is NOW, before any recreate
+	// below removes it: a record from before ADR-083 (DiskGB 0) keeps the
+	// disk size its container was created with (plan D24).
+	var live *Live
+	if err == nil {
+		l := liveFrom(insp)
+		live = &l
+	}
+	want := o.WantSizing(host, res, live)
 	// Pre-ADR-027 containers bind only the home: after the workspace
 	// migration their ~/projects/<dir> would be an EMPTY dir inside the home
 	// mount — the project would look wiped. Recreate them once with the
@@ -337,6 +376,19 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 			err = errdefs.NotFound(fmt.Errorf("recreated"))
 		}
 	}
+	// Size (ADR-083): a STOPPED container created at another size than the
+	// record now asks for is rebuilt, the same shape and the same reason
+	// (stopped only, so live sessions are never killed) as the recreates
+	// above. Every container from before ADR-083 has no limits at all, so
+	// each existing project takes this once, on its next start (plan D7).
+	if err == nil && (insp.State == nil || !insp.State.Running) && live.Sizing != want {
+		o.logger.Info("recreating stopped container for a resource change",
+			"project", project, "from", live.Sizing, "to", want)
+		if rerr := o.docker.ContainerRemove(ctx, insp.ID, container.RemoveOptions{Force: true}); rerr != nil {
+			return "", fmt.Errorf("recreate for a resource change: %w", rerr)
+		}
+		err = errdefs.NotFound(fmt.Errorf("recreated"))
+	}
 	// Every path below hands the project home to Docker as a bind SOURCE:
 	// create passes it in Binds, and START re-resolves the stored, unresolved
 	// source on every start (verified on Engine 29.7.2) — so a symlink the
@@ -380,7 +432,18 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 				// recursion: on the second pass the network exists, so this
 				// branch cannot be taken again.
 				if o.recreateMissingNetwork(ctx, id, config.NetworkName(project), lan) {
-					return o.ensureRunningLocked(ctx, user, project, opts)
+					// The container is gone now, so the second pass cannot
+					// read its disk size: carry the one decided above into
+					// a record that has none (plan D24).
+					pinned := opts
+					pinned.Resources = func() (Resources, error) {
+						r, err := opts.resources()
+						if err == nil && r.DiskGB <= 0 {
+							r.DiskGB = want.DiskGB
+						}
+						return r, err
+					}
+					return o.ensureRunningLocked(ctx, user, project, pinned)
 				}
 				return "", fmt.Errorf("start %s: %w", name, err)
 			}
@@ -440,8 +503,9 @@ func (o *Orchestrator) ensureRunningLocked(ctx context.Context, user, project st
 			extraEnv: []string{
 				config.EnvProject + "=" + project,
 				config.EnvProjectDir + "=" + opts.Dir,
-				config.EnvDockerDisk + "=" + strconv.Itoa(o.cfg.DockerDiskGB()),
+				config.EnvDockerDisk + "=" + strconv.Itoa(want.DiskGB),
 			},
+			sizing: want,
 			labels: map[string]string{
 				config.LabelManaged: "true",
 				config.LabelProject: project,
@@ -762,7 +826,15 @@ func (o *Orchestrator) EnsureSetup(ctx context.Context, user, guestUser string) 
 		if err := realBelow(o.cfg.TenantDir(user), o.cfg.UserHome(user)); err != nil {
 			return "", fmt.Errorf("setup home: %w", err)
 		}
+		// The setup VM is unlimited too (plan D8); it runs no dockerd, so it
+		// has no disk size. An existing one is never resized: setup VMs are
+		// reaped after their max age and come back at the new size.
+		host, herr := o.Host(ctx)
+		if herr != nil {
+			return "", herr
+		}
 		id, err = o.create(ctx, createSpec{
+			sizing:    o.WantSizing(host, Resources{}, nil),
 			name:      config.SetupContainer(user),
 			netName:   config.SetupNetwork(user),
 			hostname:  "styrman-setup",
@@ -908,8 +980,9 @@ type createSpec struct {
 	workspaceDst  string
 	extraEnv      []string
 	labels        map[string]string
-	noRestart     bool // ephemeral (setup VM): don't auto-restart after reboot
-	lan           bool // ADR-067 network mode; always false for system VMs
+	noRestart     bool   // ephemeral (setup VM): don't auto-restart after reboot
+	lan           bool   // ADR-067 network mode; always false for system VMs
+	sizing        Sizing // ADR-083: NanoCPUs and Memory are the VM's size
 }
 
 // createBridgeNetwork is the ONLY place a styrman bridge network is created.
@@ -1077,13 +1150,12 @@ func (o *Orchestrator) create(ctx context.Context, spec createSpec) (string, err
 				return b
 			}(),
 			RestartPolicy: restartPolicy(spec.noRestart),
-			// Per-project sizing: 0 leaves Kata's own default (1 vCPU / 2 GB);
-			// the operator can cap/raise it via STYRMAN_VCPUS / STYRMAN_MEMORY_MB
-			// so project VMs aren't silently stuck on the runtime default (low
-			// finding). Kata reads these container limits to size the guest.
+			// Kata reads these limits to size the guest: it adds them to its
+			// own 1 vCPU / 2 GiB base, and an unset limit leaves the VM at
+			// that base. The whole host is spelled out (resources.go, ADR-083).
 			Resources: container.Resources{
-				NanoCPUs: int64(o.cfg.VCPUs) * 1_000_000_000,
-				Memory:   int64(o.cfg.MemoryMB) * 1024 * 1024,
+				NanoCPUs: spec.sizing.NanoCPUs,
+				Memory:   spec.sizing.MemBytes,
 			},
 		},
 		&network.NetworkingConfig{

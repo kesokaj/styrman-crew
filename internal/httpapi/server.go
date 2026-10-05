@@ -89,6 +89,39 @@ type modeRuntime interface {
 	WithProject(user, project string, fn func(orchestrator.Project))
 }
 
+// sizeRuntime is the Resources handler's read side of the orchestrator
+// (ADR-083): the host's size, a container's current size (without the
+// project lock — the dialog must not wait behind a boot), and the sizing a
+// request works out to. An interface for the same reason as modeRuntime.
+type sizeRuntime interface {
+	Host(ctx context.Context) (orchestrator.Host, error)
+	LiveSizing(ctx context.Context, project string) (orchestrator.Live, bool, error)
+	WantSizing(h orchestrator.Host, r orchestrator.Resources, live *orchestrator.Live) orchestrator.Sizing
+}
+
+// runOptsFor is the ONE place a project's RunOpts is built, so every start
+// path carries both reads the orchestrator requires under the project's lock:
+// the network mode and the size. RunOpts.Resources is required (a nil one
+// refuses the start), so a start path that built its own would fail on its
+// first start rather than run a limited project at the whole host (ADR-083,
+// plan D18; rule mechanism-reaches-every-caller).
+func runOptsFor(sp *userSpace, p project.Project, guest string) orchestrator.RunOpts {
+	return orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest,
+		Lan: lanOf(sp, p.ID), Resources: resourcesOf(sp, p.ID)}
+}
+
+// resourcesOf is the RunOpts.Resources read: the record's size as of the
+// moment the orchestrator sizes the container, like lanOf.
+func resourcesOf(sp *userSpace, id string) func() (orchestrator.Resources, error) {
+	return func() (orchestrator.Resources, error) {
+		p, err := sp.projects.Get(id)
+		if err != nil {
+			return orchestrator.Resources{}, err
+		}
+		return orchestrator.Resources{CPUs: p.CPUs, MemoryGiB: p.MemoryGiB, DiskGB: p.DiskGB}, nil
+	}
+}
+
 // lanOf is the RunOpts.Lan read for a project: the record's mode as of the
 // moment the orchestrator decides the bridge name, under the project's
 // lock, never a snapshot taken when the request began.
@@ -122,6 +155,7 @@ type Server struct {
 	stillAuthorized    func(email string) bool
 	browserReauthEvery time.Duration
 	mode               modeRuntime
+	size               sizeRuntime
 	tmux               *conversation.Manager
 	bridge             *terminal.Bridge
 	users              *userstore.Store
@@ -216,6 +250,7 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		orch:          orch,
 		guest:         orch,
 		mode:          orch,
+		size:          orch,
 		tmux:          conversation.NewManager(orch, cfg),
 		users:         users,
 		logger:        logger,
@@ -281,7 +316,7 @@ func (s *Server) ensureFor(ctx context.Context, user, projectID string) (contain
 		return "", "", "", err
 	}
 	guest := sp.profile.GuestUser()
-	id, err := wsBoot(ctx, s.orch, user, p.ID, orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest, Lan: lanOf(sp, p.ID)})
+	id, err := wsBoot(ctx, s.orch, user, p.ID, runOptsFor(sp, p, guest))
 	return id, guest, p.Dir, err
 }
 
@@ -493,6 +528,8 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	mux.HandleFunc("PATCH /api/projects/{project}", s.renameProject)
 	mux.HandleFunc("GET /api/projects/{project}/network", s.projectNetwork)
 	mux.HandleFunc("PUT /api/projects/{project}/network", s.setProjectNetwork)
+	mux.HandleFunc("GET /api/projects/{project}/resources", s.projectResources)
+	mux.HandleFunc("PUT /api/projects/{project}/resources", s.setProjectResources)
 	mux.HandleFunc("GET /api/settings/tools", s.toolDetails)
 	mux.HandleFunc("PATCH /api/settings/runtime", s.updateRuntime)
 	mux.HandleFunc("POST /api/settings/credentials/git", s.importGitCredential)
@@ -856,7 +893,9 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	p, err := sp.projects.Add(project.Project{Name: req.Name, CreatedAt: time.Now().UTC()})
+	// A new project records the operator's current Docker disk default, so a
+	// later change of that default never resizes it (ADR-083).
+	p, err := sp.projects.Add(project.Project{Name: req.Name, CreatedAt: time.Now().UTC(), DiskGB: s.cfg.DockerDiskGB()})
 	if err != nil {
 		writeErr(w, http.StatusConflict, err)
 		return
@@ -943,8 +982,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 			github:   req.GitHub,
 			attach:   func() bool { return s.orch.EnsureSelfAttached(u.Username, p.ID) },
 		}
-		containerID, err := s.orch.EnsureRunning(ctx, u.Username, p.ID,
-			orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: guest, Lan: lanOf(sp, p.ID)})
+		containerID, err := s.orch.EnsureRunning(ctx, u.Username, p.ID, runOptsFor(sp, p, guest))
 		if err != nil {
 			s.logger.Error("background project boot failed", "project", p.Name, "error", err)
 			s.bootFailed(ctx, spec)
@@ -1139,8 +1177,7 @@ func (s *Server) startProject(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	// Reuse sp from getProjectFor (N23: the old sp2, _ := s.space(...) ignored
 	// the error and could nil-deref).
-	if _, err := s.orch.EnsureRunning(ctx, u.Username, p.ID,
-		orchestrator.RunOpts{Name: p.Name, Dir: p.Dir, GuestUser: sp.profile.GuestUser(), Lan: lanOf(sp, p.ID)}); err != nil {
+	if _, err := s.orch.EnsureRunning(ctx, u.Username, p.ID, runOptsFor(sp, p, sp.profile.GuestUser())); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
