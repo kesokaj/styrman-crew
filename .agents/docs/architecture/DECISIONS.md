@@ -2852,7 +2852,7 @@ Kata's behaviour, measured on the NUC (Kata 3.31.0, Cloud Hypervisor, 2026-10-05
 - The memory math is measured on Cloud Hypervisor only. A host on the QEMU symlink (any host before `host-setup.sh` is re-run) may refuse starts at the full size. The updater does not run `host-setup.sh`, so the operator re-runs it after the release reaches each host; the GCP VM may refuse project starts until then (operator: "B sounds smarter.").
 - Kata's base memory (2048) is a constant in the server; a Kata upgrade that changes it makes starts fail loudly rather than truncate.
 
-## ADR-084: The server and the ingress are exempt from the OOM killer     (2026-10-05) — Accepted
+## ADR-084: The server and the ingress are exempt from the OOM killer     (2026-10-05) — Superseded by ADR-085
 
 **Context:** ADR-083 sized every project VM to the whole host and said memory is overcommitted by design. Its Consequences assumed that if a host ran out of memory, a project VM would be killed. The release security review of v1.42.0 measured otherwise on the NUC: cloud-hypervisor runs at `oom_score_adj -999` (inherited from containerd's shim), and `styrman-server` and Caddy run at 0. So a full-size VM exhausting memory gets the server and the ingress killed first, which takes the platform down for every tenant while the VMs keep running (`reviews/2026-10-05-security-v1.42.0-v1.41.1-f507278.md`, finding 1). The operator chose to ship v1.42.0 and fix this next ("go all approved").
 
@@ -2890,3 +2890,8 @@ Supersedes ADR-084 (never released: v1.42.1 was re-gated before its tag).
 - Under memory exhaustion the order is: host processes at 0 (sshd stays at -1000), then the largest -999 process, a VM.
 - The server and Caddy can still die if they themselves grow past the VMs, but their caps make that an in-cgroup OOM kill well before it.
 - The dockerd part needs the post-release `host-setup.sh` re-run, like ADR-083's Kata settings. Until then dockerd stays at -500.
+
+### ADR-085 amendment 1     (2026-10-05)
+
+ADR-085's Rejected list says raising the VMs' score is impossible because "the VMM is a child of the Kata shim on the host, out of the containerized server's reach". That premise is wrong (security review of v1.42.1, `reviews/2026-10-05-security-v1.42.1-2ba3f79-aa2f3b4.md`). `host-setup.sh` already installs the shim wrapper (`deploy/lib/kata-config.sh`, BUG-089). A wrapper that raised its own `oom_score_adj` before `exec` would hand that score to the shim and every VMM it starts. The VMs would then be the preferred victims, without the platform sharing their -999. This is not adopted in v1.42.2: it changes every VM's kill order and needs its own measurement. It is the cleaner alternative for a later release, and the -999 decision stands until then.
+

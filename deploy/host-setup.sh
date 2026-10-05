@@ -304,7 +304,7 @@ if ! docker image inspect "${RUNTIME_IMAGE}" >/dev/null 2>&1; then
         [ "$(stat -c %u /etc/styrman/gh-token)" = 0 ] && [ -z "$(find /etc/styrman/gh-token -perm /077 2>/dev/null)" ] \
             || { echo "FATAL: /etc/styrman/gh-token is not root-owned or is readable beyond root (chmod 600 it)"; exit 1; }
         SECRET_ARGS=(--secret "id=gh_token,src=/etc/styrman/gh-token")
-    else echo "FATAL: no GitHub token for the styrman-harness download — export GH_TOKEN in your own shell and run sudo --preserve-env=GH_TOKEN (never sudo GH_TOKEN=…, which lands in sudo's log), use styrman-ctl install --gh-token-file, or install /etc/styrman/gh-token (root, 600) first"; exit 1; fi
+    else echo "FATAL: no GitHub token for the styrman-harness download — write it through stdin first: gh auth token | sudo install -D -m 600 /dev/stdin /etc/styrman/gh-token (never sudo GH_TOKEN=… or sudo --preserve-env, both land in sudo's log), or use styrman-ctl install --gh-token-file"; exit 1; fi
     docker build -t "${RUNTIME_IMAGE}" "${SECRET_ARGS[@]}" \
         --build-arg STYRMAN_VERSION="${SETUP_VERSION}" \
         "${REPO_ROOT}/image" \

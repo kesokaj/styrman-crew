@@ -45,7 +45,7 @@ const check = async (label, fn) => {
       const shown = await page
         .locator('[role="alert"], [role="status"]')
         .allInnerTexts();
-      if (shown.length) console.log(`  shown on the page: ${JSON.stringify(shown).slice(0, 600)}`);
+      if (shown.length) console.log(`  shown on the main page: ${JSON.stringify(shown).slice(0, 600)}`);
     } catch {
       /* nothing to add */
     }

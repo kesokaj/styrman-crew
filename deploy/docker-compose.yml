@@ -90,6 +90,9 @@ services:
       - net.ipv4.ip_forward=0
     environment:
       - STYRMAN_ADDR=0.0.0.0:8080
+      # Go's soft memory limit, under the 4g mem_limit below (ADR-085): the GC
+      # runs hard near it instead of letting the kernel OOM-kill the server.
+      - GOMEMLIMIT=3GiB
       - STYRMAN_AUTH=header
       - STYRMAN_ALLOWED_EMAILS=${STYRMAN_ALLOWED_EMAILS}
       - STYRMAN_USER=${STYRMAN_USER}

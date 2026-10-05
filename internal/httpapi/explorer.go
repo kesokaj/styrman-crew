@@ -432,8 +432,17 @@ func (s *Server) listHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"transcripts": out})
 }
 
+// searchConcurrency is how many history searches the whole server runs at
+// once. A search holds several MiB per transcript (the 4 MiB tail and its
+// cleaned, lowered copies); under the server's 4g memory cap (ADR-085),
+// hundreds in flight against guest-planted transcripts would OOM-kill the
+// server for every tenant (security review of v1.42.1, finding 1).
+const searchConcurrency = 4
+
 // searchHistory greps all of the project's transcripts (agent sessions
-// included — they're raw PTY captures) for ?q=, case-insensitive.
+// included — they're raw PTY captures) for ?q=, case-insensitive. Past
+// searchConcurrency searches in flight it answers 429 rather than queue: a
+// queue would hold the requests, and their memory, anyway.
 func (s *Server) searchHistory(w http.ResponseWriter, r *http.Request) {
 	u, sp, p, err := s.getProjectFor(r)
 	if err != nil {
@@ -443,6 +452,13 @@ func (s *Server) searchHistory(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	if len(q) > 256 {
 		writeErr(w, http.StatusBadRequest, errors.New("query too long"))
+		return
+	}
+	select {
+	case s.searchSlots <- struct{}{}:
+		defer func() { <-s.searchSlots }()
+	default:
+		writeErr(w, http.StatusTooManyRequests, errors.New("too many history searches in progress — try again in a moment"))
 		return
 	}
 	matches, err := history.Search(r.Context(), s.cfg.ProjectHome(u.Username, p.ID), p.ID, q)

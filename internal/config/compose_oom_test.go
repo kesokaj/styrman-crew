@@ -58,5 +58,10 @@ func TestComposeProtectsServerAndIngressFromTheOOMKiller(t *testing.T) {
 		if !has("mem_limit: " + memLimits[name]) {
 			t.Errorf("service %q: want `mem_limit: %s`", name, memLimits[name])
 		}
+		// The Go runtime's soft limit sits under the server's cap, so the GC
+		// works hard before the kernel kills (security review of v1.42.1).
+		if name == "styrman" && !strings.Contains(string(src), "      - GOMEMLIMIT=3GiB\n") {
+			t.Errorf("service %q: want `GOMEMLIMIT=3GiB` in its environment", name)
+		}
 	}
 }

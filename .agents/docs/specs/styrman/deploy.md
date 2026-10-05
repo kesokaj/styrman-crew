@@ -253,14 +253,14 @@ omitted, Caddy uses HTTP-01 ACME challenges, which cover the base app and the au
 ```bash
 # host-setup.sh's step 7 builds the runtime image, which downloads the sh-agent
 # release from the private styrman-harness repo (ADR-074): on a fresh host no
-# /etc/styrman/gh-token exists yet, so pass a token that reads that repo.
-# This form works but puts the token on a sudo-logged command line; prefer
-# `sudo deploy/styrman-ctl install --gh-token-file <600 file>` (the token
-# travels as a file — `styrman-ctl` exports GH_TOKEN for host-setup.sh in its
-# own process), or `sudo --preserve-env=GH_TOKEN bash deploy/host-setup.sh`
-# with GH_TOKEN exported beforehand, for a bare host-setup.sh run.
-export GH_TOKEN=$(gh auth token)                                    # in your own shell, never on the sudo line
-sudo --preserve-env=GH_TOKEN bash deploy/host-setup.sh --user $USER  # also seeds deploy/.env identity values
+# /etc/styrman/gh-token exists yet, so give it a token that reads that repo.
+# Never through sudo's argv or environment: `sudo GH_TOKEN=…` and
+# `sudo --preserve-env=GH_TOKEN` both put the value in sudo's log
+# (`ENV=GH_TOKEN=…`, checked on dave 2026-10-05). Write the root-only file
+# host-setup.sh reads, through stdin, or use
+# `sudo deploy/styrman-ctl install --gh-token-file <600 file>`.
+gh auth token | sudo install -D -m 600 /dev/stdin /etc/styrman/gh-token
+sudo bash deploy/host-setup.sh --user $USER   # also seeds deploy/.env identity values
 vi deploy/.env                                # fill: BASE_DOMAIN, GOOGLE_CLIENT_ID/SECRET,
                                               #       ADMIN_EMAIL, STYRMAN_ALLOWED_EMAILS
                                               #       (+ optional CLOUDFLARE_API_TOKEN,
@@ -338,10 +338,10 @@ commit to git."
   docker disk with no safety net. The UI's "type delete to confirm" dialog
   is the only gate; there is nothing to restore from afterward.
 - **Rebuilding a host** is: clone the repo, `sudo deploy/styrman-ctl install
-  --gh-token-file <600 file>` (the token travels as a file; or GH_TOKEN
-  exported in your own shell and passed with `sudo --preserve-env=GH_TOKEN`;
-  never `sudo GH_TOKEN=…`, which puts the token on a sudo-logged command line
-  — see "Bring-up" above), fill in a fresh `deploy/.env`, bring the stack up. A
+  --gh-token-file <600 file>` (the token travels as a file; or written
+  to `/etc/styrman/gh-token` through stdin first; never through sudo's argv
+  or environment — `sudo GH_TOKEN=…` and `--preserve-env` both land in
+  sudo's log — see "Bring-up" above), fill in a fresh `deploy/.env`, bring the stack up. A
   GCP host: `deploy/gcp/vm.sh create` + `deploy/gcp/install.sh` (`gcp.md`). There is no state to restore — only project workspaces that
   were actually committed and pushed come back; anything left uncommitted
   in a project's workspace or home is gone with the old host.

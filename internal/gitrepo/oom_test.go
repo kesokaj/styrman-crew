@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -44,5 +45,32 @@ func TestGitStillRunsWithTheReset(t *testing.T) {
 	}
 	if !IsRepo(context.Background(), ws) {
 		t.Fatal("not a repo after EnsureRepo")
+	}
+}
+
+// git() itself gives its child the default score back. The test raises its
+// own score (no privilege needed) so a child that kept the inherited value
+// is visible; a fake git on PATH records the score it ends up with, after a
+// pause long enough for the reset that follows Start to land.
+func TestGitResetsItsChildsOOMScore(t *testing.T) {
+	if err := os.WriteFile("/proc/self/oom_score_adj", []byte("300"), 0); err != nil {
+		t.Skipf("cannot raise this process's oom_score_adj: %v", err)
+	}
+	bin := t.TempDir()
+	rec := filepath.Join(t.TempDir(), "adj")
+	fake := "#!/bin/sh\nsleep 0.3\ncat /proc/self/oom_score_adj > '" + rec + "'\necho /tmp/fake.git\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	if _, err := gitDir(context.Background(), t.TempDir()); err != nil {
+		t.Fatalf("gitDir through the fake git: %v", err)
+	}
+	got, err := os.ReadFile(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(got)) != "0" {
+		t.Fatalf("git's child ran at oom_score_adj %q, want 0 (the caller is at 300)", strings.TrimSpace(string(got)))
 	}
 }

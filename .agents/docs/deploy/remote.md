@@ -79,13 +79,14 @@ Run both once, after deploying the next tag:
 sudo bash deploy/firewall/install.sh    # from /opt/styrman at the deployed tag
 # a token that reads kesokaj/styrman-harness: host-setup.sh's runtime-image build
 # downloads the sh-agent release with it (ADR-074) and no /etc/styrman/gh-token
-# exists yet on a fresh host. This form works but puts the token on a
-# sudo-logged command line; prefer
-# `sudo deploy/styrman-ctl install --gh-token-file <600 file>` (the token
-# travels as a file), or `sudo --preserve-env=GH_TOKEN bash deploy/host-setup.sh`
-# with GH_TOKEN exported beforehand, for a bare host-setup.sh run.
-export GH_TOKEN=$(gh auth token)
-sudo --preserve-env=GH_TOKEN bash deploy/host-setup.sh --user $USER
+# exists yet on a fresh host. The token must never reach sudo's argv or its
+# environment: `sudo GH_TOKEN=…` and `sudo --preserve-env=GH_TOKEN` both put
+# the value in sudo's log (`ENV=GH_TOKEN=…`, checked on dave 2026-10-05).
+# Write it to the root-only file host-setup.sh reads, through stdin (the log
+# then records the command, not the value), or use
+# `sudo deploy/styrman-ctl install --gh-token-file <600 file>`.
+gh auth token | sudo install -D -m 600 /dev/stdin /etc/styrman/gh-token
+sudo bash deploy/host-setup.sh --user $USER
 ```
 
 `install.sh` now also ENABLES `styrman-firewall.service` at boot (`WantedBy=

@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strconv"
@@ -60,9 +61,11 @@ func git(ctx context.Context, ws string, args ...string) (string, error) {
 	// This git reads a guest-writable .git/config, and an oversized one can
 	// make it allocate gigabytes: give it the default 0 back at once, so the
 	// kernel can kill it before a project VM (security review of v1.42.1,
-	// high). A failed write is ignored: the server's compose memory cap still
-	// bounds git, and the moment before the write lands.
-	_ = setOOMScoreAdj(cmd.Process.Pid, 0)
+	// high). A failed write is logged, not fatal: the server's compose memory
+	// cap still bounds git, and the moment before the write lands.
+	if err := setOOMScoreAdj(cmd.Process.Pid, 0); err != nil {
+		slog.Warn("could not give host-side git the default OOM score; the server's memory cap still bounds it", "error", err)
+	}
 	err := cmd.Wait()
 	out := buf.Bytes()
 	if err != nil {

@@ -180,6 +180,10 @@ type Server struct {
 	// also guard are gone). Never held across a rebuild — see network.go.
 	netMu sync.Mutex
 
+	// searchSlots bounds history searches server-wide (searchConcurrency);
+	// see searchHistory.
+	searchSlots chan struct{}
+
 	// creds is the credential broker's store (ADR-030); nil disables the
 	// onboarding endpoints. Set by main after construction.
 	creds *credstore.Store
@@ -256,6 +260,7 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		logger:        logger,
 		spaces:        map[string]*userSpace{},
 		deleting:      map[string]bool{},
+		searchSlots:   make(chan struct{}, searchConcurrency),
 		deleteErrs:    map[string]string{},
 		provisionErrs: map[string]string{},
 
