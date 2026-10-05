@@ -2980,3 +2980,9 @@ Whether a request is a tunnel (preview, link, shared, proxy — uncharged, uncap
 ### ADR-086 amendment 3     (2026-10-05)
 
 authGuard joins amendment 2: its link exemption (ingress token only, no identity) and its preview/shared exception for non-styrman Google users are decided from the route the request takes (`routePath`), not its decoded path (security addendum 07f5517..561c23b, finding 1).
+
+## ADR-089: dave's release-signing key is rotated to SHA256:2bCW…     (2026-10-05) — Accepted
+Amends ADR-082 (which key signs tags cut from this machine).
+**Context:** `~/.ssh/id_ed25519` on dave, the key `/preflight` signs release tags with, was replaced at 17:19 on 2026-10-05; the original key (`SHA256:5HpYQJjpG+…`) no longer exists on dave. v1.42.4 was signed with the new key and dave's updater refused it ("signature"), since its `allowed_signers` listed only the original (BUG record of 2026-10-05).
+**Decision:** The operator replaced dave's `/etc/styrman/allowed_signers` with the new key's line (`ostling.simon@gmail.com ssh-ed25519 …`, `SHA256:2bCWnLoMXNQ3NNSBL6F0TXb4p7aqjHR9DLWIYhca548`), operator: "do it" (2026-10-05). Tags cut from this machine are signed with that key from v1.42.4 on. The Mac key's status (ADR-082) is unchanged.
+**Consequences:** Every other host deploys a v1.42.4+ tag only once its own `allowed_signers` lists the new key: the GCP VM's list (ADR-082: the original key and the Mac key) needs the line added, an operator step. The original key can no longer sign; a tag signed by it elsewhere still verifies only where it is listed.

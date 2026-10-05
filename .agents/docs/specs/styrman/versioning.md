@@ -280,9 +280,10 @@ version:
   `/etc/styrman/allowed_signers` allowlist — a PGP-signed tag is refused
   outright, not merely unpinned (ADR-051). The keys a host trusts are exactly
   the ones in its `allowed_signers`; an updater refuses a tag signed by a key
-  its host does not list. Two keys sign release tags (ADR-082): the original
-  release signer (`SHA256:5HpYQJjpG+…`), which signs every tag cut by
-  `/preflight` on the NUC and which every host lists, and a second SSH key
+  its host does not list. Two keys sign release tags (ADR-082): the NUC's
+  release signer — `SHA256:2bCWnLoM…` since v1.42.4 (ADR-089; the original
+  `SHA256:5HpYQJjpG+…` signed every tag before it and is gone from the NUC),
+  which signs every tag cut by `/preflight` on the NUC — and a second SSH key
   (`SHA256:XeeDl8Y8…`, "the Mac key"), which signed v1.39.0. The GCP VM lists
   both; whether the NUC lists the second has not been checked. A host that
   does not list a tag's signer stays on its version, and Settings shows

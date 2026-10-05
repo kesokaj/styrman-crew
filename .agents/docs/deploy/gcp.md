@@ -81,7 +81,9 @@ disk (about USD 20/month). Stop it when idle.
      and the second SSH key that signed the v1.39.0 tag (`SHA256:XeeDl8Y8…`,
      "the Mac key"). Both are release signers by decision (ADR-082); see
      also `.agents/docs/handoffs/2026-09-22-vertex-ai-and-final.md`. An
-     updater refuses a tag signed by a key its host does not list.
+     updater refuses a tag signed by a key its host does not list. Since
+     v1.42.4 the NUC signs with a rotated key (`SHA256:2bCWnLoM…`, ADR-089),
+     which the VM's list must gain before it takes v1.42.4 or later.
 3. On the Google OAuth client (console → APIs & Services → Credentials),
    add the redirect URI
    `https://auth.<BASE_DOMAIN>/oauth2/google/authorization-code-callback`.
