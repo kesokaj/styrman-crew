@@ -60,8 +60,30 @@ func TestComposeProtectsServerAndIngressFromTheOOMKiller(t *testing.T) {
 		}
 		// The Go runtime's soft limit sits under the server's cap, so the GC
 		// works hard before the kernel kills (security review of v1.42.1).
-		if name == "styrman" && !strings.Contains(string(src), "      - GOMEMLIMIT=3GiB\n") {
+		if name == "styrman" && !strings.Contains(serviceText(string(src), name), "      - GOMEMLIMIT=3GiB\n") {
 			t.Errorf("service %q: want `GOMEMLIMIT=3GiB` in its environment", name)
 		}
 	}
+}
+
+// serviceText is the text of one top-level compose service, from its
+// two-space-indented key to the next one.
+func serviceText(src, name string) string {
+	start := strings.Index(src, "\n  "+name+":\n")
+	if start < 0 {
+		return ""
+	}
+	rest := src[start+1:]
+	lines := strings.SplitAfter(rest, "\n")
+	out := lines[0]
+	for _, l := range lines[1:] {
+		if strings.HasPrefix(l, "  ") && !strings.HasPrefix(l, "   ") && strings.HasSuffix(strings.TrimSpace(l), ":") {
+			break
+		}
+		if l != "" && l != "\n" && !strings.HasPrefix(l, " ") && !strings.HasPrefix(l, "#") {
+			break
+		}
+		out += l
+	}
+	return out
 }

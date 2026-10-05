@@ -79,13 +79,15 @@ Run both once, after deploying the next tag:
 sudo bash deploy/firewall/install.sh    # from /opt/styrman at the deployed tag
 # a token that reads kesokaj/styrman-harness: host-setup.sh's runtime-image build
 # downloads the sh-agent release with it (ADR-074) and no /etc/styrman/gh-token
-# exists yet on a fresh host. The token must never reach sudo's argv or its
-# environment: `sudo GH_TOKEN=…` and `sudo --preserve-env=GH_TOKEN` both put
-# the value in sudo's log (`ENV=GH_TOKEN=…`, checked on dave 2026-10-05).
-# Write it to the root-only file host-setup.sh reads, through stdin (the log
-# then records the command, not the value), or use
-# `sudo deploy/styrman-ctl install --gh-token-file <600 file>`.
-gh auth token | sudo install -D -m 600 /dev/stdin /etc/styrman/gh-token
+# exists yet on a fresh host. That file is ALSO the auto-updater's root
+# token, so it holds a FINE-GRAINED, read-only token (Contents: Read on
+# kesokaj/styrman-crew and kesokaj/styrman-harness, an expiry), never your
+# full-scope `gh` login token. Save it to a 600 file you own, then hand sudo
+# the FILE: the value must never reach sudo's argv or environment
+# (`sudo GH_TOKEN=…` and `sudo --preserve-env=GH_TOKEN` both log it,
+# `ENV=GH_TOKEN=…`, checked on dave 2026-10-05). An existing host already has
+# the file: re-running host-setup.sh needs no token step at all.
+test -s ~/fine-grained-token && sudo install -D -m 600 -o root -g root ~/fine-grained-token /etc/styrman/gh-token
 sudo bash deploy/host-setup.sh --user $USER
 ```
 

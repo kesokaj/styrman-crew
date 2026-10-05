@@ -454,13 +454,30 @@ func (s *Server) searchHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("query too long"))
 		return
 	}
+	// One search per user, then a server-wide slot: a single tenant can
+	// hold at most one of the searchConcurrency slots, so it cannot lock
+	// the others out.
+	s.searchMu.Lock()
+	if s.searchBusy[u.Username] {
+		s.searchMu.Unlock()
+		writeErr(w, http.StatusTooManyRequests, errors.New("a search of yours is still running — try again when it finishes"))
+		return
+	}
 	select {
 	case s.searchSlots <- struct{}{}:
-		defer func() { <-s.searchSlots }()
 	default:
+		s.searchMu.Unlock()
 		writeErr(w, http.StatusTooManyRequests, errors.New("too many history searches in progress — try again in a moment"))
 		return
 	}
+	s.searchBusy[u.Username] = true
+	s.searchMu.Unlock()
+	defer func() {
+		s.searchMu.Lock()
+		delete(s.searchBusy, u.Username)
+		s.searchMu.Unlock()
+		<-s.searchSlots
+	}()
 	matches, err := history.Search(r.Context(), s.cfg.ProjectHome(u.Username, p.ID), p.ID, q)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)

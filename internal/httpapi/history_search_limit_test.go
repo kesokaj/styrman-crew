@@ -46,3 +46,34 @@ func TestHistorySearchIsLimitedServerWide(t *testing.T) {
 		t.Fatalf("a finished search did not give its slot back: %d of %d in use", len(n.s.searchSlots), cap(n.s.searchSlots))
 	}
 }
+
+// One user holds at most one slot: a second search of theirs while one is
+// in flight is 429, so a single tenant cannot take every slot and lock the
+// others out (review of v1.42.1..ef22f5c, low).
+func TestHistorySearchIsOnePerUser(t *testing.T) {
+	n := newNetHarness(t)
+	path := "/api/projects/" + n.pid + "/history/search?q=needle"
+	user := identity.DeriveUsername(n.admin)
+	n.s.searchMu.Lock()
+	n.s.searchBusy[user] = true // a search of theirs in flight
+	n.s.searchMu.Unlock()
+	w := doAs(t, n.h, n.admin, http.MethodGet, path, "")
+	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "yours") {
+		t.Fatalf("a second search by the same user: %d %s, want 429", w.Code, w.Body.String())
+	}
+	if len(n.s.searchSlots) != 0 {
+		t.Fatalf("a refused search took a slot: %d in use", len(n.s.searchSlots))
+	}
+	n.s.searchMu.Lock()
+	delete(n.s.searchBusy, user)
+	n.s.searchMu.Unlock()
+	if w := doAs(t, n.h, n.admin, http.MethodGet, path, ""); w.Code != http.StatusOK {
+		t.Fatalf("after theirs finished: %d %s", w.Code, w.Body.String())
+	}
+	n.s.searchMu.Lock()
+	busy := n.s.searchBusy[user]
+	n.s.searchMu.Unlock()
+	if busy {
+		t.Fatal("a finished search left its user marked busy")
+	}
+}

@@ -183,6 +183,10 @@ type Server struct {
 	// searchSlots bounds history searches server-wide (searchConcurrency);
 	// see searchHistory.
 	searchSlots chan struct{}
+	// searchBusy marks users with a search in flight (one each); searchMu
+	// guards it.
+	searchMu   sync.Mutex
+	searchBusy map[string]bool
 
 	// creds is the credential broker's store (ADR-030); nil disables the
 	// onboarding endpoints. Set by main after construction.
@@ -261,6 +265,7 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		spaces:        map[string]*userSpace{},
 		deleting:      map[string]bool{},
 		searchSlots:   make(chan struct{}, searchConcurrency),
+		searchBusy:    map[string]bool{},
 		deleteErrs:    map[string]string{},
 		provisionErrs: map[string]string{},
 
