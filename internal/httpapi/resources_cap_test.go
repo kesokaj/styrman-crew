@@ -174,3 +174,32 @@ func TestTheAdminSetsTheCapsInRuntimeSettings(t *testing.T) {
 		t.Errorf("GET /api/settings lacks the cap: %s", w.Body.String())
 	}
 }
+
+// The Settings page re-sends every field: an unchanged value is "keep", so
+// an idle the environment set below the API's 10m floor, or a stored cap
+// above a host that has since shrunk, never blocks saving another field
+// (plan D22; review of v1.42.3..5a8afa1, finding 1).
+func TestARuntimeSaveIgnoresUnchangedOutOfRangeValues(t *testing.T) {
+	n, _, _ := resHarness(t)
+	if err := n.s.cfg.SetOperator(0, 5*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	disk := n.s.cfg.DockerDiskGB()
+	body := fmt.Sprintf(`{"dockerDiskGB":%d,"idleTimeout":"5m0s","userMaxCpus":16,"userMaxMemoryGiB":0}`, disk)
+	if w := doAs(t, n.h, n.admin, http.MethodPatch, "/api/settings/runtime", body); w.Code != http.StatusOK {
+		t.Fatalf("cap save with an env idle of 5m: %d %s", w.Code, w.Body.String())
+	}
+	if c, _ := n.s.cfg.UserCaps(); c != 16 || n.s.cfg.IdleTimeoutD() != 5*time.Minute {
+		t.Fatalf("caps %d idle %s", c, n.s.cfg.IdleTimeoutD())
+	}
+	// The host shrinks below the stored cap; a disk change still saves.
+	n.s.size.(*fakeSize).host = orchestrator.Host{CPUs: 8, MemMiB: 63853}
+	body = `{"dockerDiskGB":30,"idleTimeout":"5m0s","userMaxCpus":16,"userMaxMemoryGiB":0}`
+	if w := doAs(t, n.h, n.admin, http.MethodPatch, "/api/settings/runtime", body); w.Code != http.StatusOK || n.s.cfg.DockerDiskGB() != 30 {
+		t.Fatalf("disk save with a stored cap above the host: %d %s", w.Code, w.Body.String())
+	}
+	// A CHANGED out-of-range value is still refused.
+	if w := doAs(t, n.h, n.admin, http.MethodPatch, "/api/settings/runtime", `{"idleTimeout":"6m"}`); w.Code != http.StatusBadRequest {
+		t.Fatalf("a changed idle of 6m: %d, want 400", w.Code)
+	}
+}

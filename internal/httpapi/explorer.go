@@ -624,6 +624,24 @@ func (s *Server) updateRuntime(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	// The Settings page sends every field on every save. A value equal to
+	// the current one is "keep", never re-validated, so a setting that came
+	// from the environment outside the API's range (an idle of 5m, a cap
+	// above a host that has since shrunk) never blocks a change to another
+	// one (plan D22; review of v1.42.3..5a8afa1, finding 1).
+	if body.DockerDiskGB == s.cfg.DockerDiskGB() {
+		body.DockerDiskGB = 0
+	}
+	if d, err := time.ParseDuration(body.IdleTimeout); err == nil && d == s.cfg.IdleTimeoutD() {
+		body.IdleTimeout = ""
+	}
+	curCPUs, curMem := s.cfg.UserCaps()
+	if v := body.UserMaxCPUs; v != nil && *v == curCPUs {
+		body.UserMaxCPUs = nil
+	}
+	if v := body.UserMaxMemoryGiB; v != nil && *v == curMem {
+		body.UserMaxMemoryGiB = nil
+	}
 	if body.UserMaxCPUs != nil || body.UserMaxMemoryGiB != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()

@@ -94,8 +94,8 @@ sudo bash deploy/firewall/install.sh    # from /opt/styrman at the deployed tag
   IFS= read -rsp 'token: ' t && printf '%s\n' "$t" > ~/fine-grained-token); echo
 # Install it only when the host has no non-empty one yet (never overwrite the
 # updater's), never an empty one; remove the plaintext copy once installed.
-if sudo test -s /etc/styrman/gh-token; then echo "a token is already installed; left as is"
-elif ! test -s ~/fine-grained-token; then echo "~/fine-grained-token is missing or empty — nothing installed" >&2
+if sudo grep -q '[^[:space:]]' /etc/styrman/gh-token 2>/dev/null; then echo "a token is already installed; left as is"
+elif ! grep -q '[^[:space:]]' ~/fine-grained-token 2>/dev/null; then echo "~/fine-grained-token is missing or empty — nothing installed" >&2
 elif ! sudo install -D -m 600 -o root -g root ~/fine-grained-token /etc/styrman/gh-token; then echo "install failed — nothing installed" >&2
 elif ! shred -u ~/fine-grained-token; then echo "installed, but removing ~/fine-grained-token failed — delete it by hand" >&2
 fi

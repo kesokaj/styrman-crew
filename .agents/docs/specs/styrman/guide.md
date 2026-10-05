@@ -164,7 +164,18 @@ selections before a keypress can land — the runtime image's tmux
    the project: CPU and Memory are each an "Unlimited" checkbox (the
    default, the whole host) or a number; Docker disk is a number, grow
    only; a "Running at its previous size" line shows while a saved size is
-   not yet in force; Save restarts a running project. See `api.md`
+   not yet in force; Save restarts a running project. For a non-admin owner
+   the checkbox reads "Unlimited (up to N)" and a project starts at most at
+   the admin cap (ADR-087; the stored record is not rewritten, so raising
+   the cap restores the wish; admins are not capped; disk and the setup VM
+   are not capped). Server-wide, every API request reserves its worst-case
+   memory from a 1 GiB budget (503 `server busy` when it does not fit,
+   ADR-086) and one user holds at most half of each file/history slot pool
+   (429) — see `api.md` "Load limits". Session cookies are named
+   `AUTHP<8 hex of sha256(base domain)>_*` per deployment, and the preview
+   and public-app blocks strip every deployment's portal cookies, legacy
+   names included, before proxying into a guest app (ADR-088, BUG-074).
+   See `api.md`
    (`/api/projects/{id}/resources`) and `deploy.md` for the mechanics.
    The sidebar shows per-project GIT BADGES (branch, amber ±N when
    dirty — one batched /api/git/summary call). One shared listProjects
@@ -650,7 +661,7 @@ rotated token, or a tool signed into inside a project instead of at setup).
   DATABASE_URL, …); "Import from a project" is marked optional (setup
   already auto-syncs, ADR-034) — theme (Light / Dark / System), and —
   admins only — LIVE runtime tunables: idle-stop timeout (applies to the
-  reaper immediately) and "Default Docker disk for new projects" (20 GB; recorded into each project at creation, ADR-083), persisted
+  reaper immediately), "Default Docker disk for new projects" (20 GB; recorded into each project at creation, ADR-083), and the admin cap on non-admin owners' projects (ADR-087: max CPUs and max memory GiB per project, 0 = half the host), persisted
   in `StateDir/settings.json` over the env defaults. (The user-access card
   was removed in v1.3 — access = env + admin API.) An admin's `DELETE
   /api/settings/users/{email}` is TERMINAL revocation only (TODO close-out

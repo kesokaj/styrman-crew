@@ -113,7 +113,9 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
 - Per-project sizing (ADR-083): each project record carries `cpus`,
   `memoryGiB` (0 = unlimited = the whole host) and `diskGB`, edited via
   `GET/PUT /api/projects/{id}/resources` (sidebar "Resources…"); a size change
-  or a pre-ADR-083 record rebuilds the container on (re)start. `STYRMAN_VCPUS`/
+  or a pre-ADR-083 record rebuilds the container on (re)start. A non-admin
+  owner's project starts at most at the admin cap (`userMaxCpus`/
+  `userMaxMemoryGiB`, ADR-087; 0 = half the host). `STYRMAN_VCPUS`/
   `STYRMAN_MEMORY_MB` are removed. Host side, `host-setup.sh` pins Kata to
   Cloud Hypervisor and enables memory reclaim; the updater never runs it, so
   re-run it by hand per host (`.agents/docs/specs/styrman/deploy.md`).

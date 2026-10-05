@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -175,5 +177,87 @@ func TestTheBodyDeadlineEndsWithTheBody(t *testing.T) {
 	if resp.StatusCode != http.StatusNoContent {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("got %d %s", resp.StatusCode, b)
+	}
+}
+
+// Tunnels into a guest app (preview, link, shared, proxy) are never charged:
+// a full budget must not 503 them.
+func TestTunnelsAreNotCharged(t *testing.T) {
+	defer func(d time.Duration) { budgetWait = d }(budgetWait)
+	budgetWait = 50 * time.Millisecond
+	n := newNetHarness(t)
+	n.s.budget = membudget.New(1, 1)
+	hold, err := n.s.budget.Acquire(context.Background(), "-", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold()
+	if w := doAs(t, n.h, "", http.MethodGet, "/link/nosuchtoken/", ""); w.Code == http.StatusServiceUnavailable {
+		t.Fatalf("a link tunnel was charged: %d %s", w.Code, w.Body.String())
+	}
+	// Positive control: an API request of the same tenant is charged.
+	if w := doAs(t, n.h, n.admin, http.MethodGet, "/api/version", ""); w.Code == http.StatusServiceUnavailable {
+		t.Fatalf("/api/version is uncharged but got 503")
+	}
+}
+
+// slowConn sends a request's head and the first part of its body, waits
+// past the body deadline, then sends the rest, and returns the response.
+func slowRequest(t *testing.T, srvURL, head string, body []byte, pause time.Duration) *http.Response {
+	t.Helper()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(srvURL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	half := len(body) / 2
+	fmt.Fprint(conn, head)
+	_, _ = conn.Write(body[:half])
+	time.Sleep(pause)
+	_, _ = conn.Write(body[half:])
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
+// The budget gives every charged body the read deadline — not only the
+// slot holders — and exempts uploads, which may legitimately take longer.
+func TestBodyDeadlineCoversBudgetedRoutesButNotUploads(t *testing.T) {
+	defer func(d time.Duration) { slotReadTimeout = d }(slotReadTimeout)
+	slotReadTimeout = 300 * time.Millisecond
+	n := newNetHarness(t)
+	srv := httptest.NewServer(n.h)
+	defer srv.Close()
+	auth := fmt.Sprintf("%s: %s\r\n%s: test-ingress-token\r\n", HeaderEmail, n.admin, HeaderIngress)
+
+	// A small JSON route with no slot: the stalled body is cut at the
+	// deadline (400 from the decode), not left to hang.
+	body := []byte(`{"lanAccess":false}`)
+	head := fmt.Sprintf("PUT /api/projects/%s/network HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: %d\r\n%s\r\n", n.pid, len(body), auth)
+	if resp := slowRequest(t, srv.URL, head, body, time.Second); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("stalled network body: %d, want 400 at the deadline", resp.StatusCode)
+	}
+
+	// An upload slower than the deadline still lands.
+	ws := n.s.cfg.ProjectWorkspace(identity.DeriveUsername(n.admin), n.pid)
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var mp strings.Builder
+	mp.WriteString("--BOUND\r\nContent-Disposition: form-data; name=\"file\"; filename=\"slow.txt\"\r\nContent-Type: text/plain\r\n\r\n")
+	mp.WriteString(strings.Repeat("u", 4096))
+	mp.WriteString("\r\n--BOUND--\r\n")
+	up := []byte(mp.String())
+	head = fmt.Sprintf("POST /api/projects/%s/upload?path= HTTP/1.1\r\nHost: x\r\nContent-Type: multipart/form-data; boundary=BOUND\r\nContent-Length: %d\r\n%s\r\n", n.pid, len(up), auth)
+	resp := slowRequest(t, srv.URL, head, up, time.Second)
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("slow upload: %d %s", resp.StatusCode, b)
+	}
+	if got, err := os.ReadFile(filepath.Join(ws, "slow.txt")); err != nil || len(got) != 4096 {
+		t.Fatalf("upload not saved whole: %d bytes, %v", len(got), err)
 	}
 }
