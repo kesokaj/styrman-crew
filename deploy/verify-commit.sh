@@ -187,7 +187,7 @@ fi
 # unit that systemd rejects must fail here, not on the host. Its behavioural
 # test is deploy/firewall/test.sh, which needs root and runs out of band.
 echo "==> host scripts: bash -n, shellcheck, systemd-analyze verify"
-( cd "${WT}" && bash -n deploy/host-setup.sh deploy/styrman-ctl deploy/firewall/styrman-firewall.sh deploy/firewall/install.sh deploy/firewall/test.sh deploy/update/styrman-update deploy/gcp/*.sh image/entrypoint.sh )
+( cd "${WT}" && bash -n deploy/host-setup.sh deploy/lib/*.sh deploy/styrman-ctl deploy/firewall/styrman-firewall.sh deploy/firewall/install.sh deploy/firewall/test.sh deploy/update/styrman-update deploy/gcp/*.sh image/entrypoint.sh )
 if command -v shellcheck >/dev/null 2>&1; then
     # host-setup.sh, styrman-ctl and image/entrypoint.sh were syntax-checked
     # but never shellchecked (BUG-068 names the first two). host-setup.sh is
@@ -195,8 +195,8 @@ if command -v shellcheck >/dev/null 2>&1; then
     # be broken upstream for months with every green run on an already-installed
     # host (BUG-070, .agents/rules/shared-path-learnings.md). All three were
     # clean when added, so this buys the next change to them, not this one.
-    ( cd "${WT}" && shellcheck -S warning deploy/host-setup.sh deploy/styrman-ctl deploy/firewall/*.sh deploy/update/styrman-update deploy/gcp/*.sh image/entrypoint.sh )
-    echo "    shellcheck clean: deploy/host-setup.sh deploy/styrman-ctl deploy/firewall/*.sh deploy/update/styrman-update deploy/gcp/*.sh image/entrypoint.sh"
+    ( cd "${WT}" && shellcheck -S warning deploy/host-setup.sh deploy/lib/*.sh deploy/styrman-ctl deploy/firewall/*.sh deploy/update/styrman-update deploy/gcp/*.sh image/entrypoint.sh )
+    echo "    shellcheck clean: deploy/host-setup.sh deploy/lib/*.sh deploy/styrman-ctl deploy/firewall/*.sh deploy/update/styrman-update deploy/gcp/*.sh image/entrypoint.sh"
 else
     echo "    shellcheck not installed — skipped"
 fi

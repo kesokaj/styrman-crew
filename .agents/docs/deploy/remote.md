@@ -22,6 +22,17 @@ The host is provisioned and operated with `sudo deploy/styrman-ctl`
 
 `sudo bash deploy/host-setup.sh --user $USER` (Docker, Kata `mvm`, tuning, state dirs, runtime image, `.env` scaffold — idempotent). Bring-up and production mode: `.agents/docs/specs/styrman/deploy.md` "Production mode" and "Bring-up".
 
+**Kata settings (BUG-089, ADR-083).** `host-setup.sh` also writes the `mvm`
+shim wrapper that pins Cloud Hypervisor and turns on
+`reclaim_guest_freed_memory`. The auto-updater never runs `host-setup.sh`
+(its `host_converge` applies only the firewall files), so after a release
+that changes these steps, re-run it from the verified tree once the host has
+updated: `sudo GH_TOKEN=$(gh auth token) bash /opt/styrman/deploy/host-setup.sh --user <operator>`
+(on the GCP VM over `deploy/gcp/vm.sh ssh`, with a token file — see `gcp.md`).
+It prints `Kata shim wrapper (Cloud Hypervisor): changed|unchanged` and
+`Kata memory reclaim: changed|unchanged`; running project VMs pick both up on
+their next start.
+
 **Agent harness token (ADR-074).** The harness now reaches every project
 through the runtime image, not a host channel: the crew token at
 `/etc/styrman/gh-token` must also read `kesokaj/styrman-harness` (grant it

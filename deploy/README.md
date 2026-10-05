@@ -18,6 +18,12 @@ STYRMAN_VERSION=<x.y.z> docker compose up -d --build
 
 `host-setup.sh` converges a fresh Debian 13 host (Docker, Kata `mvm`,
 tuning, state dirs, runtime image, `.env` scaffold) — idempotent, R11.
+The `mvm` runtime is a wrapper at `/usr/local/bin/containerd-shim-mvm-v2`
+that pins Kata to Cloud Hypervisor, and `configuration-clh.toml` gets
+`reclaim_guest_freed_memory = true` (`lib/kata-config.sh`, BUG-089, ADR-083).
+Both are checked by content on every run, so re-running `host-setup.sh`
+repairs a host that drifted; tested without root by
+`lib/kata-config-test.sh` (run by `go test ./internal/config/`).
 `docker-compose.yml` runs the vendored Caddy ingress (Google OAuth, TLS,
 Cloudflare DNS — `caddy/`) in front of the containerized server
 (`Dockerfile.server`).

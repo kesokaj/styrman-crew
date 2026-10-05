@@ -101,10 +101,18 @@ print(d[7:] if d.startswith("sha256:") else "")' "${KATA_ASSET}" 2>/dev/null || 
 else
     log "Kata present: $(/opt/kata/bin/kata-runtime version | head -1)"
 fi
-# containerd resolves runtimeType io.containerd.mvm.v2 → containerd-shim-mvm-v2 on PATH.
-if [[ ! -x /usr/local/bin/containerd-shim-mvm-v2 ]]; then
-    ln -sf /opt/kata/bin/containerd-shim-kata-v2 /usr/local/bin/containerd-shim-mvm-v2
-fi
+# containerd resolves runtimeType io.containerd.mvm.v2 → containerd-shim-mvm-v2
+# on PATH: a wrapper pinning Cloud Hypervisor, plus memory reclaim in its
+# config (deploy/lib/kata-config.sh; BUG-089, ADR-083). Both are checked by
+# content on every run, so a re-run repairs a host that drifted.
+# shellcheck source=lib/kata-config.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/lib/kata-config.sh"
+r="$(kata_shim_wrapper /usr/local/bin/containerd-shim-mvm-v2 /opt/kata)" \
+    || { echo "FATAL: Kata shim wrapper: ${r}"; exit 1; }
+log "Kata shim wrapper (Cloud Hypervisor): ${r}"
+r="$(kata_clh_reclaim /opt/kata/share/defaults/kata-containers/configuration-clh.toml)" \
+    || { echo "FATAL: Kata memory reclaim: ${r}"; exit 1; }
+log "Kata memory reclaim: ${r}"
 
 # ─── 3. daemon.json: mvm runtime + time-namespaces off (ADR-009) ────────────
 # Docker is only restarted when the config actually changed — a re-run on a

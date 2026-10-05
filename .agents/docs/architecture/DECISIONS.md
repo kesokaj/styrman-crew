@@ -2828,3 +2828,26 @@ Verification: Recorded in the release gate report; the two fixes are in v1.30.1 
   - The key is also git's `user.signingkey` there, so anyone who gains the operator's account on the NUC can sign a release tag that the NUC and the GCP VM deploy as root.
   - Not changed: a passphrase would make every tag cut on the NUC interactive. That choice is the operator's.
   - The Mac key's protection was not inspected: it lives on the operator's Mac, which this machine cannot reach.
+
+## ADR-083: Projects are sized per project, the whole host by default     (2026-10-05) — Accepted
+
+**Context:** Every project VM ran at Kata's default size, 1 vCPU and 2 GiB, because the server created containers with zero limits; the only knobs were two server-wide env vars (`STYRMAN_VCPUS`, `STYRMAN_MEMORY_MB`) that production never set. The Docker disk was a server-wide operator setting fixed into each container's env at creation. The operator: "I dont want to limit cpu or ram. a workspace can take the full machine if it can", then "default cpu=unlimited, ram=unlimited, disk=20gb. I want to be able to set these per project afterwards." Plan: `.agents/docs/plans/2026-10-05-project-resources.md`.
+
+Kata's behaviour, measured on the NUC (Kata 3.31.0, Cloud Hypervisor, 2026-10-05): it ADDS a container's limits to its base (`default_vcpus = 1`, `default_memory = 2048`) and caps the workload at exactly the limit through the guest cgroup. vCPUs clamp at the host's count, and Docker refuses `NanoCPUs` above it. Memory does not clamp: base plus limit, rounded up to 128 MiB, above host RAM fails the start ("The requested hotplug memory addition is not a valid size"). An unset limit is NOT "unlimited"; it is the 1 vCPU / 2 GiB default.
+
+**Decision:**
+- Each project record carries `cpus`, `memoryGiB` and `diskGB`. CPU and RAM 0 mean unlimited: the host's CPU count, and `floor((host MiB − 2048) / 128) × 128` MiB of memory, read from `docker info` on first need and cached once it succeeds. A value above the host is clamped with a WARN. The setup VM gets the same unlimited default.
+- `diskGB` is grow-only, 5–500. New projects record the operator's default at creation; a record from before this change (0) keeps whatever its container has.
+- The owner edits them in a Resources dialog (`GET`/`PUT /api/projects/{project}/resources`). Every change applies by recreating the container: now for a running project whose live size differs, at the next start for a stopped one. A stopped container whose size differs from its record is recreated on start, so every existing project rebuilds once after this release. The entrypoint grows the Docker disk image offline at boot.
+- `RunOpts.Resources` is required: a start without the record reader is refused rather than run at an unknown size.
+- `STYRMAN_VCPUS` and `STYRMAN_MEMORY_MB` are removed; set, they WARN and are ignored.
+- `host-setup.sh` pins the `mvm` shim to Cloud Hypervisor through a wrapper and sets `reclaim_guest_freed_memory = true` (BUG-089), so memory a guest frees goes back to the host.
+
+**Rejected:** Kata `default_vcpus = -1` (CPU only, root on every host, still needs a server number for memory). An online disk grow (`losetup -c` + `resize2fs` in a running guest: unverified in Kata, and a second apply path). Admins editing other users' projects (no cross-user lookup exists; new cross-tenant code). Extending the self-updater to manage Kata config (a new root write path; the operator chose a manual re-run instead). Passing `cpus − 1` so the guest's `nproc` equals the setting (the workload cap would be one short).
+
+**Consequences:**
+- Memory is overcommitted by design. Ten idle VMs at the full size raised the NUC's memory in use from 4.1 to 15.8 GB, with 48 GB still available; boot at full size took 1.8 s against 1.1 s; a 20 → 500 GB disk grow took 0.14 s. The REQUIREMENTS targets (10+ concurrent, reopen < 5 s) stand; ten projects all touching most of their RAM at once can still exhaust the host.
+- The guest's `nproc` reads the setting + 1 (Kata's base vCPU); the dialog says so.
+- A recreate keeps home and workspace; apt packages are replayed (ADR-028); anything else in the container filesystem is lost, as with a mode toggle.
+- The memory math is measured on Cloud Hypervisor only. A host on the QEMU symlink (any host before `host-setup.sh` is re-run) may refuse starts at the full size. The updater does not run `host-setup.sh`, so the operator re-runs it after the release reaches each host; the GCP VM may refuse project starts until then (operator: "B sounds smarter.").
+- Kata's base memory (2048) is a constant in the server; a Kata upgrade that changes it makes starts fail loudly rather than truncate.
