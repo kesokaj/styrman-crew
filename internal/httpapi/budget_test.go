@@ -199,7 +199,7 @@ func TestTunnelsAreNotCharged(t *testing.T) {
 	}
 	for _, c := range []struct{ email, path string }{
 		{"", "/link/nosuchtoken/"},
-		{"", "/shared/nosuchtoken/"},
+		{n.admin, "/shared/nosuchtoken/"}, // with an identity: authGuard would 401 an anonymous one first
 		{n.admin, "/proxy/" + n.pid + "/3000/"},
 		{n.admin, "/p/" + n.pid + "/t1/port/3000/"},
 	} {
@@ -354,5 +354,37 @@ func TestATunnelLookingAPIRequestGetsEveryGuard(t *testing.T) {
 	}
 	if w := as(`{"title":"x"}`, "https://evil.example"); w.Code != http.StatusForbidden {
 		t.Errorf("Origin check: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A real tunnel route keeps the Origin exemption: a sandboxed preview sends
+// "Origin: null" on every mutation, and a 403 there breaks every app behind
+// a preview (B2). The API route beside it is still checked.
+func TestATunnelRouteSkipsTheOriginCheck(t *testing.T) {
+	n := newNetHarness(t)
+	mux := http.NewServeMux()
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	for _, p := range []string{"/link/{token}/", "/shared/{token}/", "/proxy/{project}/{port}/", "/p/{project}/{term}/port/{port}/", "POST /api/projects"} {
+		mux.Handle(p, ok)
+	}
+	h := csrfGuard(mux, n.s.budgetGuard(mux))
+	for _, c := range []struct {
+		path string
+		want int
+	}{
+		{"/link/tok/api", http.StatusNoContent},
+		{"/shared/tok/x", http.StatusNoContent},
+		{"/proxy/p1/3000/x", http.StatusNoContent},
+		{"/p/p1/t1/port/3000/x", http.StatusNoContent},
+		{"/api/projects", http.StatusForbidden},
+	} {
+		r := httptest.NewRequest(http.MethodPost, c.path, strings.NewReader("{}"))
+		r.Header.Set("Origin", "null")
+		r = identity.WithUser(r, identity.User{Username: "alice", Authorized: true})
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != c.want {
+			t.Errorf("POST %s with Origin: null = %d, want %d", c.path, w.Code, c.want)
+		}
 	}
 }

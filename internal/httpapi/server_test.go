@@ -76,8 +76,9 @@ func TestRouting(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Errorf("cross-origin POST = %d, want 403", w.Code)
 	}
-	// The guard judges the CLEANED path: a raw "/link/../api/projects" is not
-	// a link path and gets the same 403, never the link exemption (audit
+	// The guard judges the ROUTE the request takes (isTunnelRoute, ADR-086
+	// amendment 2): a raw "/link/../api/projects" does not route to a link
+	// pattern and gets the same 403, never the link exemption (audit
 	// 2026-09-13; the mux would 301 it, but the guard must not exempt first).
 	req = httptest.NewRequest(http.MethodPost, "/link/../api/projects", strings.NewReader("{}"))
 	req.Header.Set("Origin", "https://evil.example")
