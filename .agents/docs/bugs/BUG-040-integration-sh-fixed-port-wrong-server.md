@@ -2,7 +2,7 @@
 owner: bugs
 date: 2026-09-11
 id: BUG-040
-status: open
+status: fixed
 area: .agents/docs/testing/styrman/integration.sh (operator workflow)
 ---
 # BUG-040: integration.sh hard-codes port 18080; a run against a local server on that port silently tested the wrong server
