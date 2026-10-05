@@ -727,13 +727,9 @@ func csrfGuard(next http.Handler) http.Handler {
 					return
 				}
 			}
-			// bodyCap: uploads carry real payloads; editor saves carry file
-			// content (2 MiB read cap × JSON escaping overhead — without the
-			// higher cap a 1–2 MiB file opens editable but can never save).
-			// /format and /check post the SAME editor content as /file: on
-			// the default 1 MiB cap their own 5 MiB guard could never fire
-			// (security review noted maxCheckBytes was dead code).
-			r.Body = http.MaxBytesReader(w, r.Body, bodyCap(r.URL.Path))
+			// The body cap is applied by budgetGuard, from the matched route
+			// (bodyCap): uploads carry real payloads; editor saves, /format
+			// and /check carry file content.
 		}
 		next.ServeHTTP(w, r)
 	})

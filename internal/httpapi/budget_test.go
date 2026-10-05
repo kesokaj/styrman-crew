@@ -76,10 +76,10 @@ func TestEveryWeightedPatternIsARoute(t *testing.T) {
 func TestBodyPricingIsCapped(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/projects/x/git/commit", strings.NewReader("{}"))
 	r.ContentLength = 1 << 40
-	if got := body(r); got != 1<<20 {
+	if got := body(r, bodyCap("POST /api/projects/{project}/git/commit")); got != 1<<20 {
 		t.Fatalf("forged length priced at %d, want the 1 MiB cap", got)
 	}
-	if got := body(httptest.NewRequest(http.MethodGet, "/api/projects/x/file", nil)); got != 0 {
+	if got := body(httptest.NewRequest(http.MethodGet, "/api/projects/x/file", nil), 8<<20); got != 0 {
 		t.Fatalf("GET priced at %d", got)
 	}
 	if hasBody(httptest.NewRequest(http.MethodGet, "/api/projects/x/file", nil)) {
@@ -259,5 +259,22 @@ func TestBodyDeadlineCoversBudgetedRoutesButNotUploads(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(ws, "slow.txt")); err != nil || len(got) != 4096 {
 		t.Fatalf("upload not saved whole: %d bytes, %v", len(got), err)
+	}
+}
+
+// The body cap follows the ROUTE, not the decoded path: ".../x%2Fupload"
+// ends in "/upload" once decoded but routes to {term}, and must keep the
+// 1 MiB cap (security review of v1.42.3..5a8afa1, finding 1).
+func TestAnEncodedSlashDoesNotBuyTheUploadCap(t *testing.T) {
+	n := newNetHarness(t)
+	big := `{"title":"` + strings.Repeat("a", 2<<20) + `"}`
+	for _, p := range []string{"/api/projects/" + n.pid + "/terminals/x%2Fupload", "/api/projects/" + n.pid + "/terminals/x%2Ffile"} {
+		w := doAs(t, n.h, n.admin, http.MethodPatch, p, big)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "too large") {
+			t.Errorf("PATCH %s with a 2 MiB body: %d %.120s, want 400 request body too large", p, w.Code, w.Body.String())
+		}
+	}
+	if bodyCap("POST /api/projects/{project}/upload") != 512<<20 || bodyCap("") != 1<<20 {
+		t.Fatal("bodyCap by pattern")
 	}
 }

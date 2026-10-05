@@ -41,7 +41,7 @@ type weightFn func(r *http.Request) int64
 func fixed(n int64) weightFn { return func(*http.Request) int64 { return n } }
 
 // editorBody: the 8 MiB editor body decoded into a string, then re-encoded.
-func editorBody(r *http.Request) int64 { return 3*body(r) + 2*mib }
+func editorBody(r *http.Request) int64 { return 3*body(r, 8<<20) + 2*mib }
 
 // historyRead: the one size known up front — ?bytes clamped as readHistory
 // clamps it, history.Read's 256 KiB default when absent — times the raw
@@ -129,15 +129,18 @@ func uncharged(p string) bool {
 	return isPreviewPath(p) || isLinkPath(p) || isSharedPath(p)
 }
 
-// bodyCap is the request-body cap for a path: csrfGuard applies it, and the
-// budget prices a body of unknown length at it. Uploads carry real payloads;
-// editor saves, /format and /check carry file content (2 MiB read cap x JSON
-// escaping); everything else is small JSON.
-func bodyCap(p string) int64 {
+// bodyCap is the request-body cap for a matched mux PATTERN: budgetGuard
+// applies it, and prices a body of unknown length at it. Uploads carry real
+// payloads; editor saves, /format and /check carry file content (2 MiB read
+// cap x JSON escaping); everything else, an unmatched request included, is
+// small JSON. Keyed on the pattern, never the request path: a path is
+// decoded, so ".../terminals/x%2Fupload" ends in "/upload" while it routes to
+// {term} (security review of v1.42.3..5a8afa1, finding 1).
+func bodyCap(pattern string) int64 {
 	switch {
-	case strings.HasSuffix(p, "/upload"):
+	case strings.HasSuffix(pattern, "/upload"):
 		return 512 << 20
-	case strings.HasSuffix(p, "/file"), strings.HasSuffix(p, "/format"), strings.HasSuffix(p, "/check"):
+	case strings.HasSuffix(pattern, "/file"), strings.HasSuffix(pattern, "/format"), strings.HasSuffix(pattern, "/check"):
 		return 8 << 20
 	}
 	return 1 << 20
@@ -150,13 +153,12 @@ func hasBody(r *http.Request) bool {
 }
 
 // body is the request body's size for pricing: the declared length, never
-// more than the cap csrfGuard enforces (a forged Content-Length cannot buy
-// a bigger reservation than the body that can actually arrive).
-func body(r *http.Request) int64 {
+// more than the cap c budgetGuard enforces (a forged Content-Length cannot
+// buy a bigger reservation than the body that can actually arrive).
+func body(r *http.Request, c int64) int64 {
 	if !hasBody(r) {
 		return 0
 	}
-	c := bodyCap(r.URL.Path)
 	if r.ContentLength >= 0 {
 		return min(r.ContentLength, c)
 	}
@@ -190,9 +192,10 @@ func tenantOf(r *http.Request) string {
 	return "-"
 }
 
-// budgetGuard charges every routed request its weight against s.budget.
-// It sits inside csrfGuard (the body is already capped) and authGuard (the
-// tenant is known), and around the mux, so no route can miss it.
+// budgetGuard caps every routed request's body by its matched route
+// (bodyCap) and charges the request its weight against s.budget. It sits
+// inside authGuard (the tenant is known) and csrfGuard, and around the mux,
+// so no route can miss it.
 func (s *Server) budgetGuard(mux *http.ServeMux) http.Handler {
 	var lastWarn atomic.Int64
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -201,7 +204,11 @@ func (s *Server) budgetGuard(mux *http.ServeMux) http.Handler {
 			return
 		}
 		_, pattern := mux.Handler(r)
-		n := defaultWeight + body(r)
+		limit := bodyCap(pattern)
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
+		}
+		n := defaultWeight + body(r, limit)
 		if f, ok := routeWeight[pattern]; ok {
 			n = f(r)
 		}
@@ -222,7 +229,7 @@ func (s *Server) budgetGuard(mux *http.ServeMux) http.Handler {
 			return
 		}
 		defer release()
-		if !strings.HasSuffix(r.URL.Path, "/upload") {
+		if !strings.HasSuffix(pattern, "/upload") {
 			bodyDeadline(w, r)
 		}
 		mux.ServeHTTP(w, r)

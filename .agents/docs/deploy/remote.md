@@ -87,11 +87,12 @@ sudo bash deploy/firewall/install.sh    # from /opt/styrman at the deployed tag
 # (`sudo GH_TOKEN=…` and `sudo --preserve-env=GH_TOKEN` both log it,
 # `ENV=GH_TOKEN=…`, checked on dave 2026-10-05). An existing host already has
 # the file: re-running host-setup.sh needs no token step at all.
-# Paste the token at the prompt (not echoed) into a file only you can read;
-# the file is emptied and set to 600 BEFORE the token goes in, so one that
-# already existed with a wider mode never holds it readable:
-(umask 077 && : > ~/fine-grained-token && chmod 600 ~/fine-grained-token &&
-  IFS= read -rsp 'token: ' t && printf '%s\n' "$t" > ~/fine-grained-token); echo
+# Paste the token at the prompt (not echoed) into a NEW file only you can
+# read: any old file (or a symlink planted at the name) is removed first and
+# noclobber creates it exclusively (O_EXCL), so it is born 600 and no earlier
+# open of the name can read the token:
+rm -f ~/fine-grained-token
+(umask 077 && set -C && IFS= read -rsp 'token: ' t && printf '%s\n' "$t" > ~/fine-grained-token); echo
 # Install it only when the host has no non-empty one yet (never overwrite the
 # updater's), never an empty one; remove the plaintext copy once installed.
 if sudo grep -q '[^[:space:]]' /etc/styrman/gh-token 2>/dev/null; then echo "a token is already installed; left as is"

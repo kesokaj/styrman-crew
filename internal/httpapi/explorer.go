@@ -332,7 +332,7 @@ func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
 
 // uploadFile accepts multipart form uploads (drag & drop) into ?path= (a
 // directory); each part keeps its filename. Binary-safe, 512 MB cap via the
-// csrf guard's MaxBytesReader.
+// budgetGuard's MaxBytesReader (bodyCap).
 func (s *Server) uploadFile(w http.ResponseWriter, r *http.Request) {
 	root, err := s.scopeFor(r)
 	if err != nil {

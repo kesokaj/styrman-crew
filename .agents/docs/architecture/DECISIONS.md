@@ -2968,3 +2968,7 @@ names set, the gatekeeper also accepts a header or query parameter named
 `<prefix>_access_token` (go-authcrunch authz/gatekeeper.go) — the same token
 by another carrier, no new capability. A guest app's own cookie named
 `AUTHP…_X` would be stripped too; the prefix is the portal's namespace.
+
+### ADR-086 amendment 1     (2026-10-05)
+
+The body cap moved from csrfGuard into `budgetGuard` and is chosen from the MATCHED mux pattern (`bodyCap`), as is the upload exemption from the body read deadline. ADR-086's "priced at most at csrfGuard's cap" now reads "at most at the route's cap". Keyed on the decoded request path, `…/terminals/x%2Fupload` bought the 512 MiB upload cap and no deadline on an ordinary endpoint (security review of v1.42.3..5a8afa1, finding 1).

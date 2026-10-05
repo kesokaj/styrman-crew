@@ -253,7 +253,8 @@ func TestSafeSuffixBlocksInjection(t *testing.T) {
 }
 
 // The 5 MiB content guard in checkFile/formatFile is only reachable if
-// csrfGuard's MaxBytesReader allows a body that large. It defaults to 1 MiB,
+// budgetGuard's MaxBytesReader (csrfGuard's until v1.42.4) allows a body
+// that large. It defaults to 1 MiB,
 // which made those guards dead code and turned an oversize request into a
 // confusing 400 instead of the intended 413.
 //
@@ -271,21 +272,28 @@ func TestCheckAndFormatGetTheLargeBodyLimit(t *testing.T) {
 		}
 		fmt.Fprintf(w, "%d", n)
 	})
-	h := csrfGuard(sink)
+	// The cap follows the matched route (bodyCap), so register the sink on
+	// the real patterns behind the real budget middleware.
+	mux := http.NewServeMux()
+	for _, p := range []string{"POST /api/projects/{project}/check", "POST /api/projects/{project}/format",
+		"PUT /api/projects/{project}/file", "POST /api/projects/{project}/terminals"} {
+		mux.Handle(p, sink)
+	}
+	h := newNetHarness(t).s.budgetGuard(mux)
 
 	// 2 MiB — over the 1 MiB default, under the 8 MiB file limit. This is a
 	// realistic editor payload: a file that size opens and saves.
 	body := make([]byte, 2<<20)
 	for _, tc := range []struct {
-		path      string
-		wantAllow bool
+		method, path string
+		wantAllow    bool
 	}{
-		{"/api/projects/p1/check", true},
-		{"/api/projects/p1/format", true},
-		{"/api/projects/p1/file", true},       // control: already had the limit
-		{"/api/projects/p1/terminals", false}, // control: small-JSON default
+		{http.MethodPost, "/api/projects/p1/check", true},
+		{http.MethodPost, "/api/projects/p1/format", true},
+		{http.MethodPut, "/api/projects/p1/file", true},        // control: already had the limit
+		{http.MethodPost, "/api/projects/p1/terminals", false}, // control: small-JSON default
 	} {
-		req := httptest.NewRequest(http.MethodPost, tc.path, bytes.NewReader(body))
+		req := httptest.NewRequest(tc.method, tc.path, bytes.NewReader(body))
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		allowed := rec.Code == http.StatusOK && rec.Body.String() == fmt.Sprint(len(body))
