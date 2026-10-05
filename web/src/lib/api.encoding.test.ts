@@ -5,8 +5,9 @@ import { api, browserSocketUrl, termSocketUrl } from "./api";
 // `u` tag in api.ts. The weakness it closes is path RETARGETING: browsers
 // resolve `..` and `?` BEFORE sending, so an id carrying either can aim a
 // clicked action at a different /api/projects/... path of the same user.
-// csrfGuard passes it (genuinely same-origin) and picks its body-size class
-// by path suffix (security review 2026-09-03, round 2).
+// csrfGuard passes it (genuinely same-origin) and budgetGuard caps its body
+// by the route it matches (security review 2026-09-03, round 2; ADR-086
+// amendment 1).
 //
 // This file is the assertion the reviewers asked for, and it is written
 // against the CALL SITES rather than against `u` itself, because the failure

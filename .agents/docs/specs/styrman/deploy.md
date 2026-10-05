@@ -137,7 +137,9 @@ deleted whenever convenient.
 
 Per-project sizing (ADR-083) is a per-project record, not environment:
 `STYRMAN_VCPUS` / `STYRMAN_MEMORY_MB` are removed (set, the server prints a
-WARN and ignores them). Default is the whole host: CPUs = `docker info`
+WARN and ignores them). Default is the whole host — for an admin's project;
+a non-admin's starts at most at the admin cap (`userMaxCpus`/
+`userMaxMemoryGiB`, 0 = half the host, ADR-087): CPUs = `docker info`
 NCPU, memory = floor((host MiB − 2048)/128)×128 (read on first need,
 cached once it succeeds); the setup VM is unlimited too. Kata adds the
 limit to its own base (1 vCPU, 2 GiB), so `nproc` in a terminal shows a
@@ -383,7 +385,8 @@ a crew release ships is editing that `ARG` line.
 **Token.** The repository is private, so every image build takes a GitHub
 token as a docker build SECRET (`--secret id=gh_token,…`, never a layer):
 `GH_TOKEN` in the environment when set, else the updater's token file
-`/etc/styrman/gh-token`, else the build stops before it starts. Sites:
+`/etc/styrman/gh-token` (an empty or whitespace-only file is refused by
+name), else the build stops before it starts. Sites:
 `deploy/update/styrman-update` (deploy), `deploy/host-setup.sh` step 7,
 `deploy/styrman-ctl install` (`--gh-token-file F` when given; a `--dry-run`
 without a token plans the `src=` form and says a real run needs one),

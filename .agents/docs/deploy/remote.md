@@ -135,6 +135,14 @@ project's id in `users/<user>/projects.json`) BEFORE upgrading; otherwise
 the project boots with an empty workspace while the old tree stays on disk
 untouched.
 
+### Hosts crossing v1.42.4 (ADR-087, ADR-088)
+
+- Every browser is signed out once: the session cookies are renamed per
+  deployment (`AUTHP<8 hex>_*`, ADR-088). Signing in again is the whole step.
+- Non-admin projects at "Unlimited" or above the admin cap (default half the
+  host, Settings → Runtime) are rebuilt at their next start at the capped
+  size; home and workspace survive (ADR-087).
+
 ### Per-project network mode (ADR-067)
 
 A project's network mode is not a firewall rule the host applies — it is which Docker bridge INTERFACE name the server chose when it created the project's network: `sdb-<hash>` (sandbox, the default) or `lan-<hash>` (LAN), same sha1 suffix of the same network name either way. The `sdb-*` jumps in `styrman-firewall.sh` match the sandbox prefix; a `lan-*` bridge is matched by no styrman rule at all, so it is exactly a normal Docker container on this host: it NATs out as the host and reaches whatever the host reaches (the local network, the host's own addresses including `sshd`, and host-published Docker ports). It gains no reach into other projects — that guarantee is Docker's own, unconditional per-bridge `DROP` rule, not something this script grants or withholds.

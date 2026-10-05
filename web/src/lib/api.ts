@@ -452,8 +452,8 @@ export type Scope =
  * The weakness this closes is path RETARGETING, not injection: browsers
  * resolve `..` and `?` before sending, so an id containing them can point a
  * clicked action at a DIFFERENT /api/projects/... path of the SAME user.
- * `csrfGuard` passes it (it is genuinely same-origin) and picks its
- * body-size class by path suffix. No tenant crossing, but not what the caller
+ * `csrfGuard` passes it (it is genuinely same-origin) and `budgetGuard`
+ * caps its body by the route it matches (ADR-086 amendment 1). No tenant crossing, but not what the caller
  * asked for either (security review 2026-09-03, round 2).
  *
  * A tag rather than 27 hand-placed encodeURIComponent calls, because the
