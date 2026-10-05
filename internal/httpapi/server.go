@@ -183,6 +183,9 @@ type Server struct {
 	// searchSlots bounds history searches server-wide (searchConcurrency);
 	// see searchHistory.
 	searchSlots chan struct{}
+	// readSlots bounds transcript reads server-wide (readConcurrency); see
+	// readHistory.
+	readSlots chan struct{}
 
 	// creds is the credential broker's store (ADR-030); nil disables the
 	// onboarding endpoints. Set by main after construction.
@@ -261,6 +264,7 @@ func New(cfg *config.Config, users *userstore.Store, orch *orchestrator.Orchestr
 		spaces:        map[string]*userSpace{},
 		deleting:      map[string]bool{},
 		searchSlots:   make(chan struct{}, searchConcurrency),
+		readSlots:     make(chan struct{}, readConcurrency),
 		deleteErrs:    map[string]string{},
 		provisionErrs: map[string]string{},
 

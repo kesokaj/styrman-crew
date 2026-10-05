@@ -439,6 +439,31 @@ func (s *Server) listHistory(w http.ResponseWriter, r *http.Request) {
 // server for every tenant (security review of v1.42.1, finding 1).
 const searchConcurrency = 4
 
+// readConcurrency bounds transcript reads the same way: one holds up to
+// 4 MiB, about 30 MiB once JSON-escaped, so 8 at once stay far under the
+// cap while ~150 did not (security review of v1.42.1..ef22f5c, finding 2).
+const readConcurrency = 8
+
+// historyWriteTimeout bounds how long a search or a read may take to hand
+// its response to the client: a client that never reads would otherwise
+// hold the response's memory, and its slot, for as long as it likes.
+const historyWriteTimeout = 30 * time.Second
+
+// acquireSlot takes a slot from sem without waiting, or answers 429 with
+// msg. The caller releases the slot (<-sem) when its response is written.
+func acquireSlot(w http.ResponseWriter, sem chan struct{}, msg string) bool {
+	select {
+	case sem <- struct{}{}:
+		// Not every ResponseWriter supports a deadline (httptest's does
+		// not); the bound then falls back to the server's own timeouts.
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(historyWriteTimeout))
+		return true
+	default:
+		writeErr(w, http.StatusTooManyRequests, errors.New(msg))
+		return false
+	}
+}
+
 // searchHistory greps all of the project's transcripts (agent sessions
 // included — they're raw PTY captures) for ?q=, case-insensitive. Past
 // searchConcurrency searches in flight it answers 429 rather than queue: a
@@ -454,13 +479,10 @@ func (s *Server) searchHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, errors.New("query too long"))
 		return
 	}
-	select {
-	case s.searchSlots <- struct{}{}:
-		defer func() { <-s.searchSlots }()
-	default:
-		writeErr(w, http.StatusTooManyRequests, errors.New("too many history searches in progress — try again in a moment"))
+	if !acquireSlot(w, s.searchSlots, "too many history searches in progress — try again in a moment") {
 		return
 	}
+	defer func() { <-s.searchSlots }()
 	matches, err := history.Search(r.Context(), s.cfg.ProjectHome(u.Username, p.ID), p.ID, q)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -493,6 +515,10 @@ func (s *Server) readHistory(w http.ResponseWriter, r *http.Request) {
 	} else if max > 4<<20 {
 		max = 4 << 20
 	}
+	if !acquireSlot(w, s.readSlots, "too many transcripts being read at once — try again in a moment") {
+		return
+	}
+	defer func() { <-s.readSlots }()
 	text, err := history.Read(s.cfg.ProjectHome(u.Username, p.ID), p.ID, r.PathValue("id"), max)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)

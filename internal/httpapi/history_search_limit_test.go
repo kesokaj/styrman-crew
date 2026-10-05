@@ -46,3 +46,34 @@ func TestHistorySearchIsLimitedServerWide(t *testing.T) {
 		t.Fatalf("a finished search did not give its slot back: %d of %d in use", len(n.s.searchSlots), cap(n.s.searchSlots))
 	}
 }
+
+// Reading a transcript holds up to 4 MiB, about 30 MiB once JSON-escaped.
+// Like search, reads are bounded server-wide: past readConcurrency in flight
+// they answer 429 (security review of v1.42.1..ef22f5c, finding 2).
+func TestHistoryReadIsLimitedServerWide(t *testing.T) {
+	n := newNetHarness(t)
+	logs := filepath.Join(n.state, "homes", identity.DeriveUsername(n.admin), "p", n.pid, ".styrman", "logs", n.pid)
+	if err := os.MkdirAll(logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logs, "conv-1.log"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := "/api/projects/" + n.pid + "/history/conv-1"
+	if w := doAs(t, n.h, n.admin, http.MethodGet, path, ""); w.Code != http.StatusOK {
+		t.Fatalf("an idle server refused a read: %d %s", w.Code, w.Body.String())
+	}
+	for range cap(n.s.readSlots) {
+		n.s.readSlots <- struct{}{}
+	}
+	if w := doAs(t, n.h, n.admin, http.MethodGet, path, ""); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("a read past the limit: %d, want 429", w.Code)
+	}
+	<-n.s.readSlots
+	if w := doAs(t, n.h, n.admin, http.MethodGet, path, ""); w.Code != http.StatusOK {
+		t.Fatalf("after a slot freed: %d", w.Code)
+	}
+	if len(n.s.readSlots) != cap(n.s.readSlots)-1 {
+		t.Fatalf("a finished read kept its slot: %d of %d", len(n.s.readSlots), cap(n.s.readSlots))
+	}
+}
