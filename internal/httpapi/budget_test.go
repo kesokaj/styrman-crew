@@ -330,11 +330,14 @@ func TestATunnelLookingAPIRequestGetsEveryGuard(t *testing.T) {
 		!isTunnelRoute(mux, httptest.NewRequest(http.MethodPost, "/p/"+n.pid+"/t1/port/3000/x", nil)) {
 		t.Fatal("a real tunnel route was not recognised")
 	}
-	// Behind authGuard this request carries no identity (authGuard still
-	// reads the path and lets a link through without one), so the handler
-	// fails closed with 404 before reading the body:
-	if w := doAs(t, n.h, n.admin, http.MethodPatch, raw, `{"title":"x"}`); w.Code != http.StatusNotFound {
-		t.Errorf("through authGuard: %d %s, want 404 (no identity)", w.Code, w.Body.String())
+	// authGuard judges it by route too: without an identity it is refused,
+	// never let through as a link (security addendum 07f5517..561c23b,
+	// finding 1); with one, it reaches the handler as the user.
+	if w := doAs(t, n.h, "", http.MethodPatch, raw, `{"title":"x"}`); w.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous through authGuard: %d %s, want 401", w.Code, w.Body.String())
+	}
+	if w := doAs(t, n.h, n.admin, http.MethodPatch, raw, `{"title":"x"}`); strings.Contains(w.Body.String(), "invalid user slug") {
+		t.Errorf("with an identity the handler saw none: %d %s", w.Code, w.Body.String())
 	}
 	// The guards this finding is about, driven with an identity: the body
 	// cap cuts a 2 MiB body at the 1 MiB default, and the Origin check runs.

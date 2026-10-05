@@ -2976,3 +2976,7 @@ The body cap moved from csrfGuard into `budgetGuard` and is chosen from the MATC
 ### ADR-086 amendment 2     (2026-10-05)
 
 Whether a request is a tunnel (preview, link, shared, proxy — uncharged, uncapped, no Origin check) is decided from the route it will take (`isTunnelRoute`, the matched mux pattern) in both `csrfGuard` and `budgetGuard`, never from its decoded path, for the same reason as amendment 1 (security addendum 5a8afa1..07f5517, finding 1).
+
+### ADR-086 amendment 3     (2026-10-05)
+
+authGuard joins amendment 2: its link exemption (ingress token only, no identity) and its preview/shared exception for non-styrman Google users are decided from the route the request takes (`routePath`), not its decoded path (security addendum 07f5517..561c23b, finding 1).

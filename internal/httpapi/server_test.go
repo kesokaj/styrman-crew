@@ -107,7 +107,7 @@ func TestAuthGuard(t *testing.T) {
 	}
 	srv := New(cfg, users, orch, nil)
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(200) })
-	h := srv.authGuard("header", inner)
+	h := srv.authGuard("header", srv.newMux(), inner)
 
 	cases := []struct {
 		name, email, path string
@@ -132,7 +132,7 @@ func TestAuthGuard(t *testing.T) {
 	}
 
 	// Mode "none" bypasses entirely (acts as the default user, admin).
-	h = srv.authGuard("none", inner)
+	h = srv.authGuard("none", srv.newMux(), inner)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/projects", nil))
 	if w.Code != http.StatusOK {

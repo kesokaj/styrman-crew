@@ -133,11 +133,18 @@ func uncharged(p string) bool {
 // inside one {term} segment for the mux while the decoded, cleaned path reads
 // /link/x (security addendum 5a8afa1..07f5517, finding 1).
 func isTunnelRoute(mux *http.ServeMux, r *http.Request) bool {
+	p := routePath(mux, r)
+	return p != "" && uncharged(p)
+}
+
+// routePath is the path part of the mux pattern r will be routed to ("" for
+// no route): the one thing every guard may judge a request's kind by.
+func routePath(mux *http.ServeMux, r *http.Request) string {
 	_, pattern := mux.Handler(r)
 	if _, p, ok := strings.Cut(pattern, " "); ok {
-		pattern = p
+		return p
 	}
-	return pattern != "" && uncharged(pattern)
+	return pattern
 }
 
 // bodyCap is the request-body cap for a matched mux PATTERN: budgetGuard

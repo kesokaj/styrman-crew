@@ -4,7 +4,6 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"net/http"
-	"path"
 
 	"github.com/kesokaj/styrman-crew/internal/identity"
 )
@@ -24,7 +23,7 @@ const HeaderIngress = "X-Styrman-Ingress"
 // (loopback dev listener, local dev) acts as the configured default user
 // with admin rights; mode "header" requires an authorized HeaderEmail.
 // /api/health stays open for container healthchecks.
-func (s *Server) authGuard(mode string, next http.Handler) http.Handler {
+func (s *Server) authGuard(mode string, mux *http.ServeMux, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/health" {
 			next.ServeHTTP(w, r)
@@ -36,11 +35,13 @@ func (s *Server) authGuard(mode string, next http.Handler) http.Handler {
 		// hit /link/<token> on :8080 directly and be proxied into ANOTHER
 		// project's port, defeating R12. The ingress injects the token on the
 		// preview block; a direct VM request lacks it.
-		// Cleaned first: the guards wrap the mux, which cleans paths for
-		// routing; a raw "/link/../x" must not read as a link path here (no
-		// bypass was found — the mux 301s it — but the prefix must be judged
-		// on the path that routes; audit 2026-09-13).
-		if isLinkPath(path.Clean(r.URL.Path)) {
+		// Judged by the ROUTE the request takes, never its decoded path: a
+		// raw "/link/../x" is not a link (audit 2026-09-13), and neither is
+		// ".../terminals/..%2F..%2F..%2F..%2Flink%2Fx", which cleans to
+		// /link/x but routes to an API handler (security addendum
+		// 07f5517..561c23b, finding 1; ADR-086 amendment 2).
+		route := routePath(mux, r)
+		if isLinkPath(route) {
 			if s.cfg.IngressToken != "" &&
 				subtle.ConstantTimeCompare([]byte(r.Header.Get(HeaderIngress)), []byte(s.cfg.IngressToken)) != 1 {
 				writeErr(w, http.StatusForbidden, fmt.Errorf("request did not come through the ingress"))
@@ -73,7 +74,7 @@ func (s *Server) authGuard(mode string, next http.Handler) http.Handler {
 				// route is refused — they never see the dashboard, terminals,
 				// or files. Authorized stays false and Username is left empty so
 				// a slug collision can never satisfy an ownership check.
-				if !isPreviewPath(r.URL.Path) && !isSharedPath(r.URL.Path) {
+				if !isPreviewPath(route) && !isSharedPath(route) {
 					writeErr(w, http.StatusForbidden, fmt.Errorf("%s is not authorized for styrman", email))
 					return
 				}

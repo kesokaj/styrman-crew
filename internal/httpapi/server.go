@@ -452,7 +452,7 @@ func (s *Server) RoutesWithAuth(authMode string) http.Handler {
 	// previewHostRewrite outermost so a <token>.preview host is mapped to the
 	// public /link route before auth even looks at it; then auth (identity /
 	// permission), then CSRF, then the memory budget (ADR-086), then routing.
-	return s.previewHostRewrite(s.authGuard(authMode, csrfGuard(mux, s.budgetGuard(mux))))
+	return s.previewHostRewrite(s.authGuard(authMode, mux, csrfGuard(mux, s.budgetGuard(mux))))
 }
 
 // newMux registers every route; budgetGuard looks the matched pattern up in
