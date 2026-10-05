@@ -391,3 +391,25 @@ func TestATunnelRouteSkipsTheOriginCheck(t *testing.T) {
 		}
 	}
 }
+
+// A Google user who is not a styrman user gets through authGuard only to a
+// preview or shared ROUTE (ADR-086 amendment 3): "/proxy%2Fp%2F1/x" decodes
+// to a preview-looking path but routes to the SPA, and is refused.
+func TestANonUserReachesOnlyPreviewAndSharedRoutes(t *testing.T) {
+	n := newNetHarness(t)
+	const stranger = "stranger@example.org"
+	for _, c := range []struct {
+		path   string
+		refuse bool
+	}{
+		{"/proxy/" + n.pid + "/3000/", false},
+		{"/shared/nosuchtoken/", false},
+		{"/api/projects", true},
+		{"/proxy%2F" + n.pid + "%2F3000/x", true},
+	} {
+		w := doAs(t, n.h, stranger, http.MethodGet, c.path, "")
+		if refused := w.Code == http.StatusForbidden && strings.Contains(w.Body.String(), "not authorized"); refused != c.refuse {
+			t.Errorf("%s: %d %.100s (refused=%v, want %v)", c.path, w.Code, w.Body.String(), refused, c.refuse)
+		}
+	}
+}
