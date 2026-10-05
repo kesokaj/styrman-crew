@@ -192,12 +192,20 @@ func TestTunnelsAreNotCharged(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer hold()
-	if w := doAs(t, n.h, "", http.MethodGet, "/link/nosuchtoken/", ""); w.Code == http.StatusServiceUnavailable {
-		t.Fatalf("a link tunnel was charged: %d %s", w.Code, w.Body.String())
+	// Positive control: the budget is full for everyone, so a charged API
+	// request gets 503.
+	if w := doAs(t, n.h, n.admin, http.MethodGet, "/api/projects", ""); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("control: a charged request on a full budget got %d, want 503", w.Code)
 	}
-	// Positive control: an API request of the same tenant is charged.
-	if w := doAs(t, n.h, n.admin, http.MethodGet, "/api/version", ""); w.Code == http.StatusServiceUnavailable {
-		t.Fatalf("/api/version is uncharged but got 503")
+	for _, c := range []struct{ email, path string }{
+		{"", "/link/nosuchtoken/"},
+		{"", "/shared/nosuchtoken/"},
+		{n.admin, "/proxy/" + n.pid + "/3000/"},
+		{n.admin, "/p/" + n.pid + "/t1/port/3000/"},
+	} {
+		if w := doAs(t, n.h, c.email, http.MethodGet, c.path, ""); w.Code == http.StatusServiceUnavailable {
+			t.Errorf("%s was charged: %d %s", c.path, w.Code, w.Body.String())
+		}
 	}
 }
 
@@ -276,5 +284,32 @@ func TestAnEncodedSlashDoesNotBuyTheUploadCap(t *testing.T) {
 	}
 	if bodyCap("POST /api/projects/{project}/upload") != 512<<20 || bodyCap("") != 1<<20 {
 		t.Fatal("bodyCap by pattern")
+	}
+}
+
+// The upload exemption from the body deadline follows the route too: a
+// stalled body on ".../terminals/x%2Fupload" (decoded path ends "/upload",
+// route is {term}) is cut at the deadline. A real socket: the deadline
+// lives on the connection (review of 5a8afa1..07f5517, finding 1).
+func TestAnEncodedSlashDoesNotBuyTheUploadDeadlineExemption(t *testing.T) {
+	defer func(d time.Duration) { slotReadTimeout = d }(slotReadTimeout)
+	slotReadTimeout = 300 * time.Millisecond
+	n := newNetHarness(t)
+	srv := httptest.NewServer(n.h)
+	defer srv.Close()
+	conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "PATCH /api/projects/%s/terminals/x%%2Fupload HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 100\r\n%s: %s\r\n%s: test-ingress-token\r\n\r\n{\"title\":",
+		n.pid, HeaderEmail, n.admin, HeaderIngress)
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no answer within 5 s: the stalled body was not cut at the %v deadline: %v", slotReadTimeout, err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("got %d, want 400 at the deadline", resp.StatusCode)
 	}
 }
