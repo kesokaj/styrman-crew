@@ -39,7 +39,7 @@ func (s *Server) authGuard(mode string, mux *http.ServeMux, next http.Handler) h
 		// raw "/link/../x" is not a link (audit 2026-09-13), and neither is
 		// ".../terminals/..%2F..%2F..%2F..%2Flink%2Fx", which cleans to
 		// /link/x but routes to an API handler (security addendum
-		// 07f5517..561c23b, finding 1; ADR-086 amendment 2).
+		// 07f5517..561c23b, finding 1; ADR-086 amendment 3).
 		route := routePath(mux, r)
 		if isLinkPath(route) {
 			if s.cfg.IngressToken != "" &&

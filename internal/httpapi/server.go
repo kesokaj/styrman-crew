@@ -607,10 +607,10 @@ func (s *Server) newMux() *http.ServeMux {
 			writeErr(w, http.StatusNotFound, fmt.Errorf("no such endpoint: %s", r.URL.Path))
 			return
 		}
-		// A preview-only guest reaches authGuard for preview-shaped paths; any
-		// that fall through to here (a malformed /proxy/… that didn't match the
-		// proxy routes) must NOT be served the SPA shell (I1). Only real styrman
-		// users get the app.
+		// A preview-only guest passes authGuard only for a preview or shared
+		// ROUTE (ADR-086 amendment 3), so none should reach here; this stays
+		// as the second line: such a guest must NOT be served the SPA shell
+		// (I1). Only real styrman users get the app.
 		if !identity.FromContext(r.Context()).Authorized {
 			writeErr(w, http.StatusNotFound, fmt.Errorf("no such endpoint: %s", r.URL.Path))
 			return
