@@ -46,3 +46,6 @@ Range reviewed: v1.42.4..ceb6108
 - Per-package Go/vitest counts inside `verify-commit.sh`.
 
 VERDICT: NO-SHIP
+
+## Outcome
+- security 1 [high] — fixed by the operator: the GCP VM's `/etc/styrman/allowed_signers` no longer lists `5HpY…` — operator, in their own turn of this release session: "GCP key removed" (2026-10-06). Not verifiable from dave (no gcloud); recorded in BUG-094. Gate re-run: `reviews/2026-10-06-preflight-v1.43.0-r2.md`.
