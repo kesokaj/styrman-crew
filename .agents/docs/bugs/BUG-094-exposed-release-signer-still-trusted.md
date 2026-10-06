@@ -19,6 +19,7 @@ ADR-089 recorded the rotation as a replacement. The exposure, recorded in the ha
 ## Fix
 Crew records (this change): ADR-089 amendment 1 in DECISIONS.md (the key is exposed and must be listed by no host); `.agents/docs/deploy/gcp.md` and `.agents/docs/specs/styrman/versioning.md` say the VM list must drop it.
 Not yet done: remove the `5HpY...` line from the GCP VM's `/etc/styrman/allowed_signers` (operator step).
+Also trusting the key (security review of the v1.43.0 gate, 2026-10-06): the harness v2.3.2 `sh-agent` binary in `styrman-runtime:1.42.4` and in every live project home embeds `5HpY…` for `sh-agent update` (none in v2.4.1) — cleared by shipping the v2.4.1 image; and the operator's local `${SECRETS}/allowed_signers`, which `deploy/gcp/install.sh` installs as the VM's whole list — the operator replaces it with the `2bCW…` line.
 State checked 2026-10-06: dave's list holds only `SHA256:2bCWnLoMXNQ3NNSBL6F0TXb4p7aqjHR9DLWIYhca548` (`sudo -n cat`, each line via `ssh-keygen -lf`); the GitHub SSH authentication keys (`gh api user/keys`) no longer include `5HpY...`; GitHub SSH signing keys could not be listed (404 for the token). The GCP VM's list was NOT checked (no gcloud on dave).
 
 ## Prevention
