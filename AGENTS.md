@@ -86,7 +86,9 @@ bash web/e2e/run.sh                                # browser e2e (Playwright, se
   image build time (`image/Dockerfile`, `ARG HARNESS_VERSION`); every
   project seeds from it on first boot (`sh-agent install --home`, no repo
   mount), and a user pulls a newer release into their own project any time
-  with `sh-agent update`. Superseded ADR-062's `image/harness/` mirror and
+  with `sh-agent update` (from harness v2.4.1 on; older binaries accept only
+  signed releases, and the image's v2.4.1, its SHA-256 pinned by
+  `ARG HARNESS_SHA256`, ADR-090, replaces them at the next boot). Superseded ADR-062's `image/harness/` mirror and
   ADR-073's host harness channel. Full mechanics:
   `.agents/docs/specs/styrman/deploy.md` → "Agent harness in the image
   (ADR-074)".

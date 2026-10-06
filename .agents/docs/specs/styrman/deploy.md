@@ -426,9 +426,12 @@ left alone`.
 **Per-project update.** The user runs `sh-agent update` in a project
 terminal; it needs `gh` (authenticated through the credential broker's
 `GH_TOKEN`, so the user's own token must read the private harness repo too)
-and `ssh-keygen` (both in the image); it downloads the newest release,
-verifies it against the signer compiled into the binary, and replaces
-`~/.local/bin/sh-agent`. Crew does nothing else for this: no timer, no
+(in the image); it downloads the newest release, checks it against that
+release's `SHA256SUMS` (version marker and checksum; no signature since
+harness v2.4.1, the harness's ADR-053/053a — the image's pin does not cover
+this path, ADR-090), and replaces `~/.local/bin/sh-agent`. A v2.3.2 or older
+binary requires a signature and so cannot reach v2.4.1 this way; the image
+installs v2.4.1 at the project's next boot on v1.43.0 or later. Crew does nothing else for this: no timer, no
 mount, no mirror. Projects may run different harness releases from each
 other and from the image's baked-in one.
 

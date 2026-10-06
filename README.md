@@ -12,7 +12,10 @@ between them — while credentials are shared once and kept current by a broker;
 containers disposable always. The agent harness (`styrman-harness`) reaches
 every project as the `sh-agent` release binary baked into the runtime image
 (ADR-074); a user can pull a newer release into their own project any time
-with `sh-agent update`, no crew release required. The image currently
+with `sh-agent update`, no crew release required (a home still on harness
+v2.3.2 or older cannot: those binaries accept only signed releases, and the
+harness is unsigned from v2.4.1; it takes v2.4.1 from the image at its next
+boot on v1.43.0 or later). The image currently
 carries harness v2.4.1 (36 skills, 8 subagents, 1 rule); its `sh-agent install` runs
 after the project reports ready, in the background (ADR-078). `agy update`
 and `claude update` work inside a project (ADR-077).

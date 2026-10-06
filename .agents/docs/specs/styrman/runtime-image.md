@@ -285,7 +285,8 @@ Steps, in order:
    rest). Claude Code still runs in its default permission mode inside a
    project. Write-once, keyed on `<image VERSION>+<sh-agent release>`
    versus the per-home `~/.styrman/.harness-version` stamp: bumping either
-   the image `VERSION` or `HARNESS_VERSION` and rebuilding the image
+   the image `VERSION` or `HARNESS_VERSION` (with its `HARNESS_SHA256`,
+   ADR-090) and rebuilding the image
    RE-SEEDS an already-onboarded project's home on its next boot — unless
    the home's manifest already names a release NEWER than the image's
    (the user ran `sh-agent update`), in which case install is skipped and

@@ -100,7 +100,8 @@ that section for why.
    `/preflight` are a separate concern from this doc — see `AGENTS.md`'s
    Definition of Done). The agent harness a release ships is the
    `styrman-harness` release the Dockerfile's `ARG HARNESS_VERSION` names
-   (ADR-074); a release that bumps it names the new harness version in its
+   (ADR-074), its binary pinned by `ARG HARNESS_SHA256` (ADR-090; a bump
+   changes both, the hash confirmed by rebuilding the tag); a release that bumps it names the new harness version in its
    changelog entry, and the bump is read against that harness release's
    notes before it lands here — the harness content is reviewed in its own
    repository's gate, not in this one (security review 2026-09-21). Between crew releases a project moves itself forward when
