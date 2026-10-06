@@ -77,13 +77,14 @@ disk (about USD 20/month). Stop it when idle.
      `/etc/styrman/gh-token` is such a token.
    - `allowed_signers`: one line, `<git email> <key type> <public key>` of
      the release signer (the NUC's `/etc/styrman/allowed_signers`). The VM's
-     list holds two keys: the original release signer (`SHA256:5HpYQJjpG+…`)
-     and the second SSH key that signed the v1.39.0 tag (`SHA256:XeeDl8Y8…`,
-     "the Mac key"). Both are release signers by decision (ADR-082); see
-     also `.agents/docs/handoffs/2026-09-22-vertex-ai-and-final.md`. An
-     updater refuses a tag signed by a key its host does not list. Since
-     v1.42.4 the NUC signs with a rotated key (`SHA256:2bCWnLoM…`, ADR-089),
-     which the VM's list must gain before it takes v1.42.4 or later.
+     list holds the NUC's release signer (`SHA256:2bCWnLoM…` since v1.42.4,
+     ADR-089) and the second SSH key that signed the v1.39.0 tag
+     (`SHA256:XeeDl8Y8…`, "the Mac key"), both release signers by decision
+     (ADR-082); see also `.agents/docs/handoffs/2026-09-22-vertex-ai-and-final.md`.
+     An updater refuses a tag signed by a key its host does not list. The
+     original signer, `SHA256:5HpYQJjpG+…`, was EXPOSED on 2026-10-05 and
+     must be listed by no host (ADR-089 amendment 1, BUG-094): a VM set up
+     before then still carries its line, which the operator removes.
 3. On the Google OAuth client (console → APIs & Services → Credentials),
    add the redirect URI
    `https://auth.<BASE_DOMAIN>/oauth2/google/authorization-code-callback`.

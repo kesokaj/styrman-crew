@@ -282,10 +282,11 @@ version:
   the ones in its `allowed_signers`; an updater refuses a tag signed by a key
   its host does not list. Two keys sign release tags (ADR-082): the NUC's
   release signer — `SHA256:2bCWnLoM…` since v1.42.4 (ADR-089; the original
-  `SHA256:5HpYQJjpG+…` signed every tag before it and is gone from the NUC),
+  `SHA256:5HpYQJjpG+…` signed every tag before it, was exposed on
+  2026-10-05 and must be listed by no host — ADR-089 amendment 1, BUG-094),
   which signs every tag cut by `/preflight` on the NUC — and a second SSH key
-  (`SHA256:XeeDl8Y8…`, "the Mac key"), which signed v1.39.0. The GCP VM lists
-  both; whether the NUC lists the second has not been checked. A host that
+  (`SHA256:XeeDl8Y8…`, "the Mac key"), which signed v1.39.0. The GCP VM is to
+  list both; the NUC lists only `2bCW…` (checked 2026-10-06). A host that
   does not list a tag's signer stays on its version, and Settings shows
   admins the refusal as `signature` (ADR-081).
 - It runs against a dedicated clone at `/opt/styrman`, never the operator's
