@@ -4,10 +4,11 @@ The per-project Kata microVM image: pure tooling, no server binary
 (ADR-002). The entrypoint seeds each project's OWN home write-once from
 `skel/` (dotfiles) and installs the agent harness with `/styrman/bin/sh-agent`
 — the `styrman-harness` RELEASE binary, harness embedded (global context, 36
-skills, 8 subagents at v2.3.2; no hooks, no scripts, no settings file but the one
+skills, 8 subagents, 1 rule at v2.4.1; no hooks, no scripts, no settings file but the one
 `attribution` key), downloaded from GitHub Releases at image build at the
-version `ARG HARNESS_VERSION` names and verified against the harness's
-signer (ADR-074, replacing the ADR-062 mirror and the ADR-073 channel).
+version `ARG HARNESS_VERSION` names and verified against the SHA-256 pinned
+in `ARG HARNESS_SHA256` (ADR-074, ADR-090; replacing the ADR-062 mirror and
+the ADR-073 channel).
 `sh-agent install` runs once per image version + harness release into each
 home, as a background job AFTER the `/run/styrman/ready` line under a 120 s
 cap (ADR-078; migrate and the browser-MCP registrations stay before ready;
@@ -42,8 +43,10 @@ GH_TOKEN=$(gh auth token) docker build --secret id=gh_token,env=GH_TOKEN \
 
 The token is a build SECRET (never a layer) and must read the private
 `kesokaj/styrman-harness` repository; on the host the updater passes its own
-token file the same way. Bumping the harness a release ships is editing the
-`ARG HARNESS_VERSION=vX.Y.Z` line in the Dockerfile.
+token file the same way. Bumping the harness a release ships is editing BOTH
+`ARG HARNESS_VERSION=vX.Y.Z` and `ARG HARNESS_SHA256` in the Dockerfile, the
+hash copied from that release's `SHA256SUMS` line for `sh-agent-linux-amd64`
+(ADR-090).
 
 `STYRMAN_VERSION` matters: it stamps `/styrman/VERSION`, which keys the
 write-once harness seeding in existing homes — a version bump is what

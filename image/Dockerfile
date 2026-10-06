@@ -3,7 +3,8 @@
 # everything via docker exec.
 # sh-agent, the agent harness installer with the harness embedded, is the
 # styrman-harness RELEASE binary named by HARNESS_VERSION, downloaded from
-# GitHub Releases below and verified against the harness's signer (ADR-074).
+# GitHub Releases below and verified against its pinned SHA-256 (ADR-074,
+# ADR-090).
 FROM debian:trixie@sha256:d5ce19d4736f0ebbacd686d1040271a5aeb0cc920f5990c1bfae1717627f0674
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -179,24 +180,30 @@ RUN mkdir -p /styrman && apt-get update && apt-get install --no-install-recommen
     && npm ls -g --all --json > /styrman/npm-global.tree.json \
     && chromium --version && chrome-devtools-mcp --help >/dev/null
 
-# Agent harness (R5/ADR-074): the sh-agent release binary, harness embedded.
-# The repository is private, so the download takes a GitHub token as a BUILD
-# SECRET (never a layer): `--secret id=gh_token,env=GH_TOKEN` locally, the
-# updater's token file on the host. The signed SHA256SUMS must name exactly
-# HARNESS_VERSION and the binary must report it: a genuinely signed OLDER
-# release would otherwise pass (the harness's README § Install without
-# cloning). HARNESS_VERSION must be a canonical vX.Y.Z — only such a build
-# installs the harness built into it. Nothing but the binary stays.
-ARG HARNESS_VERSION=v2.3.2
-ARG HARNESS_SIGNER='ostling.simon@gmail.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBkx0BICH1xG18f0a0F/02Vw0OvBTfSOVNXkPkO62NCR'
+# Agent harness (R5/ADR-074, ADR-090): the sh-agent release binary, harness
+# embedded. The repository is private, so the download takes a GitHub token as
+# a BUILD SECRET (never a layer): `--secret id=gh_token,env=GH_TOKEN` locally,
+# the updater's token file on the host. Releases are unsigned from harness
+# v2.4.1 (its ADR-053), so the binary's SHA-256 is pinned HERE (ADR-090): a
+# release re-uploaded on GitHub fails the build instead of riding in. The
+# release's SHA256SUMS must also name exactly HARNESS_VERSION and list the
+# same hash, and the binary must report the version. HARNESS_VERSION must be a
+# canonical vX.Y.Z — only such a build installs the harness built into it. A
+# bump changes both ARGs together, the hash copied from that release's
+# SHA256SUMS line for sh-agent-linux-amd64 and confirmed by a rebuild from the
+# tag (v2.4.1: commit 7ea9068, go1.27.1, CGO_ENABLED=0 -trimpath -ldflags
+# "-X main.version=v2.4.1" reproduces it bit for bit). The pin must be 64
+# lowercase hex characters. Nothing but the binary stays.
+ARG HARNESS_VERSION=v2.4.1
+ARG HARNESS_SHA256=3031e27ea2e6aa98adf102ff5405ff960578b5223cc3a9596019dfb2075e80b1
 RUN --mount=type=secret,id=gh_token,required=true \
-    set -eu; mkdir -p /styrman/bin; d="$(mktemp -d)"; cd "$d"; \
-    GH_TOKEN="$(cat /run/secrets/gh_token)" gh release download "${HARNESS_VERSION}" --repo kesokaj/styrman-harness \
-        --pattern sh-agent-linux-amd64 --pattern SHA256SUMS --pattern SHA256SUMS.sig --dir "$d"; \
-    printf '%s\n' "${HARNESS_SIGNER}" > allowed_signers; \
-    ssh-keygen -Y verify -f allowed_signers -I "${HARNESS_SIGNER%% *}" -n sh-agent-release -s SHA256SUMS.sig < SHA256SUMS; \
+    set -eu; case "${HARNESS_SHA256}" in *[!0-9a-f]*) exit 1;; esac; [ "${#HARNESS_SHA256}" -eq 64 ]; \
+    mkdir -p /styrman/bin; d="$(mktemp -d)"; cd "$d"; \
+    GH_TOKEN="$(cat /run/secrets/gh_token)" gh release download "${HARNESS_VERSION}" --repo github.com/kesokaj/styrman-harness \
+        --pattern sh-agent-linux-amd64 --pattern SHA256SUMS --dir "$d"; \
     grep -qxF "# styrman-harness ${HARNESS_VERSION}" SHA256SUMS; \
-    grep -v '^#' SHA256SUMS | sha256sum -c - --ignore-missing; \
+    grep -qxF "${HARNESS_SHA256}  sh-agent-linux-amd64" SHA256SUMS; \
+    echo "${HARNESS_SHA256}  sh-agent-linux-amd64" | sha256sum -c -; \
     install -m 755 sh-agent-linux-amd64 /styrman/bin/sh-agent; \
     test "$(/styrman/bin/sh-agent version)" = "sh-agent ${HARNESS_VERSION}"; \
     cd /; rm -r "$d"

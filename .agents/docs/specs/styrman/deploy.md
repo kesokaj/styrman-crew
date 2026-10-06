@@ -374,13 +374,19 @@ harness channel (deleted: the two harness units, `styrman-update`'s
 `STYRMAN_HARNESS_DIR` and the server's read-only harness binds).
 
 **Image build.** `image/Dockerfile` downloads the release named by
-`ARG HARNESS_VERSION` (default `v2.3.2`; was `v1.6.0` until 2026-10-02) with `gh release download` from
-`kesokaj/styrman-harness` (assets `sh-agent-linux-amd64`, `SHA256SUMS`,
-`SHA256SUMS.sig`), verifies `SHA256SUMS.sig` with `ssh-keygen -Y verify`
-against the signer line in `ARG HARNESS_SIGNER`, checks the `SHA256SUMS`
-header names that version, checks the binary's checksum, and checks
-`sh-agent version` prints `sh-agent <HARNESS_VERSION>`. Bumping the harness
-a crew release ships is editing that `ARG` line.
+`ARG HARNESS_VERSION` (default `v2.4.1`; `v2.3.2` until 2026-10-06, `v1.6.0` until 2026-10-02) with `gh release download` from
+`kesokaj/styrman-harness` (assets `sh-agent-linux-amd64` and `SHA256SUMS`;
+harness releases are unsigned from v2.4.1), checks the `SHA256SUMS`
+header names that version, checks that `SHA256SUMS` lists the hash pinned in
+`ARG HARNESS_SHA256` for the binary and that the downloaded binary has it,
+and checks `sh-agent version` prints `sh-agent <HARNESS_VERSION>` (ADR-090,
+which replaced the `ssh-keygen -Y verify` check against `ARG HARNESS_SIGNER`).
+Bumping the harness a crew release ships is editing BOTH `ARG` lines in one
+commit, the hash copied from the release's `SHA256SUMS` line for
+`sh-agent-linux-amd64` and confirmed by rebuilding the tag's commit
+(`CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=<tag>"
+./cmd/sh-agent` with the Go version `go version -m` reads from the release
+binary) before it is committed (ADR-090).
 
 **Token.** The repository is private, so every image build takes a GitHub
 token as a docker build SECRET (`--secret id=gh_token,…`, never a layer):

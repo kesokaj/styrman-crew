@@ -413,7 +413,8 @@ directly.
 
 The image carries the `styrman-harness` RELEASE binary named by
 `image/Dockerfile`'s `ARG HARNESS_VERSION`, downloaded from GitHub Releases
-at build and verified against the harness's signer; the entrypoint seeds
+at build and verified against the SHA-256 pinned in `ARG HARNESS_SHA256`
+(ADR-090); the entrypoint seeds
 every project home with `sh-agent install` (write-once, keyed on
 `/styrman/VERSION` plus the binary's release), after
 `image/configs/harness-migrate.sh` has moved a previous harness's artifacts
@@ -470,10 +471,10 @@ Manual, on every `HARNESS_VERSION` bump:
    the release's `Skills (N)` and `Subagents (N)`; `docker run --rm
    --entrypoint sh <image> -c 'ls /styrman/configs/harness-migrate.sh'`.
 2. Guard controls, once per Dockerfile change: a build with
-   `--build-arg HARNESS_SIGNER='<a wrong key line>'` fails at `ssh-keygen -Y
-   verify` (`Could not verify signature.`); a build with
-   `--build-arg HARNESS_VERSION=<an older published release>` builds and its
-   `version` prints that release.
+   `--build-arg HARNESS_SHA256=<64 zeros>` fails at the harness `RUN` step
+   (the pinned hash is not in `SHA256SUMS`, ADR-090); a build with
+   `--build-arg HARNESS_VERSION=<an older published release>` and no matching
+   `HARNESS_SHA256` fails the same way (a version bump without its hash).
 3. Old-home migration on the host, no VM (the exact procedure, with the
    asserted outcomes, is `testing/2026-09-03-verify-harness-phase2.md`): seed
    a scratch home with `git archive v1.19.1 image/harness`'s `setup.sh`,
@@ -484,7 +485,7 @@ Manual, on every `HARNESS_VERSION` bump:
 4. Agent-CLI smoke inside a fresh project (needs the operator's sign-in):
    `claude -p "What is the first heading of your global context, and how
    many skills do you have?"` quotes `# AGENTS.md — global agent context`
-   and 36 (the harness roster in the image: 36 skills, 8 subagents, v2.3.2); `agy` reports the rules file `~/.gemini/config/rules/AGENTS.md`.
+   and 36 (the harness roster in the image: 36 skills, 8 subagents, 1 rule, v2.4.1); `agy` reports the rules file `~/.gemini/config/rules/AGENTS.md`.
 5. Real re-seed evidence, when a stopped project seeded by ≤ v1.19.x is
    available: start it on the new image and read the entrypoint log line
    `agent harness deployed (version …, styrman-harness <sha>)` plus the

@@ -52,9 +52,11 @@
    approved 2026-09-16 (ADR-072); was "vendored from `devshell_prompt/harness`") is
    is carried by the **base image** as the `sh-agent` release binary with the harness
    embedded — downloaded at image build from the styrman-harness GitHub release named
-   by the Dockerfile's `HARNESS_VERSION`, its signed checksums verified against the
-   harness's signer (ADR-074, operator approval 2026-09-21; was "the host's verified
-   harness channel … the image's pinned mirror … the fallback", ADR-073). The
+   by the Dockerfile's `HARNESS_VERSION`, the binary verified against the SHA-256 the
+   Dockerfile pins in `HARNESS_SHA256` (ADR-090, operator approval 2026-10-06; was
+   "its signed checksums verified against the harness's signer", ADR-074, operator
+   approval 2026-09-21; before that "the host's verified harness channel … the
+   image's pinned mirror … the fallback", ADR-073). The
    entrypoint installs it into a project home whose harness differs and never
    downgrades one the user moved forward; from there each project moves itself
    forward when its user runs `sh-agent update` in it (the harness's R8/R9), so

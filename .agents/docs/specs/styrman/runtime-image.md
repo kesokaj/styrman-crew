@@ -261,8 +261,11 @@ Steps, in order:
    time from `kesokaj/styrman-harness` (ADR-074, superseding ADR-062's
    `image/harness/` mirror and ADR-073's host harness channel; mechanics:
    `.agents/docs/specs/styrman/deploy.md` "Agent harness in the image
-   (ADR-074)"). The harness (`ARG HARNESS_VERSION=v2.3.2`; `sh-agent list` reports
-   36 skills and 8 subagents, an install writes 1,788 files; the v1.6.0
+   (ADR-074)"). The harness (`ARG HARNESS_VERSION=v2.4.1`, its binary's SHA-256
+   pinned in `ARG HARNESS_SHA256`, ADR-090; `sh-agent list` reports
+   36 skills, 8 subagents and 1 rule, `critical-thinking.md`, installed to
+   `~/.claude/rules/` and `~/.gemini/config/rules/`; v2.3.2's install wrote
+   1,788 files; the v1.6.0
    release carried 27 skills and 7 subagents — `bugs`, `changelog`,
    `documentation`, `explorer`, `reviewer`, `security`, `verifier`) plus the global context (`AGENTS.md`); `sh-agent install
    --home <home>` (no `--repo` — the harness travels inside the binary)
