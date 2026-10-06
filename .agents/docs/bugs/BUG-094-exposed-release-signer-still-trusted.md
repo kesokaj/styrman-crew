@@ -2,7 +2,7 @@
 owner: bugs
 date: 2026-10-06
 id: BUG-094
-status: open
+status: fixed
 area: release signing (deploy/gcp allowed_signers, ADR-089)
 ---
 # BUG-094: exposed original release-signing key still listed as trusted on the GCP VM
@@ -31,3 +31,6 @@ Found 2026-10-06 by the `security` agent reviewing the harness v2.4.1 bump (`.ag
 The GCP VM's `5HpY…` line is removed — operator, in their own turn: "GCP key removed" (2026-10-06). Not independently verified from dave (no gcloud). Still open: whether the operator's local `${SECRETS}/allowed_signers` (installed by `deploy/gcp/install.sh`) still holds `5HpY…`, and GitHub SSH signing keys (unlisted); the v2.3.2 binaries in project homes are replaced by v1.43.0's image at each project's next boot.
 ## Update 2026-10-06 12:43
 Operator, in their own turn: the local `~/.config/styrman/gcp/allowed_signers` is replaced with the `2bCW…` line ("done"), and "no 5HpY key on github" (SSH signing keys). Still open: the GCP VM's list after the operator's Mac-side `install.sh` run, which copies that local file; a check prompt was handed to the operator. Live projects leave v2.3.2 only when the project itself is stopped and started (a terminal restart keeps the container).
+## Update 2026-10-06 (closed)
+Fixed in v1.43.0 (tag on eecc80e) plus the operator's host steps. The operator's Antigravity session on their Mac checked the GCP VM through `deploy/gcp/vm.sh ssh` and reported (pasted by the operator): the VM's `/etc/styrman/allowed_signers` holds `SHA256:2bCWnLoMXNQ3NNSBL6F0TXb4p7aqjHR9DLWIYhca548` and does not hold `SHA256:5HpYQJjpG+yE1xXBTOIZPsTkbkgkVnV8z0eG8hBawyU`; the local `~/.config/styrman/gcp/allowed_signers` holds only the Mac key `SHA256:XeeDl8Y8…` and `2bCW…`; the VM's updater deployed v1.43.0 (`"result":"ok"`). Not checked from dave (no gcloud): this is the operator's session's report. The operator: "no 5HpY key on github" (SSH signing keys). dave's list holds only `2bCW…` (checked 2026-10-06, above).
+Residual, not a reason to keep it open: a project's home keeps the harness v2.3.2 `sh-agent` (which embeds `5HpY…` for `sh-agent update`) until that project is stopped and started on v1.43.0; a terminal restart does not do it. On dave, project 0e5de8e8 was still on `styrman-runtime:1.42.4` at the time of closing.
